@@ -12,3 +12,8 @@ add_executable(neighbor_benchmark neighbor_benchmark.cpp)
 target_compile_features(neighbor_benchmark PRIVATE cxx_std_17)
 target_link_libraries(neighbor_benchmark PRIVATE Kokkos::kokkos)
 target_compile_options(neighbor_benchmark PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(mesh_benchmark mesh_benchmark.cpp)
+target_compile_features(mesh_benchmark PRIVATE cxx_std_17)
+target_link_libraries(mesh_benchmark PRIVATE Kokkos::kokkos)
+target_compile_options(mesh_benchmark PRIVATE -Wall -Wextra -Wpedantic)

@@ -75,7 +75,9 @@ KOKKOS_INLINE_FUNCTION int edge_add_or_cancel(Kokkos::Array<Edge,max_hole_edges>
 
 // Build one cell from its candidate particle IDs. The list must contain every
 // particle within `reach` of this row. A successful certificate proves that
-// particles outside that radius cannot cut the returned cell.
+// particles outside that radius cannot cut the returned cell. Sort candidates
+// nearest-first to reduce transient workspace growth; an unfavorable order can
+// trigger a capacity status even though the final cell would fit.
 template<class Positions, class RowOffsets, class NeighborIds,
          class FaceCounts, class FaceIds, class FaceAreas, class FaceVertexCounts,
          class FaceVertices, class RowStatus>
