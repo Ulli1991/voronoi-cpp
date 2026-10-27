@@ -1,5 +1,8 @@
 #include <Kokkos_Core.hpp>
+#include <Kokkos_Graph.hpp>
 #include <Kokkos_Sort.hpp>
+
+#include "neighbor_search.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,7 +14,9 @@
 #include <limits>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -230,11 +235,12 @@ DeviceBvh copy_bvh(const HostBvh& b) {
 }
 
 template<class Search>
-void search_count(const Exec& exec, Positions p, ScalarView radii, Search search,
-                  IntView counts, IntView checks, IntView index_tests) {
+void search_count(const Exec& exec, Positions p, ScalarView radii, IntView query_order,
+                  Search search, IntView counts, IntView checks, IntView index_tests) {
     const int n = static_cast<int>(p.extent(0));
     Kokkos::parallel_for("neighbor_count", Kokkos::RangePolicy<Exec>(exec, 0, n),
-        KOKKOS_LAMBDA(int i) {
+        KOKKOS_LAMBDA(int t) {
+            const int i = query_order(t);
             int hits = 0, tested = 0, broad_tests = 0;
             search.count(i, p, radii(i), hits, tested, broad_tests);
             counts(i) = hits;
@@ -244,11 +250,12 @@ void search_count(const Exec& exec, Positions p, ScalarView radii, Search search
 }
 
 template<class Search>
-void search_fill(const Exec& exec, Positions p, ScalarView radii, Search search,
-                 IntView offsets, IntView ids) {
+void search_fill(const Exec& exec, Positions p, ScalarView radii, IntView query_order,
+                 Search search, IntView offsets, IntView ids) {
     const int n = static_cast<int>(p.extent(0));
     Kokkos::parallel_for("neighbor_fill", Kokkos::RangePolicy<Exec>(exec, 0, n),
-        KOKKOS_LAMBDA(int i) {
+        KOKKOS_LAMBDA(int t) {
+            const int i = query_order(t);
             int ignored_hits = 0, ignored_tests = 0, ignored_index_tests = 0;
             int cursor = offsets(i);
             search.fill(i, p, radii(i), ids, cursor, ignored_hits, ignored_tests,
@@ -381,24 +388,37 @@ struct BvhSearch {
     }
 };
 
-struct Result {
-    double build_ms;
-    double query_ms;
-    long long distance_checks;
-    long long index_tests;
-    long long edges;
-    int max_neighbors;
-    std::vector<std::vector<int>> adjacency;
+
+// Compact the table into CSR without reading the total back to the host.
+void dense_compact(const Exec& exec, Kokkos::View<int**> table, IntView counts,
+                   IntView offsets, IntView ids) {
+    const int n = static_cast<int>(counts.extent(0));
+    Kokkos::parallel_scan("dense_neighbor_scan", Kokkos::RangePolicy<Exec>(exec, 0, n),
+        KOKKOS_LAMBDA(int i, int& update, bool final) {
+            if (final) offsets(i) = update;
+            update += counts(i);
+            if (final && i == n - 1) offsets(n) = update;
+        });
+    Kokkos::parallel_for("dense_neighbor_compact", Kokkos::RangePolicy<Exec>(exec, 0, n),
+        KOKKOS_LAMBDA(int t) {
+            const int begin = offsets(t);
+            for (int c = 0; c < counts(t); ++c) ids(begin + c) = table(t, c);
+        });
+}
+
+struct Csr {
+    IntView counts, checks, index_tests, offsets, ids;
 };
 
+// Two-pass CSR construction: count, scan, fill. Reading the scan total back
+// to size `ids` synchronizes with the host once per rebuild.
 template<class Search>
-Result run_query(const Exec& exec, Positions p, ScalarView radii, Search search,
-                 double build_ms) {
+Csr build_csr(const Exec& exec, Positions p, ScalarView radii, IntView query_order,
+              Search search) {
     const int n = static_cast<int>(p.extent(0));
     IntView counts("neighbor_counts", n), checks("distance_checks", n);
     IntView index_tests("index_tests", n), offsets("neighbor_offsets", n+1);
-    Kokkos::Timer timer;
-    search_count(exec, p, radii, search, counts, checks, index_tests);
+    search_count(exec, p, radii, query_order, search, counts, checks, index_tests);
     int total=0;
     Kokkos::parallel_scan("neighbor_scan", Kokkos::RangePolicy<Exec>(exec, 0, n),
         KOKKOS_LAMBDA(int i, int& update, bool final) {
@@ -408,16 +428,58 @@ Result run_query(const Exec& exec, Positions p, ScalarView radii, Search search,
     Kokkos::parallel_for("neighbor_scan_end", Kokkos::RangePolicy<Exec>(exec, 0, 1),
         KOKKOS_LAMBDA(int) { offsets(n)=total; });
     IntView ids("neighbor_ids", total);
-    search_fill(exec, p, radii, search, offsets, ids);
+    search_fill(exec, p, radii, query_order, search, offsets, ids);
     exec.fence("neighbor CSR construction");
-    const double query_ms=timer.seconds()*1.0e3;
+    return {counts, checks, index_tests, offsets, ids};
+}
 
-    auto hc=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},counts);
-    auto hcheck=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},checks);
-    auto hindex=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},index_tests);
-    auto hoff=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},offsets);
-    auto hids=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},ids);
-    Result r{build_ms,query_ms,0,0,total,0,{}};
+double median(std::vector<double> v) {
+    std::nth_element(v.begin(),v.begin()+v.size()/2,v.end());
+    return v[v.size()/2];
+}
+
+// One untimed warm-up call absorbs first-launch, module-load, and allocator
+// costs; the median of the timed calls is reported.
+template<class F>
+double median_ms(int repeats, const F& f) {
+    f();
+    std::vector<double> times(repeats);
+    for(double& t : times) { Kokkos::Timer timer; f(); t=timer.seconds()*1.0e3; }
+    return median(times);
+}
+
+struct Result {
+    double build_ms;
+    double query_ms;
+    double csr_copy_ms;
+    long long distance_checks;
+    long long index_tests;
+    long long edges;
+    int max_neighbors;
+    std::vector<std::vector<int>> adjacency;
+};
+
+template<class Search>
+Result run_query(const Exec& exec, Positions p, ScalarView radii, IntView query_order,
+                 Search search, double build_ms, int repeats) {
+    const int n = static_cast<int>(p.extent(0));
+    Csr csr;
+    const double query_ms=median_ms(repeats, [&] {
+        csr=build_csr(exec, p, radii, query_order, search);
+    });
+    // Moving the graph to the host is what a host consumer of a device search
+    // (or the reverse) pays; on host backends the mirror aliases and costs ~0.
+    const double csr_copy_ms=median_ms(repeats, [&] {
+        auto o=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},csr.offsets);
+        auto q=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},csr.ids);
+    });
+
+    auto hc=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},csr.counts);
+    auto hcheck=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},csr.checks);
+    auto hindex=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},csr.index_tests);
+    auto hoff=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},csr.offsets);
+    auto hids=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},csr.ids);
+    Result r{build_ms,query_ms,csr_copy_ms,0,0,static_cast<long long>(csr.ids.extent(0)),0,{}};
     r.adjacency.resize(n);
     for(int i=0;i<n;++i) {
         r.max_neighbors=std::max(r.max_neighbors,hc(i));
@@ -430,76 +492,243 @@ Result run_query(const Exec& exec, Positions p, ScalarView radii, Search search,
     return r;
 }
 
-std::vector<std::vector<int>> brute_force(const PointSet& s) {
+enum class DenseMode { table, nearest_first, csr, graph };
+
+const char* mode_name(DenseMode m) {
+    switch(m) {
+        case DenseMode::table: return "dense_table";
+        case DenseMode::nearest_first: return "dense_nearest_first";
+        case DenseMode::csr: return "dense_csr";
+        case DenseMode::graph: return "dense_graph";
+    }
+    return "";
+}
+
+// Persistent-workspace search: sized by one untimed rebuild (which grows the
+// table on overflow, counted in `retries`), then the cell build and the fill
+// are timed. Each timed fill reads the overflow flag back, as a solver must.
+// In graph mode the whole rebuild is one captured graph, so only its total
+// time is reported.
+Result run_dense(const Exec& exec, Positions p, ScalarView radii, double width, bool periodic,
+                 int capacity, DenseMode mode, int repeats, bool validate, int& retries,
+                 int& lanes) {
+    const int n = static_cast<int>(p.extent(0));
+    neighbor_search::DenseCellSearch<Exec> s;
+    // VORONOI_LANES overrides the lanes-per-particle heuristic for tuning.
+    const char* lanes_env=std::getenv("VORONOI_LANES");
+    neighbor_search::configure(s, n, Kokkos::Array<double,3>{1.0,1.0,1.0}, width, periodic,
+                               capacity, mode==DenseMode::nearest_first,
+                               lanes_env ? std::atoi(lanes_env) : 0);
+    lanes=s.vector_length;
+    retries=neighbor_search::rebuild(exec,s,p,radii);
+    IntView offsets("dense_neighbor_offsets", n+1);
+    IntView ids(mode==DenseMode::csr ? "dense_neighbor_ids" : "unused_ids",
+                mode==DenseMode::csr ? static_cast<std::size_t>(n)*s.capacity : 0);
+    int longest=0;
+    auto check_overflow=[&] {
+        Kokkos::deep_copy(exec,longest,s.max_count);
+        exec.fence("overflow check");
+        if(longest>s.capacity) throw std::runtime_error("neighbor table overflow after sizing");
+    };
+    double build_ms=0.0, query_ms=0.0;
+    if(mode==DenseMode::graph) {
+#if defined(KOKKOS_ENABLE_CUDA)
+        if constexpr (std::is_same_v<Exec, Kokkos::Cuda>) {
+            auto graph=Kokkos::Experimental::create_graph<Exec>([&](const auto& root) {
+                root.cuda_capture(exec, [=](const Exec& e) {
+                    neighbor_search::build(e,s,p,radii);
+                    neighbor_search::fill(e,s);
+                });
+            });
+            graph.instantiate();
+            query_ms=median_ms(repeats, [&] { graph.submit(exec); check_overflow(); });
+        } else
+#endif
+        {
+            throw std::runtime_error("graph mode needs the CUDA backend");
+        }
+    } else {
+        build_ms=median_ms(repeats, [&] {
+            neighbor_search::build(exec,s,p,radii);
+            exec.fence("dense build");
+        });
+        query_ms=median_ms(repeats, [&] {
+            neighbor_search::fill(exec,s);
+            if(mode==DenseMode::csr) dense_compact(exec,s.table,s.counts,offsets,ids);
+            check_overflow();
+        });
+    }
+
+    auto hc=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},s.counts);
+    long long total=0;
+    for(int t=0;t<n;++t) total+=hc(t);
+    Result r{build_ms,query_ms,0.0,0,0,total,longest,{}};
+    if(!validate) return r;
+    auto horder=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},s.order);
+    auto ht=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},s.table);
+    auto hp=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},s.positions);
+    r.adjacency.resize(n);
+    for(int t=0;t<n;++t) {
+        auto& row=r.adjacency[horder(t)];
+        double previous=-1.0;
+        for(int c=0;c<hc(t);++c) {
+            const int q=ht(t,c);
+            row.push_back(horder(q));
+            if(mode!=DenseMode::nearest_first) continue;
+            double d2=0.0;
+            for(int a=0;a<3;++a) {
+                double d=hp(q,a)-hp(t,a);
+                if(periodic) d-=std::nearbyint(d);
+                d2+=d*d;
+            }
+            // An out-of-order row is reported as a mismatch via a sentinel id.
+            if(d2<previous) row.push_back(-1);
+            previous=d2;
+        }
+    }
+    for(auto& row : r.adjacency) std::sort(row.begin(),row.end());
+    return r;
+}
+
+std::vector<std::vector<int>> brute_force(const PointSet& s, bool periodic) {
     const int n=static_cast<int>(s.points.size());
     std::vector<std::vector<int>> out(n);
     for(int i=0;i<n;++i) for(int j=0;j<n;++j) if(i!=j) {
-        double d2=0.; for(int a=0;a<3;++a) { const double d=s.points[i][a]-s.points[j][a]; d2+=d*d; }
+        double d2=0.;
+        for(int a=0;a<3;++a) {
+            double d=s.points[i][a]-s.points[j][a];
+            if(periodic) d-=std::nearbyint(d);
+            d2+=d*d;
+        }
         if(d2<=s.radii[i]*s.radii[i]) out[i].push_back(j);
     }
     return out;
 }
 
-double median(std::vector<double> v) {
-    std::nth_element(v.begin(),v.begin()+v.size()/2,v.end());
-    return v[v.size()/2];
+// Keep the expected neighbor count independent of n; at n=4096 and scale 1
+// the radii are unchanged. The jittered lattice already scales with spacing.
+void scale_radii(PointSet& s, double factor) {
+    for(double& r : s.radii) r*=factor;
 }
 
-void report(const PointSet& s, const std::string& method, const Result& r,
-            const std::vector<std::vector<int>>& reference, double cell_width=0.0) {
-    int bad_rows=0;
-    for(std::size_t i=0;i<reference.size();++i) if(r.adjacency[i]!=reference[i]) ++bad_rows;
+void report(const PointSet& s, const std::string& method, const std::string& order,
+            const Result& r, const std::vector<std::vector<int>>& reference,
+            const std::string& reference_name, double cell_width=0.0) {
+    // -1 marks an unvalidated row (timing mode, or no reference available).
+    int bad_rows=reference.empty() || r.adjacency.empty() ? -1 : 0;
+    if(bad_rows==0)
+        for(std::size_t i=0;i<reference.size();++i) if(r.adjacency[i]!=reference[i]) ++bad_rows;
     const double n=s.points.size();
-    std::cout << s.name << ',' << method << ',' << std::fixed << std::setprecision(4)
-              << n << ',' << cell_width << ',' << r.build_ms << ',' << r.query_ms << ','
+    std::cout << s.name << ',' << method << ',' << order << ',' << std::fixed
+              << std::setprecision(4) << n << ',' << cell_width << ',' << r.build_ms << ','
+              << r.query_ms << ',' << r.build_ms+r.query_ms << ',' << r.csr_copy_ms << ','
               << r.index_tests/n << ',' << r.distance_checks/n << ','
               << static_cast<double>(r.edges)/n << ','
-              << r.max_neighbors << ',' << bad_rows << '\n';
+              << r.max_neighbors << ',' << reference_name << ',' << bad_rows << std::endl;
 }
 
 } // namespace
 
+// Usage: neighbor_benchmark [n=4096] [radius_scale=1] [repeats=1]
+//                           [methods=all|dense|timing] [periodic=0|1]
+// "dense" runs the dense-cell variants plus the BVH used as their reference;
+// "timing" skips every reference and check. Periodic runs use the minimum
+// image and are validated against all pairs only up to the oracle limit.
 int main(int argc, char** argv) {
-    int n=4096;
-    if(argc>1) n=std::max(64,std::atoi(argv[1]));
     Kokkos::initialize(argc,argv);
     {
+        int n=argc>1 ? std::max(64,std::atoi(argv[1])) : 4096;
+        const double radius_scale=argc>2 ? std::atof(argv[2]) : 1.0;
+        const int repeats=argc>3 ? std::max(1,std::atoi(argv[3])) : 1;
+        const std::string methods=argc>4 ? argv[4] : "all";
+        const bool periodic=argc>5 && std::atoi(argv[5])!=0;
+        const bool validate=methods!="timing";
+        const bool legacy=methods=="all" && !periodic;
+        const int oracle_limit=32768;
         const Exec exec{};
-        std::cout << "distribution,method,n,cell_width,build_ms,query_ms,index_tests_per_particle,point_distance_checks_per_particle,mean_neighbors,max_neighbors,mismatched_rows\n";
+        std::cout << "# backend=" << Exec::name() << " concurrency=" << exec.concurrency()
+                  << " radius_scale=" << radius_scale << " repeats=" << repeats
+                  << " methods=" << methods << " periodic=" << periodic << '\n';
+        std::cout << "distribution,method,query_order,n,cell_width,build_ms,query_ms,total_ms,csr_copy_ms,index_tests_per_particle,point_distance_checks_per_particle,mean_neighbors,max_neighbors,reference,mismatched_rows\n";
         const std::uint64_t seed=20261027;
+        const double density_scale=std::cbrt(4096.0/n);
         std::vector<PointSet> sets;
         sets.push_back(make_uniform(n,seed));
         sets.push_back(make_jittered(n,seed+1));
         sets.push_back(make_clustered(n,seed+2));
         sets.push_back(make_gradient(n,seed+3));
+        scale_radii(sets[0],radius_scale*density_scale);
+        scale_radii(sets[1],radius_scale);
+        scale_radii(sets[2],radius_scale*density_scale);
+        scale_radii(sets[3],radius_scale*density_scale);
+        std::vector<DenseMode> modes{DenseMode::table, DenseMode::nearest_first, DenseMode::csr};
+#if defined(KOKKOS_ENABLE_CUDA)
+        if(std::is_same_v<Exec, Kokkos::Cuda>) modes.push_back(DenseMode::graph);
+#endif
         for(const auto& s:sets) {
             const int m=static_cast<int>(s.points.size());
             Positions p=copy_positions(s); ScalarView radii=copy_radii(s);
-            const auto reference=brute_force(s);
+            IntView input_order("input_order", m);
+            Kokkos::parallel_for("input_order", Kokkos::RangePolicy<Exec>(exec, 0, m),
+                KOKKOS_LAMBDA(int i) { input_order(i)=i; });
 
-            Kokkos::Timer bt;
-            HostBvh host_bvh=make_host_bvh(s.points);
-            DeviceBvh device_bvh=copy_bvh(host_bvh);
-            exec.fence("BVH setup");
-            const double bvh_build_ms=bt.seconds()*1.0e3;
-            BvhSearch tree{device_bvh.nodes,device_bvh.ids};
-            Result tree_result=run_query(exec,p,radii,tree,bvh_build_ms);
-            report(s,"median_bvh",tree_result,reference);
+            // Above the oracle limit the all-pairs check is too slow; the
+            // (non-periodic) BVH, validated against it at smaller n, serves as
+            // the reference there.
+            std::vector<std::vector<int>> reference;
+            std::string reference_name="none";
+            int capacity=16;
+            DeviceBvh device_bvh;
+            double bvh_build_ms=0.0;
+            if(validate && !periodic) {
+                bvh_build_ms=median_ms(repeats, [&] {
+                    HostBvh host_bvh=make_host_bvh(s.points);
+                    device_bvh=copy_bvh(host_bvh);
+                    exec.fence("BVH setup");
+                });
+                BvhSearch tree{device_bvh.nodes,device_bvh.ids};
+                Result tree_result=run_query(exec,p,radii,input_order,tree,bvh_build_ms,repeats);
+                const bool exact=m<=oracle_limit;
+                reference_name=exact ? "all_pairs" : "median_bvh";
+                reference=exact ? brute_force(s,false) : tree_result.adjacency;
+                report(s,"median_bvh","input",tree_result,reference,reference_name);
+                // 25% headroom over the known maximum, as a solver would size
+                // the table from its previous rebuild.
+                capacity=std::max(8,tree_result.max_neighbors+tree_result.max_neighbors/4);
+                if(legacy) {
+                    tree_result=run_query(exec,p,radii,device_bvh.ids,tree,bvh_build_ms,repeats);
+                    report(s,"median_bvh","spatial",tree_result,reference,reference_name);
+                }
+            } else if(validate && m<=oracle_limit) {
+                reference=brute_force(s,true);
+                reference_name="all_pairs_periodic";
+            }
 
             const double med=median(s.radii);
-            for(double factor : {0.5,1.0,2.0}) {
+            for(double factor : {0.5,0.75,1.0,1.5}) {
                 const double width=med*factor;
-                Kokkos::Timer ct;
-                CellIndex cells=build_cell_index(exec,p,width);
-                exec.fence("cell setup");
-                const double cell_build_ms=ct.seconds()*1.0e3;
+                for(DenseMode mode : modes) {
+                    int retries=0, lanes=1;
+                    Result dense_result=run_dense(exec,p,radii,width,periodic,capacity,mode,
+                                                  repeats,validate && !reference.empty(),retries,
+                                                  lanes);
+                    report(s,mode_name(mode),"lanes="+std::to_string(lanes),dense_result,
+                           reference,reference_name,width);
+                    if(retries>0) std::cout << "# capacity retries=" << retries << '\n';
+                }
+                if(!legacy) continue;
+                CellIndex cells;
+                const double cell_build_ms=median_ms(repeats, [&] {
+                    cells=build_cell_index(exec,p,width);
+                });
                 CellSearch cell{cells.sorted_ids,cells.occupied_keys,cells.offsets,
                                 cells.occupied_count,cells.nx,cells.ny,cells.nz,
                                 cells.hx,cells.hy,cells.hz};
-                Result cell_result=run_query(exec,p,radii,cell,cell_build_ms);
-                report(s,"sorted_cells",cell_result,reference,width);
+                Result cell_result=run_query(exec,p,radii,input_order,cell,cell_build_ms,repeats);
+                report(s,"sorted_cells","input",cell_result,reference,reference_name,width);
+                cell_result=run_query(exec,p,radii,cells.sorted_ids,cell,cell_build_ms,repeats);
+                report(s,"sorted_cells","spatial",cell_result,reference,reference_name,width);
             }
-            (void)m;
         }
     }
     Kokkos::finalize();
