@@ -34,7 +34,14 @@ Run the small geometry example and neighbor-search benchmark:
 
 The example writes `particles_128.csv` and `faces_128.csv` to the current directory. To plot them, install Matplotlib and run `python3 plot_mesh.py` from the repository root.
 
-For GPU experiments, Kokkos must be built with the relevant CUDA or HIP backend and a compatible compiler/toolchain. `neighbor_benchmark` exercises cell search and CSR construction on that execution space; `mesh_benchmark` exercises cell reconstruction there. Neither has yet been benchmarked on a GPU, and no GPU speedup claims are made here.
+For GPU experiments, first build or load Kokkos with the relevant CUDA or HIP backend and a compatible compiler/toolchain. Configure this project against that Kokkos installation, then confirm the CMake output lists `CUDA` or `HIP` under enabled Kokkos devices. `neighbor_benchmark` exercises cell search and CSR construction on the selected execution space; `mesh_benchmark` exercises cell reconstruction there. A useful first GPU run is:
+
+```sh
+./build/neighbor_benchmark 4096
+./build/mesh_benchmark 16
+```
+
+The mesh benchmark allocates fixed-capacity face output arrays, about 100 MB at 4,096 particles. Neither benchmark has yet been run on a GPU, and no GPU speedup claims are made here.
 
 ## Current scope and limitations
 
