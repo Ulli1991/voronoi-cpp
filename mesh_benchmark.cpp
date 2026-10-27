@@ -4,7 +4,9 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <utility>
@@ -166,9 +168,13 @@ int main(int argc, char** argv) {
         auto hcounts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, face_counts);
         auto hids = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, face_ids);
         auto hareas = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, face_areas);
+        auto hverts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, face_vertices);
         int good = 0, bad_faces = 0;
         std::array<int, 8> status_counts{};
         double max_closure = 0.0, max_pair_mismatch = 0.0;
+        // Volume conservation: the cells must tile the periodic unit box, so
+        // their volumes, V = sum_f A_f . x_f / 3 with x_f on face f, sum to 1.
+        double total_volume = 0.0, min_volume = std::numeric_limits<double>::infinity();
         for (int row = 0; row < n; ++row) {
             if (hs(row) >= 0 && hs(row) < static_cast<int>(status_counts.size()))
                 ++status_counts[hs(row)];
@@ -179,6 +185,12 @@ int main(int argc, char** argv) {
                 for (int a = 0; a < 3; ++a) sum[a] += hareas(row, f, a);
             const double closure = std::sqrt(sum[0]*sum[0] + sum[1]*sum[1] + sum[2]*sum[2]);
             max_closure = std::max(max_closure, closure);
+            double volume = 0.0;
+            for (int f = 0; f < hcounts(row); ++f)
+                for (int a = 0; a < 3; ++a) volume += hareas(row, f, a) * hverts(row, f, 0, a);
+            volume /= 3.0;
+            total_volume += volume;
+            min_volume = std::min(min_volume, volume);
             for (int f = 0; f < hcounts(row); ++f) {
                 const int other = hids(row, f);
                 int reverse = -1;
@@ -204,12 +216,16 @@ int main(int argc, char** argv) {
                   << " unmatched_faces=" << bad_faces
                   << " max_area_closure=" << max_closure
                   << " max_shared_face_mismatch=" << max_pair_mismatch
+                  << " total_volume=" << std::setprecision(17) << total_volume
+                  << std::setprecision(6) << " volume_error=" << std::abs(total_volume - 1.0)
+                  << " min_volume=" << min_volume
                   << " statuses=";
         for (int count : status_counts) std::cout << count << ',';
         std::cout << '\n';
 
         if (!graph_ok || good != n || bad_faces != 0 || max_closure > 1.0e-9 ||
-            max_pair_mismatch > 1.0e-9) exit_code = 2;
+            max_pair_mismatch > 1.0e-9 || std::abs(total_volume - 1.0) > 1.0e-12 ||
+            !(min_volume > 0.0)) exit_code = 2;
     }
     Kokkos::finalize();
     return exit_code;
