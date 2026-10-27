@@ -4,10 +4,22 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace neighbor_search {
+
+enum class RowSort { insertion, team_bitonic };
+
+// Opt-in, synchronized stage measurements. Production calls omit this pointer
+// and retain their original asynchronous launches and single overflow read.
+// Times accumulate across capacity retries and include launch/fence overhead.
+struct StageProfile {
+    double key_count_ms=0, scan_ms=0, scatter_ms=0, cell_order_gather_ms=0;
+    double candidate_fill_ms=0, nearest_order_ms=0, overflow_check_ms=0;
+};
 
 // Gather-style radius search on a dense cell grid over [0,box)^3. Particles
 // are copied into cell order; "slot" q holds particle order(q), and cell c
@@ -34,6 +46,9 @@ struct DenseCellSearch {
     Kokkos::Array<double, 3> box{1.0, 1.0, 1.0};
     bool periodic = false;
     bool nearest_first = false;
+    // Explicit experimental option; configure/rebuild preserve this selection.
+    // The insertion path remains the default until GPU comparison is complete.
+    RowSort row_sort = RowSort::insertion;
     // Lanes cooperating on one particle's search; 1 = one thread per particle.
     int vector_length = 1;
 
@@ -48,6 +63,15 @@ struct DenseCellSearch {
 };
 
 namespace detail {
+
+template<class ExecSpace>
+void record_stage(const ExecSpace& exec, std::optional<Kokkos::Timer>& timer,
+                  double* elapsed) {
+    if (!elapsed) return;
+    exec.fence("neighbor search stage profile");
+    *elapsed+=timer->seconds()*1e3;
+    timer->reset();
+}
 
 template<class View, class... Extents>
 void ensure(View& v, const char* label, Extents... extents) {
@@ -118,7 +142,13 @@ void configure(DenseCellSearch<ExecSpace>& s, int n, Kokkos::Array<double, 3> bo
 // keep the slot order deterministic.
 template<class ExecSpace, class InPositions, class InRadii>
 void build(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
-           const InPositions& in_positions, const InRadii& in_radii) {
+           const InPositions& in_positions, const InRadii& in_radii,
+           StageProfile* profile = nullptr) {
+    std::optional<Kokkos::Timer> stage_timer;
+    if (profile) {
+        exec.fence("neighbor build profiling start");
+        stage_timer.emplace();
+    }
     const int n = s.n, cells = s.cell_count();
     const int nx = s.nx, ny = s.ny, nz = s.nz;
     const double hx = s.hx, hy = s.hy, hz = s.hz;
@@ -138,6 +168,7 @@ void build(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
         keys(i) = key;
         Kokkos::atomic_inc(&cell_counts(key));
     });
+    detail::record_stage(exec,stage_timer,profile ? &profile->key_count_ms : nullptr);
     Kokkos::parallel_scan("dense_cell_scan", Range(exec, 0, cells),
         KOKKOS_LAMBDA(int c, int& update, bool final) {
             const int count = cell_counts(c);
@@ -148,10 +179,12 @@ void build(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
             update += count;
             if (final && c == cells - 1) cell_offsets(cells) = update;
         });
+    detail::record_stage(exec,stage_timer,profile ? &profile->scan_ms : nullptr);
     Kokkos::parallel_for("dense_cell_scatter", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
         const int key = keys(i);
         order(cell_offsets(key) + Kokkos::atomic_fetch_add(&cell_counts(key), 1)) = i;
     });
+    detail::record_stage(exec,stage_timer,profile ? &profile->scatter_ms : nullptr);
     Kokkos::parallel_for("dense_cell_order", Range(exec, 0, cells), KOKKOS_LAMBDA(int c) {
         const int begin = cell_offsets(c), end = cell_offsets(c + 1);
         for (int q = begin + 1; q < end; ++q) {
@@ -167,6 +200,7 @@ void build(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
         }
         cell_counts(c) = 0;
     });
+    detail::record_stage(exec,stage_timer,profile ? &profile->cell_order_gather_ms : nullptr);
 }
 
 namespace detail {
@@ -263,6 +297,72 @@ struct RowSearch {
     }
 };
 
+// Parallel bitonic network in team scratch: each candidate is loaded/stored
+// once, instead of insertion sort's repeated strided global-memory shifts.
+// The network compares (distance squared, slot), matching insertion exactly.
+// Return false for oversized tables so callers can use the preserved fallback.
+// Scratch is bounded at about 24 KiB/team, with no persistent or host allocations.
+template<class ExecSpace>
+bool sort_rows_team(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) {
+    constexpr int max_team_capacity = 2048;
+    if (s.capacity > max_team_capacity || s.capacity < 0) return false;
+    if (s.n == 0) return true;
+    int padded_capacity = 1;
+    while (padded_capacity < s.capacity) padded_capacity *= 2;
+    using Policy = Kokkos::TeamPolicy<ExecSpace>;
+    using Member = typename Policy::member_type;
+    using Scratch = typename ExecSpace::scratch_memory_space;
+    using Distances = Kokkos::View<double*, Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    using Ids = Kokkos::View<int*, Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    const bool host = Kokkos::SpaceAccessibility<Kokkos::HostSpace,
+        typename ExecSpace::memory_space>::accessible;
+    const int team_size = host ? 1 : 128;
+    const auto table = s.table;
+    const auto distance2 = s.distance2;
+    const auto counts = s.counts;
+    const int capacity = s.capacity;
+    const double padding_distance = std::numeric_limits<double>::infinity();
+    const int padding_id = std::numeric_limits<int>::max();
+    Policy policy(exec,s.n,team_size);
+    policy.set_scratch_size(0,Kokkos::PerTeam(
+        Distances::shmem_size(padded_capacity)+Ids::shmem_size(padded_capacity)));
+    Kokkos::parallel_for("dense_neighbor_team_bitonic",policy,KOKKOS_LAMBDA(const Member& member) {
+        const int row = member.league_rank();
+        const int count = Kokkos::clamp(counts(row),0,capacity);
+        int padded = 1;
+        while (padded < count) padded *= 2;
+        Distances distances(member.team_scratch(0),padded_capacity);
+        Ids ids(member.team_scratch(0),padded_capacity);
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(member,padded),[&](int i) {
+            distances(i) = i < count ? distance2(row,i) : padding_distance;
+            ids(i) = i < count ? table(row,i) : padding_id;
+        });
+        member.team_barrier();
+        for (int width=2;width<=padded;width*=2) {
+            for (int stride=width/2;stride>0;stride/=2) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(member,padded),[&](int i) {
+                    const int j = i ^ stride;
+                    if (j <= i) return;
+                    const double a = distances(i), b = distances(j);
+                    const int ia = ids(i), ib = ids(j);
+                    const bool a_less = a < b || (a == b && ia < ib);
+                    const bool b_less = b < a || (b == a && ib < ia);
+                    if ((i & width) == 0 ? b_less : a_less) {
+                        distances(i)=b; distances(j)=a;
+                        ids(i)=ib; ids(j)=ia;
+                    }
+                });
+                member.team_barrier();
+            }
+        }
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(member,count),[&](int i) {
+            distance2(row,i)=distances(i);
+            table(row,i)=ids(i);
+        });
+    });
+    return true;
+}
+
 // One search pass into the table. Rows longer than the capacity store only
 // the first `capacity` entries but record their true count; the maximum count
 // goes to `max_count` so the caller can grow the table and repeat. With
@@ -270,7 +370,13 @@ struct RowSearch {
 // it would have in the one-lane search, so both produce identical rows. With
 // `nearest_first`, each row is then ordered by distance, ties by slot.
 template<class ExecSpace>
-void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) {
+void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
+          StageProfile* profile = nullptr) {
+    std::optional<Kokkos::Timer> stage_timer;
+    if (profile) {
+        exec.fence("neighbor fill profiling start");
+        stage_timer.emplace();
+    }
     const int n = s.n, capacity = s.capacity;
     const bool nearest_first = s.nearest_first;
     const RowSearch<ExecSpace> search{s.positions, s.radii, s.cell_offsets, s.nx, s.ny, s.nz,
@@ -340,7 +446,12 @@ void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) {
             }, Kokkos::Max<int, memory_space>(s.max_count));
     }
 
+    detail::record_stage(exec,stage_timer,profile ? &profile->candidate_fill_ms : nullptr);
     if (!nearest_first) return;
+    if (s.row_sort == RowSort::team_bitonic && sort_rows_team(exec,s)) {
+        detail::record_stage(exec,stage_timer,profile ? &profile->nearest_order_ms : nullptr);
+        return;
+    }
     Kokkos::parallel_for("dense_neighbor_nearest_first", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
         const int count = Kokkos::min(counts(t), capacity);
         for (int c = 1; c < count; ++c) {
@@ -357,20 +468,26 @@ void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) {
             table(t, k) = q;
         }
     });
+    detail::record_stage(exec,stage_timer,profile ? &profile->nearest_order_ms : nullptr);
 }
 
 // Full rebuild with growth on overflow. Returns the number of capacity
 // retries; on return every row fits in the table.
 template<class ExecSpace, class InPositions, class InRadii>
 int rebuild(const ExecSpace& exec, DenseCellSearch<ExecSpace>& s,
-            const InPositions& in_positions, const InRadii& in_radii) {
+            const InPositions& in_positions, const InRadii& in_radii,
+            StageProfile* profile = nullptr) {
+    if (profile) *profile=StageProfile{};
     int retries = 0;
     while (true) {
-        build(exec, s, in_positions, in_radii);
-        fill(exec, s);
+        build(exec, s, in_positions, in_radii, profile);
+        fill(exec, s, profile);
+        std::optional<Kokkos::Timer> overflow_timer;
+        if (profile) overflow_timer.emplace();
         int longest = 0;
         Kokkos::deep_copy(exec, longest, s.max_count);
         exec.fence("neighbor_search::rebuild overflow check");
+        if (profile) profile->overflow_check_ms+=overflow_timer->seconds()*1e3;
         if (longest <= s.capacity) return retries;
         configure(s, s.n, s.box, s.cell_width, s.periodic, longest + longest / 4, s.nearest_first,
                   s.vector_length);

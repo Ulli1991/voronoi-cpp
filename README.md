@@ -1,5 +1,100 @@
 # voronoi-cpp
 
+Workspace profiling is available in `local_voronoi_workspace.hpp` through
+`profile_workspace(...)`, writing one `WorkspaceUsage` record per row. It runs
+separately from production timing; normal calls compile out the counters.
+`local_voronoi_retry.hpp` provides `reconstruct_table_retry` and
+`reconstruct_hydro_retry`: a 64-plane first pass, then the retained 160-plane
+path for rows that overflow, with no extra production buffers or host read.
+The ordinary interfaces and their defaults remain available.
+
+For the experimental scale-aware path, use
+`PlaneWorkspace<64,RelativeClippingTolerance>` as the retry interface's second
+template argument. It uses an arithmetic-scaled plane test and a pivoted
+intersection solve. Local stress checks cover scales 1e-8 through 1e8, rotated
+slivers up to aspect ratio 1e8, distinct near-coincident sites, and a clustered
+periodic cloud with a 4,900-fold radius contrast. An independent long-double
+plane-intersection enumeration checks the small cells. This is not an exact
+predicate implementation; unresolved degeneracies still need further work.
+GPU runtime validation passes (job 31585499): analytic/stress checks and all
+120 CPU/GPU, small/full and numerical-path output comparisons pass. At 32,768
+particles, the relative/pivoted 64-plane GPU path takes 6.52 ms to reconstruct
+and 8.68 ms including search, versus 5.88/8.12 ms for cached legacy/full.
+The smaller workspace reduces common-path private stack about 44%; no material
+speedup from capacity reduction alone was measured. The clustered-cloud test
+certifies 102/128 cells; 26 explicitly lack sufficient reach and are not yet
+automatically recovered. These options remain explicit; defaults are unchanged.
+
+The benchmark accepts two further arguments after the distribution:
+`... cached random 64 relative` selects the smaller workspace with the new
+numerical path. Distributions now include `random` and `gradient` as well as
+the existing three. `construction_stress_check` exercises the difficult cases.
+
+An experimental vertex cache is available without changing existing calls:
+`reconstruct_table<CachedVertexPositions>(...)` and
+`reconstruct_hydro<CachedVertexPositions>(...)`. It reuses each computed vertex
+through clipping, compaction, certification and output. The default remains
+`RecomputedVertexPositions`, preserving the reference path. Cached positions
+add 1,536 bytes of private temporary storage per cell, with no new persistent
+buffers. CPU/GPU checks pass; at 32,768 particles cached clipping takes 5.88 ms
+on an A100 versus 15.29 ms for recomputation, and total construction takes
+8.13 versus 17.58 ms with the parallel neighbor sort. Geometry agrees exactly
+between paths in the tested cases. The private stack grows from 7,104 to 8,640
+bytes/thread while register use falls; choose the cache with this tradeoff in
+mind. NVCC builds can enable `VORONOI_CUDA_RESOURCE_REPORT` to report
+construction-kernel register, stack and spill usage.
+
+The extended check syntax is
+`table_mesh_check output.csv side insertion|team_bitonic recomputed|cached lattice|disordered|regular`.
+Checks include all-particle nearest-site tests on sampled vertices and the
+face-centroid divergence identity, outside the timed sections. The analytic
+check now covers rotated symmetric/asymmetric cells at five scales.
+
+An experimental parallel nearest-first sort is selectable with
+`search.row_sort = neighbor_search::RowSort::team_bitonic`. It sorts each row's
+`(distance squared, slot)` keys in team scratch, preserving deterministic ties
+and avoiding repeated insertion-sort shifts through global memory. Table
+capacities above 2,048 use the retained insertion fallback. The option persists
+across capacity growth; insertion remains the default for now.
+Update: job 31583755 validated both sorters on CPU/GPU. At 32,768 particles,
+the team sort reduces A100 neighbor rebuild from 22.51 to 2.26 ms and full
+diagnostic construction from 37.76 to 17.52 ms, with identical geometry.
+It remains explicitly selectable; CPU insertion is faster than the host team
+network. The detailed results and current construction-only scope are in HANDOFF.md.
+`neighbor_sort_check` covers ties, padding and overflow truncation; invoke
+`table_mesh_check output.csv 12 team_bitonic` to compare exact row ordering
+against insertion and run the geometry checks using the new sort.
+
+`local_voronoi_hydro.hpp` adds `reconstruct_hydro`, a compact table-input path
+returning cell volumes, cell centroid offsets, face area vectors and face
+centroid offsets. It integrates moments during the same clipping/face traversal
+as the diagnostic interface and requires no face-vertex storage. Centroids are
+relative to each generator in its periodic image; only successful rows and
+faces below their row count are valid. The fixed output footprint is 1,704 bytes
+per particle versus 25,608 bytes for the diagnostic interface (excluding neighbor
+storage and clipping workspace). CPU/GPU analytic and integration checks pass
+through 32,768 particles. Compact hydro reconstruction takes 14.9 ms on an A100
+versus 189.4 ms on 18 CPU threads at that size; GPU nearest-first ordering
+dominates the pipeline at 21.4 ms. See HANDOFF.md for the measured scope.
+
+Pass an optional `neighbor_search::StageProfile*` to `rebuild` for synchronized
+grid key/count, scan, scatter, cell ordering/gather, candidate fill, nearest-first
+ordering and overflow-check timings. Profiling introduces per-stage fences;
+use ordinary calls to measure full pipeline performance. The extended
+`table_mesh_check` reports both profiles and unprofiled diagnostic/hydro timings.
+
+The direct neighbor-table integration is available in `local_voronoi_table.hpp`
+through `local_voronoi::reconstruct_table`. Pass the completed dense search's
+`positions`, `counts`, `table`, and `radii` views, using nearest-first candidate
+ordering. Results and face neighbor IDs use search slot order;
+`search.order(slot)` recovers the original particle ID. This path avoids a CSR
+copy and preserves the existing reconstruction interface. `table_mesh_check`
+is the new end-to-end correctness executable. gpudev CPU/GPU checks pass through
+32,768 particles; separate search, reconstruction and pipeline timings are
+recorded in HANDOFF.md.
+See [HANDOFF.md](HANDOFF.md) for its checks and remaining work. Descriptions of
+`mesh_benchmark` below still refer to its existing host-built graph path.
+
 A small Kokkos prototype for reconstructing local 3D Voronoi cells from particle positions and a candidate-neighbor graph. The goal is to test the geometric reconstruction independently before connecting it to a meshless finite-mass or finite-volume solver.
 
 ## What is here
