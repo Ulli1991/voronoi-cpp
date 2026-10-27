@@ -1,0 +1,8 @@
+build*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+particles_128.csv
+faces_128.csv
+voronoi_128.png
