@@ -1,0 +1,6 @@
+# Kokkos reference-counted Views are not modeled by NewDeleteLeaks.
+# AddressSanitizer/LeakSanitizer in CI checks real lifetime errors.
+Checks: '-*,clang-analyzer-*,-clang-analyzer-cplusplus.NewDeleteLeaks,bugprone-sizeof-expression,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation,performance-unnecessary-copy-initialization'
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*src/(neighbour_search|voronoi_construct)/.*'
+FormatStyle: none

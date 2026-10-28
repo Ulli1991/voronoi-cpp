@@ -208,7 +208,7 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
         for (int i=0;i<n;++i) if (usage(i).status==local_voronoi::plane_capacity) ++fallback_rows;
         fallback_usage=decltype(fallback_usage)("fallback_usage",n);
         local_voronoi::profile_workspace<VertexStorage,local_voronoi::PlaneWorkspace<
-            local_voronoi::max_planes,typename Workspace::tolerance>>(Exec{},search.positions,
+            local_voronoi::max_planes,typename Workspace::tolerance,Workspace::early_stop>>(Exec{},search.positions,
             search.counts,search.table,search.radii,box,fallback_usage);
         usage=host(fallback_usage);
     }
@@ -413,9 +413,9 @@ int main(int argc,char** argv) {
         const std::string distribution=argc>5 ? argv[5] : "lattice";
         const int planes=argc>6 ? std::stoi(argv[6]) : local_voronoi::max_planes;
         const std::string tolerance=argc>7 ? argv[7] : "legacy";
-        if (tolerance!="legacy" && tolerance!="relative")
-            throw std::invalid_argument("clipping policy must be legacy or relative");
-        if (tolerance=="relative" && vertices!="cached")
+        if (tolerance!="legacy" && tolerance!="relative" && tolerance!="relative_early")
+            throw std::invalid_argument("clipping policy must be legacy, relative or relative_early");
+        if (tolerance!="legacy" && vertices!="cached")
             throw std::invalid_argument("relative benchmark uses cached vertices");
         if (planes!=64 && planes!=local_voronoi::max_planes)
             throw std::invalid_argument("plane capacity must be 64 or 160");
@@ -425,7 +425,11 @@ int main(int argc,char** argv) {
             distribution!="random" && distribution!="gradient")
             throw std::invalid_argument("distribution must be lattice, disordered, regular, random or gradient");
         const auto sort=mode=="team_bitonic" ? neighbor_search::RowSort::team_bitonic : neighbor_search::RowSort::insertion;
-        if (tolerance=="relative" && planes==64)
+        if (tolerance=="relative_early" && planes==64)
+            result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
+        else if (tolerance=="relative_early")
+            result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<160,local_voronoi::RelativeClippingTolerance,true>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
+        else if (tolerance=="relative" && planes==64)
             result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<
                 64,local_voronoi::RelativeClippingTolerance>>(argc>1 ? argv[1] : nullptr,
                 argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);

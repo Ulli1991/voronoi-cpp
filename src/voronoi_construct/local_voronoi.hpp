@@ -60,12 +60,23 @@ struct RelativeClippingTolerance {
 
 // Plane storage can be tuned independently of the public output capacities.
 // The original 160-plane workspace remains the reference/default.
-template<int Planes = max_planes, class Tolerance = LegacyClippingTolerance>
+template<int Planes = max_planes, class Tolerance = LegacyClippingTolerance, bool EarlyStop = false>
 struct PlaneWorkspace {
     static_assert(Planes >= n_box_planes && Planes <= 65535,
                   "plane capacity must fit the vertex plane indices");
     static constexpr int plane_capacity = Planes;
+    static constexpr bool early_stop = EarlyStop;
     using tolerance = Tolerance;
+};
+
+// The clipping state can be owned privately or supplied by a team scratch
+// allocation. Keeping the state together removes storage ownership from the
+// geometry algorithm without changing its arithmetic or public defaults.
+template<int Planes>
+struct CellClippingState {
+    Kokkos::Array<Plane,Planes> planes;
+    Kokkos::Array<VertexPlanes,max_vertices> vertices;
+    Kokkos::Array<Edge,max_hole_edges> hole;
 };
 
 // Compile-time disabled on normal calls: no counters, output or atomics.
@@ -201,7 +212,8 @@ struct CachedVertexPositions {
     }
 };
 
-KOKKOS_INLINE_FUNCTION int edge_add_or_cancel(Kokkos::Array<Edge,max_hole_edges>& edges,
+template<class Edges>
+KOKKOS_INLINE_FUNCTION int edge_add_or_cancel(Edges& edges,
                                                int& count, std::uint16_t a,
                                                std::uint16_t b) {
     for (int i=0;i<count;++i) {
@@ -226,18 +238,19 @@ template<class VertexStorage = RecomputedVertexPositions,
          class Positions, class RowOffsets, class NeighborIds,
          class FaceCounts, class FaceIds, class FaceAreas, class FaceVertexCounts,
          class FaceVertices, class RowStatus, class Geometry = DiagnosticGeometry,
-         class Trace = NoWorkspaceTrace>
+         class Trace = NoWorkspaceTrace,
+         class CellState = CellClippingState<Workspace::plane_capacity>>
 KOKKOS_INLINE_FUNCTION void reconstruct_row(
     int row, const Positions positions, const RowOffsets neighbor_offsets,
     const NeighborIds neighbor_ids, double reach, const Kokkos::Array<double,3>& box,
     const FaceCounts face_counts, const FaceIds face_ids,
     const FaceAreas face_areas, const FaceVertexCounts face_vertex_counts,
     const FaceVertices face_vertices, const RowStatus row_status,
-    Geometry geometry = {}, Trace trace = {}) {
-    Kokkos::Array<Plane,Workspace::plane_capacity> planes;
-    Kokkos::Array<VertexPlanes,max_vertices> vertices;
-    Kokkos::Array<Edge,max_hole_edges> hole;
-    VertexStorage vertex_storage;
+    Geometry geometry = {}, Trace trace = {}, VertexStorage vertex_storage = {},
+    CellState state = {}) {
+    auto& planes=state.planes;
+    auto& vertices=state.vertices;
+    auto& hole=state.hole;
     int plane_count=n_box_planes;
     int vertex_count=8;
     int status=success;
@@ -265,6 +278,9 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
         vertex_storage.initialize(c,reach);
     }
 
+    // A possibly stale enclosing radius is conservative: clipping only shrinks
+    // the cell. Refresh it during the existing classification traversal.
+    double enclosing_radius2=3.0*reach*reach;
     for (int q=neighbor_offsets(row); q<neighbor_offsets(row+1); ++q) {
         trace.candidate();
         const int other=neighbor_ids(q);
@@ -276,27 +292,54 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
         if (box[2]>0) d.z-=box[2]*Kokkos::floor(d.z/box[2]+0.5);
         const double d2=dot(d,d);
         if (Tolerance::coincident(d2)) { status=coincident_particles; break; }
+        if constexpr (Workspace::early_stop) {
+            // A bisector farther than the enclosing sphere cannot cut it.
+            // Check the entire suffix rather than trusting input ordering;
+            // unsorted rows and late coincidences retain the reference path.
+            const double cutoff=4.0*enclosing_radius2*(1.0+1.0e-10);
+            if (Kokkos::isfinite(cutoff) && d2>cutoff) {
+                bool safe=true;
+                for (int k=q+1;k<neighbor_offsets(row+1);++k) {
+                    const int id=neighbor_ids(k);
+                    Vec3 delta{positions(id,0)-positions(row,0),
+                               positions(id,1)-positions(row,1),
+                               positions(id,2)-positions(row,2)};
+                    if (box[0]>0) delta.x-=box[0]*Kokkos::floor(delta.x/box[0]+0.5);
+                    if (box[1]>0) delta.y-=box[1]*Kokkos::floor(delta.y/box[1]+0.5);
+                    if (box[2]>0) delta.z-=box[2]*Kokkos::floor(delta.z/box[2]+0.5);
+                    const double distance2=dot(delta,delta);
+                    if (!(distance2>cutoff) || Tolerance::coincident(distance2)) { safe=false; break; }
+                }
+                if (safe) break;
+            }
+        }
 
         // The Voronoi half-space is d.x <= |d|^2/2, with outward normal d.
-        bool outside[max_vertices];
+        static_assert(max_vertices<=64, "classification mask needs at most 64 vertices");
+        std::uint64_t outside_mask=0;
         bool any_outside=false;
         const double plane_offset=0.5*d2;
         const double tol=Tolerance::plane_tolerance(d2,reach);
+        double visited_radius2=0.0;
         for (int v=0;v<vertex_count;++v) {
             Vec3 x;
             trace.vertex_test();
             if (!position(v,x)) { status=degenerate_geometry; break; }
-            outside[v]=Tolerance::outside(d,x,plane_offset,tol);
-            any_outside=any_outside||outside[v];
+            if constexpr (Workspace::early_stop)
+                visited_radius2=Kokkos::fmax(visited_radius2,dot(x,x));
+            const bool is_outside=Tolerance::outside(d,x,plane_offset,tol);
+            if (is_outside) outside_mask|=std::uint64_t(1)<<v;
+            any_outside=any_outside||is_outside;
         }
         if (status!=success) break;
+        if constexpr (Workspace::early_stop) enclosing_radius2=visited_radius2;
         if (!any_outside) continue;
         trace.planes(plane_count+1);
         if (plane_count==Workspace::plane_capacity) { status=plane_capacity; break; }
 
         int hole_count=0;
         for (int v=0;v<vertex_count;++v) {
-            if (!outside[v]) continue;
+            if (!(outside_mask & (std::uint64_t(1)<<v))) continue;
             const auto p=vertices[v].p;
             for (int e=0;e<3;++e) {
                 status=edge_add_or_cancel(hole,hole_count,p[e],p[(e+1)%3]);
@@ -310,7 +353,7 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
         planes[new_plane]={d,plane_offset,other};
         int kept=0;
         for (int v=0;v<vertex_count;++v)
-            if (!outside[v]) {
+            if (!(outside_mask & (std::uint64_t(1)<<v))) {
                 vertex_storage.keep(kept,v);
                 vertices[kept++]=vertices[v];
             }
@@ -324,6 +367,8 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
             trace.created_vertex();
             if (!vertex_position<Tolerance>(vertices[kept],planes,x)) { status=degenerate_geometry; break; }
             vertex_storage.set(kept,x);
+            if constexpr (Workspace::early_stop)
+                enclosing_radius2=Kokkos::fmax(enclosing_radius2,dot(x,x));
             ++kept;
         }
         if (status!=success) break;

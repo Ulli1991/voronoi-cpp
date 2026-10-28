@@ -1,4 +1,5 @@
 """Plot offline scaling CSVs; requires Matplotlib only for rendering."""
+
 import argparse
 import csv
 from pathlib import Path
@@ -30,11 +31,15 @@ def main():
     ):
         rate_key = key + ("_Mcells_s" if key == "reconstruction" else "_Mparticles_s")
         axes[0].semilogx(n, [float(row[rate_key]) for row in rows], "o-", label=label)
-        axes[1].loglog(n, [float(row[key + "_ms"]) for row in rows], "o-", label=label.split(" (")[0])
+        axes[1].loglog(
+            n, [float(row[key + "_ms"]) for row in rows], "o-", label=label.split(" (")[0]
+        )
     axes[0].set_ylabel("Throughput (millions/s)")
     axes[1].set_ylabel("Median time (ms)")
-    for key, label in (("estimated_array_bytes", "Array payload estimate"),
-                       ("max_observed_device_used_bytes", "Observed device usage")):
+    for key, label in (
+        ("estimated_array_bytes", "Array payload estimate"),
+        ("max_observed_device_used_bytes", "Observed device usage"),
+    ):
         axes[2].semilogx(n, [float(row[key]) / 2**30 for row in rows], "o-", label=label)
     total = float(rows[-1]["total_device_bytes"]) / 2**30
     if total:

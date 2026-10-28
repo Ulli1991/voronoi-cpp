@@ -1,0 +1,44 @@
+name: Checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install ruff==0.11.13
+      - run: ruff check python
+      - run: ruff format --check python
+  cpp:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizers: ['OFF', 'ON']
+    env:
+      OMP_NUM_THREADS: '2'
+      OMP_PROC_BIND: 'false'
+      UBSAN_OPTIONS: 'halt_on_error=1'
+      ASAN_OPTIONS: 'detect_leaks=1'
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang-tidy ninja-build
+      - name: Build host Kokkos
+        run: |
+          git clone --depth 1 --branch 5.0.2 https://github.com/kokkos/kokkos.git /tmp/kokkos
+          cmake -S /tmp/kokkos -B /tmp/kokkos-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKokkos_ENABLE_OPENMP=OFF -DCMAKE_INSTALL_PREFIX=/tmp/kokkos-install
+          cmake --build /tmp/kokkos-build --parallel 2
+          cmake --install /tmp/kokkos-build
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/tmp/kokkos-install -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DVORONOI_SANITIZERS=${{ matrix.sanitizers }}
+          cmake --build build --parallel 2
+      - name: C++ static checks
+        if: matrix.sanitizers == 'OFF'
+        run: bash scripts/lint_cpp.sh build
+      - name: CPU correctness tests
+        run: ctest --test-dir build --output-on-failure --parallel 2

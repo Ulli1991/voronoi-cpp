@@ -1,163 +1,288 @@
 # voronoi-cpp
 
-Workspace profiling is available in `local_voronoi_workspace.hpp` through
-`profile_workspace(...)`, writing one `WorkspaceUsage` record per row. It runs
-separately from production timing; normal calls compile out the counters.
-`local_voronoi_retry.hpp` provides `reconstruct_table_retry` and
-`reconstruct_hydro_retry`: a 64-plane first pass, then the retained 160-plane
-path for rows that overflow, with no extra production buffers or host read.
-The ordinary interfaces and their defaults remain available.
+Kokkos C++17 library for parallel neighbor finding and fully local 3D Voronoi
+cell reconstruction. The current focus is construction speed, numerical
+robustness and memory use, before any hydrodynamics operations. CPU/OpenMP and
+single-GPU/CUDA paths have been validated. Multi-GPU execution is future work.
 
-For the experimental scale-aware path, use
-`PlaneWorkspace<64,RelativeClippingTolerance>` as the retry interface's second
-template argument. It uses an arithmetic-scaled plane test and a pivoted
-intersection solve. Local stress checks cover scales 1e-8 through 1e8, rotated
-slivers up to aspect ratio 1e8, distinct near-coincident sites, and a clustered
-periodic cloud with a 4,900-fold radius contrast. An independent long-double
-plane-intersection enumeration checks the small cells. This is not an exact
-predicate implementation; unresolved degeneracies still need further work.
-GPU runtime validation passes (job 31585499): analytic/stress checks and all
-120 CPU/GPU, small/full and numerical-path output comparisons pass. At 32,768
-particles, the relative/pivoted 64-plane GPU path takes 6.52 ms to reconstruct
-and 8.68 ms including search, versus 5.88/8.12 ms for cached legacy/full.
-The smaller workspace reduces common-path private stack about 44%; no material
-speedup from capacity reduction alone was measured. The clustered-cloud test
-certifies 102/128 cells; 26 explicitly lack sufficient reach and are not yet
-automatically recovered. These options remain explicit; defaults are unchanged.
+## Construction interfaces
 
-The benchmark accepts two further arguments after the distribution:
-`... cached random 64 relative` selects the smaller workspace with the new
-numerical path. Distributions now include `random` and `gradient` as well as
-the existing three. `construction_stress_check` exercises the difficult cases.
+| File | Purpose |
+|---|---|
+| `src/neighbour_search/neighbor_search.hpp` | Dense counting-sort cell grid, radius queries and persistent neighbor tables |
+| `src/voronoi_construct/local_voronoi.hpp` | Local plane clipping, fixed-capacity workspaces and CSR input |
+| `src/voronoi_construct/local_voronoi_table.hpp` | Direct reconstruction from the search table, with diagnostic face vertices |
+| `src/voronoi_construct/local_voronoi_hydro.hpp` | Compact geometry: volumes, cell centroids, face areas and face centroids |
+| `src/voronoi_construct/local_voronoi_retry.hpp` | Small-workspace pass followed by full-workspace recovery of plane overflows |
+| `src/voronoi_construct/local_voronoi_workspace.hpp` | Separate instrumented kernel for workspace and operation counts |
 
-An experimental vertex cache is available without changing existing calls:
-`reconstruct_table<CachedVertexPositions>(...)` and
-`reconstruct_hydro<CachedVertexPositions>(...)`. It reuses each computed vertex
-through clipping, compaction, certification and output. The default remains
-`RecomputedVertexPositions`, preserving the reference path. Cached positions
-add 1,536 bytes of private temporary storage per cell, with no new persistent
-buffers. CPU/GPU checks pass; at 32,768 particles cached clipping takes 5.88 ms
-on an A100 versus 15.29 ms for recomputation, and total construction takes
-8.13 versus 17.58 ms with the parallel neighbor sort. Geometry agrees exactly
-between paths in the tested cases. The private stack grows from 7,104 to 8,640
-bytes/thread while register use falls; choose the cache with this tradeoff in
-mind. NVCC builds can enable `VORONOI_CUDA_RESOURCE_REPORT` to report
-construction-kernel register, stack and spill usage.
+The search feeds reconstruction directly, without a CSR conversion. Outputs and
+face neighbor IDs use search slot order; `search.order(slot)` gives the original
+particle ID. Centroid offsets are relative to each generator in its local
+periodic image. Only successful rows and faces below their row count are valid.
 
-The extended check syntax is
-`table_mesh_check output.csv side insertion|team_bitonic recomputed|cached lattice|disordered|regular`.
-Checks include all-particle nearest-site tests on sampled vertices and the
-face-centroid divergence identity, outside the timed sections. The analytic
-check now covers rotated symmetric/asymmetric cells at five scales.
+Each cell clips a temporary bounding cube against candidate bisector planes.
+Certification requires removal of the initial boundary and sufficient search
+reach for the resulting vertices. The caller must supply a complete candidate
+list within that reach. Periodic search radii must be below half the box size.
+Capacity overflow, coincidence, degeneracy and insufficient reach are explicit
+statuses; failed cells must not be consumed as valid geometry.
 
-An experimental parallel nearest-first sort is selectable with
-`search.row_sort = neighbor_search::RowSort::team_bitonic`. It sorts each row's
-`(distance squared, slot)` keys in team scratch, preserving deterministic ties
-and avoiding repeated insertion-sort shifts through global memory. Table
-capacities above 2,048 use the retained insertion fallback. The option persists
-across capacity growth; insertion remains the default for now.
-Update: job 31583755 validated both sorters on CPU/GPU. At 32,768 particles,
-the team sort reduces A100 neighbor rebuild from 22.51 to 2.26 ms and full
-diagnostic construction from 37.76 to 17.52 ms, with identical geometry.
-It remains explicitly selectable; CPU insertion is faster than the host team
-network. The detailed results and current construction-only scope are in HANDOFF.md.
-`neighbor_sort_check` covers ties, padding and overflow truncation; invoke
-`table_mesh_check output.csv 12 team_bitonic` to compare exact row ordering
-against insertion and run the geometry checks using the new sort.
+The compact output occupies **1,704 bytes/particle**, compared with **25,608**
+for diagnostic output, excluding inputs, neighbor tables and private workspace.
+Despite its `hydro` name, the compact interface performs geometry only.
 
-`local_voronoi_hydro.hpp` adds `reconstruct_hydro`, a compact table-input path
-returning cell volumes, cell centroid offsets, face area vectors and face
-centroid offsets. It integrates moments during the same clipping/face traversal
-as the diagnostic interface and requires no face-vertex storage. Centroids are
-relative to each generator in its periodic image; only successful rows and
-faces below their row count are valid. The fixed output footprint is 1,704 bytes
-per particle versus 25,608 bytes for the diagnostic interface (excluding neighbor
-storage and clipping workspace). CPU/GPU analytic and integration checks pass
-through 32,768 particles. Compact hydro reconstruction takes 14.9 ms on an A100
-versus 189.4 ms on 18 CPU threads at that size; GPU nearest-first ordering
-dominates the pipeline at 21.4 ms. See HANDOFF.md for the measured scope.
+## Performance options
 
-Pass an optional `neighbor_search::StageProfile*` to `rebuild` for synchronized
-grid key/count, scan, scatter, cell ordering/gather, candidate fill, nearest-first
-ordering and overflow-check timings. Profiling introduces per-stage fences;
-use ordinary calls to measure full pipeline performance. The extended
-`table_mesh_check` reports both profiles and unprofiled diagnostic/hydro timings.
+Existing reference paths and defaults remain available:
 
-The direct neighbor-table integration is available in `local_voronoi_table.hpp`
-through `local_voronoi::reconstruct_table`. Pass the completed dense search's
-`positions`, `counts`, `table`, and `radii` views, using nearest-first candidate
-ordering. Results and face neighbor IDs use search slot order;
-`search.order(slot)` recovers the original particle ID. This path avoids a CSR
-copy and preserves the existing reconstruction interface. `table_mesh_check`
-is the new end-to-end correctness executable. gpudev CPU/GPU checks pass through
-32,768 particles; separate search, reconstruction and pipeline timings are
-recorded in HANDOFF.md.
-See [HANDOFF.md](HANDOFF.md) for its checks and remaining work. Descriptions of
-`mesh_benchmark` below still refer to its existing host-built graph path.
+- Search defaults to insertion sorting. Select
+  `search.row_sort = neighbor_search::RowSort::team_bitonic` for the parallel
+  nearest-first sort; capacities above 2,048 retain insertion fallback.
+- Reconstruction defaults to `RecomputedVertexPositions`. Select
+  `CachedVertexPositions` to reuse intersections through clipping and output.
+- `reconstruct_table_retry` and `reconstruct_hydro_retry` default to cached
+  vertices and a 64-plane first pass, retrying plane overflows with 160 planes.
+- `PlaneWorkspace<64,RelativeClippingTolerance>` selects arithmetic-scaled
+  clipping tolerances and pivoted intersection solves. Legacy tolerances and
+  determinant-ratio intersections remain the ordinary default/reference.
 
-A small Kokkos prototype for reconstructing local 3D Voronoi cells from particle positions and a candidate-neighbor graph. The goal is to test the geometric reconstruction independently before connecting it to a meshless finite-mass or finite-volume solver.
+For example, the compact experimental path is
+`reconstruct_hydro_retry<CachedVertexPositions, PlaneWorkspace<64,RelativeClippingTolerance>>(...)`
+within the `local_voronoi` namespace. See `src/test/construction_scaling.cpp` for a full
+search-to-geometry example with output allocation and validation.
 
-## What is here
+An optional `neighbor_search::StageProfile*` passed to `rebuild` records search
+stages with extra fences. `profile_workspace(...)` records per-row peaks and
+operation counts in a separate kernel. Both are excluded from production
+benchmark timing. `VORONOI_CUDA_RESOURCE_REPORT=ON` enables NVCC resource reports
+for `table_mesh_check`.
 
-Candidate order can affect temporary workspace use. The mesh stress test orders candidates by distance from the cell center, which avoids transient-capacity failures in the tested lattice; a production neighbor-list path should preserve or provide this ordering, or increase and validate the workspace capacities.
+## Build and checks
 
-`local_voronoi.hpp` clips a temporary cube by the perpendicular-bisector planes associated with each candidate neighbor. For each cell it returns face areas, neighbor IDs, and face vertices. It uses fixed-capacity storage so a device kernel can report overflow or an uncertified cell rather than silently truncating the geometry. A successful row is certified against the supplied search radius. The caller must provide every particle close enough to affect that cell.
-
-`local_voronoi_example` makes a reproducible 128-particle periodic example, uses an all-to-all candidate graph, checks cell closure and pairwise face consistency, and writes CSV files. `plot_mesh.py` renders those files. This is a correctness example, not a scalable neighbor search: the all-to-all graph is only for a tiny demonstration. The reconstruction currently uses double precision; periodic image handling, degenerate configurations, and capacity limits need further validation.
-
-`neighbor_search.hpp` is the radius search intended for production use. It sorts particles into a dense cell grid with a deterministic counting sort, copies them into cell order, and writes each particle's neighbors into a fixed-capacity table with a per-row count. Buffers persist across rebuilds and are reused without zeroing, so a rebuild allocates nothing and needs one host read, the overflow check; on overflow, `rebuild` grows the table and repeats. It supports periodic boxes (radii below half the box), per-particle radii, optional nearest-first row ordering, and, for small particle counts on a GPU, several vector lanes per particle. The rebuild can be captured as one Kokkos graph.
-
-`neighbor_benchmark` times that search and compares it with a sorted-cell search over occupied cells and a median-split BVH whose build is host-side. It uses uniform, jittered-lattice, clustered, and density-gradient point sets whose radii scale with n^(-1/3), so the mean neighbor count is independent of n, and it reports the median of repeated runs after a warm-up. Results are checked against an all-pairs oracle up to 32,768 particles and against the BVH above that. Usage: `neighbor_benchmark [n] [radius_scale] [repeats] [all|dense|timing] [periodic]`; `timing` skips all checks.
-
-`mesh_benchmark` exercises periodic neighbor construction and Voronoi geometry together on a jittered lattice. It checks the candidate graph against an all-pairs periodic search for up to 8,192 particles, then runs the geometry kernel and checks certification, area closure, shared-face consistency, and volume conservation: the cell volumes must sum to the box volume to within 1e-12, and every cell volume must be positive. Its neighbor graph is generated on the host from a structured cell stencil, so it is a geometry stress test rather than a GPU neighbor-search benchmark.
-
-## Build
-
-Build Kokkos with the backend you want to use, then point CMake at that installation. For example, for an existing Kokkos installation:
+Configure against a Kokkos installation with the desired backend:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/kokkos
 cmake --build build -j
+./build/hydro_geometry_check
+./build/construction_stress_check
+./build/neighbor_sort_check
+./build/table_mesh_check faces.csv 12 team_bitonic cached lattice 64 relative
 ```
 
-Run the small geometry example and neighbor-search benchmark:
+CUDA builds require a compatible compiler/toolchain and CUDA-enabled Kokkos
+(e.g. its `nvcc_wrapper` as `CMAKE_CXX_COMPILER`). These commands execute locally;
+cluster runs must use an approved allocation.
+
+`table_mesh_check` arguments are:
+
+```text
+table_mesh_check output.csv side insertion|team_bitonic recomputed|cached lattice|disordered|regular|random|gradient 160|64 legacy|relative
+```
+
+Its test sizes are 12–32 per dimension; the relative path requires cached
+vertices. It checks candidate completeness, certification, volumes, closure,
+shared faces, compact moments and sampled all-site nearest-vertex conditions.
+`python/compare_faces.py` compares geometry CSVs across paths/backends.
+
+`hydro_geometry_check` covers analytic rotated and asymmetric cells, scales,
+invalid inputs and forced workspace recovery. `construction_stress_check` uses
+an independent long-double plane-triple oracle for difficult small cells.
+`neighbor_sort_check` covers ties, padding and the oversized-table fallback.
+
+The original `local_voronoi_example`, `neighbor_benchmark`, `mesh_benchmark`
+and `python/plot_mesh.py` remain available. The tiny example uses an all-to-all graph;
+`mesh_benchmark` uses a host-generated graph. Use the table integration or
+scaling benchmark for the actual search-plus-construction pipeline. Plotting
+requires Matplotlib.
+
+## Validated performance and limits
+
+Job **31585499** passed 194 internal result rows and 120 output comparisons on
+Raven: CPU/GPU, small/full workspaces and legacy/relative numerics. The table
+below uses 32,768 jittered particles, five warmed repetitions, one A100 40GB
+versus 18 OpenMP threads. CPU uses insertion sorting; GPU uses team sorting.
+These are diagnostic-output timings, in milliseconds:
+
+| Cached path | CPU construction | CPU combined | GPU construction | GPU combined |
+|---|---:|---:|---:|---:|
+| Legacy, 160 planes | 46.786 | 74.627 | 5.880 | 8.120 |
+| Legacy, 64 + retry | 47.118 | 75.029 | 5.988 | 8.141 |
+| Relative/pivoted, 160 | 60.260 | 87.950 | 6.439 | 8.658 |
+| Relative/pivoted, 64 + retry | 60.263 | 88.182 | 6.524 | 8.684 |
+
+The last path with **compact output** takes **6.071 ms construction / 8.360 ms
+combined** on the GPU. These are earlier integration measurements, not results
+from the new large scaling sweep.
+
+The 64-plane workspace reduces the cached relative path's compiler-reported
+private frame from 8,736 to 4,896 bytes; capacity reduction alone did not give a
+material speedup. The full fallback retains its larger frame. No register spills
+were reported, but private arrays still use local memory. These frame sizes are
+not total GPU memory usage or measurements of runtime memory traffic.
+
+Stress coverage includes scales 1e-8 through 1e8, rotated slivers up to aspect
+ratio 1e8, distinct near-coincident sites and a periodic clustered cloud with a
+4,900-fold radius contrast. Sliver errors reach about 6e-9 under
+conditioning-aware bounds. This is floating-point geometry, not exact predicates
+or arbitrary-degeneracy support. The clustered test certifies 102/128 cells;
+26 explicitly lack sufficient reach. Automatic reach enlargement remains to be
+implemented. No particle merging, splitting, relaxation or hydro updates occur.
+
+## Offline single-GPU scaling
+
+`construction_scaling` measures repeated complete reconstruction of fixed input:
 
 ```sh
-./build/local_voronoi_example
-./build/neighbor_benchmark 8192
-./build/mesh_benchmark 16
+./build/construction_scaling 32 5 relative scaling.csv
 ```
 
-The example writes `particles_128.csv` and `faces_128.csv` to the current directory. To plot them, install Matplotlib and run `python3 plot_mesh.py` from the repository root.
+Arguments are side length (12–1024), repetitions (1–101), policy
+(`relative` or `legacy`) and optional append-only CSV path. The CPU build allows
+only sizes through 32 cubed for smoke checks. The scaling workload is a periodic
+jittered lattice generated on-device, radius `3.5/side`, approximately constant
+neighbor count, fixed neighbor capacity 250, team sorting, cached vertices,
+64-plane retry and compact output. It does not represent irregular-cloud scaling.
 
-For GPU experiments, first build or load Kokkos with the relevant CUDA or HIP backend and a compatible compiler/toolchain. Configure this project against that Kokkos installation, then confirm the CMake output lists `CUDA` or `HIP` under enabled Kokkos devices. `neighbor_benchmark` exercises cell search and CSR construction on the selected execution space; `mesh_benchmark` exercises cell reconstruction there. A useful first GPU run is:
+Reported median times and throughput are separate:
+
+| Stage | Throughput |
+|---|---|
+| Neighbor rebuild | Million particles processed/s |
+| Local reconstruction | Million cells reconstructed/s |
+| Combined rebuild + reconstruction | Million particles processed/s |
+
+Each rate is `N / elapsed_seconds / 1e6`; these are construction rates, not cell
+updates or hydro steps. Input generation, two warmups, correctness checks and
+CSV output are outside timing. Validation checks every cell's status, positive
+volume, finite moments, closure and centroid tensor, global volume, and sampled
+neighbor lists against a device all-pairs oracle.
+
+`scripts/run_scaling_gpudev.sh` prepares a 15-minute, one-A100 job with four CPU cores.
+It tries sides 32, 48, 64, 96, 128, 160, 192, 256, 512 and 1024 until the first
+memory exclusion, then bisects to the largest integer side admitted by its
+memory budget. Every size runs in a fresh process. Before array allocation it
+reserves the larger of 2 GiB or 15% of device capacity; oversized cases append
+`SKIP_MEMORY` and return 77. Other errors stop the sweep.
+
+The current live array payload is approximately 4,780 bytes/particle plus the
+dense grid. Thus 1024 cubed needs roughly 5 TB, and a 40GB GPU is expected to
+reach between 128 cubed and 256 cubed. The sweep determines a conservative
+budget ceiling, not the absolute allocation limit. CSV memory fields distinguish
+estimated array payload from sampled total device usage; the latter includes
+runtime/context allocations and is not a guaranteed peak measurement.
+
+**Scaling job 31589055 completed successfully in 2m38s.** All nine measured
+sizes passed with zero validation errors. The largest admitted size was
+195 cubed (7,414,875 particles); 196 cubed exceeded the conservative memory
+budget and was skipped before allocation. At 195 cubed, search took 555.645 ms,
+reconstruction 1,196.984 ms and the combined pipeline 1,751.970 ms: respectively
+13.345 million particles/s, 6.195 million cells/s and 4.232 million particles/s.
+Maximum sampled device usage was 37.70 GB (35.11 GiB), not a guaranteed peak.
+The skipped sizes are budget exclusions, not geometry failures. Ask before
+submitting any further cluster test job. Jobs run independently of the console. Results go to
+`build-gpu-scaling/<jobid>/scaling.csv`, with log
+`build-table-validation/scaling-offline-<jobid>.out`.
+
+Optional plotting (requires Matplotlib):
 
 ```sh
-./build/neighbor_benchmark 4096
-./build/mesh_benchmark 16
+python3 python/plot_construction_scaling.py build-gpu-scaling/<jobid>/scaling.csv
 ```
 
-The mesh benchmark allocates fixed-capacity face output arrays, about 100 MB at 4,096 particles.
+This produces throughput, timing and memory panels in PNG and PDF. CSV collection
+does not depend on plotting packages.
 
-### Measured on Raven
+## Development record
 
-On one NVIDIA A100-SXM4-40GB (Kokkos 5.0.99, CUDA 13.0, GCC 14.1) and one node with two Intel Xeon Platinum 8360Y processors (72 cores, OpenMP, GCC 15.1), both benchmarks pass all of their checks. The mesh benchmark certifies every cell at 1,728, 4,096, and 32,768 particles, and the total volume matches the box to within 3e-15. Neighbor-search rows match the reference exactly for every distribution, variant, periodic and non-periodic box, and lane count tested.
+See [HANDOFF.md](HANDOFF.md) for validation logs, historical measurements and
+remaining work. The previous README is preserved in
+[docs/README-before-offline-scaling.md](docs/README-before-offline-scaling.md).
+Existing code, reference paths and artifacts are retained.
 
-Median time for a full neighbor-search rebuild, uniform points, non-periodic box:
+## Experimental candidate early stop
 
-| particles | A100, ~30 neighbors | 72 cores, ~30 neighbors | A100, ~60 neighbors | 72 cores, ~60 neighbors |
-|---|---|---|---|---|
-| 512 | 0.062 ms | 0.145 ms | 0.070 ms | 0.110 ms |
-| 8,192 | 0.120 ms | 0.54 ms | 0.136 ms | 0.91 ms |
-| 32,768 | 0.145 ms | 2.3 ms | 0.195 ms | 3.4 ms |
-| 1,048,576 | 2.39 ms | 52 ms | 3.68 ms | 74 ms |
+`PlaneWorkspace<64,RelativeClippingTolerance,true>` enables a conservative
+candidate-loop stop; the third template argument defaults to false. The cell's
+vertex radius bounds the bisectors that can still cut it. The implementation
+checks every remaining candidate distance before stopping, so it also handles
+unsorted rows and late coincident sites. Existing final certification still runs.
+No persistent buffers are added; the full-workspace retry preserves the option.
 
-- **Periodic boxes** cost 15–20% more on the GPU.
-- **Clustered points** are 9–17× faster on the GPU from 32k particles up.
-- **Nearest-first row ordering** is slow as a separate pass; at 1M particles it costs several times the search itself, so it should move into the consumer of the rows.
-- **Cabana and ArborX** neighbor lists were slower than this search in every case tested.
+Use `relative_early` instead of `relative` in `table_mesh_check` or
+`construction_scaling` to compare paths. `construction_early_stress_check` runs
+the independent stress oracle with this option and includes unsorted late-cutter,
+late-coincidence and radius-boundary fixtures. Local CPU comparisons on five
+small distributions match reference geometry. The jittered case reduces
+vertex-plane tests from 8,057,728 to 620,608; the suffix-distance checks are not
+included in that counter. This operation-count reduction is not itself a GPU speedup or roofline result;
+measured GPU timings are reported below.
 
-## Current scope and limitations
+`scripts/validate_early_stop_gpudev.sh` prepares stress checks, five distribution
+comparisons and paired scaling runs at 32, 128 and 195 cubed on one A100.
+Job **31589308 completed successfully** in 4m13s. All stress, geometry and
+scaling checks passed. At 195 cubed, early stopping reduced reconstruction
+from 1,196.39 to 1,000.87 ms (1.20x throughput), and combined time from
+1,750.65 to 1,556.38 ms (1.12x throughput). Reconstruction achieves 7.41
+million cells/s; combined throughput is 4.76 million particles/s. Sampled
+device usage is unchanged. At 128 cubed the respective speedups are 1.25x
+and 1.16x; at 32 cubed they are only about 1.02x. Obtain approval before further submissions. Hardware memory traffic and
+occupancy profiling remain separate work. LUNA's user-reported ~1 billion full
+hydro cell updates/s is a useful performance target, not a directly equivalent
+workload or a measured roofline for this construction kernel.
 
-This is early research code. The local geometry routine has been exercised on a small synthetic periodic set and the search prototype has been checked against an all-pairs oracle on synthetic distributions. These checks do not establish robustness for all particle configurations, nor do they validate conservation or stability in a hydrodynamics solver. There is no Cabana dependency. The mesh benchmark still builds its candidate graph on the host, so the GPU search does not yet feed the mesh reconstruction.
+## Repository layout
+
+- `src/neighbour_search/`: neighbor search and fixed-point position inputs.
+- `src/voronoi_construct/`: local cell reconstruction and geometry workspaces.
+- `src/test/`: examples, correctness checks and benchmarks.
+- `scripts/`: Slurm validation, scaling and profiling jobs. Submit from the repository root using `sbatch scripts/<job>.sh`.
+- `python/`: output comparisons and plotting tools.
+
+CMake exposes `voronoi_library` with both library include directories.
+Executable names and build output locations are unchanged.
+
+## Linting and continuous integration
+
+GitHub Actions (`.github/workflows/checks.yml`) runs Ruff lint/format checks,
+clang-tidy, and CPU correctness tests in ordinary and address/undefined-behavior
+sanitizer builds. CI builds a pinned Serial Kokkos 5.0.2. It does not submit
+cluster jobs or replace A100 validation.
+
+```sh
+python3 -m pip install ruff==0.11.13
+ruff check python
+ruff format --check python
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/kokkos -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build build -j 2
+bash scripts/lint_cpp.sh build
+ctest --test-dir build --output-on-failure
+```
+
+Use a host compilation database for clang-tidy. Add
+`-DVORONOI_SANITIZERS=ON` in a separate host build to enable sanitizers.
+Tests include analytic and irregular geometry, sorting edge cases, periodic and
+nonperiodic search oracles, cross-path geometry/moment comparisons over five
+distributions, coalesced and fixed-point input checks, fixed-point wrapping and
+quantization contracts, and rejection tests for malformed geometry CSVs.
+
+The clang-tidy configuration excludes `clang-analyzer-cplusplus.NewDeleteLeaks`
+because it does not model Kokkos reference-counted allocations; CI retains
+runtime leak detection. Ruff changes only formatting/import order.
+
+## Bounded coalesced-cache experiment
+
+The optional `relative_early_batched` scaling policy reuses a coalesced vertex
+cache across batches of 65,536 cells, capping persistent cache storage at 96 MiB.
+The full-size `relative_early_coalesced` policy remains available. Launches on the
+same execution instance reuse storage in order; overflow recovery runs afterward.
+Plane and topology arrays remain private. `relative_early_batched_test` uses
+257-row batches to exercise uneven boundaries in the host correctness suite.
+
+Job31590387 validated all six previous comparison rows. At128 cubed, full-cache
+reconstruction took259.60ms versus279.07ms for private cached vertices (~1.075x),
+but added3GiB. Fixed32 input-only storage gave no measured speedup. The bounded
+variant has passed local checks; GPU performance is not yet measured.
+`scripts/compare_batched_gpudev.sh` is prepared, not submitted; approval required.

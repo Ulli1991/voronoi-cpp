@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Render the face polygons emitted by the Kokkos 128-particle example."""
+
 import csv
 import itertools
 from collections import defaultdict
@@ -8,8 +9,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent
 
 
 def clip_polygon(poly, axis, bound, keep_greater):
@@ -38,14 +38,12 @@ def clip_to_box(poly):
 def main():
     with (HERE / "particles_128.csv").open() as f:
         particles = list(csv.DictReader(f))
-    pos = {int(row["id"]): [float(row[k]) for k in ("x", "y", "z")]
-           for row in particles}
+    pos = {int(row["id"]): [float(row[k]) for k in ("x", "y", "z")] for row in particles}
     grouped = defaultdict(list)
     with (HERE / "faces_128.csv").open() as f:
         for row in csv.DictReader(f):
             key = (int(row["row"]), int(row["neighbor"]))
-            grouped[key].append((int(row["vertex"]),
-                                 [float(row[k]) for k in ("x", "y", "z")]))
+            grouped[key].append((int(row["vertex"]), [float(row[k]) for k in ("x", "y", "z")]))
 
     polygons = []
     for (i, j), entries in grouped.items():
@@ -65,15 +63,20 @@ def main():
     fig = plt.figure(figsize=(9, 8), facecolor="white")
     ax = fig.add_subplot(111, projection="3d")
     collection = Poly3DCollection(
-        polygons, facecolors="#b8dce8", edgecolors="#47788c",
-        linewidths=0.28, alpha=0.42
+        polygons, facecolors="#b8dce8", edgecolors="#47788c", linewidths=0.28, alpha=0.42
     )
     ax.add_collection3d(collection)
     xyz = [pos[i] for i in sorted(pos)]
-    ax.scatter(*zip(*xyz), s=8, c="#d35f36", edgecolors="white", linewidths=0.25,
-               depthshade=False, label="128 particles")
-    ax.set(xlim=(0, 1), ylim=(0, 1), zlim=(0, 1),
-           xlabel="x", ylabel="y", zlabel="z")
+    ax.scatter(
+        *zip(*xyz),
+        s=8,
+        c="#d35f36",
+        edgecolors="white",
+        linewidths=0.25,
+        depthshade=False,
+        label="128 particles",
+    )
+    ax.set(xlim=(0, 1), ylim=(0, 1), zlim=(0, 1), xlabel="x", ylabel="y", zlabel="z")
     ax.set_box_aspect((1, 1, 1))
     ax.view_init(elev=24, azim=34)
     ax.set_title("Periodic local Voronoi mesh from the Kokkos reconstruction")

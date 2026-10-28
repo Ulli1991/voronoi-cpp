@@ -47,13 +47,13 @@ run_case() {
                 "$side" "$sorter" "$vertices" "$distribution"
         done
         for suffix in '' .hydro.csv; do
-            python3 compare_faces.py "$validation_root/cpu-$distribution-$vertices-$side.csv$suffix" \
+            python3 python/compare_faces.py "$validation_root/cpu-$distribution-$vertices-$side.csv$suffix" \
                 "$validation_root/gpu-$distribution-$vertices-$side.csv$suffix"
         done
     done
     for backend in cpu gpu; do
         for suffix in '' .hydro.csv; do
-            python3 compare_faces.py "$validation_root/$backend-$distribution-recomputed-$side.csv$suffix" \
+            python3 python/compare_faces.py "$validation_root/$backend-$distribution-recomputed-$side.csv$suffix" \
                 "$validation_root/$backend-$distribution-cached-$side.csv$suffix"
         done
     done

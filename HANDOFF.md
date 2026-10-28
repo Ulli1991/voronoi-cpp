@@ -509,3 +509,247 @@ build-table-validation/workspace-31585499.out. Numerical and capacity options
 remain opt-in, with existing defaults unchanged pending broader policy choices.
 At the user's source-size query, code totals 3,919 physical lines (3,706 nonblank),
 including 1,282 library-header lines; excludes docs, builds and data files.
+
+## Offline scaling preparation and README refresh, 2026-10-27
+
+Reviewed construction_scaling.cpp and run_scaling_gpudev.sh after resuming.
+The CUDA construction_scaling target compiles successfully in
+/tmp/voronoi-hydro-cuda. Local single-thread CPU smoke checks at 12^3 with one
+repetition pass for both relative and legacy policies: zero validation errors,
+volume error 1.11e-15, closure below 5.5e-16, centroid tensor below 1.5e-15.
+These smoke timings are not CPU/GPU performance comparisons. Shell syntax and
+plot Python syntax pass; plot rendering has not been validated.
+
+README.md now describes the current interfaces, opt-in policies, validated
+31585499 results, limitations and offline scaling workflow. Previous content
+remains in docs/README-before-offline-scaling.md; no files/code paths deleted.
+The scaling job is prepared but NOT SUBMITTED. Obtain approval before sbatch.
+Run one A100/four CPU cores/15 minutes, 32^3 upward with a conservative memory
+preflight and integer-side bisection after the first exclusion. Throughput units
+are million particles/s for search and combined, million reconstructed cells/s
+for geometry. Results append under build-gpu-scaling/<jobid>/scaling.csv.
+No large-size GPU runtime results or true peak device-memory measurements yet.
+
+## Offline scaling submitted: job 31589055
+
+User approved the prepared job. Submitted run_scaling_gpudev.sh to gpudev;
+Slurm returned 31589055. Last checked: PENDING, no log yet. Do not resubmit.
+Read build-table-validation/scaling-offline-31589055.out and
+build-gpu-scaling/31589055/scaling.csv after it starts. Results remain pending.
+
+## Offline scaling completed: job 31589055
+
+COMPLETED, exit 0, elapsed 2m38s. Nine PASS sizes: 32,48,64,96,128,160,192,194,195.
+All validation_errors=0; largest 195^3 = 7,414,875 particles. At that size:
+search 555.644875 ms (13.34463 Mparticles/s), reconstruction 1196.983629 ms
+(6.19463 Mcells/s), combined 1751.969679 ms (4.23231 Mparticles/s).
+Maximum sampled device usage 37,702,664,192 bytes; estimated arrays
+35,446,477,508 bytes. 196^3 and larger tested cases returned intentional
+SKIP_MEMORY/77 before allocation. Slurm marks those steps FAILED due to exit77;
+the driver handles them and the overall job completed successfully. This is
+the conservative budget ceiling, not the absolute GPU allocation limit.
+Raw CSV: build-gpu-scaling/31589055/scaling.csv. README updated with results.
+
+## Optional conservative early stop prepared (not GPU runtime validated)
+
+User authorized optimizing construction before hydro and emphasized LUNA's
+user-reported ~1000 million full hydro cell updates/s as a performance target.
+This is not a directly equivalent workload or our measured hardware roofline.
+
+PlaneWorkspace now has a third bool template argument (default false).
+When enabled, reconstruct_row tracks an enclosing vertex radius during existing
+classification and includes newly computed vertices in the bound. A candidate
+with d^2 > 4 R^2 (1+1e-10) triggers a suffix-distance check; stopping requires
+all remaining candidates outside the same bound and no coincidence. Unsorted
+input therefore preserves correctness. Final reach/bounding-face certification
+still runs. Retry forwards the flag to the 160-plane path. No persistent arrays
+or default changes; original paths remain available.
+
+CLI policy relative_early selects the option in table_mesh_check and
+construction_scaling. construction_early_stress_check is a second target of the
+existing stress source with the option enabled. Added late-cutter, late-zero
+coincidence and radius-boundary fixtures with deliberately unsorted rows.
+CPU stress checks all pass, as does final side12 scaling smoke validation.
+Five distributions (lattice, disordered, regular, random, gradient) compare
+against the old path: all ten geometry/moment comparisons pass, area component
+errors zero. Files/logs: /tmp/voronoi-early-validation/. Jittered1728 vertex
+plane tests fall 8,057,728 -> 620,608 (13x), coordinate reads 8,392,888 ->955,768,
+created vertices stay109,221. Suffix distance reads are NOT counted in these
+counters, and this reduction is NOT a GPU speedup claim.
+
+CPU and CUDA targets compile. CUDA resource log:
+/tmp/voronoi-early-cuda-build.log. An overlapping CPU build retained an older
+stress object during editing; forced recompilation and reran final stress and
+five-distribution comparisons afterward. Final tests include all three new cases.
+
+validate_early_stop_gpudev.sh prepared, syntax checked, NOT SUBMITTED. Requests
+one A100/four CPU cores/15min; builds CUDA targets, runs early stress, compares
+five small distributions, then same-allocation paired relative/relative_early
+scaling at sides32,128,195 with five repeats. Output build-early-stop/<jobid>/;
+log build-table-validation/early-stop-<jobid>.out. Ask user before submission.
+Actual roofline/DRAM traffic/occupancy profiling remains outstanding.
+
+## Early-stop GPU comparison submitted: 31589308
+
+User approved the prepared comparison job. sbatch validate_early_stop_gpudev.sh
+returned job31589308. Do not resubmit. Track
+build-table-validation/early-stop-31589308.out and
+build-early-stop/31589308/scaling.csv. GPU runtime results pending.
+
+## Early-stop GPU comparison complete: 31589308
+
+COMPLETED exit0, elapsed4m13s. All16 stress cases, ten distribution runs,
+ten output comparisons and six scaling rows pass (zero validation errors).
+At195^3 baseline/early: reconstruction1196.385524/1000.872116 ms;
+pipeline1750.654425/1556.377197 ms. Early rates7.408414 Mcells/s and
+4.764189 Mparticles/s; ~1.20x construction/~1.12x combined throughput.
+Search unchanged555.68/555.79 ms. Sampled device usage unchanged
+37,702,664,192 bytes. At128^3 gains1.25x construction/1.16x combined;
+32^3 gains~1.02x. Opt-in remains; no defaults changed. Hardware profiling
+needed before assigning remaining bottleneck to bandwidth, occupancy or compute.
+Results build-early-stop/31589308/scaling.csv; README updated.
+
+## Coalesced-coordinate and fixed-point experiments, 2026-10-28
+
+local_voronoi_coalesced.hpp adds LayoutLeft double[N,64,3] explicit coordinate
+cache, 1536 persistent bytes/row. Core reconstruct_row accepts optional injected
+VertexStorage object; reference call sites/defaults unchanged. Coalesced wrapper
+uses 64-plane relative/early clipping and separate 160-plane private fallback.
+Planes/topology still private: this is a coordinate-cache experiment only.
+Side12 CPU compact geometry/volume/neighbor validation passes, zero errors.
+construction_scaling policy relative_early_coalesced selects it; memory budget
+includes added cache. Fixed32 policy relative_early_fixed32 reduces input positions
+only, sorted positions remain double. Small CPU check passes. Classification mask
+change passes early stress tests. docs/local-construction-literature.md records
+primary-source search and precision caveats. No GPU performance claims yet.
+
+First CUDA compile found NVCC cannot first-capture positions inside constexpr-if;
+added explicit capture use before branch and started rebuild. Log
+/tmp/voronoi-coalesced-cuda.log. compare_coalesced_gpudev.sh prepared (NOT SUBMITTED)
+for baseline early/coalesced/fixed32 at32^3 and128^3, five repeats. Obtain user
+approval before cluster submission. Existing profiler artifacts retained.
+
+CUDA compile succeeded. User approved submission; compare_coalesced_gpudev.sh
+submitted as job31590387. Confirmed PENDING after interrupted turn. Do not
+resubmit. Log: build-table-validation/coalesced-31590387.out. Results:
+build-gpu-scaling/31590387/comparison.csv. GPU measurements pending.
+
+## Source organization, 2026-10-28
+
+Moved headers into src/neighbour_search and src/voronoi_construct; all C++
+examples/checks/benchmarks into src/test; shell scripts into scripts and Python
+tools into python. All files retained. CMake paths and include interface updated;
+Slurm scripts reference python/compare_faces.py. Submit scripts from repo root.
+Job31590387 was already spooled by Slurm and builds via root CMake, so the
+source relocation does not require resubmission. Historical handoff paths refer
+to the former layout; consult README for current locations.
+
+## Ruff, clang-tidy and extensive host CI, 2026-10-28
+
+Added pyproject.toml (Ruff0.11.13 lint/import/format), .clang-tidy, host lint runner
+scripts/lint_cpp.sh, CTest registration and .github/workflows/checks.yml. GitHub
+push/PR/manual workflow builds pinned Kokkos5.0.2 Serial; ordinary and ASan/UBSan
+matrix; full correctness suite; clang-tidy; Python lint/format. No pushes/commits
+or cluster jobs submitted for this work. CPU executable names unchanged.
+
+21 CTest entries: analytic, stress/early stress, sort, five table distributions,
+three scaling policies, Python comparison contract, five multi-path equivalence
+checks, two search-oracle modes, fixed-point contract. Each equivalence check
+compares full cached relative, reduced early, legacy recomputed and team-sort
+paths including geometry and hydro-moment CSVs. Python unit suite covers nine
+contracts incl malformed/duplicate/nonfinite/dimension/missing/incorrect rows.
+Fixed-point checks wrap boundaries, signed shortest deltas, quantization error,
+exact-tick roundtrip and acknowledged sub-tick coincidence. All21 host tests pass.
+
+Temporary lint tools installed via Python3.11 under /tmp/voronoi-lint-tools.
+Ruff lint/format pass. Local clang-tidy uses Serial Kokkos to avoid clang18 vs
+GCC15 OpenMP header incompatibility. NewDeleteLeaks reported false leak inside
+Kokkos View allocation; exclude only that analyzer model and retain runtime
+leak checks. Full clang-tidy run ongoing at /tmp/voronoi-clang-tidy-serial.log.
+Three selected ASan/UBSan tests pass with detect_leaks=0. LeakSanitizer cannot
+run under this traced environment (fatal ptrace message), so local leak checking
+is NOT claimed; GitHub enables it. Logs /tmp/voronoi-sanitizer-tests.log (failed
+LSan attempt), later console run confirms address/UB pass. CI not yet run remotely.
+Plot_mesh now resolves data at repo root after relocation; fixed during tool audit.
+
+Final clang-tidy pass completed successfully (exit0) for every src/test/*.cpp
+translation unit against Serial Kokkos. No project diagnostics; external Kokkos
+warnings suppressed. Ruff lint and format checks pass on all five Python files.
+All21 ordinary CTest entries pass (20-suite run plus fixed-point contract).
+Three selected ASan/UBSan tests pass with local LeakSanitizer disabled as noted.
+GitHub workflow configured for the entire21-test suite in normal and sanitizer
+builds, with leak detection enabled and UBSan halt_on_error. No remote CI run yet.
+
+## Next memory step: bounded coalesced cache
+
+Read completed job31590387: all6rowsPASS. At128^3 private/explicit fullcache
+reconstruction279.073/259.596ms, pipeline428.557/409.385ms. Fullcacheadds3GiB.
+Fixed32 input-only policy no gain:279.335ms reconstruction/428.699combined.
+
+Added relative_early_batched using65536row coalesced cache,96MiBmaximum.
+Wrapper supports smaller cache.extent0 thanN and launches sequential row ranges
+on the supplied execution instance; row cache index is row-begin, fallback after
+all chunks. Reference/fullcache policy remains available. Test policy uses257row
+cache for1728cells (partial final chunk). All4scaling CTests pass. CUDA build
+in progress at /tmp/voronoi-batched-cuda.log. Prepared scripts/compare_batched_gpudev.sh
+for baseline/ bounded at32/128/195 sides, NOTSUBMITTED; ask approval first.
+No claimed GPU speedup for bounded version yet. Next potential tuning is cache
+batch size versus L2 working set; first obtain timings for bounded design.
+
+CUDA bounded-cache compile succeeded. User approved submission; submitted
+scripts/compare_batched_gpudev.sh as job31590674. Do not resubmit. Log:
+build-table-validation/batched-31590674.out; CSV:
+build-gpu-scaling/31590674/comparison.csv. GPU results pending.
+
+## Bounded-cache comparison complete:31590674
+
+COMPLETED exit0,2m01s; all6rowsPASS/zero validation errors. At128^3 baseline/
+bounded reconstruction279.056/281.249ms, pipeline428.762/430.487ms. At195^3
+992.616/1010.427ms, pipeline1548.380/1566.260ms. At32^3 6.121/6.071ms.
+96MiBcache cap works, but bounded variant shows no throughput improvement;
+195^3 reconstruction~1.8%slower. Keep experimental; do not promote default.
+Fullcache7.5%gain at128^3 did not carry over to bounded chunks. Cause not yet
+measured; kernel occupancy/grid size/cache layout may differ. Next experiment
+should address remaining private planes/topology or cooperative cell execution,
+with counters and correctness comparisons rather than assuming cache-only moves
+solve the traffic issue. Raw build-gpu-scaling/31590674/comparison.csv.
+
+## Cooperative clipping primitive started
+
+src/voronoi_construct/cooperative_clip.hpp: classify_and_compact, TeamPolicy
+one team per cell (32CUDAthreads,1host), TeamThreadRange vertex classification,
+max-radius reduction and stable prefix-scan compaction. Caller-supplied distinct
+input/outputbuffers; no allocationinside. Invalidcounts yieldkept_count=-1.
+src/test/cooperative_clip_check.cpp validates everycount0..64 plusinvalidcount,
+allinside/alloutside/plane-boundary, stable outputordering andradius. CPUcontract
+passes. AddedCTestentry23. CUDAcompile started /tmp/voronoi-cooperative-cuda.log.
+THIS IS NOT YET A FULL COOPERATIVE CELL RECONSTRUCTOR: topology/hole updates,
+intersection creation, certification andmoments still needintegration. No GPUjob
+submitted andnothroughputclaim. Existing productionkernel unchanged.
+
+User repeated request to finish full warp-per-cell reconstruction. Existing
+cooperative_clip.hpp is only a classification primitive and is not integrated
+with topology updates. No full cooperative reconstructor has been implemented;
+do not advertise it as a team-per-cell speed path. Required work remains a
+shared per-team planes/vertices/hole state and coordinated clipping, then full
+face geometry and retry validation.
+
+## Team scratch storage bridge
+
+CellClippingState owns arrays; reconstruct_row accepts injected descriptor.
+team_cell_storage.hpp adds unmanaged scratch owners and lightweight pointer
+arrays plus cached coordinates. edge_add_or_cancel now accepts generic arrays.
+local_voronoi_shared.hpp contains full serial-in-team compact reconstruction
+using this scratch state; it is explicitly a scratch-storage baseline, NOT a
+cooperative warp implementation. It has not yet been instantiated or validated.
+Cooperative classification remains standalone. Full integration still required.
+
+## Full shared-workspace path instantiated and checked
+
+construction_scaling relative_early_shared instantiates the complete compact
+reconstruction using team_cell_storage.hpp/local_voronoi_shared.hpp. Host build
+succeeds; side12 all1728cells pass volumes/centroids/areas/closure/tensor/neighbor
+checks, validation_errors0. Added scaling policy to CTest. CUDA compilation
+ongoing at /tmp/voronoi-shared-cuda.log. This remains single-thread-per-team
+scratch baseline, NOT cooperative clipping, and does not yet retry plane overflow.
+Next work is team-cooperative stages with shared counters/control and barriers.

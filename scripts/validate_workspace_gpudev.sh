@@ -47,20 +47,20 @@ run_case() {
                     "$side" "$sorter" cached "$distribution" "$planes" "$policy"
             done
             for suffix in '' .hydro.csv; do
-                python3 compare_faces.py "$validation_root/cpu-$distribution-$policy-$planes-$side.csv$suffix" \
+                python3 python/compare_faces.py "$validation_root/cpu-$distribution-$policy-$planes-$side.csv$suffix" \
                     "$validation_root/gpu-$distribution-$policy-$planes-$side.csv$suffix"
             done
         done
         for backend in cpu gpu; do
             for suffix in '' .hydro.csv; do
-                python3 compare_faces.py "$validation_root/$backend-$distribution-$policy-160-$side.csv$suffix" \
+                python3 python/compare_faces.py "$validation_root/$backend-$distribution-$policy-160-$side.csv$suffix" \
                     "$validation_root/$backend-$distribution-$policy-64-$side.csv$suffix"
             done
         done
     done
     for backend in cpu gpu; do
         for suffix in '' .hydro.csv; do
-            python3 compare_faces.py "$validation_root/$backend-$distribution-legacy-64-$side.csv$suffix" \
+            python3 python/compare_faces.py "$validation_root/$backend-$distribution-legacy-64-$side.csv$suffix" \
                 "$validation_root/$backend-$distribution-relative-64-$side.csv$suffix"
         done
     done

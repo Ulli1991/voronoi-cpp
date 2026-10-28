@@ -1,3 +1,6 @@
+#ifndef VORONOI_TEST_EARLY_STOP
+#define VORONOI_TEST_EARLY_STOP false
+#endif
 #include "local_voronoi_retry.hpp"
 #include "local_voronoi_workspace.hpp"
 #include "neighbor_search.hpp"
@@ -101,7 +104,7 @@ Reference reference(const std::vector<Point>& offsets) {
     return result;
 }
 
-struct Case { std::string name; std::vector<Point> offsets; double reach,condition=1; bool required=true; };
+struct Case { std::string name; std::vector<Point> offsets; double reach,condition=1; bool required=true; bool sorted=true; };
 Case box(std::string name,double scale,double aspect=1) {
     Case result{std::move(name),{},2*scale,aspect};
     for (int a=0;a<3;++a)
@@ -115,7 +118,7 @@ Case box(std::string name,double scale,double aspect=1) {
 
 int check(const Case& input) {
     auto offsets=input.offsets;
-    std::sort(offsets.begin(),offsets.end(),[](Point a,Point b) {
+    if (input.sorted) std::sort(offsets.begin(),offsets.end(),[](Point a,Point b) {
         auto square=[](Point p) { return p[0]*p[0]+p[1]*p[1]+p[2]*p[2]; };
         const double da=square(a),db=square(b);
         return da==db ? a<b : da<db;
@@ -146,7 +149,7 @@ int check(const Case& input) {
     local_voronoi::reconstruct_hydro<local_voronoi::CachedVertexPositions>(Exec{},positions,counts,table,
         reach,no_box,faces,ids,areas,face_centers,volumes,centers,status);
     const int legacy_status=host(status)(0);
-    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance>;
+    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP>;
     local_voronoi::reconstruct_hydro_retry<local_voronoi::CachedVertexPositions,Relative>(
         Exec{},positions,counts,table,reach,no_box,faces,ids,areas,face_centers,volumes,centers,status);
     auto hs=host(status),hf=host(faces); auto hi=host(ids);
@@ -238,7 +241,7 @@ int check_cloud() {
     Kokkos::View<double***,Memory> areas("cloud_areas",n,local_voronoi::max_faces,3);
     Kokkos::View<double****,Memory> vertices("cloud_vertices",n,local_voronoi::max_faces,
         local_voronoi::max_face_vertices,3);
-    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance>;
+    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP>;
     local_voronoi::reconstruct_table_retry<local_voronoi::CachedVertexPositions,Relative>(
         Exec{},search.positions,search.counts,search.table,search.radii,{1,1,1},
         faces,ids,areas,vertices_per_face,vertices,status);
@@ -324,6 +327,22 @@ int main(int argc,char** argv) {
         auto coincident=box("coincident_rejected",1);
         coincident.offsets.push_back({0,0,0});
         errors+=check(coincident);
+        // Deliberately put irrelevant distant planes before a late cutter or
+        // coincidence; a sorted-only break would silently miss these cases.
+        auto unsorted=box("early_stop_unsorted_late_cutter",1);
+        unsorted.sorted=false;
+        unsorted.offsets.push_back({1.8,0,0});
+        unsorted.offsets.push_back({0,1.8,0});
+        unsorted.offsets.push_back({0.1,0.1,0.1});
+        errors+=check(unsorted);
+        unsorted.name="early_stop_unsorted_late_coincidence";
+        unsorted.offsets.back()={0,0,0};
+        errors+=check(unsorted);
+        auto boundary=box("early_stop_radius_boundary",1);
+        boundary.sorted=false;
+        boundary.offsets.push_back({1.08,0,0});
+        boundary.offsets.push_back({1.07,0,0});
+        errors+=check(boundary);
         errors+=check_cloud();
     }
     Kokkos::finalize();

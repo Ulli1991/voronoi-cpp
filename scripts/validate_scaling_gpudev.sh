@@ -17,5 +17,5 @@ export OMP_PLACES=cores
 for side in 16 24 32; do
     srun --ntasks=1 "$validation_root/cpu/table_mesh_check" "$validation_root/cpu-faces-$side.csv" "$side"
     srun --ntasks=1 "$validation_root/gpu/table_mesh_check" "$validation_root/gpu-faces-$side.csv" "$side"
-    python3 compare_faces.py "$validation_root/cpu-faces-$side.csv" "$validation_root/gpu-faces-$side.csv"
+    python3 python/compare_faces.py "$validation_root/cpu-faces-$side.csv" "$validation_root/gpu-faces-$side.csv"
 done

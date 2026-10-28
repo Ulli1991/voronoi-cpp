@@ -25,7 +25,7 @@ void reconstruct_table_retry(ExecSpace exec, Positions positions, Counts counts,
     Kokkos::parallel_for("local_voronoi::retry_table_plane_capacity",
         Kokkos::RangePolicy<ExecSpace>(exec,0,positions.extent(0)), KOKKOS_LAMBDA(int row) {
             if (row_status(row)!=plane_capacity) return;
-            reconstruct_row<VertexStorage,PlaneWorkspace<max_planes,typename SmallWorkspace::tolerance>>(
+            reconstruct_row<VertexStorage,PlaneWorkspace<max_planes,typename SmallWorkspace::tolerance,SmallWorkspace::early_stop>>(
                 row,positions,detail::TableRowOffsets<Counts>{counts,row},
                 detail::TableRowIds<Table>{table,row},reach(row),box,face_counts,
                 face_ids,face_areas,face_vertex_counts,face_vertices,row_status);
@@ -52,7 +52,7 @@ void reconstruct_hydro_retry(ExecSpace exec, Positions positions, Counts counts,
             if (row_status(row)!=plane_capacity) return;
             detail::HydroGeometry<Volumes,CellCentroids,FaceCentroids> geometry{
                 volumes,cell_centroids,face_centroids,row};
-            reconstruct_row<VertexStorage,PlaneWorkspace<max_planes,typename SmallWorkspace::tolerance>>(
+            reconstruct_row<VertexStorage,PlaneWorkspace<max_planes,typename SmallWorkspace::tolerance,SmallWorkspace::early_stop>>(
                 row,positions,detail::TableRowOffsets<Counts>{counts,row},
                 detail::TableRowIds<Table>{table,row},reach(row),box,face_counts,
                 face_ids,face_areas,detail::NoDiagnosticVertices{},detail::NoDiagnosticVertices{},
