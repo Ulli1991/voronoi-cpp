@@ -2,7 +2,7 @@
 //
 // Usage: shell_voronoi_check [n=32768] [uniform|jittered|lattice|wave|clustered|<layout>@<eps>]
 //                            [variants=all] [repeats=5] [width_factor=1] [displacement=0]
-// Variants are thread-, warp- and lean- with -double or -float; the
+// Variants are thread- and warp- with -double or -float; the
 // argument selects every variant whose name contains it (e.g. warp, double).
 //
 // Checks, independent of any other construction: every cell certified, cell
@@ -16,7 +16,6 @@
 #include "tet_flips.hpp"
 #include "tet_mesh.hpp"
 #include "tet_repair.hpp"
-#include "shell_voronoi_lean.hpp"
 #include "shell_voronoi_warp.hpp"
 
 #include <algorithm>
@@ -235,14 +234,6 @@ int validate(const HostCells& c, const std::vector<std::array<double, 3>>& slot_
     return failures;
 }
 
-// Inverse of the grid's slot -> particle order.
-Kokkos::View<int*, Memory> slot_of_particle(const Exec& exec, const Kokkos::View<int*, Memory>& order) {
-    Kokkos::View<int*, Memory> rank("rank", order.extent(0));
-    Kokkos::parallel_for("rank", Kokkos::RangePolicy<Exec>(exec, 0, order.extent(0)),
-                         KOKKOS_LAMBDA(int q) { rank(order(q)) = q; });
-    return rank;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -254,6 +245,7 @@ int main(int argc, char** argv) {
         const std::string selection = argc > 3 ? argv[3] : "all";
         const int repeats = argc > 4 ? std::max(1, std::atoi(argv[4])) : 5;
         const double width_factor = argc > 5 ? std::atof(argv[5]) : 1.0;
+        const double displacement = argc > 6 ? std::atof(argv[6]) : 0.0;
         const Exec exec{};
 
         const Points points = make_points(kind, requested);
@@ -286,38 +278,20 @@ int main(int argc, char** argv) {
 
         std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind
                   << " grid=" << search.cells_per_side << "^3 repeats=" << repeats << "\n";
-        const auto stencil = shell_voronoi::lean::make_stencil(exec, grid.cells_per_side, grid.cell_width);
         std::vector<double> reference_volumes;
-        for (const std::string variant : {"thread-double", "thread-float", "warp-double", "warp-float",
-                                          "lean-double", "lean-float"}) {
+        for (const std::string variant : {"thread-double", "thread-float", "warp-double", "warp-float"}) {
             if (selection != "all" && variant.find(selection) == std::string::npos) continue;
             shell_voronoi::Cells<Memory> cells(n, true);
-            // SHELL_PHASES=1 (with a SHELL_WARP_PHASES build): cycles per warp-kernel phase.
-            if (std::getenv("SHELL_PHASES")) cells.phase_cycles = Kokkos::View<long long* [6], Memory>("phases", n);
             const double construct_ms = median_ms(repeats, [&] {
                 if (variant == "thread-double") shell_voronoi::construct<double>(exec, grid, cells);
                 if (variant == "thread-float") shell_voronoi::construct<float>(exec, grid, cells);
                 if (variant == "warp-double") shell_voronoi::construct_warp<double>(exec, grid, cells);
                 if (variant == "warp-float") shell_voronoi::construct_warp<float>(exec, grid, cells);
-                if (variant == "lean-double") shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
-                if (variant == "lean-float") shell_voronoi::construct_lean<float>(exec, grid, cells, stencil);
                 exec.fence();
             });
             std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
                       << " construct_Mcells_s=" << n / construct_ms / 1e3
                       << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-            if (cells.phase_cycles.extent(0) > 0 && variant.find("warp") != std::string::npos) {
-                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.phase_cycles);
-                double sum[6] = {0, 0, 0, 0, 0, 0}, total = 0;
-                for (int t = 0; t < n; ++t)
-                    for (int k = 0; k < 6; ++k) sum[k] += double(h(t, k));
-                for (double v : sum) total += v;
-                const char* names[6] = {"walk", "fetch", "sort", "clip_no_cut", "clip_cut", "faces"};
-                std::cout << "  phase_kcycles_per_cell:";
-                for (int k = 0; k < 6; ++k)
-                    std::cout << " " << names[k] << "=" << sum[k] / n / 1e3 << " (" << int(100 * sum[k] / total) << "%)";
-                std::cout << "\n";
-            }
             const HostCells host = to_host(cells);
             const bool is_double = variant.find("double") != std::string::npos;
             failures += validate(host, slot_points, is_double ? 1e-12 : 1e-5, is_double ? 1e-12 : 1e-5,
@@ -332,439 +306,6 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Warm rebuild: build once with neighbour lists, move every particle
-        // by up to `displacement` spacings per axis, rebuild the grid (new
-        // slots), then rebuild the cells starting from the old neighbours. The
-        // result must match a cold build at the moved positions.
-        const double displacement = argc > 6 ? std::atof(argv[6]) : 0.0;
-        auto warm_experiment = [&]<class Real>(const char* label) {
-            const int capacity = 40;
-            auto restore = [&](double amplitude) {
-                std::mt19937_64 rng(7);
-                std::uniform_real_distribution<double> step(-amplitude * spacing, amplitude * spacing);
-                auto h = Kokkos::create_mirror_view(positions);
-                for (int i = 0; i < n; ++i)
-                    for (int a = 0; a < 3; ++a) h(i, a) = wrap(points[i][a] + (amplitude > 0 ? step(rng) : 0.0));
-                Kokkos::deep_copy(positions, h);
-                neighbor_search::build(exec, search, positions);
-                exec.fence();
-            };
-
-            restore(0.0);
-            shell_voronoi::Cells<Memory> before(n, false);
-            before.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours", n, capacity);
-            shell_voronoi::construct_lean<Real>(exec, grid, before, stencil);
-            Kokkos::View<int**, Memory> seed_ids("seed_ids", n, capacity);
-            Kokkos::View<int*, Memory> seed_count("seed_count", n);
-            {
-                auto order = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.order);
-                auto lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, before.all_neighbours);
-                auto counts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, before.face_count);
-                auto ids = Kokkos::create_mirror_view(seed_ids);
-                auto count = Kokkos::create_mirror_view(seed_count);
-                for (int t = 0; t < n; ++t) {
-                    const int particle = order(t);
-                    count(particle) = counts(t);
-                    for (int j = 0; j < counts(t); ++j) ids(particle, j) = order(lists(t, j));
-                }
-                Kokkos::deep_copy(seed_ids, ids);
-                Kokkos::deep_copy(seed_count, count);
-            }
-
-            restore(displacement);
-            const Kokkos::View<int*, Memory> rank = slot_of_particle(exec, search.order);
-            const shell_voronoi::lean::Seeds<Memory> seeds{seed_ids, seed_count, search.order, rank};
-            {
-                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.positions);
-                for (int t = 0; t < n; ++t) slot_points[t] = {h(t, 0), h(t, 1), h(t, 2)};
-            }
-
-            // One output set at a time keeps 7M-particle runs within 40 GB.
-            std::vector<double> cold_volumes(n);
-            double cold_ms = 0, uncertified_ms = 0;
-            {
-                shell_voronoi::Cells<Memory> cold(n, false);
-                cold_ms = median_ms(repeats, [&] {
-                    shell_voronoi::construct_lean<Real>(exec, grid, cold, stencil);
-                    exec.fence();
-                });
-                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cold.volume);
-                for (int t = 0; t < n; ++t) cold_volumes[t] = h(t);
-                // Seeds only, no certification walk: not a valid mesh, but
-                // the gap to the certified time bounds what a faster spatial
-                // structure could save.
-                uncertified_ms = median_ms(repeats, [&] {
-                    shell_voronoi::construct_lean<Real>(exec, grid, cold, stencil, seeds, false);
-                    exec.fence();
-                });
-            }
-            shell_voronoi::Cells<Memory> warm(n, true);
-            warm.all_neighbours = Kokkos::View<int**, Memory>("warm_neighbours", n, capacity);
-            const double warm_ms = median_ms(repeats, [&] {
-                shell_voronoi::construct_lean<Real>(exec, grid, warm, stencil, seeds);
-                exec.fence();
-            });
-            std::cout << label << " warm(displacement=" << displacement << "): warm_ms=" << warm_ms
-                      << " warm_Mcells_s=" << n / warm_ms / 1e3 << " seeds_only_ms=" << uncertified_ms
-                      << " seeds_only_Mcells_s=" << n / uncertified_ms / 1e3 << " cold_ms=" << cold_ms
-                      << " cold_Mcells_s=" << n / cold_ms / 1e3 << " grid_build_ms=" << build_ms << "\n";
-            const HostCells host = to_host(warm);
-            const bool is_double = std::is_same_v<Real, double>;
-            failures += validate(host, slot_points, is_double ? 1e-12 : 1e-5, is_double ? 1e-12 : 1e-5,
-                                 is_double ? 1e-9 : 1e-4);
-            double worst = 0;
-            for (int t = 0; t < n; ++t)
-                worst = std::max(worst, std::abs(host.volume(t) - cold_volumes[t]) / cold_volumes[t]);
-            std::cout << "  warm_vs_cold_max_relative_volume_difference=" << worst << "\n";
-        };
-        // Geometry from topology: rings from one exact build, then only the
-        // face-parallel geometry pass is timed and checked against the build.
-        // CPU replay (test only, brute force): clip every cell nearest-first
-        // from all particles within 6 spacings and count how many plane tests
-        // cheaper bounds on the current cell would have rejected.
-        if (selection == "cullstats") {
-            using shell_voronoi::Vec3;
-            const int side = search.cells_per_side;
-            const double width = search.cell_width;
-            auto offsets = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.cell_offsets);
-            const int reach = std::min((side - 1) / 2, static_cast<int>(std::ceil(6 * spacing / width)));
-            const double half_width = std::min(0.25, ((side - 1) / 2 + 1) * width);
-            std::vector<Vec3<double>> dirs;  // 26 unit directions: faces, edges, corners of a cube
-            for (int x = -1; x <= 1; ++x)
-                for (int y = -1; y <= 1; ++y)
-                    for (int z = -1; z <= 1; ++z)
-                        if (x || y || z) {
-                            const double l = std::sqrt(double(x * x + y * y + z * z));
-                            dirs.push_back({x / l, y / l, z / l});
-                        }
-            long long tests = 0, cuts = 0, by_octant = 0, by_dirs = 0, wrong = 0, vertices = 0, far = 0, open = 0;
-            std::vector<std::pair<double, Vec3<double>>> candidates;
-            for (int t = 0; t < n; ++t) {
-                const auto& p = slot_points[t];
-                int home[3];
-                for (int a = 0; a < 3; ++a) home[a] = std::clamp(static_cast<int>(p[a] / width), 0, side - 1);
-                candidates.clear();
-                for (int dx = -reach; dx <= reach; ++dx)
-                    for (int dy = -reach; dy <= reach; ++dy)
-                        for (int dz = -reach; dz <= reach; ++dz) {
-                            const int u[3] = {home[0] + dx, home[1] + dy, home[2] + dz};
-                            int key = 0;
-                            double image[3];
-                            for (int a = 0; a < 3; ++a) {
-                                key = key * side + (u[a] + side) % side;
-                                image[a] = u[a] < 0 ? -1.0 : u[a] >= side ? 1.0 : 0.0;
-                            }
-                            for (int q = offsets(key); q < offsets(key + 1); ++q) {
-                                if (q == t) continue;
-                                const Vec3<double> d{slot_points[q][0] + image[0] - p[0], slot_points[q][1] + image[1] - p[1],
-                                                     slot_points[q][2] + image[2] - p[2]};
-                                candidates.push_back({dot(d, d), d});
-                            }
-                        }
-                std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-                shell_voronoi::detail::Polyhedron<double> cell;
-                shell_voronoi::detail::start_cube(cell, half_width);
-                bool certified = false;
-                for (const auto& [d2, d] : candidates) {
-                    if (d2 >= 4 * cell.radius2) {
-                        certified = true;
-                        break;
-                    }
-                    // Bounds from the current vertices.
-                    double octant[8] = {0, 0, 0, 0, 0, 0, 0, 0}, support[26];
-                    for (int k = 0; k < 26; ++k) support[k] = -1e300;
-                    for (int v = 0; v < cell.vertices; ++v) {
-                        const Vec3<double>& x = cell.vertex[v];
-                        const int o = (x.x < 0) | (x.y < 0) << 1 | (x.z < 0) << 2;
-                        octant[o] = std::max(octant[o], std::sqrt(dot(x, x)));
-                        for (int k = 0; k < 26; ++k) support[k] = std::max(support[k], dot(x, dirs[k]));
-                        vertices += 1;
-                        far += dot(x, x) >= 0.25 * d2;
-                    }
-                    const double half = 0.5 * d2, radius = std::sqrt(cell.radius2);
-                    bool octant_cuts = false;
-                    for (int o = 0; o < 8 && !octant_cuts; ++o) {
-                        const double s[3] = {o & 1 ? -1.0 : 1.0, o & 2 ? -1.0 : 1.0, o & 4 ? -1.0 : 1.0};
-                        const double c[3] = {std::max(s[0] * d.x, 0.0), std::max(s[1] * d.y, 0.0), std::max(s[2] * d.z, 0.0)};
-                        octant_cuts = octant[o] * std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) > half;
-                    }
-                    double best = radius * std::sqrt(d2);
-                    for (int k = 0; k < 26; ++k) {
-                        const double along = dot(d, dirs[k]);
-                        if (along <= 0) continue;
-                        const Vec3<double> across = d - dirs[k] * along;
-                        best = std::min(best, radius * std::sqrt(dot(across, across)) + along * support[k]);
-                    }
-                    const bool dirs_cut = best > half;
-                    const int planes = cell.planes;
-                    if (shell_voronoi::detail::clip(cell, d, 0) != shell_voronoi::ok) break;
-                    const bool cut = cell.planes > planes;
-                    ++tests;
-                    cuts += cut;
-                    by_octant += !octant_cuts;
-                    by_dirs += !dirs_cut;
-                    wrong += cut && (!octant_cuts || !dirs_cut);
-                }
-                open += !certified;
-            }
-            std::cout << "cullstats: per_cell tests=" << double(tests) / n << " cuts=" << double(cuts) / n
-                      << " rejected_by_octant_radii=" << double(by_octant) / n
-                      << " rejected_by_26_directions=" << double(by_dirs) / n
-                      << " vertices_per_test=" << double(vertices) / tests
-                      << " far_vertices_per_test=" << double(far) / tests << " wrong_rejections=" << wrong
-                      << " uncertified=" << open << "\n";
-        }
-
-        if (selection == "faces") {
-            shell_voronoi::Cells<Memory> cells(n, false);
-            // Room for every owned face's ring; a cell that still overflows is
-            // rebuilt by the fallback, which records no ring, and is left out.
-            cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
-            Kokkos::deep_copy(cells.rings, -1);
-            cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours", n, 40);
-            shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
-            auto status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.status);
-            auto owned = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.owned_count);
-            auto neighbour = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.neighbour);
-            auto rings = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.rings);
-            auto built = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.volume);
-            std::vector<int> owner, other, start{0}, ring;
-            int skipped = 0;
-            for (int t = 0; t < n; ++t) {
-                if (status(t) != shell_voronoi::ok || (owned(t) > 0 && rings(t, 0) < 0)) {
-                    ++skipped;  // failed, or built by the fallback, which records no rings
-                    continue;
-                }
-                for (int f = 0, at = 0; f < owned(t); ++f) {
-                    const int k = rings(t, at);
-                    owner.push_back(t);
-                    other.push_back(neighbour(t, f));
-                    for (int m = 0; m < k; ++m) ring.push_back(rings(t, at + 1 + m));
-                    start.push_back(static_cast<int>(ring.size()));
-                    at += 1 + k;
-                }
-            }
-            auto to_device = [](const std::vector<int>& v, const char* label) {
-                Kokkos::View<int*, Memory> d(label, v.size());
-                auto h = Kokkos::create_mirror_view(d);
-                for (std::size_t i = 0; i < v.size(); ++i) h(i) = v[i];
-                Kokkos::deep_copy(d, h);
-                return d;
-            };
-            const face_geometry::Faces<Memory> faces{to_device(owner, "owner"), to_device(other, "neighbour"),
-                                                      to_device(start, "ring_start"), to_device(ring, "ring")};
-            const int face_count = static_cast<int>(owner.size());
-            const face_geometry::Geometry<Memory> geometry{
-                Kokkos::View<double* [3], Memory>("face_area", face_count),
-                Kokkos::View<double* [3], Memory>("face_centroid", face_count),
-                Kokkos::View<double*, Memory>("volume", n)};
-            const double geometry_ms = median_ms(repeats, [&] {
-                face_geometry::compute(exec, search.positions, 1.0, faces, geometry);
-                exec.fence();
-            });
-            const double build_ms_lean = median_ms(repeats, [&] {
-                shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
-                exec.fence();
-            });
-            auto volume = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, geometry.volume);
-            // Cells whose neighbour has no rings miss that neighbour's owned
-            // faces, so only cells with complete face lists are compared.
-            auto lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.all_neighbours);
-            auto counts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.face_count);
-            std::vector<char> complete(n, 1);
-            for (int t = 0; t < n; ++t)
-                if (status(t) != shell_voronoi::ok || (owned(t) > 0 && rings(t, 0) < 0)) {
-                    complete[t] = 0;
-                    for (int f = 0; f < counts(t); ++f) complete[lists(t, f)] = 0;
-                }
-            double worst = 0, total = 0;
-            int compared = 0;
-            for (int t = 0; t < n; ++t) {
-                total += volume(t);
-                if (!complete[t]) continue;
-                ++compared;
-                worst = std::max(worst, std::abs(volume(t) - built(t)) / built(t));
-            }
-            std::cout << "  compared " << compared << " of " << n << " cells\n";
-            if (std::getenv("FACES_DEBUG")) {
-                auto all = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.face_count);
-                std::vector<int> seen(n, 0);
-                for (std::size_t f = 0; f < owner.size(); ++f) {
-                    ++seen[owner[f]];
-                    ++seen[other[f]];
-                }
-                int shown = 0;
-                for (int t = 0; t < n && shown < 6; ++t)
-                    if (status(t) == shell_voronoi::ok && std::abs(volume(t) - built(t)) / built(t) > 1e-9) {
-                        std::cout << "  cell " << t << " faces(build)=" << all(t) << " faces(list)=" << seen[t]
-                                  << " owned=" << owned(t) << " volume(build)=" << built(t)
-                                  << " volume(faces)=" << volume(t) << "\n";
-                        ++shown;
-                    }
-            }
-            std::cout << "faces: faces=" << face_count << " (" << double(face_count) / n
-                      << " per cell) ring_entries_per_face=" << double(ring.size()) / face_count
-                      << " geometry_ms=" << geometry_ms << " geometry_Mcells_s=" << n / geometry_ms / 1e3
-                      << " clipping_build_ms=" << build_ms_lean << " clipping_Mcells_s=" << n / build_ms_lean / 1e3
-                      << " cells_without_rings=" << skipped << " total_volume=" << total
-                      << " max_relative_volume_difference=" << worst << "\n";
-        }
-
-        // Topology change per step: exact neighbour sets (by particle) before
-        // and after one step's displacement of `displacement` spacings, for a
-        // displacement field given as the seventh argument.
-        if (selection == "topology") {
-            const std::string field = argc > 7 ? argv[7] : "random";
-            const int capacity = 40;
-            auto neighbour_sets = [&](const std::vector<std::array<double, 3>>& at) {
-                {
-                    auto h = Kokkos::create_mirror_view(positions);
-                    for (int i = 0; i < n; ++i)
-                        for (int a = 0; a < 3; ++a) h(i, a) = at[i][a];
-                    Kokkos::deep_copy(positions, h);
-                }
-                neighbor_search::build(exec, search, positions);
-                shell_voronoi::Cells<Memory> cells(n, false);
-                cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours", n, capacity);
-                shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
-                auto order = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.order);
-                auto lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.all_neighbours);
-                auto counts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.face_count);
-                auto status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.status);
-                std::vector<std::vector<int>> sets(n);
-                for (int t = 0; t < n; ++t) {
-                    auto& set = sets[order(t)];
-                    if (status(t) != shell_voronoi::ok) {
-                        set = {-1};  // marks an unbuilt cell
-                        continue;
-                    }
-                    for (int f = 0; f < counts(t); ++f) set.push_back(order(lists(t, f)));
-                    std::sort(set.begin(), set.end());
-                }
-                return sets;
-            };
-            // Smooth fields have unit maximum speed; displacement = amplitude * spacing * field.
-            const double two_pi = 2.0 * 3.14159265358979323846;
-            std::mt19937_64 rng(11);
-            std::uniform_real_distribution<double> unit(-1.0, 1.0);
-            std::array<std::array<double, 7>, 6> modes;  // k (3), direction (3), phase
-            for (auto& m : modes) {
-                for (int a = 0; a < 3; ++a) m[a] = std::round(2.5 * unit(rng));
-                for (int a = 3; a < 6; ++a) m[a] = unit(rng);
-                m[6] = two_pi * unit(rng);
-            }
-            auto velocity = [&](const std::array<double, 3>& x) -> std::array<double, 3> {
-                if (field == "shear") return {std::sin(two_pi * x[1]), 0.0, 0.0};
-                if (field == "turbulent") {
-                    std::array<double, 3> v{0, 0, 0};
-                    for (const auto& m : modes) {
-                        const double s = std::sin(two_pi * (m[0] * x[0] + m[1] * x[1] + m[2] * x[2]) + m[6]);
-                        for (int a = 0; a < 3; ++a) v[a] += m[3 + a] * s / 3.0;
-                    }
-                    return v;
-                }
-                return {unit(rng), unit(rng), unit(rng)};  // random, incoherent
-            };
-            std::vector<std::array<double, 3>> moved(n);
-            for (int i = 0; i < n; ++i) {
-                const auto v = velocity(points[i]);
-                for (int a = 0; a < 3; ++a) moved[i][a] = wrap(points[i][a] + displacement * spacing * v[a]);
-            }
-            const auto before = neighbour_sets(points);
-            const auto after = neighbour_sets(moved);
-            long long changed = 0, gained = 0, lost = 0, unbuilt = 0;
-            for (int i = 0; i < n; ++i) {
-                if (before[i] == std::vector<int>{-1} || after[i] == std::vector<int>{-1}) {
-                    ++unbuilt;
-                    continue;
-                }
-                if (before[i] == after[i]) continue;
-                ++changed;
-                std::vector<int> d;
-                std::set_difference(after[i].begin(), after[i].end(), before[i].begin(), before[i].end(),
-                                    std::back_inserter(d));
-                gained += d.size();
-                d.clear();
-                std::set_difference(before[i].begin(), before[i].end(), after[i].begin(), after[i].end(),
-                                    std::back_inserter(d));
-                lost += d.size();
-            }
-            std::cout << "topology: field=" << field << " displacement=" << displacement
-                      << " changed_cells=" << 100.0 * changed / n << "% faces_gained_per_changed_cell="
-                      << (changed ? double(gained) / changed : 0.0)
-                      << " faces_lost_per_changed_cell=" << (changed ? double(lost) / changed : 0.0)
-                      << " unbuilt=" << unbuilt << "\n";
-        }
-
-        // Evolving mesh: particles carried by a smooth flow for 40 steps,
-        // `displacement` spacings per step at the fastest point, and steered a
-        // fraction of the way toward their cell centroid each step (mesh
-        // regularisation; the eighth argument, default 0.3). Reports the share
-        // of cells whose neighbour set changes in each step.
-        if (selection == "evolve") {
-            const std::string field = argc > 7 ? argv[7] : "turbulent";
-            const double steer = argc > 8 ? std::atof(argv[8]) : 0.3;
-            const int steps = 40, capacity = 40;
-            const double two_pi = 2.0 * 3.14159265358979323846;
-            std::mt19937_64 rng(11);
-            std::uniform_real_distribution<double> unit(-1.0, 1.0);
-            std::array<std::array<double, 7>, 6> modes;
-            for (auto& m : modes) {
-                for (int a = 0; a < 3; ++a) m[a] = std::round(2.5 * unit(rng));
-                for (int a = 3; a < 6; ++a) m[a] = unit(rng);
-                m[6] = two_pi * unit(rng);
-            }
-            auto velocity = [&](const std::array<double, 3>& x) -> std::array<double, 3> {
-                if (field == "shear") return {std::sin(two_pi * x[1]), 0.0, 0.0};
-                std::array<double, 3> v{0, 0, 0};
-                for (const auto& m : modes) {
-                    const double sv = std::sin(two_pi * (m[0] * x[0] + m[1] * x[1] + m[2] * x[2]) + m[6]);
-                    for (int a = 0; a < 3; ++a) v[a] += m[3 + a] * sv / 3.0;
-                }
-                return v;
-            };
-            std::vector<std::array<double, 3>> x(points.begin(), points.end());
-            std::vector<std::vector<int>> previous;
-            for (int step = 0; step <= steps; ++step) {
-                {
-                    auto h = Kokkos::create_mirror_view(positions);
-                    for (int i = 0; i < n; ++i)
-                        for (int a = 0; a < 3; ++a) h(i, a) = x[i][a];
-                    Kokkos::deep_copy(positions, h);
-                }
-                neighbor_search::build(exec, search, positions);
-                shell_voronoi::Cells<Memory> cells(n, false);
-                cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours", n, capacity);
-                shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
-                auto order = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.order);
-                auto lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.all_neighbours);
-                auto counts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.face_count);
-                auto centroid = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.centroid);
-                std::vector<std::vector<int>> sets(n);
-                std::vector<std::array<double, 3>> offset(n);
-                for (int t = 0; t < n; ++t) {
-                    const int i = order(t);
-                    for (int f = 0; f < counts(t); ++f) sets[i].push_back(order(lists(t, f)));
-                    std::sort(sets[i].begin(), sets[i].end());
-                    offset[i] = {centroid(t, 0), centroid(t, 1), centroid(t, 2)};
-                }
-                if (step > 0) {
-                    int changed = 0;
-                    for (int i = 0; i < n; ++i) changed += sets[i] != previous[i];
-                    if (step <= 3 || step % 5 == 0)
-                        std::cout << "evolve: field=" << field << " displacement=" << displacement
-                                  << " steer=" << steer << " step=" << step
-                                  << " changed_cells=" << 100.0 * changed / n << "%\n";
-                }
-                previous = std::move(sets);
-                for (int i = 0; i < n; ++i) {
-                    const auto v = velocity(x[i]);
-                    for (int a = 0; a < 3; ++a)
-                        x[i][a] = wrap(x[i][a] + displacement * spacing * v[a] + steer * offset[i][a]);
-                }
-            }
-        }
-
         // Persistent tetrahedra: built once from an exact build, then the
         // per-step kernels (circumcentres, faces, local Delaunay check) are
         // timed, the geometry is checked against the build, and after moving
@@ -772,18 +313,21 @@ int main(int argc, char** argv) {
         // the check's flagged cells are compared with the cells whose
         // neighbours really changed in an exact rebuild.
         if (selection == "tets") {
-            const int capacity = 40;
+            // Every cell's natural neighbours (by particle), from the owned faces.
             auto exact_sets = [&](const Kokkos::View<double* [3], Memory>& at, shell_voronoi::Cells<Memory>& cells) {
                 neighbor_search::build(exec, search, at);
-                shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
+                shell_voronoi::construct<double>(exec, grid, cells);
                 auto order = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.order);
-                auto lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.all_neighbours);
-                auto counts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.face_count);
+                auto neighbour = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.neighbour);
+                auto owned = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.owned_count);
                 std::vector<std::vector<int>> sets(n);
-                for (int t = 0; t < n; ++t) {
-                    for (int f = 0; f < counts(t); ++f) sets[order(t)].push_back(order(lists(t, f)));
-                    std::sort(sets[order(t)].begin(), sets[order(t)].end());
-                }
+                for (int t = 0; t < n; ++t)
+                    for (int f = 0; f < owned(t); ++f) {
+                        const int i = order(t), j = order(neighbour(t, f));
+                        sets[i].push_back(j);
+                        sets[j].push_back(i);
+                    }
+                for (auto& set : sets) std::sort(set.begin(), set.end());
                 return sets;
             };
             // Build 0 at the starting positions, in slot order: from here on a
@@ -793,7 +337,6 @@ int main(int argc, char** argv) {
             Kokkos::deep_copy(x0, search.positions);
             shell_voronoi::Cells<Memory> cells(n, false);
             cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
-            cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours", n, capacity);
             Kokkos::deep_copy(cells.rings, -1);
             const auto before = exact_sets(x0, cells);  // positions already in slot order: order is identity
             auto status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.status);
@@ -999,7 +542,6 @@ int main(int argc, char** argv) {
             }
             std::cout << "  inverted_tets=" << inverted << "\n";
             shell_voronoi::Cells<Memory> after_cells(n, false);
-            after_cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_after", n, capacity);
             const auto after = exact_sets(x1, after_cells);  // indexed by particle = slot of build 0
             long long changed = 0, caught = 0, flagged_cells = 0;
             for (int i = 0; i < n; ++i) {
@@ -1089,7 +631,6 @@ int main(int argc, char** argv) {
                         Kokkos::deep_copy(xd, h);
                     }
                     shell_voronoi::Cells<Memory> step_cells(n, false);
-                    step_cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_step", n, capacity);
                     const auto exact = exact_sets(xd, step_cells);
                     long long mismatched = 0, changed = 0;
                     for (int i = 0; i < n; ++i) {
@@ -1125,24 +666,11 @@ int main(int argc, char** argv) {
                         }
                         std::cout << "  total_tet_volume=" << volume << "\n";
                         // The same positions through the plain thread-per-cell kernel.
-                        shell_voronoi::Cells<Memory> plain(n, false);
-                        plain.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_plain", n, capacity);
-                        shell_voronoi::construct<double>(exec, grid, plain);
-                        auto plain_lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, plain.all_neighbours);
-                        auto plain_counts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, plain.face_count);
-                        auto plain_status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, plain.status);
                         for (int i = 0; i < n; ++i) {
                             if (repaired[i] == exact[i]) continue;
-                            int slot = 0;
-                            while (step_order(slot) != i) ++slot;
-                            std::vector<int> plain_set;
-                            for (int f = 0; f < plain_counts(slot); ++f) plain_set.push_back(step_order(plain_lists(slot, f)));
-                            std::sort(plain_set.begin(), plain_set.end());
-                            std::cout << "  slot " << slot << " at " << xs[i][0] << " " << xs[i][1] << " " << xs[i][2] << "\n";
-                            std::cout << "  cell " << i << " reference_status=" << status_of[i] << " mesh_faces="
-                                      << repaired[i].size() << " reference_faces=" << exact[i].size()
-                                      << " plain_status=" << plain_status(slot) << " plain_faces=" << plain_set.size()
-                                      << " plain_matches_mesh=" << (plain_set == repaired[i]) << "\n";
+                            std::cout << "  cell " << i << " at " << xs[i][0] << " " << xs[i][1] << " " << xs[i][2]
+                                      << " reference_status=" << status_of[i] << " mesh_faces=" << repaired[i].size()
+                                      << " reference_faces=" << exact[i].size() << "\n";
                             std::vector<int> diff;
                             std::set_symmetric_difference(repaired[i].begin(), repaired[i].end(), exact[i].begin(),
                                                           exact[i].end(), std::back_inserter(diff));
@@ -1199,7 +727,6 @@ int main(int argc, char** argv) {
             // Flip repair on the device, finished on the host (stuck triangles,
             // inverted tetrahedra), compared with an exact rebuild every step.
             if (argc > 7 && std::string(argv[7]) == "gpuflips") {
-                const int capacity_neighbours = capacity;
                 tet_mesh::Mesh<Memory> dm;
                 tet_mesh::from_rings(exec, cells, dm);
                 const int capacity = 2 * static_cast<int>(dm.vertex.extent(0));
@@ -1332,7 +859,6 @@ int main(int argc, char** argv) {
                     const long long left = tet_flips::failing(fm, grid_xs);
                     const auto repaired = tet_flips::neighbours(fm, n);
                     shell_voronoi::Cells<Memory> step_cells(n, false);
-                    step_cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_step", n, capacity_neighbours);
                     const auto exact = exact_sets(xd, step_cells);
                     long long mismatched = 0, exact_faces = 0;
                     for (int i = 0; i < n; ++i) {
@@ -1428,12 +954,6 @@ int main(int argc, char** argv) {
                       << " missed=" << changed - caught << "\n";
         }
 
-        if (displacement > 0 && selection != "topology" && selection != "evolve" && selection != "tets") {
-            if (selection == "all" || std::string("lean-double").find(selection) != std::string::npos)
-                warm_experiment.template operator()<double>("lean-double");
-            if (selection == "all" || std::string("lean-float").find(selection) != std::string::npos)
-                warm_experiment.template operator()<float>("lean-float");
-        }
     }
     Kokkos::finalize();
     return failures == 0 ? 0 : 1;

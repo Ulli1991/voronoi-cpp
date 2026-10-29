@@ -3,8 +3,8 @@
 #include "shell_voronoi.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cmath>
+#include <cstdlib>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -17,28 +17,22 @@
 // a cut, the creation of new vertices and the walk around a face are each
 // constant work per vertex, done by all lanes at once. Particles of a grid
 // ring are tested 32 at a time and clipped nearest-first after a warp sort.
+// Teams of 16 or 8 lanes per cell were 2x and 3.6x slower on an A100.
 //
 // Cells that overflow the warp capacities are rebuilt by the per-thread
 // kernel. On other backends construct_warp simply calls that kernel.
 namespace shell_voronoi {
 namespace warp {
 
-#ifndef SHELL_WARP_TEAM
-#define SHELL_WARP_TEAM 32  // threads per cell: 32, 16 or 8 (then 1, 2 or 4 cells per warp)
-#endif
-constexpr int lanes = SHELL_WARP_TEAM;
-static_assert(lanes == 32 || lanes == 16 || lanes == 8, "a cell's team is 8, 16 or 32 threads");
+constexpr int lanes = 32;
 constexpr int max_planes = 64;
 constexpr int max_vertices = 64;
 constexpr int per_lane = max_vertices / lanes;  // vertices (and planes) each lane owns
-constexpr int cells_per_warp = 32 / lanes;
-// Four cells per block whatever the team width: their polyhedra fill about
-// half of the 48 KB block scratch.
-constexpr int warps_per_block = 4 / cells_per_warp;
-constexpr int cells_per_block = warps_per_block * cells_per_warp;
-#ifndef SHELL_WARP_MIN_BLOCKS
-#define SHELL_WARP_MIN_BLOCKS 5  // caps registers so 5 blocks fit per SM: ~4% faster on A100
-#endif
+// Four cells (warps) per block: their polyhedra fill about half of the 48 KB
+// block scratch.
+constexpr int cells_per_block = 4;
+// Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
+constexpr int min_blocks_per_sm = 5;
 constexpr std::uint8_t none = 255;
 
 // One warp's polyhedron. Corners and adjacency hold three 8-bit indices each:
@@ -87,31 +81,69 @@ KOKKOS_INLINE_FUNCTION std::uint32_t with_byte(std::uint32_t packed, int k, int 
 KOKKOS_INLINE_FUNCTION int pack_image(int x, int y, int z) { return (x + 1) | (y + 1) << 2 | (z + 1) << 4; }
 KOKKOS_INLINE_FUNCTION int image(int packed, int axis) { return ((packed >> (2 * axis)) & 3) - 1; }
 
-#if defined(__CUDA_ARCH__)
-// A cell's team: lanes [first, first + lanes) of the warp. Votes and
-// shuffles are confined to the team, which runs independently of the others.
-__device__ inline int lane() { return threadIdx.x % lanes; }
-__device__ inline unsigned team_mask() {
-    return lanes == 32 ? 0xffffffffu : ((1u << lanes) - 1) << (threadIdx.x - lane());
+// Grid-cell offsets (4 bits per axis, biased by 8) sorted by the squared
+// smallest distance any point of the home cell can have to them.
+template <class MemorySpace>
+struct Stencil {
+    Kokkos::View<int*, MemorySpace> offsets;
+    Kokkos::View<float*, MemorySpace> bound2;
+    double reach = 0;  // cells outside the stencil are at least this far
+};
+
+// Every grid cell up to `reach` = min(largest ring, 4) cell widths away;
+// a cell that needs more is left uncertified for the per-thread kernel.
+template <class ExecSpace>
+Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec, int cells_per_side, double cell_width) {
+    const int reach = std::min((cells_per_side - 1) / 2, 4);
+    std::vector<std::pair<float, int>> entries;
+    auto beyond = [](int d) { return std::max(std::abs(d) - 1, 0); };
+    for (int dx = -reach; dx <= reach; ++dx)
+        for (int dy = -reach; dy <= reach; ++dy)
+            for (int dz = -reach; dz <= reach; ++dz) {
+                // Only cells up to `reach` widths away: beyond that the cube's
+                // corners alone would claim distances the stencil cannot vouch for.
+                const int gaps = beyond(dx) * beyond(dx) + beyond(dy) * beyond(dy) + beyond(dz) * beyond(dz);
+                if (gaps > reach * reach) continue;
+                const double bound = cell_width * std::sqrt(double(gaps));
+                // Round down so float storage never overstates a distance.
+                entries.push_back({std::nextafter(float(bound * bound), 0.0f), (dx + 8) | (dy + 8) << 4 | (dz + 8) << 8});
+            }
+    std::sort(entries.begin(), entries.end());
+    using Memory = typename ExecSpace::memory_space;
+    Stencil<Memory> s{Kokkos::View<int*, Memory>("shell_stencil", entries.size()),
+                      Kokkos::View<float*, Memory>("shell_stencil_bound2", entries.size()), reach * cell_width};
+    auto offsets = Kokkos::create_mirror_view(s.offsets);
+    auto bound2 = Kokkos::create_mirror_view(s.bound2);
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        offsets(i) = entries[i].second;
+        bound2(i) = entries[i].first;
+    }
+    Kokkos::deep_copy(exec, s.offsets, offsets);
+    Kokkos::deep_copy(exec, s.bound2, bound2);
+    return s;
 }
-__device__ inline unsigned team_ballot(bool p) { return __ballot_sync(team_mask(), p) >> (threadIdx.x - lane()); }
+
+#if defined(__CUDA_ARCH__)
+// The warp building a cell is the team's vector range: lane l is threadIdx.x.
+__device__ inline int lane() { return threadIdx.x; }
+constexpr unsigned all_lanes = 0xffffffffu;
 
 // One bit per vertex: vertex l + k * lanes is bit l + k * lanes.
 __device__ inline std::uint64_t vertex_ballot(const bool (&out)[per_lane]) {
     std::uint64_t bits = 0;
-    for (int k = 0; k < per_lane; ++k) bits |= std::uint64_t(team_ballot(out[k])) << (k * lanes);
+    for (int k = 0; k < per_lane; ++k) bits |= std::uint64_t(__ballot_sync(all_lanes, out[k])) << (k * lanes);
     return bits;
 }
 
 template <class T>
 __device__ T warp_max(T v) {
-    for (int o = lanes / 2; o > 0; o >>= 1) v = Kokkos::max(v, __shfl_xor_sync(team_mask(), v, o, lanes));
+    for (int o = lanes / 2; o > 0; o >>= 1) v = Kokkos::max(v, __shfl_xor_sync(all_lanes, v, o));
     return v;
 }
 
 template <class T>
 __device__ T warp_sum(T v) {
-    for (int o = lanes / 2; o > 0; o >>= 1) v += __shfl_xor_sync(team_mask(), v, o, lanes);
+    for (int o = lanes / 2; o > 0; o >>= 1) v += __shfl_xor_sync(all_lanes, v, o);
     return v;
 }
 
@@ -119,10 +151,10 @@ __device__ T warp_sum(T v) {
 __device__ inline int exclusive_scan(int v, int& total) {
     int inclusive = v;
     for (int o = 1; o < lanes; o <<= 1) {
-        const int up = __shfl_up_sync(team_mask(), inclusive, o, lanes);
+        const int up = __shfl_up_sync(all_lanes, inclusive, o);
         if (lane() >= o) inclusive += up;
     }
-    total = __shfl_sync(team_mask(), inclusive, lanes - 1, lanes);
+    total = __shfl_sync(all_lanes, inclusive, lanes - 1);
     return inclusive - v;
 }
 
@@ -153,7 +185,7 @@ __device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, int& vertic
         v.y[l] = sy ? -h : h;
         v.z[l] = sz ? -h : h;
     }
-    __syncwarp(team_mask());
+    __syncwarp(all_lanes);
     if (l < 8) {
         // Across edge (a, b) lies the corner that has the edge (b, a).
         std::uint32_t adjacent = 0;
@@ -166,7 +198,7 @@ __device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, int& vertic
         }
         v.adjacent[l] = adjacent;
     }
-    __syncwarp(team_mask());
+    __syncwarp(all_lanes);
     planes = box_planes;
     vertices = 8;
 }
@@ -191,7 +223,7 @@ __device__ int clip(Polyhedron<Real>& c, Vertices<Real> v, Vertices<Real> next, 
     const std::uint64_t removed = vertex_ballot(out);
     if (removed == 0) return ok;
     if (planes == max_planes) return plane_overflow;
-    __syncwarp(team_mask());
+    __syncwarp(all_lanes);
 
     // Each edge from a removed vertex to a kept one crosses the plane and
     // becomes a new vertex. Count them per lane, then number them.
@@ -238,7 +270,7 @@ __device__ int clip(Polyhedron<Real>& c, Vertices<Real> v, Vertices<Real> next, 
         }
         c.replacement[w] = replacement;
     }
-    __syncwarp(team_mask());
+    __syncwarp(all_lanes);
     // Across (b, plane) is the new vertex whose hole edge starts at b, across
     // (plane, a) the one whose hole edge ends at a.
     for (int m = 0; m < made; ++m) {
@@ -282,7 +314,7 @@ __device__ int clip(Polyhedron<Real>& c, Vertices<Real> v, Vertices<Real> next, 
     planes = plane + 1;
     vertices = kept + created;
     radius2 = warp_max(radius);
-    __syncwarp(team_mask());
+    __syncwarp(all_lanes);
     return ok;
 }
 
@@ -292,9 +324,9 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
     const int l = lane();
     for (int size = 2; size <= lanes; size <<= 1) {
         for (int stride = size / 2; stride > 0; stride >>= 1) {
-            const float other_key = __shfl_xor_sync(team_mask(), key, stride, lanes);
-            const int other_slot = __shfl_xor_sync(team_mask(), slot, stride, lanes);
-            const int other_image = __shfl_xor_sync(team_mask(), packed_image, stride, lanes);
+            const float other_key = __shfl_xor_sync(all_lanes, key, stride);
+            const int other_slot = __shfl_xor_sync(all_lanes, slot, stride);
+            const int other_image = __shfl_xor_sync(all_lanes, packed_image, stride);
             const bool ascending = (l & size) == 0;
             const bool lower = (l & stride) == 0;
             const bool other_smaller = other_key < key || (other_key == key && other_slot < slot);
@@ -316,31 +348,34 @@ struct Kernel {
     Grid<MemorySpace> grid;
     Cells<MemorySpace> out;
     Real half_width;
-    // Grid-cell offsets (4 bits per axis, biased by 8) sorted by the squared
-    // smallest distance any point of the home cell can have to them.
-    Kokkos::View<const int*, MemorySpace> stencil;
-    Kokkos::View<const float*, MemorySpace> stencil_bound2;
-    int stencil_size;
-    double stencil_reach;
-    // Persistent mode: fewer blocks, each team taking cells from this counter
-    // until none are left, so a slow cell holds up only its own team.
-    Kokkos::View<int*, MemorySpace> next_cell;
-    bool persistent = false;
+    Stencil<MemorySpace> stencil;
+    // Persistent warps (about two waves of resident blocks) take cells from
+    // this counter until none are left, so a slow cell holds up only its own
+    // warp: 1.06x on uniform random points over one block per four cells.
+    Kokkos::View<int, MemorySpace> next_cell;
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
-        const int team = member.team_rank() * cells_per_warp + int(threadIdx.x) / lanes;
         auto* base = static_cast<Polyhedron<Real>*>(
             member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron<Real>)));
-        Polyhedron<Real>& c = base[team];
-        for (int t = member.league_rank() * cells_per_block + team;;) {
-        if (persistent) {
+        Polyhedron<Real>& c = base[member.team_rank()];
+        while (true) {
             int taken = 0;
-            if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(0), 1);
-            t = __shfl_sync(team_mask(), taken, 0, lanes);
+            if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
+            const int t = __shfl_sync(all_lanes, taken, 0);
+            if (t >= grid.n) return;  // the whole warp
+            build(c, t);
         }
-        if (t >= grid.n) return;  // whole team
+#else
+        (void)member;
+#endif
+    }
+
+#if defined(__CUDA_ARCH__)
+    // Build cell t in polyhedron c, with all lanes of the warp.
+    __device__ __forceinline__ void build(Polyhedron<Real>& c, int t) const {
         const int l = lane();
+        const int stencil_size = static_cast<int>(stencil.offsets.extent(0));
         const auto& positions = grid.positions;
         const auto& offsets = grid.cell_offsets;
         const int side = grid.cells_per_side;
@@ -362,16 +397,6 @@ struct Kernel {
         int current = 0;  // which copy of the vertices is the polyhedron
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
-#if defined(SHELL_WARP_PHASES)
-        long long phase[6] = {0, 0, 0, 0, 0, 0}, mark = clock64();
-        auto lap = [&](int k) {
-            const long long now = clock64();
-            phase[k] += now - mark;
-            mark = now;
-        };
-#else
-        auto lap = [](int) {};
-#endif
 
         // Sort the buffered candidates, then clip nearest-first while they
         // can still cut the cell.
@@ -379,15 +404,13 @@ struct Kernel {
             float key = l < buffered ? c.candidate_distance2[l] : 3.0e38f;
             int slot = l < buffered ? c.candidate_slot[l] : 0x7fffffff;
             int packed = l < buffered ? c.candidate_image[l] : 0;
-            __syncwarp(team_mask());
-            lap(1);
+            __syncwarp(all_lanes);
             sort_candidates(key, slot, packed);
-            lap(2);
             for (int i = 0; i < buffered && status == ok; ++i) {
-                const float k = __shfl_sync(team_mask(), key, i, lanes);
+                const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
-                const int q = __shfl_sync(team_mask(), slot, i, lanes);
-                const int im = __shfl_sync(team_mask(), packed, i, lanes);
+                const int q = __shfl_sync(all_lanes, slot, i);
+                const int im = __shfl_sync(all_lanes, packed, i);
                 const Vec3<double> d{positions(q, 0) + image(im, 0) * box - p.x,
                                      positions(q, 1) + image(im, 1) * box - p.y,
                                      positions(q, 2) + image(im, 2) * box - p.z};
@@ -397,7 +420,6 @@ struct Kernel {
                 if (planes > before) current = 1 - current;
                 ++clipped;
                 cuts += planes > before;
-                lap(planes > before ? 4 : 3);
             }
             buffered = 0;
         };
@@ -407,7 +429,7 @@ struct Kernel {
         // reads its particles, so the memory accesses overlap. The walk is
         // certified once the next cell's lower bound exceeds 2R.
         for (int first = 0; first < stencil_size && status == ok; first += lanes) {
-            if (double(stencil_bound2(first)) >= 4.0 * static_cast<double>(radius2)) {
+            if (double(stencil.bound2(first)) >= 4.0 * static_cast<double>(radius2)) {
                 certified = true;
                 break;
             }
@@ -415,7 +437,7 @@ struct Kernel {
             const int e = first + l;
             int begin = 0, end = 0, packed = 0;
             if (e < stencil_size) {
-                const int code = stencil(e);
+                const int code = stencil.offsets(e);
                 const int u[3] = {home[0] + (code & 15) - 8, home[1] + ((code >> 4) & 15) - 8,
                                   home[2] + ((code >> 8) & 15) - 8};
                 const double q[3] = {p.x, p.y, p.z};
@@ -434,7 +456,6 @@ struct Kernel {
                     packed = pack_image(shift[0], shift[1], shift[2]);
                 }
             }
-            lap(0);
             const int most = warp_max(end - begin);
             for (int k = 0; k < most && status == ok; ++k) {
                 const int q = begin + k;
@@ -447,7 +468,7 @@ struct Kernel {
                     d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                     take = d2 < 4.0 * static_cast<double>(radius2);
                 }
-                const unsigned taking = team_ballot(take);
+                const unsigned taking = __ballot_sync(all_lanes, take);
                 if (taking == 0) continue;
                 if (buffered + __popc(taking) > lanes) flush();
                 if (take) {
@@ -457,13 +478,12 @@ struct Kernel {
                     c.candidate_image[at] = packed;
                 }
                 buffered += __popc(taking);
-                __syncwarp(team_mask());
-                lap(1);
+                __syncwarp(all_lanes);
             }
             if (buffered > 0) flush();
         }
         // Cells outside the stencil are at least stencil_reach away.
-        if (status == ok && !certified && stencil_reach * stencil_reach >= 4.0 * static_cast<double>(radius2))
+        if (status == ok && !certified && stencil.reach * stencil.reach >= 4.0 * static_cast<double>(radius2))
             certified = true;
         if (status == ok && !certified) status = uncertified;
 
@@ -476,20 +496,19 @@ struct Kernel {
                 if (v < vertices)
                     for (int e = 0; e < 3; ++e) touches |= byte(cv.corner[v], e) < box_planes;
             }
-            if (__any_sync(team_mask(), touches)) status = uncertified;
+            if (__any_sync(all_lanes, touches)) status = uncertified;
         }
 
-        lap(0);
         // Faces: lane l walks planes l and l + 32 around their vertices.
         for (int k = 0; k < per_lane; ++k)
             if (l + k * lanes < planes) c.first[l + k * lanes] = none;
-        __syncwarp(team_mask());
+        __syncwarp(all_lanes);
         for (int k = 0; k < per_lane; ++k) {
             const int v = l + k * lanes;
             if (v < vertices)
                 for (int e = 0; e < 3; ++e) c.first[byte(cv.corner[v], e)] = v;
         }
-        __syncwarp(team_mask());
+        __syncwarp(all_lanes);
 
         double volume = 0;
         Vec3<double> moment{0, 0, 0}, area_sum{0, 0, 0};
@@ -509,15 +528,15 @@ struct Kernel {
             const Vec3<double> first{double(cv.x[start]), double(cv.y[start]), double(cv.z[start])};
             Vec3<double> previous = first, area{0, 0, 0}, face_moment{0, 0, 0};
             double weight = 0;
-            int current = start, steps = 0;
+            int vertex = start, steps = 0;
             do {
                 int at = 0;
-                while (at < 3 && byte(cv.corner[current], at) != plane) ++at;
+                while (at < 3 && byte(cv.corner[vertex], at) != plane) ++at;
                 if (at == 3 || ++steps > max_vertices) {
                     broken = true;
                     break;
                 }
-                const int next = byte(cv.adjacent[current], (at + 2) % 3);
+                const int next = byte(cv.adjacent[vertex], (at + 2) % 3);
                 const Vec3<double> x{double(cv.x[next]), double(cv.y[next]), double(cv.z[next])};
                 const Vec3<double> twice = cross(previous - first, x - first);
                 area = area + twice * 0.5;
@@ -528,8 +547,8 @@ struct Kernel {
                 volume += tetra;
                 moment = moment + (first + previous + x) * (tetra / 4.0);
                 previous = x;
-                current = next;
-            } while (current != start);
+                vertex = next;
+            } while (vertex != start);
             if (broken) break;
             area_sum = area_sum + area;
             const double magnitude = Kokkos::sqrt(dot(area, area));
@@ -543,7 +562,7 @@ struct Kernel {
                 ++owned_here;
             }
         }
-        if (status == ok && __any_sync(team_mask(), broken)) status = degenerate;
+        if (status == ok && __any_sync(all_lanes, broken)) status = degenerate;
 
         volume = warp_sum(volume);
         moment = {warp_sum(moment.x), warp_sum(moment.y), warp_sum(moment.z)};
@@ -581,19 +600,10 @@ struct Kernel {
                 out.work(t, 0) = rings;
                 out.work(t, 1) = clipped;
                 out.work(t, 2) = cuts;
-#if defined(SHELL_WARP_PHASES)
-                lap(5);
-                if (out.phase_cycles.extent(0) > 0)
-                    for (int k = 0; k < 6; ++k) out.phase_cycles(t, k) = phase[k];
-#endif
             }
         }
-        if (!persistent) return;
-        }
-#else
-        (void)member;
-#endif
     }
+#endif
 };
 
 #endif  // KOKKOS_ENABLE_CUDA
@@ -601,69 +611,35 @@ struct Kernel {
 }  // namespace warp
 
 // Build every cell with one warp per cell, then rebuild cells that overflowed
-// the warp capacities with the per-thread kernel. Non-CUDA backends use the
-// per-thread kernel directly.
+// the warp capacities with the per-thread kernel. Other backends, and
+// requests for face rings, use the per-thread kernel throughout.
 template <class Real, class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     const Cells<typename ExecSpace::memory_space>& out) {
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
-        const int side = grid.cells_per_side;
-        if (grid.n <= 0 || side < 3 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
-            throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
-        const int max_ring = (side - 1) / 2;
-        const Real half_width = static_cast<Real>(Kokkos::min(0.25 * grid.box, (max_ring + 1) * grid.cell_width));
-
-        // Stencil of grid cells up to `reach` cells away; beyond it a cell is
-        // left uncertified and rebuilt by the per-thread kernel.
-        const int reach = Kokkos::min(max_ring, 4);
-        std::vector<std::pair<float, int>> entries;
-        for (int dx = -reach; dx <= reach; ++dx)
-            for (int dy = -reach; dy <= reach; ++dy)
-                for (int dz = -reach; dz <= reach; ++dz) {
-                    auto beyond = [](int d) { return Kokkos::max(Kokkos::abs(d) - 1, 0); };
-                    // Only cells up to `reach` widths away: beyond that the cube's
-                    // corners alone would claim distances the stencil cannot vouch for.
-                    if (beyond(dx) * beyond(dx) + beyond(dy) * beyond(dy) + beyond(dz) * beyond(dz) > reach * reach)
-                        continue;
-                    const double bound = grid.cell_width * std::sqrt(double(beyond(dx) * beyond(dx) +
-                                                                            beyond(dy) * beyond(dy) +
-                                                                            beyond(dz) * beyond(dz)));
-                    entries.push_back({float(bound * bound), (dx + 8) | (dy + 8) << 4 | (dz + 8) << 8});
-                }
-        std::sort(entries.begin(), entries.end());
-        // Round the bounds down so float storage never overstates a distance.
-        Kokkos::View<int*, typename ExecSpace::memory_space> stencil("shell_stencil", entries.size());
-        Kokkos::View<float*, typename ExecSpace::memory_space> bound2("shell_stencil_bound2", entries.size());
-        {
-            auto hs = Kokkos::create_mirror_view(stencil);
-            auto hb = Kokkos::create_mirror_view(bound2);
-            for (std::size_t i = 0; i < entries.size(); ++i) {
-                hs(i) = entries[i].second;
-                hb(i) = std::nextafter(entries[i].first, 0.0f);
-            }
-            Kokkos::deep_copy(exec, stencil, hs);
-            Kokkos::deep_copy(exec, bound2, hb);
+        if (out.rings.extent(0) == 0) {
+            const int side = grid.cells_per_side;
+            if (grid.n <= 0 || side < 3 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
+                throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
+            const int max_ring = (side - 1) / 2;
+            const Real half_width =
+                static_cast<Real>(Kokkos::min(0.25 * grid.box, (max_ring + 1) * grid.cell_width));
+            using Memory = typename ExecSpace::memory_space;
+            const warp::Stencil<Memory> stencil = warp::make_stencil(exec, side, grid.cell_width);
+            Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
+            const int blocks = Kokkos::min((grid.n + warp::cells_per_block - 1) / warp::cells_per_block,
+                                           2 * warp::min_blocks_per_sm * exec.cuda_device_prop().multiProcessorCount);
+            // A block holds cells_per_block warps; each warp is a team's vector range.
+            Kokkos::TeamPolicy<Kokkos::Cuda,
+                               Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
+                policy(exec, blocks, warp::cells_per_block, warp::lanes);
+            policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron<Real>)));
+            Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                 warp::Kernel<Real, Memory>{grid, out, half_width, stencil, next_cell});
+            detail::construct_with_overflow<Real>(exec, grid, out, detail::Pass::failed);
+            return;
         }
-        // Persistent teams (about two waves of resident blocks, cells from a
-        // counter): 1.06x on uniform random points. SHELL_WARP_BLOCKS=1 launches
-        // one block per four cells instead.
-        const bool persistent = std::getenv("SHELL_WARP_BLOCKS") == nullptr;
-        Kokkos::View<int*, typename ExecSpace::memory_space> next_cell("shell_warp_next_cell", 1);
-        int blocks = (grid.n + warp::cells_per_block - 1) / warp::cells_per_block;
-        if (persistent)
-            blocks = Kokkos::min(blocks, 2 * SHELL_WARP_MIN_BLOCKS * exec.cuda_device_prop().multiProcessorCount);
-        // Blocks are warps_per_block full warps (vector length 32); a warp
-        // holds cells_per_warp teams of `lanes` threads.
-        Kokkos::TeamPolicy<Kokkos::Cuda, Kokkos::LaunchBounds<warp::warps_per_block * 32, SHELL_WARP_MIN_BLOCKS>>
-            policy(exec, blocks, warp::warps_per_block, 32);
-        policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron<Real>)));
-        Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                             warp::Kernel<Real, typename ExecSpace::memory_space>{
-                                 grid, out, half_width, stencil, bound2, static_cast<int>(entries.size()),
-                                 reach * grid.cell_width, next_cell, persistent});
-        construct<Real>(exec, grid, out, /*only_failed=*/true);
-        return;
     }
 #endif
     construct<Real>(exec, grid, out);

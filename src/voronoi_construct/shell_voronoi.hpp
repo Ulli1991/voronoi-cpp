@@ -104,22 +104,15 @@ struct Cells {
     Kokkos::View<double** [3], MemorySpace> face_centroid;
     Kokkos::View<double*, MemorySpace> volume;
     Kokkos::View<double* [3], MemorySpace> centroid;
-    // Optional: every natural neighbour of a cell (slots, face_count of them),
-    // the state a warm rebuild starts from. Size 0 = off.
-    Kokkos::View<int**, MemorySpace> all_neighbours;
-    // Optional: for each owned face, in order, its ring length k followed by
-    // the k slots whose bisectors bound it, so that vertex m of the face is
-    // equidistant from the cell, the face neighbour, ring[m] and ring[m + 1].
-    // Size 0 = off.
+    // Optional, size 0 = off: for each owned face, in order, its ring length
+    // k followed by the k slots whose bisectors bound it, so that vertex m of
+    // the face is equidistant from the cell, the face neighbour, ring[m] and
+    // ring[m + 1]. Only the thread kernel records rings.
     Kokkos::View<int**, MemorySpace> rings;
     // Optional diagnostics, size 0 = off: |sum of area vectors| / sum of
     // |area|, and work per cell (rings walked, candidates clipped, cuts).
     Kokkos::View<double*, MemorySpace> closure;
     Kokkos::View<int* [3], MemorySpace> work;
-    // Optional, size 0 = off: clock cycles per phase of the warp kernel when
-    // built with SHELL_WARP_PHASES (walk, fetch, sort, clips that do not cut,
-    // clips that cut, faces).
-    Kokkos::View<long long* [6], MemorySpace> phase_cycles;
 
     Cells() = default;
     Cells(int n, bool with_diagnostics)
@@ -167,8 +160,9 @@ KOKKOS_INLINE_FUNCTION bool intersect(const Cell& cell, int a, int b, int c,
     return true;
 }
 
-// Cube of half-width h around the generator; corners keep the orientation
-// convention of local_voronoi.hpp.
+// Cube of half-width h around the generator. Each corner lists its three
+// planes in the order that walks every face the same way round, so the order
+// flips at corners of odd parity.
 template <class Cell, class Real>
 KOKKOS_INLINE_FUNCTION void start_cube(Cell& cell, Real h) {
     const Vec3<Real> axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
@@ -295,10 +289,6 @@ struct Candidate {
     int slot;
     std::int8_t image[3];  // periodic image of the slot, in box lengths
 };
-
-}  // namespace detail
-
-namespace detail {
 
 // Which cells a pass builds.
 enum class Pass { all, failed, overflowed };
@@ -470,13 +460,6 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 const double sliver = 64 * Kokkos::Experimental::epsilon_v<Real> *
                                       static_cast<double>(cell.radius2);
                 if (Kokkos::sqrt(dot(area, area)) <= sliver) continue;
-                if (out.all_neighbours.extent(0) > 0) {
-                    if (faces == static_cast<int>(out.all_neighbours.extent(1))) {
-                        status = face_overflow;
-                        break;
-                    }
-                    out.all_neighbours(t, faces) = cell.neighbour[plane];
-                }
                 ++faces;
                 area_magnitude += Kokkos::sqrt(dot(area, area));
                 const int neighbour = cell.neighbour[plane];
@@ -524,24 +507,30 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         });
 }
 
-}  // namespace detail
-
-// Build every cell, or with only_failed just those whose status is not ok
-// (the fallback after a faster kernel). Real is the precision of the private
-// polyhedron; inputs and outputs are double. Cells that overflow the usual
-// capacities are then rebuilt once more, in double with big ones.
+// Build the cells of `pass`, then rebuild those that overflowed the usual
+// capacities once more, in double with big ones.
 template <class Real, class ExecSpace>
-void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
-               const Cells<typename ExecSpace::memory_space>& out, bool only_failed = false) {
-    using detail::Pass;
-    detail::construct_pass<Real, max_planes, max_vertices>(exec, grid, out, only_failed ? Pass::failed : Pass::all);
+void construct_with_overflow(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                             const Cells<typename ExecSpace::memory_space>& out, Pass pass) {
+    construct_pass<Real, max_planes, max_vertices>(exec, grid, out, pass);
     int overflowed = 0;
     const auto status = out.status;
     Kokkos::parallel_reduce(
         "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
         KOKKOS_LAMBDA(int t, int& count) { count += status(t) == vertex_overflow || status(t) == plane_overflow; },
         overflowed);
-    if (overflowed > 0) detail::construct_pass<double, big_planes, big_vertices>(exec, grid, out, Pass::overflowed);
+    if (overflowed > 0) construct_pass<double, big_planes, big_vertices>(exec, grid, out, Pass::overflowed);
+}
+
+}  // namespace detail
+
+// Build every cell with one thread per cell: the portable kernel, and the
+// only one that records face rings. Real is the precision of the private
+// polyhedron; inputs and outputs are double.
+template <class Real, class ExecSpace>
+void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+               const Cells<typename ExecSpace::memory_space>& out) {
+    detail::construct_with_overflow<Real>(exec, grid, out, detail::Pass::all);
 }
 
 }  // namespace shell_voronoi
