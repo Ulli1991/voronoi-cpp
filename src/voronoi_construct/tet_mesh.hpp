@@ -68,7 +68,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                 at += 1 + k;
             }
         });
-    auto face_of = [=] KOKKOS_FUNCTION(int a, int b) {  // a < b
+    auto face_of = KOKKOS_LAMBDA(int a, int b) {  // a < b
         for (int g = face_start(a); g < face_start(a + 1); ++g)
             if (neighbour(g) == b) return g;
         return -1;
@@ -95,9 +95,9 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                 at += 1 + k;
             }
         });
-    auto ring_of = [=] KOKKOS_FUNCTION(int g, int m) { return particles(ring_start(g) + m % length(g)); };
+    auto ring_of = KOKKOS_LAMBDA(int g, int m) { return particles(ring_start(g) + m % length(g)); };
     // A face emits the slots whose tetrahedron has the face's particles as its two smallest.
-    auto emits = [=] KOKKOS_FUNCTION(int g, int m) {
+    auto emits = KOKKOS_LAMBDA(int g, int m) {
         const int j = neighbour(g);
         return j < ring_of(g, m) && j < ring_of(g, m + 1);
     };
