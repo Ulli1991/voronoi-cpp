@@ -210,3 +210,12 @@ add_test(NAME integer_positions_scaling_smoke COMMAND construction_scaling 12 1 
 
 add_test(NAME integer_positions_decoded_smoke COMMAND construction_scaling 12 1 relative_early_integer32_decoded)
 
+# Fused natural-neighbour construction: validation and timing.
+add_executable(shell_voronoi_check src/test/shell_voronoi_check.cpp)
+target_link_libraries(shell_voronoi_check PRIVATE voronoi_library)
+target_compile_options(shell_voronoi_check PRIVATE -Wall -Wextra -Wpedantic)
+# Double-precision kernels only: float and clustered or degenerate inputs
+# still fail some checks (see the degenerate layouts in the program).
+foreach(distribution uniform jittered lattice)
+    add_test(NAME shell_${distribution} COMMAND shell_voronoi_check 4096 ${distribution} double 1)
+endforeach()
