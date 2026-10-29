@@ -81,7 +81,7 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_BINARY_DIR}/test-${distribution}.csv
             12 insertion cached ${distribution} 64 relative_early)
     endforeach()
-    foreach(policy relative_early relative_early_coalesced relative_early_fixed32 relative_early_batched_test relative_early_shared)
+    foreach(policy relative_early relative_early_coalesced relative_early_fixed32 relative_early_batched_test relative_early_shared cooperative)
         add_test(NAME scaling_${policy} COMMAND construction_scaling 12 1 ${policy})
     endforeach()
     set_tests_properties(geometry_analytic geometry_stress geometry_early_stress neighbor_sort
@@ -119,3 +119,94 @@ if(BUILD_TESTING)
     target_link_libraries(cooperative_clip_check PRIVATE voronoi_library)
     add_test(NAME cooperative_clip_contract COMMAND cooperative_clip_check)
 endif()
+
+if(BUILD_TESTING)
+    foreach(distribution lattice disordered regular random gradient)
+        add_test(NAME team_${distribution} COMMAND table_mesh_check
+            ${CMAKE_CURRENT_BINARY_DIR}/test-team-${distribution}.csv
+            12 insertion cached ${distribution} 64 cooperative)
+        set_tests_properties(team_${distribution} PROPERTIES TIMEOUT 180)
+    endforeach()
+endif()
+
+if(BUILD_TESTING)
+    add_executable(construction_team_stress_check src/test/construction_stress_check.cpp)
+    target_link_libraries(construction_team_stress_check PRIVATE voronoi_library)
+    target_compile_definitions(construction_team_stress_check PRIVATE VORONOI_TEST_TEAM=true)
+    add_test(NAME geometry_team_stress COMMAND construction_team_stress_check)
+    set_tests_properties(geometry_team_stress PROPERTIES TIMEOUT 180)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME scaling_scratch_sort COMMAND construction_scaling 12 1 relative_early_scratch_sort)
+    foreach(distribution lattice disordered regular random gradient)
+        add_test(NAME scratch_sort_${distribution} COMMAND table_mesh_check
+            ${CMAKE_CURRENT_BINARY_DIR}/test-scratch-sort-${distribution}.csv
+            12 team_bitonic_recompute cached ${distribution} 64 relative_early)
+        set_tests_properties(scratch_sort_${distribution} PROPERTIES TIMEOUT 180)
+    endforeach()
+endif()
+
+if(BUILD_TESTING)
+    add_executable(scratch_sort_check src/test/scratch_sort_check.cpp)
+    target_link_libraries(scratch_sort_check PRIVATE voronoi_library)
+    add_test(NAME scratch_sort_contract COMMAND scratch_sort_check)
+    set_tests_properties(scratch_sort_contract PROPERTIES TIMEOUT 120)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME search_stage_profile_contract COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/check_search_stage_profile.py
+        $<TARGET_FILE:construction_scaling>)
+    set_tests_properties(search_stage_profile_contract PROPERTIES TIMEOUT 180)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(layout_search_check src/test/layout_search_check.cpp)
+    target_link_libraries(layout_search_check PRIVATE voronoi_library)
+    add_test(NAME layout_search_contract COMMAND layout_search_check)
+    set_tests_properties(layout_search_contract PROPERTIES TIMEOUT 120)
+    foreach(policy relative_early_unsorted relative_early_morton relative_early_morton_unsorted)
+        add_test(NAME scaling_${policy} COMMAND construction_scaling 12 1 ${policy})
+    endforeach()
+    foreach(distribution lattice disordered regular random gradient)
+        add_test(NAME layout_geometry_${distribution} COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/check_layout_geometry.py
+            $<TARGET_FILE:table_mesh_check> ${distribution})
+        set_tests_properties(layout_geometry_${distribution} PROPERTIES TIMEOUT 180)
+    endforeach()
+endif()
+
+add_executable(reconstruction_profile src/test/construction_scaling.cpp)
+target_link_libraries(reconstruction_profile PRIVATE voronoi_library)
+target_compile_definitions(reconstruction_profile PRIVATE VORONOI_REFERENCE_PROFILE=1)
+if(Kokkos_ENABLE_CUDA)
+    target_compile_options(reconstruction_profile PRIVATE -lineinfo)
+endif()
+if(BUILD_TESTING)
+    add_test(NAME reconstruction_profile_smoke COMMAND reconstruction_profile 12 1 relative_early_scratch_sort)
+    set_tests_properties(reconstruction_profile_smoke PROPERTIES TIMEOUT 180)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME ncu_capture_contract COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ncu_capture.py)
+endif()
+
+add_test(NAME float_cache_scaling_smoke COMMAND construction_scaling 12 1 relative_early_float_cache)
+
+add_test(NAME face_links_scaling_smoke COMMAND construction_scaling 12 1 relative_early_face_links)
+
+add_executable(construction_face_links_stress_check src/test/construction_stress_check.cpp)
+target_link_libraries(construction_face_links_stress_check PRIVATE voronoi_library)
+target_compile_definitions(construction_face_links_stress_check PRIVATE
+    VORONOI_TEST_EARLY_STOP=true VORONOI_TEST_FACE_LINKS=true)
+add_test(NAME geometry_face_links_stress COMMAND construction_face_links_stress_check)
+
+add_executable(integer_positions_check src/test/integer_positions_check.cpp)
+target_link_libraries(integer_positions_check PRIVATE voronoi_library)
+add_test(NAME integer_positions_geometry COMMAND integer_positions_check)
+add_test(NAME integer_positions_scaling_smoke COMMAND construction_scaling 12 1 relative_early_integer32)
+
+add_test(NAME integer_positions_decoded_smoke COMMAND construction_scaling 12 1 relative_early_integer32_decoded)
+

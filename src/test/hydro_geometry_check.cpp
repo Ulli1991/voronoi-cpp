@@ -69,9 +69,11 @@ int check_box(double scale, bool asymmetric, bool rotated) {
         Kokkos::Array<double,3>{0,0,0},workspace_usage);
     auto usage=host(workspace_usage);
     if (usage(0).status!=hs(0) || usage(0).faces!=hf(0)) ++errors;
-    if (!rotated) {
+    if (!rotated && !std::is_same_v<VertexStorage,local_voronoi::FloatCachedVertexPositions>) {
         if (usage(0).planes!=12 || usage(0).vertices!=8 || usage(0).faces!=6 ||
             usage(0).face_vertices!=4 || usage(0).candidates!=6 ||
+            usage(0).suffix_tests!=0 || usage(0).edge_tests<=0 ||
+            usage(0).face_seed_tests!=48 || usage(0).face_link_tests!=(Workspace::direct_face_links ? 24 : 108) ||
             usage(0).vertex_tests!=48 || usage(0).coordinate_reads!=104 ||
             usage(0).created_vertices!=24 || usage(0).intersection_solves!=
                 (VertexStorage::caches_coordinates ? 24 : 128)) ++errors;
@@ -159,7 +161,8 @@ int check_box(double scale, bool asymmetric, bool rotated) {
     if (!rejected) ++errors;
     std::cout << "backend=" << Exec::name() << " analytic_box_scale=" << scale
               << " asymmetric=" << asymmetric << " rotated=" << rotated
-              << " vertices=" << (std::is_same_v<VertexStorage,local_voronoi::CachedVertexPositions> ? "cached" : "recomputed")
+              << " vertices=" << (std::is_same_v<VertexStorage,local_voronoi::FloatCachedVertexPositions> ? "float_filtered" :
+                  (std::is_same_v<VertexStorage,local_voronoi::CachedVertexPositions> ? "cached" : "recomputed"))
               << " clipping_policy=" << (std::is_same_v<typename Workspace::tolerance,
                   local_voronoi::RelativeClippingTolerance> ? "relative_pivoted" : "legacy")
               << " errors=" << errors << '\n';
@@ -175,6 +178,12 @@ int main(int argc,char** argv) {
             for (bool asymmetric:{false,true})
                 for (bool rotated:{false,true}) {
                     errors+=check_box(scale,asymmetric,rotated);
+                    errors+=check_box<local_voronoi::CachedVertexPositions,
+                        local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true,true>>(
+                            scale,asymmetric,rotated);
+                    errors+=check_box<local_voronoi::FloatCachedVertexPositions,
+                        local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true>>(
+                            scale,asymmetric,rotated);
                     errors+=check_box<local_voronoi::CachedVertexPositions>(scale,asymmetric,rotated);
                     errors+=check_box<local_voronoi::CachedVertexPositions,
                         local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance>>(

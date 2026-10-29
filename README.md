@@ -286,3 +286,16 @@ reconstruction took259.60ms versus279.07ms for private cached vertices (~1.075x)
 but added3GiB. Fixed32 input-only storage gave no measured speedup. The bounded
 variant has passed local checks; GPU performance is not yet measured.
 `scripts/compare_batched_gpudev.sh` is prepared, not submitted; approval required.
+
+GPU optimization priorities and correctness gates: [optimization plan](docs/gpu-optimization-plan.md).
+
+Memory allocation breakdown and the opt-in scratch-distance sorting experiment: [memory budget](docs/memory-budget.md). Select `team_bitonic_recompute` before configuring a fresh search; `construction_scaling` exposes it as `relative_early_scratch_sort`. On the measured A100 at 195³, observed GPU usage fell from 35.1 to 21.3 GiB and search time from 478 to 315 ms; reconstruction stayed near 897 ms.
+
+To measure search stages, pass a separate sixth argument to the scaling CLI:
+`construction_scaling 128 5 relative_early_scratch_sort timings.csv search-stages.csv`.
+The ordinary timings remain uninstrumented. Additional fenced passes report
+key/count, scan, scatter, cell ordering/gather, candidate fill, nearest ordering,
+and completeness-check medians in the stage CSV; their independently computed
+medians need not sum to the instrumented wall-time median.
+
+Opt-in unsorted-first reconstruction and Morton cell-block experiments: [design, recovery and validation](docs/layout-experiments.md).

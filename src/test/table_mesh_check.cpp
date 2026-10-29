@@ -1,7 +1,9 @@
 #include "local_voronoi_table.hpp"
 #include "local_voronoi_hydro.hpp"
+#include "local_voronoi_team.hpp"
 #include "local_voronoi_workspace.hpp"
 #include "local_voronoi_retry.hpp"
+#include "local_voronoi_order_retry.hpp"
 #include "neighbor_search.hpp"
 
 #include <algorithm>
@@ -22,9 +24,9 @@ template<class View> auto host(View view) {
 }
 
 template<class VertexStorage = local_voronoi::RecomputedVertexPositions,
-         class Workspace = local_voronoi::PlaneWorkspace<>>
+         class Workspace = local_voronoi::PlaneWorkspace<>, bool Cooperative = false>
 int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
-          const std::string& distribution) {
+          const std::string& distribution, bool unsorted=false, bool morton=false) {
     if (side<12 || side>32) throw std::invalid_argument("side must be between 12 and 32");
     const int n = side*side*side;
     const double radius = 3.5/side;
@@ -56,9 +58,10 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
     Kokkos::deep_copy(radii,radius);
     neighbor_search::DenseCellSearch<Exec> search;
     search.row_sort=row_sort;
+    search.morton_cells=morton;
     const Kokkos::Array<double,3> box{1,1,1};
     // Deliberately force capacity growth, then feed the completed table directly.
-    neighbor_search::configure(search,n,box,0.75*radius,true,8,true);
+    neighbor_search::configure(search,n,box,0.75*radius,true,8,!unsorted);
     const int retries = neighbor_search::rebuild(Exec{},search,positions,radii);
     int sort_errors=0;
     if (row_sort==neighbor_search::RowSort::team_bitonic) {
@@ -141,6 +144,8 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
         else
             local_voronoi::reconstruct_table<VertexStorage,Workspace>(Exec{},search.positions,search.counts,search.table,
                 search.radii,box,faces,ids,areas,vertices_per_face,vertices,status);
+        if (unsorted) local_voronoi::retry_table_order<VertexStorage,Workspace>(
+            Exec{},search,faces,ids,areas,vertices_per_face,vertices,status);
     };
     reconstruct(); // Warm up before timing repeated reconstruction of identical rows.
     std::vector<double> timings;
@@ -169,7 +174,11 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
     Kokkos::View<double*,Memory> volumes("volumes",n);
     Kokkos::View<double**,Memory> cell_centroids("cell_centroids",n,3);
     auto reconstruct_hydro=[&] {
-        if constexpr (Workspace::plane_capacity<local_voronoi::max_planes)
+        if constexpr (Cooperative)
+            local_voronoi::reconstruct_hydro_team(Exec{},search.positions,search.counts,search.table,
+                search.radii,box,hydro_faces,hydro_ids,hydro_areas,face_centroids,
+                volumes,cell_centroids,hydro_status);
+        else if constexpr (Workspace::plane_capacity<local_voronoi::max_planes)
             local_voronoi::reconstruct_hydro_retry<VertexStorage,Workspace>(Exec{},search.positions,search.counts,search.table,
                 search.radii,box,hydro_faces,hydro_ids,hydro_areas,face_centroids,
                 volumes,cell_centroids,hydro_status);
@@ -177,6 +186,9 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
             local_voronoi::reconstruct_hydro<VertexStorage,Workspace>(Exec{},search.positions,search.counts,search.table,
                 search.radii,box,hydro_faces,hydro_ids,hydro_areas,face_centroids,
                 volumes,cell_centroids,hydro_status);
+        if (unsorted) local_voronoi::retry_hydro_order<VertexStorage,Workspace>(
+            Exec{},search,hydro_faces,hydro_ids,hydro_areas,face_centroids,
+            volumes,cell_centroids,hydro_status);
     };
     reconstruct_hydro();
     std::vector<double> hydro_timings, hydro_pipeline_timings;
@@ -191,6 +203,13 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
     }
     std::sort(hydro_timings.begin(),hydro_timings.end());
     std::sort(hydro_pipeline_timings.begin(),hydro_pipeline_timings.end());
+    // Compact geometry rejects degenerate faces/moments that the diagnostic
+    // vertex writer does not validate. Its order retry can therefore sort more
+    // rows. Refresh the diagnostic oracle against that final candidate table.
+    if (unsorted) {
+        reconstruct();
+        hs=host(status); hf=host(faces); hi=host(ids); ha=host(areas); hv=host(vertices);
+    }
     auto hhs=host(hydro_status), hhf=host(hydro_faces);
     auto hhi=host(hydro_ids);
     auto hha=host(hydro_areas);
@@ -369,7 +388,8 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
               << " position_cache_bytes_per_cell=" <<
                   (std::is_same_v<VertexStorage,local_voronoi::CachedVertexPositions> ?
                       sizeof(local_voronoi::CachedVertexPositions) : 0)
-              << " row_sort=" << (row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
+              << " morton_cells=" << morton << " nearest_first=" << !unsorted
+              << " row_sort=" << (row_sort==neighbor_search::RowSort::team_bitonic_recompute ? "team_bitonic_recompute" : row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
               << " capacity_retries=" << retries << " volume_error=" << std::abs(total_volume-1)
               << " reconstruction_median_ms=" << timings[2]
               << " search_rebuild_median_ms=" << search_timings[2]
@@ -381,7 +401,8 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
               << " max_closure=" << max_closure << " max_pair_error=" << max_pair_error
               << " errors=" << errors << '\n';
     std::cout << "profile_backend=" << Exec::name() << " particles=" << n
-              << " row_sort=" << (row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
+              << " morton_cells=" << morton << " nearest_first=" << !unsorted
+              << " row_sort=" << (row_sort==neighbor_search::RowSort::team_bitonic_recompute ? "team_bitonic_recompute" : row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
               << " key_count_ms=" << profile.key_count_ms << " scan_ms=" << profile.scan_ms
               << " scatter_ms=" << profile.scatter_ms
               << " cell_order_gather_ms=" << profile.cell_order_gather_ms
@@ -407,14 +428,14 @@ int main(int argc,char** argv) {
     int result;
     {
         const std::string mode=argc>3 ? argv[3] : "insertion";
-        if (mode!="insertion" && mode!="team_bitonic")
-            throw std::invalid_argument("sort must be insertion or team_bitonic");
+        if (mode!="insertion" && mode!="team_bitonic" && mode!="team_bitonic_recompute" && mode!="unsorted" && mode!="morton" && mode!="morton_unsorted")
+            throw std::invalid_argument("sort must be insertion, team_bitonic, team_bitonic_recompute, unsorted, morton or morton_unsorted");
         const std::string vertices=argc>4 ? argv[4] : "recomputed";
         const std::string distribution=argc>5 ? argv[5] : "lattice";
         const int planes=argc>6 ? std::stoi(argv[6]) : local_voronoi::max_planes;
         const std::string tolerance=argc>7 ? argv[7] : "legacy";
-        if (tolerance!="legacy" && tolerance!="relative" && tolerance!="relative_early")
-            throw std::invalid_argument("clipping policy must be legacy, relative or relative_early");
+        if (tolerance!="legacy" && tolerance!="relative" && tolerance!="relative_early" && tolerance!="cooperative")
+            throw std::invalid_argument("clipping policy must be legacy, relative, relative_early or cooperative");
         if (tolerance!="legacy" && vertices!="cached")
             throw std::invalid_argument("relative benchmark uses cached vertices");
         if (planes!=64 && planes!=local_voronoi::max_planes)
@@ -424,8 +445,17 @@ int main(int argc,char** argv) {
         if (distribution!="lattice" && distribution!="disordered" && distribution!="regular" &&
             distribution!="random" && distribution!="gradient")
             throw std::invalid_argument("distribution must be lattice, disordered, regular, random or gradient");
-        const auto sort=mode=="team_bitonic" ? neighbor_search::RowSort::team_bitonic : neighbor_search::RowSort::insertion;
-        if (tolerance=="relative_early" && planes==64)
+        const auto sort=mode=="team_bitonic_recompute" ? neighbor_search::RowSort::team_bitonic_recompute : mode=="team_bitonic" ? neighbor_search::RowSort::team_bitonic : neighbor_search::RowSort::insertion;
+        if (mode=="unsorted" || mode=="morton" || mode=="morton_unsorted") {
+            if (tolerance!="relative_early" || planes!=64 || vertices!="cached")
+                throw std::invalid_argument("layout experiment requires cached,64,relative_early");
+            result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true>>(
+                argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,
+                neighbor_search::RowSort::team_bitonic_recompute,distribution,mode!="morton",mode!="unsorted");
+        }
+        else if (tolerance=="cooperative")
+            result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<160,local_voronoi::RelativeClippingTolerance>,true>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
+        else if (tolerance=="relative_early" && planes==64)
             result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
         else if (tolerance=="relative_early")
             result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<160,local_voronoi::RelativeClippingTolerance,true>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);

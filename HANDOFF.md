@@ -753,3 +753,306 @@ checks, validation_errors0. Added scaling policy to CTest. CUDA compilation
 ongoing at /tmp/voronoi-shared-cuda.log. This remains single-thread-per-team
 scratch baseline, NOT cooperative clipping, and does not yet retry plane overflow.
 Next work is team-cooperative stages with shared counters/control and barriers.
+
+## Cooperative full-cell validation and optimization plan (2026-10-28)
+
+The full local_voronoi_team.hpp path now has public view-extent validation,
+explicit classification-mask broadcast, and a separate 160-plane reference retry
+for 64-plane overflow. Classification and intersection creation cooperate across
+32 CUDA threads; topology edits, compaction and final face/moment traversal are
+still on the leader. The cooperative loop currently processes all candidates
+(no radius early exit); do not label it as an early-stop implementation.
+
+Added cooperative table_mesh_check policy: compact team geometry is compared
+with the 160-plane relative diagnostic reference, including face IDs, areas,
+centroids, volume, invalid counts and incomplete-list certification. Five
+particle distributions and cooperative scaling pass locally. Added independent
+long-double stress-oracle target construction_team_stress_check; host test passes.
+CPU and CUDA compilation succeeded for all three affected executables.
+
+User optimization notes are incorporated in docs/gpu-optimization-plan.md:
+measured profiling/locality, workspace, grid tuning, mixed precision, fusion,
+and separately measured temporal reuse. Warm face lists alone cannot certify
+absence of omitted sites within 2R. Keep cold-build and warm throughput distinct.
+
+Prepared scripts/compare_cooperative_gpudev.sh: one A100 on gpudev, four CPUs,
+15 minutes, stress and five-distribution checks, then paired full reconstruction
+and search timings at 32^3/128^3/195^3 for reference early-stop, serial shared and
+cooperative paths. NOT SUBMITTED; ask before submission. No measured GPU speedup
+for the cooperative path yet. Full host regression and modified-source lint
+results are recorded below when complete.
+
+Validation complete: all 31 host CTests pass (125 seconds). clang-tidy on
+modified table/stress translation units exits 0. CUDA builds for scaling,
+table comparison and team stress all succeed. Script bash syntax and
+git diff whitespace checks pass. GPU execution remains pending approval.
+
+User approved cooperative GPU comparison. Submitted scripts/compare_cooperative_gpudev.sh
+as job 31600967 on gpudev (one A100, 15 minutes). Do not resubmit.
+Log: build-table-validation/team-31600967.out; results:
+build-gpu-scaling/31600967/comparison.csv. Results pending.
+
+User requested the same comparison on gpu1 as well, with 15 minutes maximum.
+Submitted job 31601151 using --partition=gpu1 --time=00:15:00 --mem=32G,
+one A100. Initial submission with default memory was rejected (no job created)
+for exceeding the single-GPU host-memory share. gpudev job 31600967 retained.
+GPU1 log: build-table-validation/team-31601151.out; CSV:
+build-gpu-scaling/31601151/comparison.csv. Do not resubmit either job.
+
+GPU comparison complete: 31601151 COMPLETED exit0 in 6m01s on ravg1024.
+User requested cancellation of gpudev 31600967; cancellation confirmed.
+All nine scaling rows PASS, zero validation errors; preceding geometry/stress
+steps exited0. At195^3 reconstruction: reference896.964ms (8.267M cells/s),
+serial shared2897.095ms, cooperative4023.174ms (1.843M cells/s).
+Cooperative is 4.49x slower, not a production improvement. Search ~478ms
+across all policies. At128^3 reference252.116ms vs cooperative1139.914ms.
+Keep reference default. Cooperative processes all candidates whereas reference
+has early exit; serial topology/face work and team overhead remain hypotheses
+requiring profiling, not established attribution. Next: equalize certified
+early-stop work and profile before further cooperative performance claims.
+
+## Isolated memory experiment after cooperative slowdown
+
+User agrees to measured, small changes; notes LUNA regular-grid capacity may
+have been256^3 rather than512^3. Do not report an exact LUNA memory footprint.
+Added docs/memory-budget.md: current payload ~4780B/particle, dominated by
+2000B double candidate distances,1000B candidate IDs,1704B geometry outputs.
+
+Opt-in RowSort::team_bitonic_recompute computes double candidate distances in
+team scratch and writes only sorted IDs. Fresh configure skips the global
+distance table for capacities<=2048; larger rows preserve insertion fallback
+and allocate distances. Existing allocations/reference paths retained. Select
+this mode before configure. Periodic recomputation can differ at last bits from
+shifted-query search arithmetic; certify full geometry, not just row ordering.
+No reconstruction algorithm or precision change. Benchmark policy
+relative_early_scratch_sort subtracts2000B/particle from its preflight estimate.
+Expected saving41.8%,13.81GiB at195^3. Still insufficient for256^3 on40GB.
+
+Eight targeted CPU CTests pass: legacy sort, scratch allocation/order contract
+(24 cases: periodic/nonperiodic, lanes1/4, growth/cap250/oversized2049,
+wide/narrow grids and repeated builds), scaling and five geometry distributions.
+Prepared scripts/compare_scratch_sort_gpu1.sh (one A100,32GiB host,15min):
+contracts, five geometries, paired reference/scratch-sort32^3/128^3/195^3.
+NOT SUBMITTED; ask approval. CUDA build/lint completion recorded below.
+
+Scratch-sort validation: CUDA compilation succeeds for construction_scaling,
+table_mesh_check and scratch_sort_check. clang-tidy on the new contract and
+scaling translation units exits0; git diff --check and job script syntax pass.
+GPU timing remains pending submission approval.
+
+User approved scratch-sort GPU comparison. Submitted job31601918 via
+scripts/compare_scratch_sort_gpu1.sh: gpu1,one A100,32GiB host,15min maximum.
+Do not resubmit. Log: build-table-validation/scratch-sort-31601918.out;
+results: build-gpu-scaling/31601918/comparison.csv. Results pending.
+
+## GPU scratch-sort result: 31601918
+
+Completed successfully on ravg1063 in3m53s. All contract/geometry steps exit0;
+all6scaling rowsPASS with0validation errors. At195^3: search477.661->314.987ms,
+reconstruction896.917->897.179ms (unchanged), pipeline1374.229->1211.418ms.
+Search throughput15.523->23.540M particles/s; pipeline5.396->6.121M/s.
+Observed device usage37,687,984,128->22,856,925,184bytes (~35.10->21.29GiB).
+Array estimate35,446,477,508->20,616,727,508bytes (~41.8% reduction); observed
+usage reduction~39.4% includes runtime/workspace overhead. At128^3 search
+127.894->82.635ms and pipeline379.944->334.664ms; reconstruction unchanged.
+This is a validated memory and search improvement, not a reconstruction speedup.
+Reference remains available. Results build-gpu-scaling/31601918/comparison.csv.
+
+## Focused reference instrumentation (user agreed after both paths deemed slow)
+
+construction_scaling now accepts optional SEARCH_STAGE_CSV after timing CSV.
+Separate post-timing passes use StageProfile; baseline search/reconstruction/
+pipeline measurements remain unfenced beyond their original completion points.
+Reports seven per-stage medians and instrumented wall median. Reconstructs once
+again after profiling so the resulting candidate table gets geometry validation.
+Added Python/CTest contract covering both sort policies, appended CSV schemas,
+finite/nonnegative stage times and successful final geometry.
+
+Prepared scripts/profile_reference_gpu1.sh: one A100,gpu1,32GiB host,15min max.
+Collects uninstrumented paired timings and separate fenced search stages at
+128^3/195^3. Builds with -lineinfo; captures one warmed main reference clipping
+kernel at128^3 with LaunchStats,Occupancy,MemoryWorkloadAnalysis/tables,
+WarpStateStats,SourceCounters. Saves raw counters and source report separately
+from throughput CSV. Sections verified with local ncu --list-sections. Retry
+cost remains in throughput; counter capture isolates the main kernel. This is
+NOT phase-by-phase reconstruction wall timing. NOT SUBMITTED; ask approval.
+
+Reference instrumentation validated: three targeted host CTests pass, CUDA
+compilation succeeds, clang-tidy exits0 (only suppressed non-user warnings),
+Ruff lint/format, shell syntax and git diff whitespace checks pass.
+Profiling job remains prepared and unsubmitted pending user approval.
+
+User approved reference profiling. Submitted job31603868 via
+scripts/profile_reference_gpu1.sh: gpu1,one A100,32GiB host,15min maximum.
+Do not resubmit. Log: build-table-validation/reference-profile-31603868.out;
+reports and CSVs: build-roofline/31603868/. Results pending.
+
+## Profiling job31603868: useful search results, Nsight resource failure
+
+Four uninstrumented/stage benchmark runs PASS with0validation errors.
+At195^3 scratch-sort stage medians: key/count0.187ms,scan0.045ms,
+scatter0.152ms,cell order/gather4.436ms,candidate fill116.155ms,
+nearest ordering194.031ms,overflow check0.012ms; instrumented total314.952ms.
+Sorting ~62%, candidate collection ~37%; grid setup ~1.5%. At128^3 sorting
+56.933ms vs candidate fill24.648ms (total82.846ms). Reconstruction ~899ms
+at195^3, unchanged. Data: build-roofline/31603868/search-stages.csv and timings.csv.
+
+Nsight step failed exit9: driver profiling resource unavailable; log suggests
+another profiler/DCGM as possible cause, not confirmed. No new reconstruction
+hardware counters captured. Job FAILED overall after2m06s on ravg1075; ordinary
+benchmark data remains valid. Do not confuse profiler failure with geometry
+failure. No retry submitted. Next search target is sorting rather than grid
+build; reconstruction source-counter capture remains outstanding.
+
+## User authorized experiments1(no full candidate sort) and2(Morton locality)
+
+Implemented opt-in Morton GRID CELL BLOCK ordering in neighbor_search.hpp,
+with cached Cartesian-cell-to-Morton-rank map, complete query coverage, per-cell
+Morton ranges instead of merged Cartesian z ranges. Input-ID ordering inside
+cells retained. Configure-time host map construction is outside steady-state
+benchmarks;4bytes/gridcell added to device payload estimate. No default change.
+
+Benchmark modes relative_early_unsorted,relative_early_morton,
+relative_early_morton_unsorted plus existing relative_early_scratch_sort baseline.
+Raw unsorted failed:568/1728invalid cells in scaling lattice; intermediate
+vertex/plane growth and regular-grid coplanar degeneracies. Preserve this finding.
+Added local_voronoi_order_retry.hpp: sort failed rows IN PLACE, retry full160plane
+reference, compact path also retries tiny order-sensitive faces (area^2 ratio
+<=1e-24). No face removal/tolerance relaxation. Every timed scaling reconstruction
+starts after a fresh search fill and includes recovery. Diagnostic table oracle
+is refreshed after compact recovery changes candidate ordering.
+
+Added layout_search_check.cpp independent neighbour oracle and
+python/check_layout_geometry.py comparisons against canonical particle IDs.
+Four nonregular distribution comparisons pass with failure recovery; regular
+retest after tiny-face trigger is pending. Five reference regressions pass.
+CUDA initial retry build and clang-tidy initially passed; final edit revalidation
+pending. See docs/layout-experiments.md for limitations and timing semantics.
+Prepared scripts/compare_layout_gpu1.sh (oneA100,32GiBhost,15min); NOTSUBMITTED.
+Ask approval after final validation. Preserve original algorithms/artifacts.
+
+Layout experiments final validation complete: all14 targeted CPU CTests pass
+(153.65s), including all5cross-layout geometry distributions and reference
+regressions. CUDA build succeeds for construction_scaling,table_mesh_check,
+layout_search_check. Final clang-tidy exits0; Ruff and script syntax/whitespace
+checks pass. Regular topology now matches after tiny-face reference-order retry.
+No GPU job submitted for these experiments. Prepared compare_layout_gpu1.sh
+compares baseline sorted Cartesian,unsorted-first,Morton sorted,Morton unsorted
+at32/128/195,5repeats,with full recovery included. Ask user approval before sbatch.
+
+User approved four-way layout comparison. Submitted job31612191 via
+scripts/compare_layout_gpu1.sh: gpu1,one A100,32GiB host,15min maximum.
+Do not resubmit. Log: build-table-validation/layout-31612191.out;
+results: build-gpu-scaling/31612191/comparison.csv and search-stages.csv.
+Results pending.
+
+User approved focused reconstruction profiling. Submitted job 31624020 via
+scripts/profile_reconstruction_gpudev.sh: gpudev, one A100, 15-minute limit.
+Confirmed RUNNING on ravg1002; initial configure completed, build underway.
+Log: build-table-validation/clip-profile-31624020.out.
+Artifacts: build-roofline/31624020/. Counter preflight and captures pending.
+Do not duplicate or automatically resubmit this job.
+
+Job 31624020 FAILED after 57 seconds: hardware counter access succeeded, but
+check_ncu_capture.py assumed long-format CSV whereas Nsight raw export is wide
+with a units row. Fixed parser to accept both formats, retaining strict checks.
+Seven parser tests and Ruff pass; saved actual preflight.csv now validates.
+Recovered small 32^3 capture: 6.085696 ms kernel duration, 886.045312 Mbyte DRAM
+reads, 100 registers/thread, 8672-byte stack. This is a profiler capture, not
+baseline throughput. Full hardware/source captures did not execute.
+No resubmission yet; ask approval for another gpudev job (15-minute maximum).
+
+User approved corrected profiling resubmission. Submitted job 31624143 via
+scripts/profile_reconstruction_gpudev.sh: gpudev, one A100, 15-minute limit.
+Uses corrected wide/long CSV parser validated against job 31624020 capture.
+Log: build-table-validation/clip-profile-31624143.out.
+Artifacts: build-roofline/31624143/. Results pending; do not duplicate submission.
+
+Job 31624143 completed baseline and verified hardware capture; FAILED at source
+capture after 62 seconds because --source-folders requires --import-source on.
+Corrected script to include that option; bash syntax passes. No resubmission.
+128^3 baseline: search97.956ms, reconstruction286.955ms, pipeline384.499ms,
+all geometry validation passed. Profile main kernel287.044ms, DRAM reads110.567GB,
+writes46.273GB, L2traffic503.308GB, local load sectors11450311675/store4800448203,
+occupancy23.376%, eligiblewarps0.233575, longscoreboard67.170%, active threads
+per instruction9.54. About74.8KB DRAM traffic/cell,546GB/s aggregate DRAM.
+Work counts/cell:23.011 candidates processed,154.432 suffix tests,359.662 vertex
+classifications,63.311 intersections,293.770 edge comparisons,453.647 face seed
+checks,1230.835 face link checks. Counts are not timings; source hotspots pending.
+Hardware evidence supports local workspace traffic/latency as leading target,
+not a claim of saturating DRAM bandwidth. All artifacts retained in
+build-roofline/31624143/. Obtain approval before another cluster submission.
+
+Implemented opt-in FloatCachedVertexPositions and scaling policy
+relative_early_float_cache. FP32 seed-relative cache halves vertex cache from
+1536 to768 bytes; double planes retained, uncertain clipping tests recompute
+in double, radius inflated for cache rounding, certification/output recompute
+double intersections. Reference path preserved. No GPU speed claim.
+Added 20 mixed-cache analytic cases and float_cache_scaling_smoke (12^3).
+Initial analytic/periodic CPU checks pass; CUDA analytic compilation passes.
+Final rebuild after profiling-counter bookkeeping/label adjustment underway;
+logs /tmp/voronoi-float-build.log and /tmp/voronoi-float-tests.log.
+Details: docs/mixed-precision-experiment.md. Integer particle storage and FP16
+remain unimplemented. Irregular-distribution testing needed before promotion.
+Source-only script scripts/profile_source_gpudev.sh prepared with corrected
+--import-source on; local ncu --list-metrics option validation passes.
+No new cluster job submitted. Ask approval before submission.
+Final CPU rebuild completed; geometry_analytic and float_cache_scaling_smoke
+both pass after the final changes. git diff --check passes.
+
+User approved source-only profiling job. Submitted 31624563 using
+scripts/profile_source_gpudev.sh: gpudev, one A100, 15-minute maximum.
+Profiles the existing double-reference executable from job31624143, not the
+new FP32 cache, to complete source attribution of the measured baseline.
+Log: build-table-validation/source-profile-31624563.out.
+Artifacts: build-roofline/31624563/. Do not duplicate or automatically resubmit.
+
+Source job31624563 COMPLETED52s, capture gates passed. Critical interpretation:
+old executable imported newer FP32-edited source; displayed source text is
+misaligned. Reversed known FP32 edits into separate reconstructed baseline
+snapshot within result directory. Leading baseline line441 face adjacency search
+754657 samples, line442 edge match182699, line310 suffix position gather635510,
+line225 hole edge matching258666. Not walltime percentages; inline accessor
+attribution duplicates counts. See build-roofline/31624563/findings.md.
+Next target should include explicit face adjacency / removing repeated scans;
+FP32 cache alone does not address the largest source hotspots.
+
+Implemented opt-in PlaneWorkspace fourth flag direct_face_links and benchmark
+relative_early_face_links. Byte lookup per face replaces repeated all-vertex
+adjacency scans; preserves reference order, 64byte usual/160byte retry map.
+Retry policy propagation included. Analytic108->24 face-link checks verified.
+Four CPU CTests pass: geometry_analytic, float_cache_scaling_smoke,
+face_links_scaling_smoke, geometry_face_links_stress (includes irregular inputs).
+CUDA analytic target build in /tmp/voronoi-links-cuda.log. Prepared (NOT submitted)
+scripts/compare_workspace_gpudev.sh:gpudev1A10015min, baseline/float/directlinks,
+32/128/195^3, five repeats plus GPU geometry checks. Ask approval before sbatch.
+
+User approved workspace comparison. Submitted job31624791 using
+scripts/compare_workspace_gpudev.sh:gpudev,one A100,15-minute maximum.
+Runs GPU analytic and direct-face-link stress checks, then reference/FP32cache/
+directlinks at32^3,128^3,195^3, five repeats. Log:
+build-table-validation/workspace-31624791.out. Results:
+build-gpu-scaling/31624791/comparison.csv. Do not duplicate submission.
+CUDA analytic compilation for directlinks completed successfully before submission.
+
+Integer reconstruction implemented (user explicitly requested integer positions,
+not FP32 vertex caching). coordinate_displacement overload on FixedPointPositions32
+subtracts unsigned coordinates before double conversion for unit periodic box.
+Both clipping candidate and early-stop suffix loads use it. New benchmark mode
+relative_early_integer32 consumes slot-ordered uint32 positions, keeping double
+planes/vertices/output. Search stays double; additional integer gather included
+in search/pipeline timing. Net persistent arrays unchanged versus double-input
+baseline (input -12bytes/particle, integer slots +12). No GPU speed claim.
+New integer_positions_check compares complete geometry exactly with decoded
+quantized input: regular/jittered/periodically shifted125particles plus boundary
+and half-box displacement tests. CPU/CUDA builds underway. Documentation:
+docs/integer-reconstruction.md. No new cluster job submitted.
+Prior GPU job31624791 final195^3: reference1020.510ms, FP32cache1418.670ms,
+directlinks862.361ms reconstruction; all geometry validations PASS.
+Integer initial validation: five CPU CTests passed, CUDA integer_positions_check
+compiled successfully. Added matched relative_early_integer32_decoded control
+(same quantized input/gather/search; reconstruction reads doubles). Final control
+rebuild running /tmp/voronoi-integer-control-build.log, tests afterwards in
+/tmp/voronoi-integer-tests.log. Prepared scripts/compare_integer_gpudev.sh:
+one gpudev A100,15min, integer geometry test then original/decoded/integer
+32/128/195^3 five-repeat comparison. NOT SUBMITTED; ask approval first.
