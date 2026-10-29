@@ -872,9 +872,9 @@ int main(int argc, char** argv) {
                     for (int k = 0; k < 4; ++k) open += a[k] < 0;
                 std::cout << "  unpaired_triangles=" << open << " of " << 4LL * tet_count << "\n";
             }
-            tet_mesh::Mesh<Memory> mesh{Kokkos::View<int* [4], Memory>("tet_vertex", tet_count),
-                                        Kokkos::View<int* [4], Memory>("tet_adjacent", tet_count),
-                                        Kokkos::View<double* [3], Memory>("tet_centre", tet_count),
+            tet_mesh::Mesh<Memory> mesh{tet_mesh::Quads<Memory>("tet_vertex", tet_count),
+                                        tet_mesh::Quads<Memory>("tet_adjacent", tet_count),
+                                        tet_mesh::Points<Memory>("tet_centre", tet_count),
                                         {}, {}, {}, {}};
             {
                 auto hv = Kokkos::create_mirror_view(mesh.vertex);
@@ -1223,7 +1223,14 @@ int main(int argc, char** argv) {
                     }
                     int stuck_count = 0;
                     Kokkos::Timer timer;
-                    tet_repair::move(exec, xd, state);
+                    // GPUFLIPS_SCREEN=1: circumcentres first (the geometry needs them
+                    // anyway), then only screened tetrahedra are checked exactly.
+                    if (std::getenv("GPUFLIPS_SCREEN")) {
+                        tet_mesh::circumcentres(exec, xd, 1.0, dm, state.count);
+                        tet_repair::move_screened(exec, xd, 1.0, dm, state);
+                    } else {
+                        tet_repair::move(exec, xd, state);
+                    }
                     const auto gpu = tet_repair::repair(exec, dm, state, stuck, stuck_count);
                     exec.fence();
                     const double gpu_ms = timer.seconds() * 1e3;

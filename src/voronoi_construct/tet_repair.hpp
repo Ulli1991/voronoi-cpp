@@ -20,6 +20,7 @@
 namespace tet_repair {
 
 namespace ep = exact_predicates;
+using tet_mesh::Vec3;
 
 namespace detail {
 struct Plan;
@@ -27,7 +28,7 @@ struct Plan;
 
 template <class MemorySpace>
 struct State {
-    Kokkos::View<ep::i64* [3], MemorySpace> point;  // snapped positions
+    Kokkos::View<ep::i64* [4], Kokkos::LayoutRight, MemorySpace> point;  // snapped positions, padded to 32 bytes
     Kokkos::View<char*, MemorySpace> alive;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
@@ -70,12 +71,18 @@ KOKKOS_INLINE_FUNCTION int orient(const Point& point, const int* v) {
     return ep::orient(offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3]));
 }
 
+// With the tetrahedron's offsets from v[0] already known (o[0] = 0).
 template <class Point>
-KOKKOS_INLINE_FUNCTION bool in_sphere(const Point& point, const int* v, int e) {
-    const ep::Offset p[5] = {{0, 0, 0}, offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3]),
-                             offset(point, v[0], e)};
+KOKKOS_INLINE_FUNCTION bool in_sphere(const Point& point, const int* v, const ep::Offset* o, int e) {
+    const ep::Offset p[5] = {o[0], o[1], o[2], o[3], offset(point, v[0], e)};
     const int id[5] = {v[0], v[1], v[2], v[3], e};
     return ep::in_sphere(p, id);
+}
+
+template <class Point>
+KOKKOS_INLINE_FUNCTION bool in_sphere(const Point& point, const int* v, int e) {
+    const ep::Offset o[4] = {{0, 0, 0}, offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3])};
+    return in_sphere(point, v, o, e);
 }
 
 template <class Mesh>
@@ -199,7 +206,8 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
     s.count = static_cast<int>(m.vertex.extent(0));
     Kokkos::resize(m.vertex, capacity);
     Kokkos::resize(m.adjacent, capacity);
-    s.point = Kokkos::View<ep::i64* [3], Memory>("tet_repair_point", n);
+    Kokkos::resize(m.centre, capacity);
+    s.point = Kokkos::View<ep::i64* [4], Kokkos::LayoutRight, Memory>("tet_repair_point", n);
     s.alive = Kokkos::View<char*, Memory>("tet_repair_alive", capacity);
     s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", capacity);
     s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", capacity);
@@ -246,11 +254,72 @@ void move(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSp
         "tet_repair::move", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
             for (int a = 0; a < 3; ++a) point(i, a) = ep::snap(x(i, a));
         });
-    Kokkos::deep_copy(exec, s.counters, 0);
-    const auto& st = s;
+    // Every slot is listed (dead ones are skipped by find): no atomics.
+    const auto dirty = s.dirty;
+    const auto listed = s.listed;
     Kokkos::parallel_for(
         "tet_repair::all_dirty", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
-            if (st.alive(t)) mark(st, t);
+            dirty(t) = 1;
+            listed(t) = t;
+        });
+    Kokkos::deep_copy(exec, s.counters, 0);
+    Kokkos::deep_copy(exec, Kokkos::subview(s.counters, 3), s.count);
+}
+
+// As move, but lists only the tetrahedra that may need repair, screened in
+// double precision with their circumcentres (m.centre, computed for x):
+// those with a neighbour's far vertex inside or near the circumsphere, and
+// the badly shaped ones (possibly flat or inverted). The margin covers the
+// snapping of positions to the exact grid; what it lists is decided exactly.
+template <class ExecSpace>
+void move_screened(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSpace::memory_space>& x,
+                   double box, const tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
+                   State<typename ExecSpace::memory_space>& s) {
+    const auto point = s.point;
+    Kokkos::parallel_for(
+        "tet_repair::move", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
+            for (int a = 0; a < 3; ++a) point(i, a) = ep::snap(x(i, a));
+        });
+    Kokkos::deep_copy(exec, s.counters, 0);
+    const auto& st = s;
+    const auto vertex = m.vertex;
+    const auto adjacent = m.adjacent;
+    const auto centre = m.centre;
+    const double snap = box / ep::scale * 1.7320508075688772;  // largest move by snapping
+    Kokkos::parallel_for(
+        "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
+            st.dirty(t) = 0;
+            if (!st.alive(t)) return;
+            auto wrap = [box](double d) { return d - box * Kokkos::nearbyint(d / box); };
+            auto from = [&](double cx, double cy, double cz, int v) {
+                return Vec3<double>{wrap(x(v, 0) - cx), wrap(x(v, 1) - cy), wrap(x(v, 2) - cz)};
+            };
+            const int v0 = vertex(t, 0);
+            const Vec3<double> d1 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 1)),
+                               d2 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 2)),
+                               d3 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 3));
+            const double l1 = dot(d1, d1), l2 = dot(d2, d2), l3 = dot(d3, d3);
+            const double volume6 = dot(d1, cross(d2, d3));
+            // Well shaped and clearly positive, else decide exactly.
+            bool suspect = !(volume6 > 1e-3 * Kokkos::sqrt(l1 * l2 * l3));
+            const Vec3<double> r = from(centre(t, 0), centre(t, 1), centre(t, 2), v0);
+            const double r2 = dot(r, r);
+            const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
+            for (int k = 0; k < 4 && !suspect; ++k) {
+                const int u = adjacent(t, k);
+                if (u < 0) continue;
+                int far = -1;
+                for (int a = 0; a < 4; ++a) {
+                    const int w = vertex(u, a);
+                    bool shared = false;
+                    for (int b = 0; b < 4; ++b) shared |= w == vertex(t, b);
+                    if (!shared) far = w;
+                }
+                if (far < 0) continue;
+                const Vec3<double> e = from(centre(t, 0), centre(t, 1), centre(t, 2), far);
+                suspect = dot(e, e) < r2 + margin;
+            }
+            if (suspect) mark(st, t);
         });
 }
 
@@ -294,8 +363,10 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 const int t = listed(i);
                 if (!alive(t)) return;
                 const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+                const ep::Offset o[4] = {{0, 0, 0}, detail::offset(point, v[0], v[1]), detail::offset(point, v[0], v[2]),
+                                         detail::offset(point, v[0], v[3])};
                 // Turned inside out: listed for the host, but flips usually untangle it.
-                if (detail::orient(point, v) <= 0) {
+                if (ep::orient(o[1], o[2], o[3]) <= 0) {
                     const int at = stuck_base + Kokkos::atomic_fetch_add(&counters(1), 1);
                     if (at < static_cast<int>(stuck.extent(0))) {
                         stuck(at, 0) = t;
@@ -306,7 +377,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     const int u = adjacent(t, k);
                     if (u < 0 || (dirty(u) && u < t)) continue;
                     const int far = detail::far_vertex(m, t, u);
-                    if (far < 0 || !detail::in_sphere(point, v, far)) continue;
+                    if (far < 0 || !detail::in_sphere(point, v, o, far)) continue;
                     const int at = Kokkos::atomic_fetch_add(&counters(0), 1);
                     if (at < work_capacity) {
                         work(at, 0) = t;

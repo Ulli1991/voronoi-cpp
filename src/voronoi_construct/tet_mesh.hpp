@@ -18,11 +18,18 @@ namespace tet_mesh {
 
 using shell_voronoi::Vec3;
 
+// One tetrahedron's entries are contiguous (row-major on every backend), so
+// a random access touches one memory sector instead of one per entry.
+template <class MemorySpace>
+using Quads = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
+template <class MemorySpace>
+using Points = Kokkos::View<double* [3], Kokkos::LayoutRight, MemorySpace>;
+
 template <class MemorySpace>
 struct Mesh {
-    Kokkos::View<int* [4], MemorySpace> vertex;     // particles
-    Kokkos::View<int* [4], MemorySpace> adjacent;   // tetrahedron across the face opposite vertex k, -1 if none
-    Kokkos::View<double* [3], MemorySpace> centre;  // circumcentre, unwrapped near vertex 0
+    Quads<MemorySpace> vertex;     // particles
+    Quads<MemorySpace> adjacent;   // tetrahedron across the face opposite vertex k, -1 if none
+    Points<MemorySpace> centre;    // circumcentre, unwrapped near vertex 0
     // Owned faces (owner < neighbour), each a ring of tetrahedra in order.
     Kokkos::View<int*, MemorySpace> owner, neighbour, ring_start, ring;
 };
@@ -109,9 +116,9 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
             if (last && g == faces - 1) tet_start(faces) = sum;
         },
         tets);
-    mesh.vertex = Kokkos::View<int* [4], Memory>("tet_vertex", tets);
-    mesh.adjacent = Kokkos::View<int* [4], Memory>("tet_adjacent", tets);
-    mesh.centre = Kokkos::View<double* [3], Memory>("tet_centre", tets);
+    mesh.vertex = Quads<Memory>("tet_vertex", tets);
+    mesh.adjacent = Quads<Memory>("tet_adjacent", tets);
+    mesh.centre = Points<Memory>("tet_centre", tets);
     mesh.owner = owner;
     mesh.neighbour = neighbour;
     mesh.ring_start = ring_start;
@@ -196,9 +203,10 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
 // 1. Circumcentres, one thread per tetrahedron.
 template <class ExecSpace>
 void circumcentres(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSpace::memory_space>& x,
-                   double box, const Mesh<typename ExecSpace::memory_space>& mesh) {
+                   double box, const Mesh<typename ExecSpace::memory_space>& mesh, int count = -1) {
     Kokkos::parallel_for(
-        "tet_mesh::circumcentres", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.vertex.extent(0)),
+        "tet_mesh::circumcentres",
+        Kokkos::RangePolicy<ExecSpace>(exec, 0, count < 0 ? static_cast<int>(mesh.vertex.extent(0)) : count),
         KOKKOS_LAMBDA(int t) {
             const int v0 = mesh.vertex(t, 0);
             Vec3<double> d[3];

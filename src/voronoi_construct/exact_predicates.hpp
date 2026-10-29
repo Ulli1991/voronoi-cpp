@@ -30,10 +30,11 @@ struct Offset {
 
 KOKKOS_INLINE_FUNCTION i64 snap(double x) { return static_cast<i64>(Kokkos::floor(x * scale)); }
 
-// b - a on the periodic grid, to the nearest image.
+// b - a on the periodic grid, to the nearest image; a and b are snapped
+// coordinates in [0, 2^30), so one shift suffices (no 64-bit modulo).
 KOKKOS_INLINE_FUNCTION i64 delta(i64 a, i64 b) {
     constexpr i64 period = i64(1) << 30;
-    i64 d = (b - a) % period;
+    i64 d = b - a;
     if (d >= period / 2) d -= period;
     if (d < -period / 2) d += period;
     return d;
