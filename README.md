@@ -113,11 +113,10 @@ cmake --build build-cuda -j
 OpenMP build: `module load gcc/15`, Kokkos `/u/uli/kokkos-gcc15`, same cmake
 call with a different build directory. Elsewhere, point `CMAKE_PREFIX_PATH` at
 a Kokkos installation with the desired backend. Run GPU jobs through Slurm
-(`scripts/` holds example job scripts; submit from the repository root).
+(submit from the repository root).
 
-Tests: `ctest --test-dir build-cuda --output-on-failure`. This includes the
-older table-pipeline checks and `shell_voronoi_check 4096 {uniform,jittered,lattice}
-double 1`.
+Tests: `ctest --test-dir build-cuda --output-on-failure` runs
+`shell_voronoi_check 4096 {uniform,jittered,lattice} double 1`.
 
 `shell_voronoi_check` validates and times the construction:
 
@@ -157,40 +156,23 @@ scratch level and block size), `GPUFLIPS_FAST` (no host check, timing only),
 ## Repository layout
 
 - `src/neighbour_search/`: `neighbor_search.hpp` (dense cell grid, radius
-  queries), `fixed_point_positions.hpp`.
+  queries).
 - `src/voronoi_construct/`: `shell_voronoi*.hpp` (clipping), `tet_mesh.hpp`,
   `tet_repair.hpp`, `tet_flips.hpp`, `face_geometry.hpp`, `exact_predicates.hpp`
-  (persistent mesh), and the earlier table pipeline (`local_voronoi*.hpp`).
-- `src/test/`: `shell_voronoi_check.cpp` and the older checks and benchmarks.
+  (persistent mesh).
+- `src/test/`: `shell_voronoi_check.cpp`.
 - `research_notes/`: status notes (`status_2026-10-29.md`), AREPO/PROTEUS/
   GIZMO/SPH-EXA surveys, Kokkos CUDA audit, and literature reports.
-- `docs/`: design notes for the earlier table pipeline (GPU optimization plan,
-  memory budget, layout experiments).
-- `scripts/`, `python/`: Slurm jobs, comparison and plotting tools.
+- `scripts/`: `lint_cpp.sh`.
 
 CMake exposes `voronoi_library` with both include directories.
 
-## Earlier table-based pipeline
-
-The first pipeline (`local_voronoi*.hpp`, `table_mesh_check`,
-`construction_scaling`, `mesh_benchmark`) builds each cell from a precomputed
-neighbor table with fixed-capacity plane workspaces and floating-point
-tolerances, not exact predicates. It remains in the repository with its tests
-and its measurements (about 4.2-4.8 million particles/s combined search plus
-reconstruction at 195^3 on an A100). It is superseded for speed by the shell
-kernels above. See `HANDOFF.md`, `docs/`, and
-`docs/README-before-offline-scaling.md` for its details.
-
 ## Linting and continuous integration
 
-GitHub Actions (`.github/workflows/checks.yml`) runs Ruff lint/format checks,
-clang-tidy, and CPU correctness tests in ordinary and address/undefined-behavior
+GitHub Actions (`.github/workflows/checks.yml`) runs clang-tidy and CPU correctness tests in ordinary and address/undefined-behavior
 sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
 
 ```sh
-python3 -m pip install ruff==0.11.13
-ruff check python
-ruff format --check python
 cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/kokkos -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build build -j 2
 bash scripts/lint_cpp.sh build
