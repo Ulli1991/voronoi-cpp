@@ -2,6 +2,8 @@
 
 #include "shell_voronoi.hpp"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -294,10 +296,11 @@ struct Kernel {
     Seeds<MemorySpace> seeds;
     Real half_width;
     int threads;
-    bool certify;  // false only for timing experiments: skips the walk
+    bool certify;    // false only for timing experiments: skips the walk
+    int level = 0;   // scratch level of the polyhedra: 0 shared memory, 1 global (cached)
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
-        char* block = static_cast<char*>(member.team_shmem().get_shmem(threads * Polyhedron<Real>::bytes));
+        char* block = static_cast<char*>(member.team_scratch(level).get_shmem(threads * Polyhedron<Real>::bytes));
         const int t = member.league_rank() * threads + member.team_rank();
         if (t >= grid.n) return;
         const Polyhedron<Real> c(block, threads, member.team_rank());
@@ -531,17 +534,25 @@ void construct_lean(const ExecSpace& exec, const Grid<typename ExecSpace::memory
     const int side = grid.cells_per_side;
     if (grid.n <= 0 || side < 3 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
         throw std::invalid_argument("shell_voronoi::construct_lean: invalid grid or output size");
-    // One warp per block when it fits the 48 KB block scratch limit (float),
-    // otherwise the largest power of two that does (double).
+    // Experiments: SHELL_LEAN_LEVEL selects the scratch level of the polyhedra
+    // (1 = global memory, cached) and SHELL_LEAN_THREADS the block size.
     const bool host = Kokkos::SpaceAccessibility<Kokkos::HostSpace, typename ExecSpace::memory_space>::accessible;
-    int threads = host ? 1 : 32;
-    while (threads > 1 && threads * lean::Polyhedron<Real>::bytes > 48 * 1024) threads /= 2;
+    const char* level_env = std::getenv("SHELL_LEAN_LEVEL");
+    const char* threads_env = std::getenv("SHELL_LEAN_THREADS");
+    // Default: a full warp per block; when its polyhedra do not fit the 48 KB
+    // of level-0 scratch (double), level 1 (measured 1.33x faster on A100 than
+    // halving the block).
+    int threads = host ? 1 : threads_env ? std::atoi(threads_env) : 32;
+    const int level = host ? 0
+                      : level_env ? std::atoi(level_env)
+                                  : threads * lean::Polyhedron<Real>::bytes > 48 * 1024 ? 1 : 0;
+    while (level == 0 && threads > 1 && threads * lean::Polyhedron<Real>::bytes > 48 * 1024) threads /= 2;
     const int max_ring = (side - 1) / 2;
     const Real half_width = static_cast<Real>(std::min(0.25 * grid.box, (max_ring + 1) * grid.cell_width));
     Kokkos::TeamPolicy<ExecSpace> policy(exec, (grid.n + threads - 1) / threads, threads);
-    policy.set_scratch_size(0, Kokkos::PerTeam(threads * lean::Polyhedron<Real>::bytes));
+    policy.set_scratch_size(level, Kokkos::PerTeam(threads * lean::Polyhedron<Real>::bytes));
     Kokkos::parallel_for("shell_voronoi::construct_lean", policy,
-                         lean::Kernel<Real, ExecSpace>{grid, out, stencil, seeds, half_width, threads, certify});
+                         lean::Kernel<Real, ExecSpace>{grid, out, stencil, seeds, half_width, threads, certify, level});
     if (certify) construct<double>(exec, grid, out, /*only_failed=*/true);
 }
 
