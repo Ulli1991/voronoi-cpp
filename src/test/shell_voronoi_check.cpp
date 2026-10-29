@@ -13,6 +13,7 @@
 
 #include "neighbor_search.hpp"
 #include "face_geometry.hpp"
+#include "tet_flips.hpp"
 #include "tet_mesh.hpp"
 #include "shell_voronoi_lean.hpp"
 #include "shell_voronoi_warp.hpp"
@@ -891,6 +892,167 @@ int main(int argc, char** argv) {
                     std::cout << "  missed cell " << i << " faces " << before[i].size() << "->" << after[i].size()
                               << " gained " << gained.size() << " lost " << lost.size()
                               << " gained_already_in_tetrahedra=" << already << "\n";
+                }
+            }
+            // Flip repair over several steps, each compared with an exact rebuild.
+            if (argc > 7 && std::string(argv[7]) == "flips") {
+                std::vector<tet_flips::Point> xs(n);
+                {
+                    auto h0 = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, x0);
+                    for (int i = 0; i < n; ++i) xs[i] = {h0(i, 0), h0(i, 1), h0(i, 2)};
+                }
+                tet_flips::Mesh fm = tet_flips::make_mesh(tet_flips::snap(xs), tets);
+                auto previous = before;
+                for (int step = 1; step <= 10; ++step) {
+                    for (int i = 0; i < n; ++i) {
+                        std::array<double, 3> v{0, 0, 0};
+                        for (const auto& mode : modes) {
+                            const double sv = std::sin(two_pi * (mode[0] * xs[i][0] + mode[1] * xs[i][1] +
+                                                                 mode[2] * xs[i][2]) + mode[6]);
+                            for (int a = 0; a < 3; ++a) v[a] += mode[3 + a] * sv / 3.0;
+                        }
+                        for (int a = 0; a < 3; ++a) xs[i][a] = wrap(xs[i][a] + displacement * spacing * v[a]);
+                    }
+                    Kokkos::Timer timer;
+                    const auto grid_xs = tet_flips::snap(xs);
+                    const auto stats = tet_flips::repair(fm, grid_xs);
+                    const double repair_ms = timer.seconds() * 1e3;
+                    const long long left = tet_flips::failing(fm, grid_xs);
+                    if (left > 0 && std::getenv("TETS_DEBUG")) {
+                        for (std::size_t t = 0; t < fm.vertex.size(); ++t) {
+                            if (!fm.alive[t]) continue;
+                            for (int k = 0; k < 4; ++k) {
+                                const int u = fm.adjacent[t][k];
+                                if (u < 0) continue;
+                                int far = -1;
+                                for (int v : fm.vertex[u])
+                                    if (tet_flips::detail::position(fm.vertex[t], v) < 0) far = v;
+                                if (far < 0 || !tet_flips::detail::in_sphere(grid_xs, fm.vertex[t], far)) continue;
+                                int back = 0;
+                                for (int j = 0; j < 4; ++j) back += fm.adjacent[u][j] == int(t);
+                                std::cout << "  failing t=" << t << " u=" << u << " alive_u=" << int(fm.alive[u])
+                                          << " back=" << back << " orient_t="
+                                          << tet_flips::detail::orient_sign(grid_xs, fm.vertex[t])
+                                          << " orient_u=" << tet_flips::detail::orient_sign(grid_xs, fm.vertex[u])
+                                          << " reverse_fails="
+                                          << tet_flips::detail::in_sphere(grid_xs, fm.vertex[u], fm.vertex[t][k]) << "\n";
+                            }
+                        }
+                    }
+                    const auto repaired = tet_flips::neighbours(fm, n);
+                    Kokkos::View<double* [3], Memory> xd("xs", n);
+                    {
+                        auto h = Kokkos::create_mirror_view(xd);
+                        for (int i = 0; i < n; ++i)
+                            for (int a = 0; a < 3; ++a) h(i, a) = xs[i][a];
+                        Kokkos::deep_copy(xd, h);
+                    }
+                    shell_voronoi::Cells<Memory> step_cells(n, false);
+                    step_cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_step", n, capacity);
+                    const auto exact = exact_sets(xd, step_cells);
+                    long long mismatched = 0, changed = 0;
+                    for (int i = 0; i < n; ++i) {
+                        mismatched += repaired[i] != exact[i];
+                        changed += exact[i] != previous[i];
+                    }
+                    if (mismatched && std::getenv("TETS_DEBUG")) {
+                        // Size of each disputed face: spread of the circumcentres around edge i-j.
+                        auto wrap = [](double d) { return d - std::nearbyint(d); };
+                        auto centre = [&](const tet_flips::Tet& t) {
+                            auto d = [&](int v) {
+                                return shell_voronoi::Vec3<double>{wrap(xs[v][0] - xs[t[0]][0]),
+                                                                   wrap(xs[v][1] - xs[t[0]][1]),
+                                                                   wrap(xs[v][2] - xs[t[0]][2])};
+                            };
+                            return face_geometry::detail::circumcentre(d(t[1]), d(t[2]), d(t[3])) +
+                                   shell_voronoi::Vec3<double>{xs[t[0]][0], xs[t[0]][1], xs[t[0]][2]};
+                        };
+                        auto step_status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, step_cells.status);
+                        auto step_order = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.order);
+                        std::vector<int> status_of(n);
+                        for (int t = 0; t < n; ++t) status_of[step_order(t)] = step_status(t);
+                        double volume = 0;
+                        for (std::size_t t = 0; t < fm.vertex.size(); ++t) {
+                            if (!fm.alive[t]) continue;
+                            const auto& v = fm.vertex[t];
+                            auto d = [&](int k) {
+                                return shell_voronoi::Vec3<double>{wrap(xs[v[k]][0] - xs[v[0]][0]),
+                                                                   wrap(xs[v[k]][1] - xs[v[0]][1]),
+                                                                   wrap(xs[v[k]][2] - xs[v[0]][2])};
+                            };
+                            volume += dot(d(1), cross(d(2), d(3))) / 6.0;
+                        }
+                        std::cout << "  total_tet_volume=" << volume << "\n";
+                        // The same positions through the plain thread-per-cell kernel.
+                        shell_voronoi::Cells<Memory> plain(n, false);
+                        plain.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_plain", n, capacity);
+                        shell_voronoi::construct<double>(exec, grid, plain);
+                        auto plain_lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, plain.all_neighbours);
+                        auto plain_counts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, plain.face_count);
+                        auto plain_status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, plain.status);
+                        for (int i = 0; i < n; ++i) {
+                            if (repaired[i] == exact[i]) continue;
+                            int slot = 0;
+                            while (step_order(slot) != i) ++slot;
+                            std::vector<int> plain_set;
+                            for (int f = 0; f < plain_counts(slot); ++f) plain_set.push_back(step_order(plain_lists(slot, f)));
+                            std::sort(plain_set.begin(), plain_set.end());
+                            std::cout << "  slot " << slot << " at " << xs[i][0] << " " << xs[i][1] << " " << xs[i][2] << "\n";
+                            std::cout << "  cell " << i << " reference_status=" << status_of[i] << " mesh_faces="
+                                      << repaired[i].size() << " reference_faces=" << exact[i].size()
+                                      << " plain_status=" << plain_status(slot) << " plain_faces=" << plain_set.size()
+                                      << " plain_matches_mesh=" << (plain_set == repaired[i]) << "\n";
+                            std::vector<int> diff;
+                            std::set_symmetric_difference(repaired[i].begin(), repaired[i].end(), exact[i].begin(),
+                                                          exact[i].end(), std::back_inserter(diff));
+                            for (int j : diff) {
+                                std::vector<shell_voronoi::Vec3<double>> cs;
+                                for (std::size_t t = 0; t < fm.vertex.size(); ++t)
+                                    if (fm.alive[t] && tet_flips::detail::position(fm.vertex[t], i) >= 0 &&
+                                        tet_flips::detail::position(fm.vertex[t], j) >= 0)
+                                    {
+                                        cs.push_back(centre(fm.vertex[t]));
+                                        const auto& v = fm.vertex[t];
+                                        auto d = [&](int k) {
+                                            return shell_voronoi::Vec3<double>{wrap(xs[v[k]][0] - xs[v[0]][0]),
+                                                                               wrap(xs[v[k]][1] - xs[v[0]][1]),
+                                                                               wrap(xs[v[k]][2] - xs[v[0]][2])};
+                                        };
+                                        const auto c = face_geometry::detail::circumcentre(d(1), d(2), d(3));
+                                        std::cout << "    tet " << t << " (" << v[0] << "," << v[1] << "," << v[2] << ","
+                                                  << v[3] << ") volume/spacing^3=" << dot(d(1), cross(d(2), d(3))) / 6 / (spacing * spacing * spacing)
+                                                  << " radius/spacing=" << std::sqrt(dot(c, c)) / spacing << "\n";
+                                    }
+                                double spread = 0;
+                                for (auto& p : cs)
+                                    for (auto& q : cs) {
+                                        const shell_voronoi::Vec3<double> d{wrap(p.x - q.x), wrap(p.y - q.y), wrap(p.z - q.z)};
+                                        spread = std::max(spread, std::sqrt(dot(d, d)));
+                                    }
+                                double area = 0;  // largest triangle of circumcentres: a lower bound on the face area
+                                for (auto& p : cs)
+                                    for (auto& q : cs)
+                                        for (auto& r : cs) {
+                                            const shell_voronoi::Vec3<double> u{wrap(q.x - p.x), wrap(q.y - p.y), wrap(q.z - p.z)},
+                                                w{wrap(r.x - p.x), wrap(r.y - p.y), wrap(r.z - p.z)};
+                                            const auto c = cross(u, w);
+                                            area = std::max(area, 0.5 * std::sqrt(dot(c, c)));
+                                        }
+                                std::cout << "  area/spacing^2>=" << area / (spacing * spacing) << " ring=" << cs.size();
+                                std::cout << "  disputed " << i << "-" << j << " in_mesh="
+                                          << std::binary_search(repaired[i].begin(), repaired[i].end(), j)
+                                          << " face_extent/spacing=" << spread / spacing << "\n";
+                            }
+                        }
+                    }
+                    previous = exact;
+                    std::cout << "flips: step=" << step << " changed_cells=" << 100.0 * changed / n
+                              << "% flips23=" << stats.flips23 << " flips32=" << stats.flips32
+                              << " stuck=" << stats.stuck << " rebuilt=" << stats.rebuilt
+                              << " unrepaired=" << stats.unrepaired << " failing_after=" << left
+                              << " mismatched_cells=" << mismatched << " flips_per_changed_cell="
+                              << (changed ? double(stats.flips23 + stats.flips32) / changed : 0.0)
+                              << " host_repair_ms=" << repair_ms << "\n";
                 }
             }
             std::cout << "tets moved: displacement=" << displacement << " invalid_tets=" << failed << " ("
