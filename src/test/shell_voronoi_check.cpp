@@ -259,7 +259,6 @@ int main(int argc, char** argv) {
         const Points points = make_points(kind, requested);
         const int n = static_cast<int>(points.size());
         Kokkos::View<double* [3], Memory> positions("positions", n);
-        Kokkos::View<double*, Memory> unused_radii("unused_radii", n);
         {
             auto h = Kokkos::create_mirror_view(positions);
             for (int i = 0; i < n; ++i)
@@ -268,18 +267,16 @@ int main(int argc, char** argv) {
         }
 
         // About one particle per grid cell; only the cell index is built.
-        neighbor_search::DenseCellSearch<Exec> search;
+        neighbor_search::CellList<Exec> search;
         const double spacing = std::cbrt(1.0 / n);
         // SHELL_MORTON=1: cells stored in Morton order, so consecutive slots form compact bricks.
-        search.morton_cells = std::getenv("SHELL_MORTON") != nullptr;
-        neighbor_search::configure(search, n, Kokkos::Array<double, 3>{1.0, 1.0, 1.0}, width_factor * spacing,
-                                   true, 1, false);
+        search.morton = std::getenv("SHELL_MORTON") != nullptr;
+        neighbor_search::configure(search, n, 1.0, width_factor * spacing);
         const double build_ms = median_ms(repeats, [&] {
-            neighbor_search::build(exec, search, positions, unused_radii);
+            neighbor_search::build(exec, search, positions);
             exec.fence();
         });
-        const shell_voronoi::Grid<Memory> grid{search.positions, search.cell_offsets, n, search.nx, search.hx, 1.0,
-                                               search.morton_cells ? search.cell_rank : Kokkos::View<int*, Memory>{}};
+        const shell_voronoi::Grid<Memory> grid = shell_voronoi::make_grid(search);
 
         std::vector<std::array<double, 3>> slot_points(n);
         {
@@ -288,7 +285,7 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind
-                  << " grid=" << search.nx << "^3 repeats=" << repeats << "\n";
+                  << " grid=" << search.cells_per_side << "^3 repeats=" << repeats << "\n";
         const auto stencil = shell_voronoi::lean::make_stencil(exec, grid.cells_per_side, grid.cell_width);
         std::vector<double> reference_volumes;
         for (const std::string variant : {"thread-double", "thread-float", "warp-double", "warp-float",
@@ -349,7 +346,7 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < n; ++i)
                     for (int a = 0; a < 3; ++a) h(i, a) = wrap(points[i][a] + (amplitude > 0 ? step(rng) : 0.0));
                 Kokkos::deep_copy(positions, h);
-                neighbor_search::build(exec, search, positions, unused_radii);
+                neighbor_search::build(exec, search, positions);
                 exec.fence();
             };
 
@@ -427,8 +424,8 @@ int main(int argc, char** argv) {
         // cheaper bounds on the current cell would have rejected.
         if (selection == "cullstats") {
             using shell_voronoi::Vec3;
-            const int side = search.nx;
-            const double width = search.hx;
+            const int side = search.cells_per_side;
+            const double width = search.cell_width;
             auto offsets = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.cell_offsets);
             const int reach = std::min((side - 1) / 2, static_cast<int>(std::ceil(6 * spacing / width)));
             const double half_width = std::min(0.25, ((side - 1) / 2 + 1) * width);
@@ -626,7 +623,7 @@ int main(int argc, char** argv) {
                         for (int a = 0; a < 3; ++a) h(i, a) = at[i][a];
                     Kokkos::deep_copy(positions, h);
                 }
-                neighbor_search::build(exec, search, positions, unused_radii);
+                neighbor_search::build(exec, search, positions);
                 shell_voronoi::Cells<Memory> cells(n, false);
                 cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours", n, capacity);
                 shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
@@ -735,7 +732,7 @@ int main(int argc, char** argv) {
                         for (int a = 0; a < 3; ++a) h(i, a) = x[i][a];
                     Kokkos::deep_copy(positions, h);
                 }
-                neighbor_search::build(exec, search, positions, unused_radii);
+                neighbor_search::build(exec, search, positions);
                 shell_voronoi::Cells<Memory> cells(n, false);
                 cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours", n, capacity);
                 shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
@@ -777,7 +774,7 @@ int main(int argc, char** argv) {
         if (selection == "tets") {
             const int capacity = 40;
             auto exact_sets = [&](const Kokkos::View<double* [3], Memory>& at, shell_voronoi::Cells<Memory>& cells) {
-                neighbor_search::build(exec, search, at, unused_radii);
+                neighbor_search::build(exec, search, at);
                 shell_voronoi::construct_lean<double>(exec, grid, cells, stencil);
                 auto order = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.order);
                 auto lists = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.all_neighbours);
@@ -791,7 +788,7 @@ int main(int argc, char** argv) {
             };
             // Build 0 at the starting positions, in slot order: from here on a
             // particle is named by its slot of this build.
-            neighbor_search::build(exec, search, positions, unused_radii);
+            neighbor_search::build(exec, search, positions);
             Kokkos::View<double* [3], Memory> x0("x0", n);
             Kokkos::deep_copy(x0, search.positions);
             shell_voronoi::Cells<Memory> cells(n, false);

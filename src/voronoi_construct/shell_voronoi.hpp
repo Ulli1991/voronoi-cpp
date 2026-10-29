@@ -1,5 +1,7 @@
 #pragma once
 
+#include "neighbor_search.hpp"
+
 #include <Kokkos_Core.hpp>
 
 #include <cstdint>
@@ -19,7 +21,7 @@
 // stored once, by the cell with the lower slot index (its owner). A flux
 // computed on that single face and applied with opposite signs conserves
 // exactly. Slots, positions and cell offsets come from a built
-// neighbor_search::DenseCellSearch.
+// neighbor_search::CellList.
 namespace shell_voronoi {
 
 enum Status : int {
@@ -84,6 +86,11 @@ struct Grid {
 
     KOKKOS_INLINE_FUNCTION int rank(int key) const { return cell_rank.extent(0) ? cell_rank(key) : key; }
 };
+
+template <class ExecSpace>
+Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList<ExecSpace>& list) {
+    return {list.positions, list.cell_offsets, list.n, list.cells_per_side, list.cell_width, list.box, list.cell_rank};
+}
 
 // Per-cell results. Face arrays are [cell, owned face]; area vectors point
 // out of the owning cell, centroids are relative to the owner's generator.
