@@ -128,6 +128,41 @@ namespace detail {
 // covering the same region: orient the new ones, reuse the old slots first,
 // and reconnect them to each other and to the outside through the old outer
 // faces. Returns the new tetrahedra.
+// Whether `fresh` (vertex sets) closes the cavity of `old` exactly: six outer
+// faces, each face of a new tetrahedron matched once (outside or by another
+// new one), each outer face used once, and no new tetrahedron duplicating
+// the outer one it attaches to. Near-degenerate configurations can break this.
+inline bool closes(const Mesh& m, const std::vector<int>& old, const std::vector<Tet>& fresh) {
+    std::vector<std::array<int, 3>> outer_key;
+    std::vector<int> outer_tet;
+    for (int t : old)
+        for (int k = 0; k < 4; ++k) {
+            const int o = m.adjacent[t][k];
+            if (std::find(old.begin(), old.end(), o) != old.end()) continue;
+            outer_key.push_back(face_key(m.vertex[t], k));
+            outer_tet.push_back(o);
+        }
+    if (outer_key.size() != 6) return false;
+    std::vector<int> used(6, 0);
+    for (std::size_t r = 0; r < fresh.size(); ++r)
+        for (int c = 0; c < 4; ++c) {
+            const auto key = face_key(fresh[r], c);
+            int matches = 0;
+            for (int q = 0; q < 6; ++q)
+                if (key == outer_key[q]) {
+                    ++matches;
+                    ++used[q];
+                    const int w = outer_tet[q];
+                    if (w >= 0 && position(m.vertex[w], fresh[r][c]) >= 0) return false;
+                }
+            for (std::size_t s2 = 0; s2 < fresh.size(); ++s2)
+                if (s2 != r)
+                    for (int c2 = 0; c2 < 4; ++c2) matches += face_key(fresh[s2], c2) == key;
+            if (matches != 1) return false;
+        }
+    return std::all_of(used.begin(), used.end(), [](int u) { return u == 1; });
+}
+
 inline std::vector<int> replace(Mesh& m, const Grid& x, const std::vector<int>& old,
                                 std::vector<Tet> fresh) {
     std::map<std::array<int, 3>, std::pair<int, int>> outside;  // outer face -> (outer tet, its face index)
@@ -429,7 +464,7 @@ inline Stats repair(Mesh& m, const Grid& x) {
                 negative += o < 0;
                 three.push_back(n);
             }
-            const bool convex = positive == 3 || negative == 3;
+            const bool convex = (positive == 3 || negative == 3) && detail::closes(m, {t, u}, three);
             if (convex) {
                 for (int s : detail::replace(m, x, {t, u}, three)) push(s);
                 ++stats.flips23;
@@ -479,6 +514,7 @@ inline Stats repair(Mesh& m, const Grid& x) {
                 // Valid only if p and q lie on opposite sides of the new triangle.
                 const Tet side_p{others[0], others[1], others[2], p}, side_q{others[0], others[1], others[2], q};
                 if (detail::orient_sign(x, side_p) * detail::orient_sign(x, side_q) >= 0) continue;
+                if (!detail::closes(m, ring, {n1, n2})) continue;
                 for (int s : detail::replace(m, x, ring, {n1, n2})) push(s);
                 ++stats.flips32;
                 done = true;

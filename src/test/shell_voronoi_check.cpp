@@ -1214,6 +1214,17 @@ int main(int argc, char** argv) {
                 }
                 Kokkos::View<double* [3], Memory> xd("xd", n);
                 Kokkos::View<int* [2], Memory> stuck;
+                // Faces rebuilt every step from the edge representatives.
+                const int face_capacity = 10 * n;
+                Kokkos::View<int*, Memory> face_start("face_start", capacity + 1);
+                Kokkos::View<int* [2], Memory> face_pair("face_pair", face_capacity);
+                tet_mesh::FaceRings<Memory> rings[2] = {
+                    tet_mesh::make_face_rings<Memory>(capacity, face_capacity, 8 * face_capacity),
+                    tet_mesh::make_face_rings<Memory>(capacity, face_capacity, 8 * face_capacity)};
+                const face_geometry::Geometry<Memory> face_geometry{
+                    Kokkos::View<double* [3], Memory>("face_area", face_capacity),
+                    Kokkos::View<double* [3], Memory>("face_centroid", face_capacity),
+                    Kokkos::View<double*, Memory>("cell_volume", n)};
                 for (int step = 1; step <= 10; ++step) {
                     for (int i = 0; i < n; ++i) {
                         std::array<double, 3> v{0, 0, 0};
@@ -1244,11 +1255,28 @@ int main(int argc, char** argv) {
                     const auto gpu = tet_repair::repair(exec, dm, state, stuck, stuck_count);
                     exec.fence();
                     const double gpu_ms = timer.seconds() * 1e3;
+                    const auto xg = padded(xd);
+                    Kokkos::Timer face_timer;
+                    tet_mesh::circumcentres(exec, xg, 1.0, dm, state.count);
+                    int faces = 0;
+                    if (std::getenv("GPUFLIPS_WALK_ALL")) {  // every face walked around its edge
+                        faces = tet_mesh::faces_from_edges(exec, xg, 1.0, dm, state.count, face_start, face_pair,
+                                                           face_geometry);
+                    } else {  // rings kept, only faces touched by flips walked
+                        faces = tet_mesh::update_face_rings(exec, dm, state.count, state.touched, rings[step % 2],
+                                                            rings[(step + 1) % 2]);
+                        tet_mesh::faces(exec, xg, 1.0, dm, face_geometry);
+                        Kokkos::deep_copy(exec, state.touched, 0);
+                    }
+                    exec.fence();
+                    const double faces_ms = face_timer.seconds() * 1e3;
                     if (std::getenv("GPUFLIPS_FAST")) {  // timing only: no host check
                         std::cout << "gpuflips: step=" << step << " gpu_ms=" << gpu_ms
                                   << " gpu_Mcells_s=" << n / gpu_ms / 1e3 << " rounds=" << gpu.rounds
                                   << " flips23=" << gpu.flips23 << " flips32=" << gpu.flips32
-                                  << " stuck=" << stuck_count << " tets=" << state.count << "\n";
+                                  << " stuck=" << stuck_count << " tets=" << state.count << " faces=" << faces
+                                  << " centres_faces_ms=" << faces_ms << " step_ms=" << gpu_ms + faces_ms
+                                  << " step_Mcells_s=" << n / (gpu_ms + faces_ms) / 1e3 << "\n";
                         continue;
                     }
                     // Finish on the host and continue from its mesh.
@@ -1263,14 +1291,82 @@ int main(int argc, char** argv) {
                     }
                     const auto grid_xs = tet_flips::snap(xs);
                     const long long failing_after_gpu = tet_flips::failing(fm, grid_xs);
+                    auto adjacency_report = [&](const char* when) {
+                        long long dead = 0, wrong_face = 0, no_back = 0;
+                        for (std::size_t t = 0; t < fm.vertex.size(); ++t) {
+                            if (!fm.alive[t]) continue;
+                            for (int k = 0; k < 4; ++k) {
+                                const int u = fm.adjacent[t][k];
+                                if (u < 0) continue;
+                                if (!fm.alive[u]) {
+                                    ++dead;
+                                    continue;
+                                }
+                                int shared = 0, back = 0;
+                                for (int a = 0; a < 4; ++a)
+                                    if (a != k && tet_flips::detail::position(fm.vertex[u], fm.vertex[t][a]) >= 0) ++shared;
+                                for (int c = 0; c < 4; ++c) back += fm.adjacent[u][c] == int(t);
+                                wrong_face += shared != 3;
+                                no_back += back != 1;
+                            }
+                        }
+                        std::cout << "  adjacency " << when << ": to_dead=" << dead << " wrong_face=" << wrong_face
+                                  << " no_back=" << no_back << "\n";
+                    };
+                    if (std::getenv("TETS_DEBUG")) {
+                        adjacency_report("after gpu");
+                        auto hs = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, stuck);
+                        long long inverted = 0, unflippable = 0, rejected = 0;
+                        std::vector<char> seen(fm.vertex.size(), 0);
+                        long long distinct_inverted = 0;
+                        for (int i = 0; i < std::min<int>(stuck_count, hs.extent(0)); ++i) {
+                            const int k = hs(i, 1);
+                            inverted += k == -1;
+                            rejected += k == -2;
+                            unflippable += k >= 0;
+                            const int t = hs(i, 0);
+                            if (k == -1 && t >= 0 && t < int(seen.size()) && !seen[t]++) ++distinct_inverted;
+                        }
+                        std::cout << "  stuck by reason: inverted=" << inverted << " (distinct " << distinct_inverted
+                                  << ") unflippable=" << unflippable << " rejected=" << rejected << "\n";
+                    }
                     const auto host = tet_flips::repair(fm, grid_xs);
+                    if (std::getenv("TETS_DEBUG")) adjacency_report("after host");
                     const long long left = tet_flips::failing(fm, grid_xs);
                     const auto repaired = tet_flips::neighbours(fm, n);
                     shell_voronoi::Cells<Memory> step_cells(n, false);
                     step_cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_step", n, capacity_neighbours);
                     const auto exact = exact_sets(xd, step_cells);
-                    long long mismatched = 0;
-                    for (int i = 0; i < n; ++i) mismatched += repaired[i] != exact[i];
+                    long long mismatched = 0, exact_faces = 0;
+                    for (int i = 0; i < n; ++i) {
+                        mismatched += repaired[i] != exact[i];
+                        exact_faces += static_cast<long long>(exact[i].size());
+                    }
+                    // Volumes from the rebuilt faces against the clipping reference.
+                    double worst_volume = 0, total_volume = 0;
+                    {
+                        auto hv = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, face_geometry.volume);
+                        auto rv = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, step_cells.volume);
+                        auto ro = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.order);
+                        auto rs = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, step_cells.status);
+                        int worst_t = -1;
+                        for (int t = 0; t < n; ++t) {
+                            total_volume += hv(ro(t));
+                            if (rv(t) > 0 && std::abs(hv(ro(t)) - rv(t)) / rv(t) > worst_volume) {
+                                worst_volume = std::abs(hv(ro(t)) - rv(t)) / rv(t);
+                                worst_t = t;
+                            }
+                        }
+                        if (worst_t >= 0 && std::getenv("TETS_DEBUG"))
+                            std::cout << "  worst cell " << ro(worst_t) << " ours=" << hv(ro(worst_t))
+                                      << " reference=" << rv(worst_t) << " reference_status=" << rs(worst_t)
+                                      << " mean_volume=" << 1.0 / n << " reference_faces="
+                                      << exact[ro(worst_t)].size() << " mesh_faces=" << repaired[ro(worst_t)].size() << "\n";
+                    }
+                    std::cout << "gpuflips_faces: step=" << step << " faces=" << faces << " exact_faces="
+                              << exact_faces / 2 << " total_volume=" << total_volume
+                              << " max_relative_volume_difference=" << worst_volume << " centres_faces_ms=" << faces_ms
+                              << "\n";
                     std::cout << "gpuflips: step=" << step << " gpu_ms=" << gpu_ms
                               << " gpu_Mcells_s=" << n / gpu_ms / 1e3 << " rounds=" << gpu.rounds
                               << " flips23=" << gpu.flips23 << " flips32=" << gpu.flips32
@@ -1280,15 +1376,51 @@ int main(int argc, char** argv) {
                     // Back to the device.
                     const int count = static_cast<int>(fm.vertex.size());
                     if (count > capacity) break;
+                    // Tetrahedra the host changed count as touched for the next ring update.
+                    auto ht = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, state.touched);
+                    const int gpu_count = state.count;
                     for (int t = 0; t < count; ++t)
                         for (int k = 0; k < 4; ++k) {
+                            if (t >= gpu_count || hv(t, k) != fm.vertex[t][k] || ha(t, k) != fm.adjacent[t][k] ||
+                                hl(t) != fm.alive[t])
+                                ht(t) = 1;
                             hv(t, k) = fm.vertex[t][k];
                             ha(t, k) = fm.adjacent[t][k];
                         }
+                    Kokkos::deep_copy(state.touched, ht);
                     for (int t = 0; t < count; ++t) hl(t) = fm.alive[t];
                     Kokkos::deep_copy(dm.vertex, hv);
                     Kokkos::deep_copy(dm.adjacent, ha);
                     Kokkos::deep_copy(state.alive, hl);
+                    {
+                        // Edge representatives for the host's mesh: the lowest
+                        // tetrahedron index around each edge (test only).
+                        auto he = Kokkos::create_mirror_view(dm.edges);
+                        for (std::size_t t = 0; t < he.extent(0); ++t) he(t) = 0;
+                        for (int t = 0; t < count; ++t) {
+                            if (!fm.alive[t]) continue;
+                            for (int k = 0; k < 6; ++k) {
+                                int ka, kb;
+                                tet_mesh::edge_ends(k, ka, kb);
+                                const int a = fm.vertex[t][ka], b = fm.vertex[t][kb];
+                                int lowest = t;
+                                for (int current = t, before = -1, steps = 0; steps < 64; ++steps) {
+                                    int next = -1;
+                                    for (int c = 0; c < 4 && next < 0; ++c) {
+                                        const int v = fm.vertex[current][c];
+                                        if (v != a && v != b && fm.adjacent[current][c] != before)
+                                            next = fm.adjacent[current][c];
+                                    }
+                                    if (next < 0 || next == t) break;
+                                    lowest = std::min(lowest, next);
+                                    before = current;
+                                    current = next;
+                                }
+                                if (lowest == t) he(t) |= 1 << k;
+                            }
+                        }
+                        Kokkos::deep_copy(dm.edges, he);
+                    }
                     state.count = count;
                     state.free_count = 0;
                 }

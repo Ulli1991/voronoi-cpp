@@ -30,6 +30,7 @@ template <class MemorySpace>
 struct State {
     Kokkos::View<ep::i64* [4], Kokkos::LayoutRight, MemorySpace> point;  // snapped positions, padded to 32 bytes
     Kokkos::View<char*, MemorySpace> alive;
+    Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
     // Votes: round in the high 32 bits, plan index + 1 below, so a vote of
@@ -194,6 +195,55 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
     return p;
 }
 
+// Whether the plan's new tetrahedra close the cavity of its old ones exactly:
+// six outer faces, each face of a new tetrahedron matched once (outside or by
+// another new one), each outer face used once, and no new tetrahedron
+// duplicating the outer one it attaches to. Near-degenerate configurations
+// can break this; such flips are left to the host.
+template <class Mesh>
+KOKKOS_INLINE_FUNCTION bool closes(const Mesh& m, const Plan& p) {
+    int outer_key[8][3], outer_tet[8], outers = 0;
+    for (int r = 0; r < p.olds; ++r) {
+        const int o = p.old[r];
+        const int v[4] = {m.vertex(o, 0), m.vertex(o, 1), m.vertex(o, 2), m.vertex(o, 3)};
+        for (int j = 0; j < 4; ++j) {
+            const int w = m.adjacent(o, j);
+            bool inner = false;
+            for (int q = 0; q < p.olds; ++q) inner |= w == p.old[q];
+            if (inner) continue;
+            if (outers == 8) return false;
+            face(v, j, outer_key[outers]);
+            outer_tet[outers++] = w;
+        }
+    }
+    if (outers != 6) return false;
+    int used[6] = {0, 0, 0, 0, 0, 0};
+    for (int r = 0; r < p.freshes; ++r)
+        for (int c = 0; c < 4; ++c) {
+            int key[3];
+            face(p.fresh[r], c, key);
+            int matches = 0;
+            for (int q = 0; q < 6; ++q)
+                if (key[0] == outer_key[q][0] && key[1] == outer_key[q][1] && key[2] == outer_key[q][2]) {
+                    ++matches;
+                    ++used[q];
+                    if (outer_tet[q] >= 0 && position(m, outer_tet[q], p.fresh[r][c]) >= 0) return false;
+                }
+            for (int s2 = 0; s2 < p.freshes; ++s2) {
+                if (s2 == r) continue;
+                for (int c2 = 0; c2 < 4; ++c2) {
+                    int other[3];
+                    face(p.fresh[s2], c2, other);
+                    matches += key[0] == other[0] && key[1] == other[1] && key[2] == other[2];
+                }
+            }
+            if (matches != 1) return false;
+        }
+    for (int q = 0; q < 6; ++q)
+        if (used[q] != 1) return false;
+    return true;
+}
+
 }  // namespace detail
 
 // Snapped positions and positive orientation of every tetrahedron; allocates
@@ -209,8 +259,10 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
     Kokkos::resize(m.vertex, capacity);
     Kokkos::resize(m.adjacent, capacity);
     Kokkos::resize(m.centre, capacity);
+    Kokkos::resize(m.edges, capacity);
     s.point = Kokkos::View<ep::i64* [4], Kokkos::LayoutRight, Memory>("tet_repair_point", n);
     s.alive = Kokkos::View<char*, Memory>("tet_repair_alive", capacity);
+    s.touched = Kokkos::View<char*, Memory>("tet_repair_touched", capacity);
     s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", capacity);
     s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", capacity);
     s.lock = Kokkos::View<unsigned long long*, Memory>("tet_repair_lock", capacity);
@@ -230,6 +282,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
         });
     const auto vertex = m.vertex;
     const auto adjacent = m.adjacent;
+    const auto edges = m.edges;
     Kokkos::parallel_for(
         "tet_repair::orient", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
             alive(t) = 1;
@@ -237,6 +290,9 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
             if (detail::orient(point, v) < 0) {
                 Kokkos::kokkos_swap(vertex(t, 2), vertex(t, 3));
                 Kokkos::kokkos_swap(adjacent(t, 2), adjacent(t, 3));
+                // Edges (0,2)<->(0,3) and (1,2)<->(1,3) trade places.
+                const int b = edges(t);
+                edges(t) = (b & ~0x1e) | (b & 0x2) << 1 | (b & 0x4) >> 1 | (b & 0x8) << 1 | (b & 0x10) >> 1;
             }
         });
     return s;
@@ -351,6 +407,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
     const auto dirty = s.dirty;
     const auto lock = s.lock;
     const auto free_slots = s.free_slots;
+    const auto edges = m.edges;
     const auto host = s.host_counters;
     auto read = [&] {  // one asynchronous copy into pinned memory, then wait
         Kokkos::deep_copy(exec, host, counters);
@@ -429,6 +486,14 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 detail::Plan p;
                 const int u = adjacent(t, k);
                 if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k);
+                if (p.kind > 0 && !detail::closes(m, p)) {
+                    p.kind = 0;  // never votes, so it cannot block other flips
+                    const int at = Kokkos::atomic_fetch_add(&counters(1), 1);
+                    if (at < static_cast<int>(stuck.extent(0))) {
+                        stuck(at, 0) = t;
+                        stuck(at, 1) = -2;  // flip rejected: does not close its cavity
+                    }
+                }
                 plans(i) = p;
                 if (p.kind == -1) {
                     const int at = Kokkos::atomic_fetch_add(&counters(1), 1);
@@ -463,9 +528,8 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     mark(st, p.old[0]);  // retry next round
                     return;
                 }
-                Kokkos::atomic_inc(&counters(p.kind == 2 ? 6 : 7));
                 // Outer faces of the old tetrahedra: sorted triple, outer tet, its index back.
-                int outer_key[6][3], outer_tet[6], outer_back[6], outers = 0;
+                int outer_key[8][3], outer_tet[8], outer_back[8], outers = 0;
                 for (int r = 0; r < p.olds; ++r) {
                     const int o = p.old[r];
                     const int v[4] = {vertex(o, 0), vertex(o, 1), vertex(o, 2), vertex(o, 3)};
@@ -473,7 +537,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         const int w = adjacent(o, j);
                         bool inner = false;
                         for (int q = 0; q < p.olds; ++q) inner |= w == p.old[q];
-                        if (inner || outers == 6) continue;
+                        if (inner || outers == 8) continue;
                         detail::face(v, j, outer_key[outers]);
                         outer_tet[outers] = w;
                         outer_back[outers] = -1;
@@ -482,6 +546,26 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                                 if (adjacent(w, b) == o) outer_back[outers] = b;
                         ++outers;
                     }
+                }
+                Kokkos::atomic_inc(&counters(p.kind == 2 ? 6 : 7));
+                // Edges the old tetrahedra represented; they get new representatives below.
+                int kept_edge[19][2], kept_edges = 0;
+                for (int r = 0; r < p.olds; ++r) {
+                    const int o = p.old[r];
+                    for (int bits = edges(o); bits; bits &= bits - 1) {
+                        int ka, kb;
+                        tet_mesh::edge_ends(Kokkos::Experimental::countr_zero_builtin(static_cast<unsigned>(bits)), ka,
+                                            kb);
+                        kept_edge[kept_edges][0] = vertex(o, ka);
+                        kept_edge[kept_edges][1] = vertex(o, kb);
+                        ++kept_edges;
+                    }
+                    edges(o) = 0;
+                }
+                if (p.kind == 2) {  // the new edge a-far
+                    kept_edge[kept_edges][0] = p.fresh[0][0];
+                    kept_edge[kept_edges][1] = p.fresh[0][1];
+                    ++kept_edges;
                 }
                 // Slots: reuse the old ones, then pop free slots or grow.
                 int slot[3];
@@ -529,7 +613,26 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         }
                     }
                 }
-                for (int r = 0; r < p.freshes; ++r) mark(st, slot[r]);
+                // Each kept edge (except the one a 3->2 flip removes) to the first new tetrahedron holding it.
+                for (int q = 0; q < kept_edges; ++q) {
+                    const int a = kept_edge[q][0], b = kept_edge[q][1];
+                    for (int r = 0; r < p.freshes; ++r) {
+                        int pa = -1, pb = -1;
+                        for (int c = 0; c < 4; ++c) {
+                            if (vertex(slot[r], c) == a) pa = c;
+                            if (vertex(slot[r], c) == b) pb = c;
+                        }
+                        if (pa >= 0 && pb >= 0) {
+                            edges(slot[r]) |= 1 << tet_mesh::edge_index(pa, pb);
+                            break;
+                        }
+                    }
+                }
+                for (int r = 0; r < p.olds; ++r) st.touched(p.old[r]) = 1;
+                for (int r = 0; r < p.freshes; ++r) {
+                    st.touched(slot[r]) = 1;
+                    mark(st, slot[r]);
+                }
             });
         read();
         const auto& c2 = host;
