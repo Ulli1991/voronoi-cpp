@@ -390,6 +390,7 @@ struct Kernel {
             }
             if (gap2 >= reach2) continue;
             ++visited;
+            key = grid.rank(key);
             const int last = cell_offsets(key + 1);
             for (int s = cell_offsets(key); s < last && status == ok; ++s) {
                 if (s == t) continue;

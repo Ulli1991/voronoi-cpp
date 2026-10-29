@@ -26,6 +26,9 @@ constexpr int lanes = 32;
 constexpr int max_planes = 64;
 constexpr int max_vertices = 64;
 constexpr int warps_per_block = 4;
+#ifndef SHELL_WARP_MIN_BLOCKS
+#define SHELL_WARP_MIN_BLOCKS 5  // caps registers so 5 blocks fit per SM: ~4% faster on A100
+#endif
 constexpr std::uint8_t none = 255;
 
 // One warp's polyhedron. Corners and adjacency hold three 8-bit indices each:
@@ -387,7 +390,7 @@ struct Kernel {
                     shift[a] = u[a] < 0 ? -1 : u[a] >= side ? 1 : 0;
                 }
                 if (gap2 < 4.0 * static_cast<double>(radius2)) {
-                    const int key = (wrapped[0] * side + wrapped[1]) * side + wrapped[2];
+                    const int key = grid.rank((wrapped[0] * side + wrapped[1]) * side + wrapped[2]);
                     begin = offsets(key);
                     end = offsets(key + 1);
                     packed = pack_image(shift[0], shift[1], shift[2]);
@@ -593,7 +596,8 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Kokkos::deep_copy(exec, bound2, hb);
         }
         const int blocks = (grid.n + warp::warps_per_block - 1) / warp::warps_per_block;
-        Kokkos::TeamPolicy<Kokkos::Cuda> policy(exec, blocks, warp::warps_per_block, warp::lanes);
+        Kokkos::TeamPolicy<Kokkos::Cuda, Kokkos::LaunchBounds<warp::warps_per_block * warp::lanes, SHELL_WARP_MIN_BLOCKS>>
+            policy(exec, blocks, warp::warps_per_block, warp::lanes);
         policy.set_scratch_size(0, Kokkos::PerTeam(warp::warps_per_block * sizeof(warp::Polyhedron<Real>)));
         Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
                              warp::Kernel<Real, typename ExecSpace::memory_space>{
