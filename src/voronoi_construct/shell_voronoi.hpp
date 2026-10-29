@@ -109,6 +109,10 @@ struct Cells {
     // |area|, and work per cell (rings walked, candidates clipped, cuts).
     Kokkos::View<double*, MemorySpace> closure;
     Kokkos::View<int* [3], MemorySpace> work;
+    // Optional, size 0 = off: clock cycles per phase of the warp kernel when
+    // built with SHELL_WARP_PHASES (walk, fetch, sort, clips that do not cut,
+    // clips that cut, faces).
+    Kokkos::View<long long* [6], MemorySpace> phase_cycles;
 
     Cells() = default;
     Cells(int n, bool with_diagnostics)

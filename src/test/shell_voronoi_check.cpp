@@ -15,6 +15,7 @@
 #include "face_geometry.hpp"
 #include "tet_flips.hpp"
 #include "tet_mesh.hpp"
+#include "tet_repair.hpp"
 #include "shell_voronoi_lean.hpp"
 #include "shell_voronoi_warp.hpp"
 
@@ -294,6 +295,8 @@ int main(int argc, char** argv) {
                                           "lean-double", "lean-float"}) {
             if (selection != "all" && variant.find(selection) == std::string::npos) continue;
             shell_voronoi::Cells<Memory> cells(n, true);
+            // SHELL_PHASES=1 (with a SHELL_WARP_PHASES build): cycles per warp-kernel phase.
+            if (std::getenv("SHELL_PHASES")) cells.phase_cycles = Kokkos::View<long long* [6], Memory>("phases", n);
             const double construct_ms = median_ms(repeats, [&] {
                 if (variant == "thread-double") shell_voronoi::construct<double>(exec, grid, cells);
                 if (variant == "thread-float") shell_voronoi::construct<float>(exec, grid, cells);
@@ -306,6 +309,18 @@ int main(int argc, char** argv) {
             std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
                       << " construct_Mcells_s=" << n / construct_ms / 1e3
                       << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
+            if (cells.phase_cycles.extent(0) > 0 && variant.find("warp") != std::string::npos) {
+                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.phase_cycles);
+                double sum[6] = {0, 0, 0, 0, 0, 0}, total = 0;
+                for (int t = 0; t < n; ++t)
+                    for (int k = 0; k < 6; ++k) sum[k] += double(h(t, k));
+                for (double v : sum) total += v;
+                const char* names[6] = {"walk", "fetch", "sort", "clip_no_cut", "clip_cut", "faces"};
+                std::cout << "  phase_kcycles_per_cell:";
+                for (int k = 0; k < 6; ++k)
+                    std::cout << " " << names[k] << "=" << sum[k] / n / 1e3 << " (" << int(100 * sum[k] / total) << "%)";
+                std::cout << "\n";
+            }
             const HostCells host = to_host(cells);
             const bool is_double = variant.find("double") != std::string::npos;
             failures += validate(host, slot_points, is_double ? 1e-12 : 1e-5, is_double ? 1e-12 : 1e-5,
@@ -1173,6 +1188,92 @@ int main(int argc, char** argv) {
                               << " mismatched_cells=" << mismatched << " flips_per_changed_cell="
                               << (changed ? double(stats.flips23 + stats.flips32) / changed : 0.0)
                               << " host_repair_ms=" << repair_ms << "\n";
+                }
+            }
+            // Flip repair on the device, finished on the host (stuck triangles,
+            // inverted tetrahedra), compared with an exact rebuild every step.
+            if (argc > 7 && std::string(argv[7]) == "gpuflips") {
+                const int capacity_neighbours = capacity;
+                tet_mesh::Mesh<Memory> dm;
+                tet_mesh::from_rings(exec, cells, dm);
+                const int capacity = 2 * static_cast<int>(dm.vertex.extent(0));
+                auto state = tet_repair::prepare(exec, x0, dm, capacity);
+                std::vector<tet_flips::Point> xs(n);
+                {
+                    auto h0 = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, x0);
+                    for (int i = 0; i < n; ++i) xs[i] = {h0(i, 0), h0(i, 1), h0(i, 2)};
+                }
+                Kokkos::View<double* [3], Memory> xd("xd", n);
+                Kokkos::View<int* [2], Memory> stuck;
+                for (int step = 1; step <= 10; ++step) {
+                    for (int i = 0; i < n; ++i) {
+                        std::array<double, 3> v{0, 0, 0};
+                        for (const auto& mode : modes) {
+                            const double sv = std::sin(two_pi * (mode[0] * xs[i][0] + mode[1] * xs[i][1] +
+                                                                 mode[2] * xs[i][2]) + mode[6]);
+                            for (int a = 0; a < 3; ++a) v[a] += mode[3 + a] * sv / 3.0;
+                        }
+                        for (int a = 0; a < 3; ++a) xs[i][a] = wrap(xs[i][a] + displacement * spacing * v[a]);
+                    }
+                    {
+                        auto h = Kokkos::create_mirror_view(xd);
+                        for (int i = 0; i < n; ++i)
+                            for (int a = 0; a < 3; ++a) h(i, a) = xs[i][a];
+                        Kokkos::deep_copy(xd, h);
+                    }
+                    int stuck_count = 0;
+                    Kokkos::Timer timer;
+                    tet_repair::move(exec, xd, state);
+                    const auto gpu = tet_repair::repair(exec, dm, state, stuck, stuck_count);
+                    exec.fence();
+                    const double gpu_ms = timer.seconds() * 1e3;
+                    if (std::getenv("GPUFLIPS_FAST")) {  // timing only: no host check
+                        std::cout << "gpuflips: step=" << step << " gpu_ms=" << gpu_ms
+                                  << " gpu_Mcells_s=" << n / gpu_ms / 1e3 << " rounds=" << gpu.rounds
+                                  << " flips23=" << gpu.flips23 << " flips32=" << gpu.flips32
+                                  << " stuck=" << stuck_count << " tets=" << state.count << "\n";
+                        continue;
+                    }
+                    // Finish on the host and continue from its mesh.
+                    auto hv = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, dm.vertex);
+                    auto ha = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, dm.adjacent);
+                    auto hl = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, state.alive);
+                    tet_flips::Mesh fm;
+                    for (int t = 0; t < state.count; ++t) {
+                        fm.vertex.push_back({hv(t, 0), hv(t, 1), hv(t, 2), hv(t, 3)});
+                        fm.adjacent.push_back({ha(t, 0), ha(t, 1), ha(t, 2), ha(t, 3)});
+                        fm.alive.push_back(hl(t));
+                    }
+                    const auto grid_xs = tet_flips::snap(xs);
+                    const long long failing_after_gpu = tet_flips::failing(fm, grid_xs);
+                    const auto host = tet_flips::repair(fm, grid_xs);
+                    const long long left = tet_flips::failing(fm, grid_xs);
+                    const auto repaired = tet_flips::neighbours(fm, n);
+                    shell_voronoi::Cells<Memory> step_cells(n, false);
+                    step_cells.all_neighbours = Kokkos::View<int**, Memory>("all_neighbours_step", n, capacity_neighbours);
+                    const auto exact = exact_sets(xd, step_cells);
+                    long long mismatched = 0;
+                    for (int i = 0; i < n; ++i) mismatched += repaired[i] != exact[i];
+                    std::cout << "gpuflips: step=" << step << " gpu_ms=" << gpu_ms
+                              << " gpu_Mcells_s=" << n / gpu_ms / 1e3 << " rounds=" << gpu.rounds
+                              << " flips23=" << gpu.flips23 << " flips32=" << gpu.flips32
+                              << " stuck=" << stuck_count << " failing_after_gpu=" << failing_after_gpu
+                              << " host_flips=" << host.flips23 + host.flips32 << " host_rebuilt=" << host.rebuilt
+                              << " failing_after=" << left << " mismatched_cells=" << mismatched << "\n";
+                    // Back to the device.
+                    const int count = static_cast<int>(fm.vertex.size());
+                    if (count > capacity) break;
+                    for (int t = 0; t < count; ++t)
+                        for (int k = 0; k < 4; ++k) {
+                            hv(t, k) = fm.vertex[t][k];
+                            ha(t, k) = fm.adjacent[t][k];
+                        }
+                    for (int t = 0; t < count; ++t) hl(t) = fm.alive[t];
+                    Kokkos::deep_copy(dm.vertex, hv);
+                    Kokkos::deep_copy(dm.adjacent, ha);
+                    Kokkos::deep_copy(state.alive, hl);
+                    state.count = count;
+                    state.free_count = 0;
                 }
             }
             std::cout << "tets moved: displacement=" << displacement << " invalid_tets=" << failed << " ("

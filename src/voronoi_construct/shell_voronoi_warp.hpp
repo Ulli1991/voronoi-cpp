@@ -339,6 +339,16 @@ struct Kernel {
         start_cube(c, half_width, planes, vertices);
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
+#if defined(SHELL_WARP_PHASES)
+        long long phase[6] = {0, 0, 0, 0, 0, 0}, mark = clock64();
+        auto lap = [&](int k) {
+            const long long now = clock64();
+            phase[k] += now - mark;
+            mark = now;
+        };
+#else
+        auto lap = [](int) {};
+#endif
 
         // Sort the buffered candidates, then clip nearest-first while they
         // can still cut the cell.
@@ -347,7 +357,9 @@ struct Kernel {
             int slot = l < buffered ? c.candidate_slot[l] : 0x7fffffff;
             int packed = l < buffered ? c.candidate_image[l] : 0;
             __syncwarp();
+            lap(1);
             sort_candidates(key, slot, packed);
+            lap(2);
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(full_mask, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
@@ -360,6 +372,7 @@ struct Kernel {
                 status = clip(c, planes, vertices, radius2, convert<Real>(d), q);
                 ++clipped;
                 cuts += planes > before;
+                lap(planes > before ? 4 : 3);
             }
             buffered = 0;
         };
@@ -396,6 +409,7 @@ struct Kernel {
                     packed = pack_image(shift[0], shift[1], shift[2]);
                 }
             }
+            lap(0);
             const int most = warp_max(end - begin);
             for (int k = 0; k < most && status == ok; ++k) {
                 const int q = begin + k;
@@ -419,6 +433,7 @@ struct Kernel {
                 }
                 buffered += __popc(taking);
                 __syncwarp();
+                lap(1);
             }
             if (buffered > 0) flush();
         }
@@ -438,6 +453,7 @@ struct Kernel {
             if (__any_sync(full_mask, touches)) status = uncertified;
         }
 
+        lap(0);
         // Faces: lane l walks planes l and l + 32 around their vertices.
         for (int k = 0; k < 2; ++k)
             if (l + k * lanes < planes) c.first[l + k * lanes] = none;
@@ -538,6 +554,11 @@ struct Kernel {
                 out.work(t, 0) = rings;
                 out.work(t, 1) = clipped;
                 out.work(t, 2) = cuts;
+#if defined(SHELL_WARP_PHASES)
+                lap(5);
+                if (out.phase_cycles.extent(0) > 0)
+                    for (int k = 0; k < 6; ++k) out.phase_cycles(t, k) = phase[k];
+#endif
             }
         }
 #else
