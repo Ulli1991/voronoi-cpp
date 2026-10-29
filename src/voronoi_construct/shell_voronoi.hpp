@@ -34,7 +34,7 @@ constexpr int status_count = 6;
 
 constexpr int max_planes = 48;    // cutting planes, including the 6 box planes
 constexpr int max_vertices = 64;  // one 64-bit mask marks vertices to remove
-constexpr int max_hole_edges = 32;
+constexpr int big_planes = 128, big_vertices = 256;  // for the rare cells that overflow those
 constexpr int ring_buffer = 32;
 constexpr int max_owned_faces = 32;
 constexpr int box_planes = 6;
@@ -78,6 +78,11 @@ struct Grid {
     int cells_per_side = 1;
     double cell_width = 1.0;
     double box = 1.0;
+    // Cartesian cell key -> its place in cell_offsets when cells are stored
+    // in another order (Morton); size 0 = Cartesian order.
+    Kokkos::View<int*, MemorySpace> cell_rank;
+
+    KOKKOS_INLINE_FUNCTION int rank(int key) const { return cell_rank.extent(0) ? cell_rank(key) : key; }
 };
 
 // Per-cell results. Face arrays are [cell, owned face]; area vectors point
@@ -123,20 +128,24 @@ namespace detail {
 
 // Private state of one cell under construction. A vertex is the meeting point
 // of three planes, stored in an order that walks each face consistently.
-template <class Real>
+// Planes and Vertices are capacities: the defaults fit almost every cell;
+// the rare larger ones are rebuilt with big ones (big_planes, big_vertices).
+template <class Real, int Planes = max_planes, int Vertices = max_vertices>
 struct Polyhedron {
-    Vec3<Real> normal[max_planes];  // the cell is {x : normal . x <= offset}
-    Real offset[max_planes];
-    int neighbour[max_planes];
-    Vec3<Real> vertex[max_vertices];
-    std::uint8_t corner[max_vertices][3];
+    static_assert(Planes <= 255, "plane indices are bytes");
+    static constexpr int planes_capacity = Planes, vertices_capacity = Vertices;
+    Vec3<Real> normal[Planes];  // the cell is {x : normal . x <= offset}
+    Real offset[Planes];
+    int neighbour[Planes];
+    Vec3<Real> vertex[Vertices];
+    std::uint8_t corner[Vertices][3];
     int planes = 0;
     int vertices = 0;
     Real radius2 = 0;  // largest squared vertex distance from the generator
 };
 
-template <class Real>
-KOKKOS_INLINE_FUNCTION bool intersect(const Polyhedron<Real>& cell, int a, int b, int c,
+template <class Cell, class Real>
+KOKKOS_INLINE_FUNCTION bool intersect(const Cell& cell, int a, int b, int c,
                                       Vec3<Real>& x) {
     const Vec3<Real> bc = cross(cell.normal[b], cell.normal[c]);
     const Vec3<Real> ca = cross(cell.normal[c], cell.normal[a]);
@@ -149,8 +158,8 @@ KOKKOS_INLINE_FUNCTION bool intersect(const Polyhedron<Real>& cell, int a, int b
 
 // Cube of half-width h around the generator; corners keep the orientation
 // convention of local_voronoi.hpp.
-template <class Real>
-KOKKOS_INLINE_FUNCTION void start_cube(Polyhedron<Real>& cell, Real h) {
+template <class Cell, class Real>
+KOKKOS_INLINE_FUNCTION void start_cube(Cell& cell, Real h) {
     const Vec3<Real> axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
     for (int a = 0; a < 3; ++a) {
         cell.normal[2 * a] = axes[a];
@@ -174,15 +183,17 @@ KOKKOS_INLINE_FUNCTION void start_cube(Polyhedron<Real>& cell, Real h) {
 
 // Drop planes no vertex uses any more (cut away by later planes) and renumber
 // the rest. The six box planes keep their indices. Returns the freed count.
-template <class Real>
-KOKKOS_INLINE_FUNCTION int compact_planes(Polyhedron<Real>& cell) {
-    std::uint64_t used = (std::uint64_t(1) << box_planes) - 1;
+template <class Cell>
+KOKKOS_INLINE_FUNCTION int compact_planes(Cell& cell) {
+    constexpr int capacity = Cell::planes_capacity;
+    bool used[capacity];
+    for (int p = 0; p < cell.planes; ++p) used[p] = p < box_planes;
     for (int v = 0; v < cell.vertices; ++v)
-        for (int k = 0; k < 3; ++k) used |= std::uint64_t(1) << cell.corner[v][k];
-    std::uint8_t renumber[max_planes];
+        for (int k = 0; k < 3; ++k) used[cell.corner[v][k]] = true;
+    std::uint8_t renumber[capacity];
     int planes = 0;
     for (int p = 0; p < cell.planes; ++p) {
-        if (!(used >> p & 1)) continue;
+        if (!used[p]) continue;
         renumber[p] = static_cast<std::uint8_t>(planes);
         cell.normal[planes] = cell.normal[p];
         cell.offset[planes] = cell.offset[p];
@@ -198,23 +209,27 @@ KOKKOS_INLINE_FUNCTION int compact_planes(Polyhedron<Real>& cell) {
 
 // Clip by the bisector of the generator and a particle at offset d. Returns
 // ok when the plane does not cut, or after the cut has been applied.
-template <class Real>
-KOKKOS_INLINE_FUNCTION int clip(Polyhedron<Real>& cell, Vec3<Real> d, int neighbour) {
+template <class Cell, class Real>
+KOKKOS_INLINE_FUNCTION int clip(Cell& cell, Vec3<Real> d, int neighbour) {
+    constexpr int max_holes = Cell::vertices_capacity / 2;
     const Real offset = Real(0.5) * dot(d, d);
     const Real tolerance =
         Real(64) * Kokkos::Experimental::epsilon_v<Real> * Kokkos::sqrt(dot(d, d) * cell.radius2);
-    std::uint64_t outside = 0;
-    for (int v = 0; v < cell.vertices; ++v)
-        if (dot(d, cell.vertex[v]) - offset > tolerance) outside |= std::uint64_t(1) << v;
-    if (outside == 0) return ok;
-    if (cell.planes == max_planes && compact_planes(cell) == 0) return plane_overflow;
+    bool outside[Cell::vertices_capacity];
+    bool any = false;
+    for (int v = 0; v < cell.vertices; ++v) {
+        outside[v] = dot(d, cell.vertex[v]) - offset > tolerance;
+        any |= outside[v];
+    }
+    if (!any) return ok;
+    if (cell.planes == Cell::planes_capacity && compact_planes(cell) == 0) return plane_overflow;
 
     // The removed vertices' directed edges that are not cancelled by a
     // reversed twin form the boundary of the hole the new face closes.
-    std::uint8_t hole[max_hole_edges][2];
+    std::uint8_t hole[max_holes][2];
     int holes = 0;
     for (int v = 0; v < cell.vertices; ++v) {
-        if (!(outside >> v & 1)) continue;
+        if (!outside[v]) continue;
         for (int e = 0; e < 3; ++e) {
             const std::uint8_t a = cell.corner[v][e], b = cell.corner[v][(e + 1) % 3];
             int twin = -1;
@@ -225,7 +240,7 @@ KOKKOS_INLINE_FUNCTION int clip(Polyhedron<Real>& cell, Vec3<Real> d, int neighb
                 hole[twin][1] = hole[holes - 1][1];
                 --holes;
             } else {
-                if (holes == max_hole_edges) return vertex_overflow;
+                if (holes == max_holes) return vertex_overflow;
                 hole[holes][0] = a;
                 hole[holes][1] = b;
                 ++holes;
@@ -240,12 +255,12 @@ KOKKOS_INLINE_FUNCTION int clip(Polyhedron<Real>& cell, Vec3<Real> d, int neighb
 
     int kept = 0;
     for (int v = 0; v < cell.vertices; ++v) {
-        if (outside >> v & 1) continue;
+        if (outside[v]) continue;
         cell.vertex[kept] = cell.vertex[v];
         for (int k = 0; k < 3; ++k) cell.corner[kept][k] = cell.corner[v][k];
         ++kept;
     }
-    if (kept + holes > max_vertices) return vertex_overflow;
+    if (kept + holes > Cell::vertices_capacity) return vertex_overflow;
     if (kept + holes < 4) return degenerate;
     Real radius2 = 0;
     for (int v = 0; v < kept; ++v) radius2 = Kokkos::max(radius2, dot(cell.vertex[v], cell.vertex[v]));
@@ -272,14 +287,14 @@ struct Candidate {
 
 }  // namespace detail
 
-// Build every cell, or with only_failed just those whose status is not ok
-// (the fallback after a faster kernel). Real is the precision of the private
-// polyhedron; inputs and outputs are double.
-template <class Real, class ExecSpace>
-void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
-               const Cells<typename ExecSpace::memory_space>& out, bool only_failed = false) {
-    using detail::Candidate;
-    using detail::Polyhedron;
+namespace detail {
+
+// Which cells a pass builds.
+enum class Pass { all, failed, overflowed };
+
+template <class Real, int Planes, int Vertices, class ExecSpace>
+void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                    const Cells<typename ExecSpace::memory_space>& out, Pass pass) {
     const int n = grid.n, side = grid.cells_per_side;
     const double width = grid.cell_width, box = grid.box;
     if (n <= 0 || side < 3 || out.status.extent(0) != static_cast<std::size_t>(n))
@@ -296,7 +311,10 @@ void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_spac
     Kokkos::parallel_for(
         "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, n),
         KOKKOS_LAMBDA(int t) {
-            if (only_failed && out.status(t) == ok) return;
+            const int before = out.status(t);
+            if ((pass == Pass::failed && before == ok) ||
+                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow))
+                return;
             const Vec3<double> p{positions(t, 0), positions(t, 1), positions(t, 2)};
             int home[3];
             double inside = width;  // distance to the nearest face of the home cell
@@ -307,7 +325,7 @@ void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_spac
                 inside = Kokkos::min(inside, Kokkos::min(frac, width - frac));
             }
 
-            Polyhedron<Real> cell;
+            Polyhedron<Real, Planes, Vertices> cell;
             detail::start_cube(cell, half_width);
             int status = ok;
             bool certified = false;
@@ -363,7 +381,7 @@ void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_spac
                             const int uz = home[2] + dz;
                             const int z = (uz + side) % side;
                             const std::int8_t image_z = uz < 0 ? -1 : uz >= side ? 1 : 0;
-                            const int key = (x * side + y) * side + z;
+                            const int key = grid.rank((x * side + y) * side + z);
                             for (int q = offsets(key); q < offsets(key + 1); ++q) {
                                 if (q == t) continue;
                                 const double ddx = positions(q, 0) + image_x * box - p.x;
@@ -416,7 +434,7 @@ void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_spac
                     for (int w = 0; w < cell.vertices && next < 0; ++w)
                         for (int k = 0; k < 3; ++k)
                             if (cell.corner[w][k] == plane && cell.corner[w][(k + 1) % 3] == last) next = w;
-                    if (next < 0 || ++steps > max_vertices) {
+                    if (next < 0 || ++steps > Vertices) {
                         status = degenerate;
                         break;
                     }
@@ -493,6 +511,26 @@ void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_spac
                 out.work(t, 2) = cuts;
             }
         });
+}
+
+}  // namespace detail
+
+// Build every cell, or with only_failed just those whose status is not ok
+// (the fallback after a faster kernel). Real is the precision of the private
+// polyhedron; inputs and outputs are double. Cells that overflow the usual
+// capacities are then rebuilt once more, in double with big ones.
+template <class Real, class ExecSpace>
+void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+               const Cells<typename ExecSpace::memory_space>& out, bool only_failed = false) {
+    using detail::Pass;
+    detail::construct_pass<Real, max_planes, max_vertices>(exec, grid, out, only_failed ? Pass::failed : Pass::all);
+    int overflowed = 0;
+    const auto status = out.status;
+    Kokkos::parallel_reduce(
+        "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+        KOKKOS_LAMBDA(int t, int& count) { count += status(t) == vertex_overflow || status(t) == plane_overflow; },
+        overflowed);
+    if (overflowed > 0) detail::construct_pass<double, big_planes, big_vertices>(exec, grid, out, Pass::overflowed);
 }
 
 }  // namespace shell_voronoi
