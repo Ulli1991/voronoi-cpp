@@ -24,12 +24,15 @@ template <class MemorySpace>
 using Quads = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
 template <class MemorySpace>
 using Points = Kokkos::View<double* [3], Kokkos::LayoutRight, MemorySpace>;
+// Positions or centres padded to 32 bytes: one memory sector per point.
+template <class MemorySpace>
+using Points4 = Kokkos::View<double* [4], Kokkos::LayoutRight, MemorySpace>;
 
 template <class MemorySpace>
 struct Mesh {
     Quads<MemorySpace> vertex;     // particles
     Quads<MemorySpace> adjacent;   // tetrahedron across the face opposite vertex k, -1 if none
-    Points<MemorySpace> centre;    // circumcentre, unwrapped near vertex 0
+    Points4<MemorySpace> centre;   // circumcentre, unwrapped near vertex 0, and squared radius
     // Owned faces (owner < neighbour), each a ring of tetrahedra in order.
     Kokkos::View<int*, MemorySpace> owner, neighbour, ring_start, ring;
 };
@@ -118,7 +121,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
         tets);
     mesh.vertex = Quads<Memory>("tet_vertex", tets);
     mesh.adjacent = Quads<Memory>("tet_adjacent", tets);
-    mesh.centre = Points<Memory>("tet_centre", tets);
+    mesh.centre = Points4<Memory>("tet_centre", tets);
     mesh.owner = owner;
     mesh.neighbour = neighbour;
     mesh.ring_start = ring_start;
@@ -201,8 +204,8 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
 }
 
 // 1. Circumcentres, one thread per tetrahedron.
-template <class ExecSpace>
-void circumcentres(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSpace::memory_space>& x,
+template <class ExecSpace, class X>
+void circumcentres(const ExecSpace& exec, const X& x,
                    double box, const Mesh<typename ExecSpace::memory_space>& mesh, int count = -1) {
     Kokkos::parallel_for(
         "tet_mesh::circumcentres",
@@ -219,13 +222,14 @@ void circumcentres(const ExecSpace& exec, const Kokkos::View<double* [3], typena
             mesh.centre(t, 0) = x(v0, 0) + c.x;
             mesh.centre(t, 1) = x(v0, 1) + c.y;
             mesh.centre(t, 2) = x(v0, 2) + c.z;
+            mesh.centre(t, 3) = dot(c, c);
         });
 }
 
 // 2. Face area vectors (owner to neighbour), centroids (relative to the
 // owner) and cell volumes, one thread per owned face.
-template <class ExecSpace>
-void faces(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSpace::memory_space>& x, double box,
+template <class ExecSpace, class X>
+void faces(const ExecSpace& exec, const X& x, double box,
            const Mesh<typename ExecSpace::memory_space>& mesh,
            const face_geometry::Geometry<typename ExecSpace::memory_space>& out) {
     Kokkos::deep_copy(exec, out.volume, 0.0);
@@ -271,8 +275,8 @@ void faces(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecS
 // neighbour must not lie inside this circumsphere. Writes 1 per failing
 // tetrahedron into `invalid` and returns how many failed. Rounding-level
 // cases count as valid here; deciding them exactly is the repair's job.
-template <class ExecSpace>
-int check(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSpace::memory_space>& x, double box,
+template <class ExecSpace, class X>
+int check(const ExecSpace& exec, const X& x, double box,
           const Mesh<typename ExecSpace::memory_space>& mesh,
           const Kokkos::View<int*, typename ExecSpace::memory_space>& invalid) {
     int failed = 0;
@@ -284,8 +288,7 @@ int check(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSp
                 return Vec3<double>{detail::wrap(x(v, 0) - c.x, box), detail::wrap(x(v, 1) - c.y, box),
                                     detail::wrap(x(v, 2) - c.z, box)};
             };
-            const Vec3<double> r = from_centre(mesh.vertex(t, 0));
-            const double r2 = dot(r, r);
+            const double r2 = mesh.centre(t, 3);
             int bad = 0;
             for (int k = 0; k < 4 && !bad; ++k) {
                 const int other = mesh.adjacent(t, k);
@@ -312,8 +315,8 @@ int check(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSp
 // Orientation sign of every tetrahedron (+1, -1, or 0 when flat to
 // rounding). A tetrahedron whose sign differs from the build's has inverted,
 // and the local Delaunay check is only conclusive without inversions.
-template <class ExecSpace>
-void orientations(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSpace::memory_space>& x,
+template <class ExecSpace, class X>
+void orientations(const ExecSpace& exec, const X& x,
                   double box, const Mesh<typename ExecSpace::memory_space>& mesh,
                   const Kokkos::View<int*, typename ExecSpace::memory_space>& sign) {
     Kokkos::parallel_for(

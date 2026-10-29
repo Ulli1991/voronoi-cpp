@@ -874,7 +874,7 @@ int main(int argc, char** argv) {
             }
             tet_mesh::Mesh<Memory> mesh{tet_mesh::Quads<Memory>("tet_vertex", tet_count),
                                         tet_mesh::Quads<Memory>("tet_adjacent", tet_count),
-                                        tet_mesh::Points<Memory>("tet_centre", tet_count),
+                                        tet_mesh::Points4<Memory>("tet_centre", tet_count),
                                         {}, {}, {}, {}};
             {
                 auto hv = Kokkos::create_mirror_view(mesh.vertex);
@@ -904,16 +904,25 @@ int main(int argc, char** argv) {
                                                            Kokkos::View<double*, Memory>("volume", n)};
             Kokkos::View<int*, Memory> invalid("invalid", tet_count);
             int failed = 0;
+            // Positions padded to 32 bytes for the random gathers of the tetrahedra kernels.
+            auto padded = [&](const Kokkos::View<double* [3], Memory>& x) {
+                tet_mesh::Points4<Memory> p("padded_positions", n);
+                Kokkos::parallel_for("pad", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int i) {
+                    for (int a = 0; a < 3; ++a) p(i, a) = x(i, a);
+                });
+                return p;
+            };
+            const auto x0p = padded(x0);
             const double centre_ms = median_ms(repeats, [&] {
-                tet_mesh::circumcentres(exec, x0, 1.0, mesh);
+                tet_mesh::circumcentres(exec, x0p, 1.0, mesh);
                 exec.fence();
             });
             const double face_ms = median_ms(repeats, [&] {
-                tet_mesh::faces(exec, x0, 1.0, mesh, geometry);
+                tet_mesh::faces(exec, x0p, 1.0, mesh, geometry);
                 exec.fence();
             });
             const double check_ms = median_ms(repeats, [&] {
-                failed = tet_mesh::check(exec, x0, 1.0, mesh, invalid);
+                failed = tet_mesh::check(exec, x0p, 1.0, mesh, invalid);
             });
             auto volume = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, geometry.volume);
             double worst = 0;
@@ -1226,8 +1235,9 @@ int main(int argc, char** argv) {
                     // GPUFLIPS_SCREEN=1: circumcentres first (the geometry needs them
                     // anyway), then only screened tetrahedra are checked exactly.
                     if (std::getenv("GPUFLIPS_SCREEN")) {
-                        tet_mesh::circumcentres(exec, xd, 1.0, dm, state.count);
-                        tet_repair::move_screened(exec, xd, 1.0, dm, state);
+                        const auto xdp = padded(xd);
+                        tet_mesh::circumcentres(exec, xdp, 1.0, dm, state.count);
+                        tet_repair::move_screened(exec, xdp, 1.0, dm, state);
                     } else {
                         tet_repair::move(exec, xd, state);
                     }
