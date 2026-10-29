@@ -569,6 +569,10 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             for (int dy = -reach; dy <= reach; ++dy)
                 for (int dz = -reach; dz <= reach; ++dz) {
                     auto beyond = [](int d) { return Kokkos::max(Kokkos::abs(d) - 1, 0); };
+                    // Only cells up to `reach` widths away: beyond that the cube's
+                    // corners alone would claim distances the stencil cannot vouch for.
+                    if (beyond(dx) * beyond(dx) + beyond(dy) * beyond(dy) + beyond(dz) * beyond(dz) > reach * reach)
+                        continue;
                     const double bound = grid.cell_width * std::sqrt(double(beyond(dx) * beyond(dx) +
                                                                             beyond(dy) * beyond(dy) +
                                                                             beyond(dz) * beyond(dz)));

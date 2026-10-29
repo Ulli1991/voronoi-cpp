@@ -48,6 +48,10 @@ Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec, in
     for (int dx = -reach; dx <= reach; ++dx)
         for (int dy = -reach; dy <= reach; ++dy)
             for (int dz = -reach; dz <= reach; ++dz) {
+                // Only cells up to `reach` widths away: beyond that the cube's
+                // corners alone would claim distances the stencil cannot vouch for.
+                if (beyond(dx) * beyond(dx) + beyond(dy) * beyond(dy) + beyond(dz) * beyond(dz) > reach * reach)
+                    continue;
                 const double bound = cell_width * std::sqrt(double(beyond(dx) * beyond(dx) +
                                                                    beyond(dy) * beyond(dy) +
                                                                    beyond(dz) * beyond(dz)));
