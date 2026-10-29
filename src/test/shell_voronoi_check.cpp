@@ -407,6 +407,102 @@ int main(int argc, char** argv) {
         };
         // Geometry from topology: rings from one exact build, then only the
         // face-parallel geometry pass is timed and checked against the build.
+        // CPU replay (test only, brute force): clip every cell nearest-first
+        // from all particles within 6 spacings and count how many plane tests
+        // cheaper bounds on the current cell would have rejected.
+        if (selection == "cullstats") {
+            using shell_voronoi::Vec3;
+            const int side = search.nx;
+            const double width = search.hx;
+            auto offsets = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, search.cell_offsets);
+            const int reach = std::min((side - 1) / 2, static_cast<int>(std::ceil(6 * spacing / width)));
+            const double half_width = std::min(0.25, ((side - 1) / 2 + 1) * width);
+            std::vector<Vec3<double>> dirs;  // 26 unit directions: faces, edges, corners of a cube
+            for (int x = -1; x <= 1; ++x)
+                for (int y = -1; y <= 1; ++y)
+                    for (int z = -1; z <= 1; ++z)
+                        if (x || y || z) {
+                            const double l = std::sqrt(double(x * x + y * y + z * z));
+                            dirs.push_back({x / l, y / l, z / l});
+                        }
+            long long tests = 0, cuts = 0, by_octant = 0, by_dirs = 0, wrong = 0, vertices = 0, far = 0, open = 0;
+            std::vector<std::pair<double, Vec3<double>>> candidates;
+            for (int t = 0; t < n; ++t) {
+                const auto& p = slot_points[t];
+                int home[3];
+                for (int a = 0; a < 3; ++a) home[a] = std::clamp(static_cast<int>(p[a] / width), 0, side - 1);
+                candidates.clear();
+                for (int dx = -reach; dx <= reach; ++dx)
+                    for (int dy = -reach; dy <= reach; ++dy)
+                        for (int dz = -reach; dz <= reach; ++dz) {
+                            const int u[3] = {home[0] + dx, home[1] + dy, home[2] + dz};
+                            int key = 0;
+                            double image[3];
+                            for (int a = 0; a < 3; ++a) {
+                                key = key * side + (u[a] + side) % side;
+                                image[a] = u[a] < 0 ? -1.0 : u[a] >= side ? 1.0 : 0.0;
+                            }
+                            for (int q = offsets(key); q < offsets(key + 1); ++q) {
+                                if (q == t) continue;
+                                const Vec3<double> d{slot_points[q][0] + image[0] - p[0], slot_points[q][1] + image[1] - p[1],
+                                                     slot_points[q][2] + image[2] - p[2]};
+                                candidates.push_back({dot(d, d), d});
+                            }
+                        }
+                std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+                shell_voronoi::detail::Polyhedron<double> cell;
+                shell_voronoi::detail::start_cube(cell, half_width);
+                bool certified = false;
+                for (const auto& [d2, d] : candidates) {
+                    if (d2 >= 4 * cell.radius2) {
+                        certified = true;
+                        break;
+                    }
+                    // Bounds from the current vertices.
+                    double octant[8] = {0, 0, 0, 0, 0, 0, 0, 0}, support[26];
+                    for (int k = 0; k < 26; ++k) support[k] = -1e300;
+                    for (int v = 0; v < cell.vertices; ++v) {
+                        const Vec3<double>& x = cell.vertex[v];
+                        const int o = (x.x < 0) | (x.y < 0) << 1 | (x.z < 0) << 2;
+                        octant[o] = std::max(octant[o], std::sqrt(dot(x, x)));
+                        for (int k = 0; k < 26; ++k) support[k] = std::max(support[k], dot(x, dirs[k]));
+                        vertices += 1;
+                        far += dot(x, x) >= 0.25 * d2;
+                    }
+                    const double half = 0.5 * d2, radius = std::sqrt(cell.radius2);
+                    bool octant_cuts = false;
+                    for (int o = 0; o < 8 && !octant_cuts; ++o) {
+                        const double s[3] = {o & 1 ? -1.0 : 1.0, o & 2 ? -1.0 : 1.0, o & 4 ? -1.0 : 1.0};
+                        const double c[3] = {std::max(s[0] * d.x, 0.0), std::max(s[1] * d.y, 0.0), std::max(s[2] * d.z, 0.0)};
+                        octant_cuts = octant[o] * std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) > half;
+                    }
+                    double best = radius * std::sqrt(d2);
+                    for (int k = 0; k < 26; ++k) {
+                        const double along = dot(d, dirs[k]);
+                        if (along <= 0) continue;
+                        const Vec3<double> across = d - dirs[k] * along;
+                        best = std::min(best, radius * std::sqrt(dot(across, across)) + along * support[k]);
+                    }
+                    const bool dirs_cut = best > half;
+                    const int planes = cell.planes;
+                    if (shell_voronoi::detail::clip(cell, d, 0) != shell_voronoi::ok) break;
+                    const bool cut = cell.planes > planes;
+                    ++tests;
+                    cuts += cut;
+                    by_octant += !octant_cuts;
+                    by_dirs += !dirs_cut;
+                    wrong += cut && (!octant_cuts || !dirs_cut);
+                }
+                open += !certified;
+            }
+            std::cout << "cullstats: per_cell tests=" << double(tests) / n << " cuts=" << double(cuts) / n
+                      << " rejected_by_octant_radii=" << double(by_octant) / n
+                      << " rejected_by_26_directions=" << double(by_dirs) / n
+                      << " vertices_per_test=" << double(vertices) / tests
+                      << " far_vertices_per_test=" << double(far) / tests << " wrong_rejections=" << wrong
+                      << " uncertified=" << open << "\n";
+        }
+
         if (selection == "faces") {
             shell_voronoi::Cells<Memory> cells(n, false);
             // Room for every owned face's ring; a cell that still overflows is
