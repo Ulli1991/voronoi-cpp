@@ -269,13 +269,16 @@ int main(int argc, char** argv) {
         // About one particle per grid cell; only the cell index is built.
         neighbor_search::DenseCellSearch<Exec> search;
         const double spacing = std::cbrt(1.0 / n);
+        // SHELL_MORTON=1: cells stored in Morton order, so consecutive slots form compact bricks.
+        search.morton_cells = std::getenv("SHELL_MORTON") != nullptr;
         neighbor_search::configure(search, n, Kokkos::Array<double, 3>{1.0, 1.0, 1.0}, width_factor * spacing,
                                    true, 1, false);
         const double build_ms = median_ms(repeats, [&] {
             neighbor_search::build(exec, search, positions, unused_radii);
             exec.fence();
         });
-        const shell_voronoi::Grid<Memory> grid{search.positions, search.cell_offsets, n, search.nx, search.hx, 1.0};
+        const shell_voronoi::Grid<Memory> grid{search.positions, search.cell_offsets, n, search.nx, search.hx, 1.0,
+                                               search.morton_cells ? search.cell_rank : Kokkos::View<int*, Memory>{}};
 
         std::vector<std::array<double, 3>> slot_points(n);
         {
@@ -813,6 +816,27 @@ int main(int argc, char** argv) {
                       << " skipped=" << skipped << " centres_ms=" << centre_ms << " faces_ms=" << face_ms
                       << " check_ms=" << check_ms << " step_Mcells_s=" << n / step_ms / 1e3
                       << " invalid_at_start=" << failed << " max_relative_volume_difference=" << worst << "\n";
+            {
+                // The same tetrahedra built on the device from the rings.
+                tet_mesh::Mesh<Memory> built_mesh;
+                int unresolved = 0;
+                const double from_rings_ms = median_ms(repeats, [&] {
+                    unresolved = tet_mesh::from_rings(exec, cells, built_mesh);
+                    exec.fence();
+                });
+                tet_mesh::circumcentres(exec, x0, 1.0, built_mesh);
+                tet_mesh::faces(exec, x0, 1.0, built_mesh, geometry);
+                const int again = tet_mesh::check(exec, x0, 1.0, built_mesh, invalid);
+                auto v2 = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, geometry.volume);
+                double worst2 = 0;
+                for (int t = 0; t < n; ++t)
+                    if (status(t) == shell_voronoi::ok)
+                        worst2 = std::max(worst2, std::abs(v2(order0(t)) - built(t)) / built(t));
+                std::cout << "tets_from_rings: tets=" << built_mesh.vertex.extent(0) << " (host " << tet_count
+                          << ") unresolved=" << unresolved << " invalid=" << again << " from_rings_ms=" << from_rings_ms
+                          << " Mcells_s=" << n / from_rings_ms / 1e3
+                          << " max_relative_volume_difference=" << worst2 << "\n";
+            }
 
             // Move by a smooth turbulent field, check, and compare with an exact rebuild.
             const double two_pi = 2.0 * 3.14159265358979323846;

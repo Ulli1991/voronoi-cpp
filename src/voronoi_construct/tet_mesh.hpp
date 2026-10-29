@@ -32,6 +32,167 @@ using face_geometry::detail::circumcentre;
 using face_geometry::detail::wrap;
 }  // namespace detail
 
+// The tetrahedra and their adjacency from the face rings of a clipping build
+// (cells in slot order, every cell ok), without hashing: tetrahedron
+// (i, j, q_m, q_m+1) is emitted only by the face of its two smallest
+// particles, and each triangle's two tetrahedra sit next to each other in
+// the ring of its two smallest particles' face. Returns the number of ring
+// slots or adjacencies that could not be resolved (0 for a consistent build).
+template <class ExecSpace>
+int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
+               Mesh<typename ExecSpace::memory_space>& mesh) {
+    using Memory = typename ExecSpace::memory_space;
+    using Range = Kokkos::RangePolicy<ExecSpace>;
+    const int n = static_cast<int>(cells.owned_count.extent(0));
+
+    // Faces in CSR: cell t owns faces [face_start(t), face_start(t + 1)).
+    Kokkos::View<int*, Memory> face_start("face_start", n + 1);
+    int faces = 0;
+    Kokkos::parallel_scan(
+        "tet_mesh::face_start", Range(exec, 0, n),
+        KOKKOS_LAMBDA(int t, int& sum, bool last) {
+            if (last) face_start(t) = sum;
+            sum += cells.owned_count(t);
+            if (last && t == n - 1) face_start(n) = sum;
+        },
+        faces);
+    Kokkos::View<int*, Memory> owner("face_owner", faces), neighbour("face_neighbour", faces),
+        length("face_length", faces);
+    Kokkos::parallel_for(
+        "tet_mesh::face_lengths", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
+            for (int f = 0, at = 0; f < cells.owned_count(t); ++f) {
+                const int g = face_start(t) + f, k = cells.rings(t, at);
+                owner(g) = t;
+                neighbour(g) = cells.neighbour(t, f);
+                length(g) = k;
+                at += 1 + k;
+            }
+        });
+    auto face_of = [=] KOKKOS_FUNCTION(int a, int b) {  // a < b
+        for (int g = face_start(a); g < face_start(a + 1); ++g)
+            if (neighbour(g) == b) return g;
+        return -1;
+    };
+
+    Kokkos::View<int*, Memory> ring_start("face_ring_start", faces + 1), tet_start("face_tet_start", faces + 1);
+    int slots = 0, tets = 0;
+    Kokkos::parallel_scan(
+        "tet_mesh::ring_start", Range(exec, 0, faces),
+        KOKKOS_LAMBDA(int g, int& sum, bool last) {
+            if (last) ring_start(g) = sum;
+            sum += length(g);
+            if (last && g == faces - 1) ring_start(faces) = sum;
+        },
+        slots);
+    // The rings' particles, contiguous per face (the cells' rows are strided).
+    Kokkos::View<int*, Memory> particles(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_particles")),
+                                         slots);
+    Kokkos::parallel_for(
+        "tet_mesh::face_particles", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
+            for (int f = 0, at = 0; f < cells.owned_count(t); ++f) {
+                const int g = face_start(t) + f, k = length(g);
+                for (int m = 0; m < k; ++m) particles(ring_start(g) + m) = cells.rings(t, at + 1 + m);
+                at += 1 + k;
+            }
+        });
+    auto ring_of = [=] KOKKOS_FUNCTION(int g, int m) { return particles(ring_start(g) + m % length(g)); };
+    // A face emits the slots whose tetrahedron has the face's particles as its two smallest.
+    auto emits = [=] KOKKOS_FUNCTION(int g, int m) {
+        const int j = neighbour(g);
+        return j < ring_of(g, m) && j < ring_of(g, m + 1);
+    };
+    Kokkos::parallel_scan(
+        "tet_mesh::tet_start", Range(exec, 0, faces),
+        KOKKOS_LAMBDA(int g, int& sum, bool last) {
+            if (last) tet_start(g) = sum;
+            for (int m = 0; m < length(g); ++m) sum += emits(g, m);
+            if (last && g == faces - 1) tet_start(faces) = sum;
+        },
+        tets);
+    mesh.vertex = Kokkos::View<int* [4], Memory>("tet_vertex", tets);
+    mesh.adjacent = Kokkos::View<int* [4], Memory>("tet_adjacent", tets);
+    mesh.centre = Kokkos::View<double* [3], Memory>("tet_centre", tets);
+    mesh.owner = owner;
+    mesh.neighbour = neighbour;
+    mesh.ring_start = ring_start;
+    mesh.ring = Kokkos::View<int*, Memory>("face_ring", slots);
+    const auto vertex = mesh.vertex;
+    const auto adjacent = mesh.adjacent;
+    const auto ring = mesh.ring;
+
+    // Emit, and name every ring slot by its tetrahedron.
+    int unresolved = 0;
+    Kokkos::parallel_reduce(
+        "tet_mesh::emit", Range(exec, 0, faces),
+        KOKKOS_LAMBDA(int g, int& missing) {
+            const int i = owner(g), j = neighbour(g);
+            for (int m = 0, e = tet_start(g); m < length(g); ++m) {
+                const int p = ring_of(g, m), q = ring_of(g, m + 1);
+                if (emits(g, m)) {
+                    vertex(e, 0) = i;
+                    vertex(e, 1) = j;
+                    vertex(e, 2) = p;
+                    vertex(e, 3) = q;
+                    ring(ring_start(g) + m) = e++;
+                    continue;
+                }
+                // The two smallest of {i, j, p, q} own the face that emits it.
+                int s[4] = {i, j, p, q};
+                for (int a = 1; a < 4; ++a)
+                    for (int b = a; b > 0 && s[b - 1] > s[b]; --b) Kokkos::kokkos_swap(s[b - 1], s[b]);
+                const int h = face_of(s[0], s[1]);
+                int id = -1;
+                for (int r = 0, e2 = h < 0 ? 0 : tet_start(h); h >= 0 && r < length(h); ++r) {
+                    const bool emitted = emits(h, r);
+                    const int u = ring_of(h, r), w = ring_of(h, r + 1);
+                    if (emitted && ((u == s[2] && w == s[3]) || (u == s[3] && w == s[2]))) {
+                        id = e2;
+                        break;
+                    }
+                    e2 += emitted;
+                }
+                ring(ring_start(g) + m) = id;
+                missing += id < 0;
+            }
+        },
+        unresolved);
+
+    // Neighbours: across a triangle through edge i-j, the next tetrahedron in
+    // that ring; across the other two triangles, look up their own rings.
+    int open = 0;
+    Kokkos::parallel_reduce(
+        "tet_mesh::adjacency", Range(exec, 0, faces),
+        KOKKOS_LAMBDA(int g, int& missing) {
+            const int k = length(g), base = ring_start(g);
+            for (int m = 0; m < k; ++m) {
+                if (!emits(g, m)) continue;
+                const int e = ring(base + m);
+                adjacent(e, 2) = ring(base + (m + 1) % k);      // opposite p: triangle (i, j, q)
+                adjacent(e, 3) = ring(base + (m + k - 1) % k);  // opposite q: triangle (i, j, p)
+                for (int drop = 0; drop < 2; ++drop) {          // opposite i, then j
+                    int tri[3] = {vertex(e, drop == 0 ? 1 : 0), vertex(e, 2), vertex(e, 3)};
+                    for (int a = 1; a < 3; ++a)
+                        for (int b = a; b > 0 && tri[b - 1] > tri[b]; --b) Kokkos::kokkos_swap(tri[b - 1], tri[b]);
+                    const int h = face_of(tri[0], tri[1]);
+                    int other = -1;
+                    for (int r = 0; h >= 0 && r < length(h); ++r)
+                        if (ring_of(h, r) == tri[2]) {
+                            // Tetrahedra at slots r - 1 and r share this triangle.
+                            const int before = ring(ring_start(h) + (r + length(h) - 1) % length(h));
+                            const int after = ring(ring_start(h) + r);
+                            other = before == e ? after : before;
+                            break;
+                        }
+                    adjacent(e, drop) = other;
+                    missing += other < 0;
+                }
+                missing += adjacent(e, 2) < 0 || adjacent(e, 3) < 0;
+            }
+        },
+        open);
+    return unresolved + open;
+}
+
 // 1. Circumcentres, one thread per tetrahedron.
 template <class ExecSpace>
 void circumcentres(const ExecSpace& exec, const Kokkos::View<double* [3], typename ExecSpace::memory_space>& x,
