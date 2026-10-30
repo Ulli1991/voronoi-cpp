@@ -179,9 +179,6 @@ __device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, std::uint64
     }
     for (int k = 0; k < per_lane; ++k) {
         const int slot = l + k * lanes;
-        // Slots 8.. start free; their corners name no plane, so no slot can
-        // pass for a new vertex (see clip).
-        if (slot >= 8) c.corner[slot] = ~std::uint32_t(0);
         if (slot < max_vertices - 8) c.free_slots[slot] = max_vertices - 1 - slot;
     }
     if (l < 8) {
@@ -222,13 +219,15 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     const Real scale = Real(64) * Kokkos::Experimental::epsilon_v<Real>;
     const Real tolerance2 = scale * scale * dot(d, d) * radius2;
     bool out[per_lane] = {};
-    Real side[per_lane] = {};
+    Real radius = 0;  // largest squared distance of a kept vertex, then of any
     for (int k = 0; k < per_lane; ++k) {
         const int w = l + k * lanes;
         if (!(live >> w & 1)) continue;
-        side[k] = d.x * c.x[w] + d.y * c.y[w] + d.z * c.z[w] - offset;
-        c.side[w] = side[k];
-        out[k] = side[k] > 0 && side[k] * side[k] > tolerance2;
+        const Real x = c.x[w], y = c.y[w], z = c.z[w];
+        const Real side = d.x * x + d.y * y + d.z * z - offset;
+        c.side[w] = side;
+        out[k] = side > 0 && side * side > tolerance2;
+        if (!out[k]) radius = Kokkos::max(radius, x * x + y * y + z * z);
     }
     const std::uint64_t removed = vertex_ballot(out);
     if (removed == 0) return ok;
@@ -269,8 +268,8 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
 
     // New vertex j lies on the edge from removed w to kept u, between planes
     // a and b. It takes a free slot; u's edge back now ends at it.
-    Real radius = 0;
     int slot[per_lane], kept_end[per_lane], a[per_lane], b[per_lane];
+    std::uint64_t made = 0;  // slots this lane filled
     for (int k = 0; k < per_lane; ++k) {
         const int j = l + k * lanes;
         if (j >= created) continue;
@@ -293,24 +292,21 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
         c.ends[b[k]] = s;
         slot[k] = s;
         kept_end[k] = u;
+        made |= std::uint64_t(1) << s;
     }
+    const unsigned made_low = __reduce_or_sync(all_lanes, static_cast<unsigned>(made));
+    const unsigned made_high = __reduce_or_sync(all_lanes, static_cast<unsigned>(made >> 32));
     __syncwarp(all_lanes);
     // Across (a, b) is u, across (b, plane) the new vertex whose hole edge
     // starts at b, across (plane, a) the one whose hole edge ends at a.
     for (int k = 0; k < per_lane; ++k)
         if (l + k * lanes < created) c.adjacent[slot[k]] = pack(kept_end[k], c.starts[b[k]], c.ends[a[k]]);
-    // Removed slots go back on the stack; slots that took new vertices (the
-    // only ones on the new plane) join the polyhedron.
-    bool in[per_lane];
+    // Removed slots go back on the stack.
     for (int k = 0; k < per_lane; ++k) {
         const int w = l + k * lanes;
         if (out[k]) c.free_slots[free - created + __popcll(removed & ((std::uint64_t(1) << w) - 1))] = w;
-        const bool was = live >> w & 1;
-        const bool fresh = !was && byte(c.corner[w], 2) == plane;
-        in[k] = fresh || (was && !out[k]);
-        if (was && !out[k]) radius = Kokkos::max(radius, c.x[w] * c.x[w] + c.y[w] * c.y[w] + c.z[w] * c.z[w]);
     }
-    live = vertex_ballot(in);
+    live = (live & ~removed) | made_low | std::uint64_t(made_high) << 32;
     if (l == 0) {
         c.nx[plane] = static_cast<float>(d.x);
         c.ny[plane] = static_cast<float>(d.y);
