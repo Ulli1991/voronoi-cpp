@@ -11,7 +11,7 @@
 //       circumcentres, face rings and faces. --verify compares every step
 //       with an exact rebuild; --debug adds adjacency and stuck details.
 //
-// Distributions: uniform, jittered, lattice, wave, clustered, or
+// Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 // <sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>.
 
 #include "support.hpp"

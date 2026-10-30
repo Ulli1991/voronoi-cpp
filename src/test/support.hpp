@@ -96,8 +96,8 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
 }
 
 // Points in the unit box: uniform, jittered (lattice moved by up to 0.1
-// spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, or a
-// degenerate layout. Lattices round n to a cube.
+// spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, halo,
+// or a degenerate layout. Lattices round n to a cube.
 inline Points make_points(const std::string& kind, int n) {
     if (const auto at = kind.find('@'); at != std::string::npos)
         return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n);
@@ -126,6 +126,32 @@ inline Points make_points(const std::string& kind, int n) {
                 const auto& c = centres[i % 8];
                 points.push_back({wrap(c[0] + blob(rng)), wrap(c[1] + blob(rng)), wrap(c[2] + blob(rng))});
             }
+        }
+    } else if (kind == "halo") {
+        // Four halos with density 1 / (r^2 + c^2) out to r = 0.2, c = 0.002
+        // (core to edge 1:10^4), over a 10 % uniform background: about
+        // 1:10^5 from the voids to the halo cores.
+        constexpr double edge = 0.2, core = 0.002;
+        std::array<Point, 4> centres;
+        for (auto& c : centres) c = {unit(rng), unit(rng), unit(rng)};
+        // The enclosed mass m(r) = r - c atan(r / c), inverted by bisection.
+        const double total = edge - core * std::atan(edge / core);
+        std::normal_distribution<double> gauss(0.0, 1.0);
+        for (int i = 0; i < n; ++i) {
+            if (i % 10 == 0) {
+                points.push_back({unit(rng), unit(rng), unit(rng)});
+                continue;
+            }
+            const double target = total * unit(rng);
+            double lo = 0, hi = edge;
+            for (int k = 0; k < 60; ++k) {
+                const double mid = 0.5 * (lo + hi);
+                (mid - core * std::atan(mid / core) < target ? lo : hi) = mid;
+            }
+            const Point g{gauss(rng), gauss(rng), gauss(rng)};
+            const double scale = 0.5 * (lo + hi) / std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+            const auto& c = centres[i % 4];
+            points.push_back({wrap(c[0] + scale * g[0]), wrap(c[1] + scale * g[1]), wrap(c[2] + scale * g[2])});
         }
     } else if (kind == "uniform") {
         for (int i = 0; i < n; ++i) points.push_back({unit(rng), unit(rng), unit(rng)});

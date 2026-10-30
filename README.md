@@ -151,7 +151,7 @@ voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<fa
 voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug]
 ```
 
-Distributions are uniform, jittered, lattice, wave, clustered, or
+Distributions are uniform, jittered, lattice, wave, clustered, halo, or
 `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`. `rebuild`
 times the thread-/warp- kernels in -double/-float (selected by substring)
 and checks every variant's cells. `step` times tetrahedra from rings and the
