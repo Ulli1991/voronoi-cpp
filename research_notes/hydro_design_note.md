@@ -103,6 +103,14 @@ run over the whole mesh. On a deep hierarchy (5-10 % active) that would cut our 
 proportional to it, and inactive cells keep their geometry until they are active again.
 Measure it in cell updates per second per substep against a full step.
 
+Option (Ulli, 2026-10-30): in substeps, rebuild only the active cells locally by clipping (warp
+kernel, 12-35 M cells/s on the A100) instead of repairing; the persistent mesh is repaired at
+synchronisation points. Faces between an active and an inactive cell follow the owner rule.
+Crossover with today's whole-mesh repair (~178 M cells/s per full mesh): local rebuild is
+cheaper below about 10-20 % active cells; an active-only repair would move that line. Requires
+the clipping to keep its face output (owner, area, centroid), sized like the ring pool rather
+than 32 slots per cell (cleanup decision D1 amended).
+
 ## Validation for stage 1
 
 - Conservation: mass, momentum, energy to rounding every step (periodic box).
