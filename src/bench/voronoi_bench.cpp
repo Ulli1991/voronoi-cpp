@@ -179,13 +179,13 @@ void report_adjacency(const tet_flips::Mesh& m, const char* when) {
 
 // The stuck entries the last device repair left, by reason.
 void report_stuck(const tet_repair::State<Memory>& state) {
-    const int stuck = Kokkos::min(state.host_counters(1), static_cast<int>(state.stuck.extent(0)));
+    const int stuck = Kokkos::min(state.host_counters(tet_repair::counter::stuck), static_cast<int>(state.stuck.extent(0)));
     const auto list = to_host(state.stuck);
     long long inverted = 0, unflippable = 0, rejected = 0;
     for (int i = 0; i < stuck; ++i) {
         const int k = list(i, 1);
-        inverted += k == -1;
-        rejected += k == -2;
+        inverted += k == tet_repair::inverted;
+        rejected += k == tet_repair::rejected;
         unflippable += k >= 0;
     }
     std::cout << "  stuck by reason: inverted=" << inverted << " unflippable=" << unflippable

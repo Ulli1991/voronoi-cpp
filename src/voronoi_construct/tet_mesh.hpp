@@ -12,11 +12,10 @@
 // A Voronoi face between particles i and j is the ring of circumcentres of
 // the tetrahedra around the edge i-j. Kept from step to step, the mesh needs
 // per step only
-//   1. one circumcentre per tetrahedron,
+//   1. one circumcentre per tetrahedron (of the tetrahedra a repair created),
 //   2. face geometry from those circumcentres,
-//   3. a check that each tetrahedron's circumsphere is still empty of the
-//      far vertices of its neighbours (the local Delaunay condition),
-// and repair only where the check fails.
+//   3. per-cell face lists, cell volumes and centroids,
+// and the repair (tet_repair) only where the local Delaunay condition fails.
 namespace tet_mesh {
 
 using shell_voronoi::Vec3;
@@ -25,8 +24,6 @@ using shell_voronoi::Vec3;
 // a random access touches one memory sector instead of one per entry.
 template <class MemorySpace>
 using Quads = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
-template <class MemorySpace>
-using Points = Kokkos::View<double* [3], Kokkos::LayoutRight, MemorySpace>;
 // Positions or centres padded to 32 bytes: one memory sector per point.
 template <class MemorySpace>
 using Points4 = Kokkos::View<double* [4], Kokkos::LayoutRight, MemorySpace>;
@@ -91,22 +88,32 @@ KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
 }
 
+// The longest ring of tetrahedra around an edge that the walks follow.
+constexpr int max_ring_length = 64;
+
+// The tetrahedron after `current` around edge i-j (particles of current),
+// away from `before`; -1 at an open face.
+template <class M>
+KOKKOS_INLINE_FUNCTION int next_around_edge(const M& m, int current, int before, int i, int j) {
+    for (int c = 0; c < 4; ++c) {
+        const int v = m.vertex(current, c);
+        if (v == i || v == j) continue;
+        const int w = m.adjacent(current, c);
+        if (w >= 0 && w != before) return w;
+    }
+    return -1;
+}
+
 // Tetrahedra around edge i-j from t, in order and t first, written to
-// ring[0, 65) unless it is null. Returns the number of steps (the ring
+// ring[0, max_ring_length] unless it is null. Returns the number of steps (the ring
 // length when it closes).
 template <class M>
 KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring = nullptr) {
     int current = t, before = -1, steps = 0;
     do {
         if (ring) ring[steps] = current;
-        int next = -1;
-        for (int c = 0; c < 4 && next < 0; ++c) {
-            const int v = m.vertex(current, c);
-            if (v == i || v == j) continue;
-            const int w = m.adjacent(current, c);
-            if (w != before) next = w;
-        }
-        if (next < 0 || ++steps > 64) break;
+        const int next = next_around_edge(m, current, before, i, j);
+        if (next < 0 || ++steps > max_ring_length) break;
         before = current;
         current = next;
     } while (current != t);
@@ -126,15 +133,6 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(Vec3 a, Vec3 b, Vec3 c) {
     return (bc * dot(a, a) + ca * dot(b, b) + ab * dot(c, c)) * scale;
 }
 }  // namespace detail
-
-// Positions padded to 32 bytes, the preferred input of the kernels below.
-template <class ExecSpace, class X>
-void pad(const ExecSpace& exec, const X& x, const Points4<typename ExecSpace::memory_space>& padded) {
-    Kokkos::parallel_for(
-        "tet_mesh::pad", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) padded(i, a) = x(i, a);
-        });
-}
 
 // The tetrahedra and their adjacency from the face rings of a clipping build
 // (Cells::with_rings, cells in slot order, every cell ok), without hashing: tetrahedron
@@ -180,7 +178,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
         return -1;
     };
 
-    Kokkos::View<int*, Memory> ring_start("face_ring_start", faces + 1), tet_start("face_tet_start", faces + 1);
+    Kokkos::View<int*, Memory> ring_start("face_ring_start", faces + 1), first_tet("face_first_tet", faces + 1);
     int slots = 0, tets = 0;
     Kokkos::parallel_scan(
         "tet_mesh::ring_start", Range(exec, 0, faces),
@@ -209,11 +207,11 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
         return j < ring_of(g, m) && j < ring_of(g, m + 1);
     };
     Kokkos::parallel_scan(
-        "tet_mesh::tet_start", Range(exec, 0, faces),
+        "tet_mesh::first_tet", Range(exec, 0, faces),
         KOKKOS_LAMBDA(int g, int& sum, bool last) {
-            if (last) tet_start(g) = sum;
+            if (last) first_tet(g) = sum;
             for (int m = 0; m < length(g); ++m) sum += emits(g, m);
-            if (last && g == faces - 1) tet_start(faces) = sum;
+            if (last && g == faces - 1) first_tet(faces) = sum;
         },
         tets);
     mesh.vertex = Quads<Memory>("tet_vertex", tets);
@@ -235,7 +233,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
         "tet_mesh::emit", Range(exec, 0, faces),
         KOKKOS_LAMBDA(int g, int& missing) {
             const int i = owner(g), j = neighbour(g);
-            for (int m = 0, e = tet_start(g); m < length(g); ++m) {
+            for (int m = 0, e = first_tet(g); m < length(g); ++m) {
                 const int p = ring_of(g, m), q = ring_of(g, m + 1);
                 if (emits(g, m)) {
                     vertex(e, 0) = i;
@@ -251,7 +249,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                     for (int b = a; b > 0 && s[b - 1] > s[b]; --b) Kokkos::kokkos_swap(s[b - 1], s[b]);
                 const int h = face_of(s[0], s[1]);
                 int id = -1;
-                for (int r = 0, e2 = h < 0 ? 0 : tet_start(h); h >= 0 && r < length(h); ++r) {
+                for (int r = 0, e2 = h < 0 ? 0 : first_tet(h); h >= 0 && r < length(h); ++r) {
                     const bool emitted = emits(h, r);
                     const int u = ring_of(h, r), w = ring_of(h, r + 1);
                     if (emitted && ((u == s[2] && w == s[3]) || (u == s[3] && w == s[2]))) {
@@ -325,8 +323,8 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                 const int g = face_of(Kokkos::min(a, b), Kokkos::max(a, b));
                 const int first = g < 0 ? -1 : ring(ring_start(g));
                 if (first >= 0 && position(mesh, first, a) >= 0 && position(mesh, first, b) >= 0) continue;
-                int around[65];
-                const int length = Kokkos::min(walk_edge(mesh, e, a, b, around), 65);
+                int around[max_ring_length + 1];
+                const int length = Kokkos::min(walk_edge(mesh, e, a, b, around), max_ring_length + 1);
                 int lowest = e;
                 for (int r = 0; r < length; ++r) lowest = Kokkos::min(lowest, around[r]);
                 if (lowest == e) Kokkos::atomic_or(&bits(e), 1 << k);
@@ -381,7 +379,7 @@ FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
 template <class M, class Start, class Touched>
 KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, const Touched& touched, int t, int i, int j,
                                      int& representative) {
-    for (int current = t, before = -1, steps = 0; steps < 64; ++steps) {
+    for (int current = t, before = -1, steps = 0; steps < max_ring_length; ++steps) {
         const int bits = m.edges(current);
         const int a = position(m, current, i), b = position(m, current, j);
         if (a < 0 || b < 0) return -1;
@@ -391,13 +389,7 @@ KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, const Touch
             return start(current) + Kokkos::Experimental::popcount_builtin(static_cast<unsigned>(bits & (bit - 1)));
         }
         if (current < t && touched(current)) return -1;
-        int next = -1;
-        for (int c = 0; c < 4 && next < 0; ++c) {
-            const int v = m.vertex(current, c);
-            if (v == i || v == j) continue;
-            const int w = m.adjacent(current, c);
-            if (w != before) next = w;
-        }
+        const int next = next_around_edge(m, current, before, i, j);
         if (next < 0 || next == t) return -1;
         before = current;
         current = next;
@@ -779,40 +771,6 @@ void cells(const ExecSpace& exec, const X& x, double box, const Mesh<typename Ex
             cell_centroid(i, 1) = moment.y / v;
             cell_centroid(i, 2) = moment.z / v;
         });
-}
-
-// 4. Local Delaunay check, one thread per tetrahedron: the far vertex of each
-// neighbour must not lie inside this circumsphere. Writes 1 per failing
-// tetrahedron into `invalid` and returns how many failed. Rounding-level
-// cases count as valid here; deciding them exactly is the repair's job.
-template <class ExecSpace, class X>
-int check(const ExecSpace& exec, const X& x, double box,
-          const Mesh<typename ExecSpace::memory_space>& mesh,
-          const Kokkos::View<int*, typename ExecSpace::memory_space>& invalid) {
-    int failed = 0;
-    Kokkos::parallel_reduce(
-        "tet_mesh::check", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.vertex.extent(0)),
-        KOKKOS_LAMBDA(int t, int& count) {
-            const Vec3 c{mesh.centre(t, 0), mesh.centre(t, 1), mesh.centre(t, 2)};
-            auto from_centre = [&](int v) {
-                return Vec3{wrap(x(v, 0) - c.x, box), wrap(x(v, 1) - c.y, box),
-                                    wrap(x(v, 2) - c.z, box)};
-            };
-            const double r2 = mesh.centre(t, 3);
-            int bad = 0;
-            for (int k = 0; k < 4 && !bad; ++k) {
-                const int other = mesh.adjacent(t, k);
-                if (other < 0) continue;
-                const int far = far_vertex(mesh, t, other);
-                if (far < 0) continue;
-                const Vec3 d = from_centre(far);
-                bad = dot(d, d) < r2 * (1.0 - 1e-10);
-            }
-            invalid(t) = bad;
-            count += bad;
-        },
-        failed);
-    return failed;
 }
 
 }  // namespace tet_mesh
