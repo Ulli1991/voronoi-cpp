@@ -252,11 +252,11 @@ KOKKOS_INLINE_FUNCTION bool flip32(const Mesh& m, const Point& point, int t, int
 
 // Plan the repair of triangle t|u (t's face opposite corner k) if it fails
 // the local Delaunay test: the first of the 2->3 flip and the 3->2 flips
-// around its three edges that is valid and closes its cavity; else
-// unflippable (none is valid) or rejected (none of the valid ones closes).
-// The device repair and the host fallback plan alike.
+// around its three edges that is valid (and, if `closing`, closes its
+// cavity); else unflippable (none is valid) or rejected (none of the valid
+// ones closes).
 template <class Mesh, class Point>
-KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k) {
+KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k, bool closing) {
     Plan p;
     const int u = m.adjacent(t, k);
     const int T[4] = {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)};
@@ -269,7 +269,7 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
         const bool valid = candidate == 0 ? flip23(point, t, u, T[k], far, f, p)
                                           : flip32(m, point, t, u, f[candidate - 1], f[candidate % 3], p);
         if (!valid) continue;
-        if (closes(m, p.old, p.olds, p.fresh, p.freshes)) return p;
+        if (!closing || closes(m, p.old, p.olds, p.fresh, p.freshes)) return p;
         rejected = true;
     }
     p.kind = rejected ? Plan::rejected : Plan::unflippable;
@@ -564,7 +564,11 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 const int t = work(i, 0), k = work(i, 1);
                 detail::Plan p;
                 const int u = adjacent(t, k);
-                if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k);
+                if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k, false);
+                // The first valid flip nearly always closes its cavity; if
+                // not, the first of the others that does (checking each
+                // candidate inside one plan() made steps 2 % slower).
+                if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) p = detail::plan(m, point, t, k, true);
                 plans(i) = detail::pack(p);
                 if (p.kind < 0) detail::list_stuck(counters, stuck, t, p.kind == detail::Plan::rejected ? rejected : k);
                 if (p.kind <= 0) return;  // never votes, so it cannot block other flips
