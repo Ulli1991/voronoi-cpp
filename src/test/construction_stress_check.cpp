@@ -1,6 +1,9 @@
 #ifndef VORONOI_TEST_EARLY_STOP
 #define VORONOI_TEST_EARLY_STOP false
 #endif
+#ifndef VORONOI_TEST_NEAREST_BATCH
+#define VORONOI_TEST_NEAREST_BATCH 0
+#endif
 #include "local_voronoi_retry.hpp"
 #include "local_voronoi_workspace.hpp"
 #include "neighbor_search.hpp"
@@ -149,7 +152,8 @@ int check(const Case& input) {
     local_voronoi::reconstruct_hydro<local_voronoi::CachedVertexPositions>(Exec{},positions,counts,table,
         reach,no_box,faces,ids,areas,face_centers,volumes,centers,status);
     const int legacy_status=host(status)(0);
-    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP>;
+    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP,
+        VORONOI_TEST_NEAREST_BATCH>;
     local_voronoi::reconstruct_hydro_retry<local_voronoi::CachedVertexPositions,Relative>(
         Exec{},positions,counts,table,reach,no_box,faces,ids,areas,face_centers,volumes,centers,status);
     auto hs=host(status),hf=host(faces); auto hi=host(ids);
@@ -215,7 +219,8 @@ int check_cloud() {
     neighbor_search::DenseCellSearch<Exec> search;
     // Grid width is independent of the smallest radius: avoid a dense grid
     // with a prohibitive number of empty cells in a mixed-density problem.
-    neighbor_search::configure(search,n,{1,1,1},0.15,true,8,true);
+    // Nearest-batch reconstruction must see the search's unsorted rows.
+    neighbor_search::configure(search,n,{1,1,1},0.15,true,8,VORONOI_TEST_NEAREST_BATCH==0);
     if (!Kokkos::SpaceAccessibility<Kokkos::HostSpace,Memory>::accessible)
         search.row_sort=neighbor_search::RowSort::team_bitonic;
     neighbor_search::rebuild(Exec{},search,positions,radii);
@@ -241,7 +246,8 @@ int check_cloud() {
     Kokkos::View<double***,Memory> areas("cloud_areas",n,local_voronoi::max_faces,3);
     Kokkos::View<double****,Memory> vertices("cloud_vertices",n,local_voronoi::max_faces,
         local_voronoi::max_face_vertices,3);
-    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP>;
+    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP,
+        VORONOI_TEST_NEAREST_BATCH>;
     local_voronoi::reconstruct_table_retry<local_voronoi::CachedVertexPositions,Relative>(
         Exec{},search.positions,search.counts,search.table,search.radii,{1,1,1},
         faces,ids,areas,vertices_per_face,vertices,status);
@@ -298,6 +304,42 @@ int check_cloud() {
 }
 } // namespace
 
+// A neighbor at a non-finite position cuts no vertex on the reference path, so
+// a unit cube must still come out whole. Nearest-batch order must skip it the
+// same way instead of returning it forever.
+int check_non_finite() {
+    const double nan=std::numeric_limits<double>::quiet_NaN();
+    const Point offsets[]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1},{nan,0,0}};
+    const int n=8;
+    Kokkos::View<double*[3],Memory> positions("positions",n);
+    Kokkos::View<double*,Memory> reach("reach",n),volumes("volumes",n);
+    Kokkos::View<int*,Memory> counts("counts",n),faces("faces",n),status("status",n);
+    Kokkos::View<int**,Memory> table("table",n,n-1),ids("ids",n,local_voronoi::max_faces);
+    Kokkos::View<double**,Memory> centers("centers",n,3);
+    Kokkos::View<double***,Memory> areas("areas",n,local_voronoi::max_faces,3);
+    Kokkos::View<double***,Memory> face_centers("face_centers",n,local_voronoi::max_faces,3);
+    auto p=Kokkos::create_mirror_view(positions);
+    auto t=Kokkos::create_mirror_view(table);
+    auto c=Kokkos::create_mirror_view(counts);
+    for (int q=0;q<n-1;++q) {
+        for (int a=0;a<3;++a) p(q+1,a)=offsets[q][a];
+        t(0,q)=q+1;
+    }
+    c(0)=n-1;
+    Kokkos::deep_copy(positions,p); Kokkos::deep_copy(table,t); Kokkos::deep_copy(counts,c);
+    Kokkos::deep_copy(reach,2.0);
+    using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP,
+        VORONOI_TEST_NEAREST_BATCH>;
+    local_voronoi::reconstruct_hydro_retry<local_voronoi::CachedVertexPositions,Relative>(
+        Exec{},positions,counts,table,reach,{0,0,0},faces,ids,areas,face_centers,volumes,centers,status);
+    auto hs=host(status),hf=host(faces); auto hv=host(volumes);
+    const int errors=hs(0)!=local_voronoi::success || hf(0)!=6 || !(std::abs(hv(0)-1.0)<=1e-12);
+    std::cout << "backend=" << Exec::name() << " stress=non_finite_neighbor_ignored"
+              << " relative_status=" << hs(0) << " faces=" << hf(0) << " volume=" << hv(0)
+              << " errors=" << errors << '\n';
+    return errors;
+}
+
 int main(int argc,char** argv) {
     Kokkos::initialize(argc,argv);
     int errors=0;
@@ -344,6 +386,7 @@ int main(int argc,char** argv) {
         boundary.offsets.push_back({1.07,0,0});
         errors+=check(boundary);
         errors+=check_cloud();
+        errors+=check_non_finite();
     }
     Kokkos::finalize();
     return errors ? 2 : 0;

@@ -60,13 +60,26 @@ struct RelativeClippingTolerance {
 
 // Plane storage can be tuned independently of the public output capacities.
 // The original 160-plane workspace remains the reference/default.
-template<int Planes = max_planes, class Tolerance = LegacyClippingTolerance, bool EarlyStop = false>
+// A positive NearestBatch visits an unsorted row in (distance squared, slot)
+// order, the order insertion sorting gives, selecting that many candidates per
+// scan of the row; the search then needs neither nearest_first nor its
+// distance table. Zero keeps the row's own order.
+template<int Planes = max_planes, class Tolerance = LegacyClippingTolerance, bool EarlyStop = false,
+         int NearestBatch = 0>
 struct PlaneWorkspace {
     static_assert(Planes >= n_box_planes && Planes <= 65535,
                   "plane capacity must fit the vertex plane indices");
+    static_assert(NearestBatch >= 0, "nearest batch size must be zero (off) or positive");
+    static_assert(NearestBatch == 0 || EarlyStop,
+                  "without early stop a nearest batch only rescans the row; keep the row order");
     static constexpr int plane_capacity = Planes;
     static constexpr bool early_stop = EarlyStop;
+    static constexpr bool nearest_batch = NearestBatch > 0;
+    static constexpr int nearest_batch_size = NearestBatch;
     using tolerance = Tolerance;
+    // The same options at another plane capacity, as used by the full-workspace retry.
+    template<int OtherPlanes>
+    using with_planes = PlaneWorkspace<OtherPlanes,Tolerance,EarlyStop,NearestBatch>;
 };
 
 // The clipping state can be owned privately or supplied by a team scratch
@@ -101,6 +114,71 @@ KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
 }
 KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
 KOKKOS_INLINE_FUNCTION double norm(Vec3 a) { return Kokkos::sqrt(dot(a,a)); }
+
+// The next candidates of one row in (distance squared, slot) order. Each
+// refill scans the row once and keeps the `Batch` smallest keys after the last
+// one returned, so a row is never sorted and no per-row distance is stored.
+template<int Batch>
+struct NearestCandidates {
+    double distance2[Batch];
+    int ids[Batch];
+    int size = 0, taken = 0;
+    bool exhausted = false;
+    double last_distance2 = -1.0;
+    int last_id = -1;
+
+    template<class Ids, class Separation>
+    KOKKOS_INLINE_FUNCTION void refill(int first, int last, const Ids& neighbor_ids,
+                                       const Separation& separation) {
+        size = 0;
+        taken = 0;
+        for (int q=first;q<last;++q) {
+            const int id=neighbor_ids(q);
+            const Vec3 d=separation(id);
+            const double d2=dot(d,d);
+            // Written so that a NaN distance is never selected: it cuts no
+            // vertex on the reference path, and returning it would make every
+            // later key compare false and the row repeat forever.
+            if (!(d2>last_distance2 || (d2==last_distance2 && id>last_id))) continue;
+            int k=size<Batch ? size : Batch-1;
+            if (size==Batch && (d2>distance2[k] || (d2==distance2[k] && id>ids[k]))) continue;
+            while (k>0 && (distance2[k-1]>d2 || (distance2[k-1]==d2 && ids[k-1]>id))) {
+                distance2[k]=distance2[k-1];
+                ids[k]=ids[k-1];
+                --k;
+            }
+            distance2[k]=d2;
+            ids[k]=id;
+            if (size<Batch) ++size;
+        }
+        exhausted = size<Batch;
+    }
+
+    // False once every candidate of the row has been returned.
+    template<class Ids, class Separation>
+    KOKKOS_INLINE_FUNCTION bool next(int first, int last, const Ids& neighbor_ids,
+                                     const Separation& separation, int& id) {
+        if (taken==size) {
+            if (exhausted && size>0) return false;
+            refill(first,last,neighbor_ids,separation);
+            if (size==0) return false;
+        }
+        last_distance2=distance2[taken];
+        last_id=ids[taken];
+        id=ids[taken++];
+        return true;
+    }
+};
+
+// GPU threads keep the batch in local memory; 8 was fastest on a jittered
+// lattice from 32 to 80 cubed (Quadro RTX 6000, fixed clock). Host threads
+// only pay for rescans of the row, so they get a larger batch; 32 is not yet
+// measured at a fixed clock.
+template<class ExecSpace>
+constexpr int default_nearest_batch() {
+    return Kokkos::SpaceAccessibility<Kokkos::HostSpace,
+        typename ExecSpace::memory_space>::accessible ? 32 : 8;
+}
 
 // Default geometry observer is compiled away. Hydro can instead integrate
 // moments during the existing face walk, without storing diagnostic vertices.
@@ -281,32 +359,42 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
     // A possibly stale enclosing radius is conservative: clipping only shrinks
     // the cell. Refresh it during the existing classification traversal.
     double enclosing_radius2=3.0*reach*reach;
-    for (int q=neighbor_offsets(row); q<neighbor_offsets(row+1); ++q) {
-        trace.candidate();
-        const int other=neighbor_ids(q);
+    auto separation = [&](int other) {
         Vec3 d{positions(other,0)-positions(row,0),
                positions(other,1)-positions(row,1),
                positions(other,2)-positions(row,2)};
         if (box[0]>0) d.x-=box[0]*Kokkos::floor(d.x/box[0]+0.5);
         if (box[1]>0) d.y-=box[1]*Kokkos::floor(d.y/box[1]+0.5);
         if (box[2]>0) d.z-=box[2]*Kokkos::floor(d.z/box[2]+0.5);
+        return d;
+    };
+    const int first_candidate=neighbor_offsets(row), end_candidate=neighbor_offsets(row+1);
+    int q=first_candidate;
+    NearestCandidates<Workspace::nearest_batch ? Workspace::nearest_batch_size : 1> nearest;
+    while (true) {
+        int other;
+        if constexpr (Workspace::nearest_batch) {
+            if (!nearest.next(first_candidate,end_candidate,neighbor_ids,separation,other)) break;
+        } else {
+            if (q==end_candidate) break;
+            other=neighbor_ids(q++);
+        }
+        trace.candidate();
+        const Vec3 d=separation(other);
         const double d2=dot(d,d);
         if (Tolerance::coincident(d2)) { status=coincident_particles; break; }
         if constexpr (Workspace::early_stop) {
             // A bisector farther than the enclosing sphere cannot cut it.
-            // Check the entire suffix rather than trusting input ordering;
-            // unsorted rows and late coincidences retain the reference path.
             const double cutoff=4.0*enclosing_radius2*(1.0+1.0e-10);
             if (Kokkos::isfinite(cutoff) && d2>cutoff) {
+                // Nearest-batch order is exact, so every later candidate is
+                // farther still. Otherwise check the entire suffix rather than
+                // trusting input ordering; unsorted rows and late coincidences
+                // retain the reference path.
+                if constexpr (Workspace::nearest_batch) break;
                 bool safe=true;
-                for (int k=q+1;k<neighbor_offsets(row+1);++k) {
-                    const int id=neighbor_ids(k);
-                    Vec3 delta{positions(id,0)-positions(row,0),
-                               positions(id,1)-positions(row,1),
-                               positions(id,2)-positions(row,2)};
-                    if (box[0]>0) delta.x-=box[0]*Kokkos::floor(delta.x/box[0]+0.5);
-                    if (box[1]>0) delta.y-=box[1]*Kokkos::floor(delta.y/box[1]+0.5);
-                    if (box[2]>0) delta.z-=box[2]*Kokkos::floor(delta.z/box[2]+0.5);
+                for (int k=q;k<end_candidate;++k) {
+                    const Vec3 delta=separation(neighbor_ids(k));
                     const double distance2=dot(delta,delta);
                     if (!(distance2>cutoff) || Tolerance::coincident(distance2)) { safe=false; break; }
                 }

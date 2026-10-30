@@ -58,7 +58,8 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
     search.row_sort=row_sort;
     const Kokkos::Array<double,3> box{1,1,1};
     // Deliberately force capacity growth, then feed the completed table directly.
-    neighbor_search::configure(search,n,box,0.75*radius,true,8,true);
+    // Nearest-batch reconstruction orders unsorted rows itself.
+    neighbor_search::configure(search,n,box,0.75*radius,true,8,!Workspace::nearest_batch);
     const int retries = neighbor_search::rebuild(Exec{},search,positions,radii);
     int sort_errors=0;
     if (row_sort==neighbor_search::RowSort::team_bitonic) {
@@ -207,8 +208,8 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
     if constexpr (Workspace::plane_capacity<local_voronoi::max_planes) {
         for (int i=0;i<n;++i) if (usage(i).status==local_voronoi::plane_capacity) ++fallback_rows;
         fallback_usage=decltype(fallback_usage)("fallback_usage",n);
-        local_voronoi::profile_workspace<VertexStorage,local_voronoi::PlaneWorkspace<
-            local_voronoi::max_planes,typename Workspace::tolerance,Workspace::early_stop>>(Exec{},search.positions,
+        local_voronoi::profile_workspace<VertexStorage,
+            typename Workspace::template with_planes<local_voronoi::max_planes>>(Exec{},search.positions,
             search.counts,search.table,search.radii,box,fallback_usage);
         usage=host(fallback_usage);
     }
@@ -369,7 +370,8 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
               << " position_cache_bytes_per_cell=" <<
                   (std::is_same_v<VertexStorage,local_voronoi::CachedVertexPositions> ?
                       sizeof(local_voronoi::CachedVertexPositions) : 0)
-              << " row_sort=" << (row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
+              << " row_sort=" << (Workspace::nearest_batch ? "unsorted_nearest_batch" :
+                  row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
               << " capacity_retries=" << retries << " volume_error=" << std::abs(total_volume-1)
               << " reconstruction_median_ms=" << timings[2]
               << " search_rebuild_median_ms=" << search_timings[2]
@@ -381,7 +383,8 @@ int check(const char* output_path, int side, neighbor_search::RowSort row_sort,
               << " max_closure=" << max_closure << " max_pair_error=" << max_pair_error
               << " errors=" << errors << '\n';
     std::cout << "profile_backend=" << Exec::name() << " particles=" << n
-              << " row_sort=" << (row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
+              << " row_sort=" << (Workspace::nearest_batch ? "unsorted_nearest_batch" :
+                  row_sort==neighbor_search::RowSort::team_bitonic ? "team_bitonic" : "insertion")
               << " key_count_ms=" << profile.key_count_ms << " scan_ms=" << profile.scan_ms
               << " scatter_ms=" << profile.scatter_ms
               << " cell_order_gather_ms=" << profile.cell_order_gather_ms
@@ -413,8 +416,14 @@ int main(int argc,char** argv) {
         const std::string distribution=argc>5 ? argv[5] : "lattice";
         const int planes=argc>6 ? std::stoi(argv[6]) : local_voronoi::max_planes;
         const std::string tolerance=argc>7 ? argv[7] : "legacy";
-        if (tolerance!="legacy" && tolerance!="relative" && tolerance!="relative_early")
-            throw std::invalid_argument("clipping policy must be legacy, relative or relative_early");
+        const bool nearest_batch=tolerance=="relative_nearest_batch" || tolerance=="relative_nearest_batch_4";
+        if (tolerance!="legacy" && tolerance!="relative" && tolerance!="relative_early" && !nearest_batch)
+            throw std::invalid_argument("clipping policy must be legacy, relative, relative_early, "
+                "relative_nearest_batch or relative_nearest_batch_4");
+        if (nearest_batch && mode!="insertion")
+            throw std::invalid_argument("nearest-batch policies read unsorted rows; pass insertion");
+        if (tolerance=="relative_nearest_batch_4" && planes!=64)
+            throw std::invalid_argument("relative_nearest_batch_4 uses 64 planes");
         if (tolerance!="legacy" && vertices!="cached")
             throw std::invalid_argument("relative benchmark uses cached vertices");
         if (planes!=64 && planes!=local_voronoi::max_planes)
@@ -425,7 +434,13 @@ int main(int argc,char** argv) {
             distribution!="random" && distribution!="gradient")
             throw std::invalid_argument("distribution must be lattice, disordered, regular, random or gradient");
         const auto sort=mode=="team_bitonic" ? neighbor_search::RowSort::team_bitonic : neighbor_search::RowSort::insertion;
-        if (tolerance=="relative_early" && planes==64)
+        if (tolerance=="relative_nearest_batch_4")
+            result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true,4>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
+        else if (tolerance=="relative_nearest_batch" && planes==64)
+            result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true,local_voronoi::default_nearest_batch<Exec>()>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
+        else if (tolerance=="relative_nearest_batch")
+            result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<160,local_voronoi::RelativeClippingTolerance,true,local_voronoi::default_nearest_batch<Exec>()>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
+        else if (tolerance=="relative_early" && planes==64)
             result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,true>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);
         else if (tolerance=="relative_early")
             result=check<local_voronoi::CachedVertexPositions,local_voronoi::PlaneWorkspace<160,local_voronoi::RelativeClippingTolerance,true>>(argc>1 ? argv[1] : nullptr,argc>2 ? std::stoi(argv[2]) : 12,sort,distribution);

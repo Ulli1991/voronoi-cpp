@@ -70,25 +70,33 @@ target_compile_features(construction_early_stress_check PRIVATE cxx_std_17)
 target_compile_definitions(construction_early_stress_check PRIVATE VORONOI_TEST_EARLY_STOP=true)
 target_link_libraries(construction_early_stress_check PRIVATE voronoi_library)
 
+add_executable(construction_nearest_batch_stress_check src/test/construction_stress_check.cpp)
+target_compile_features(construction_nearest_batch_stress_check PRIVATE cxx_std_17)
+target_compile_definitions(construction_nearest_batch_stress_check PRIVATE
+    VORONOI_TEST_EARLY_STOP=true VORONOI_TEST_NEAREST_BATCH=4)
+target_link_libraries(construction_nearest_batch_stress_check PRIVATE voronoi_library)
+
 include(CTest)
 if(BUILD_TESTING)
     add_test(NAME geometry_analytic COMMAND hydro_geometry_check)
     add_test(NAME geometry_stress COMMAND construction_stress_check)
     add_test(NAME geometry_early_stress COMMAND construction_early_stress_check)
+    add_test(NAME geometry_nearest_batch_stress COMMAND construction_nearest_batch_stress_check)
     add_test(NAME neighbor_sort COMMAND neighbor_sort_check)
     foreach(distribution lattice disordered regular random gradient)
         add_test(NAME table_${distribution} COMMAND table_mesh_check
             ${CMAKE_CURRENT_BINARY_DIR}/test-${distribution}.csv
             12 insertion cached ${distribution} 64 relative_early)
     endforeach()
-    foreach(policy relative_early relative_early_coalesced relative_early_fixed32 relative_early_batched_test relative_early_shared)
+    foreach(policy relative_early relative_early_nearest_batch relative_early_coalesced relative_early_fixed32 relative_early_batched_test relative_early_shared)
         add_test(NAME scaling_${policy} COMMAND construction_scaling 12 1 ${policy})
     endforeach()
-    set_tests_properties(geometry_analytic geometry_stress geometry_early_stress neighbor_sort
+    set_tests_properties(geometry_analytic geometry_stress geometry_early_stress
+        geometry_nearest_batch_stress neighbor_sort
         PROPERTIES TIMEOUT 120)
     set_tests_properties(table_lattice table_disordered table_regular table_random table_gradient
-        scaling_relative_early scaling_relative_early_coalesced scaling_relative_early_fixed32
-        PROPERTIES TIMEOUT 180)
+        scaling_relative_early scaling_relative_early_nearest_batch scaling_relative_early_coalesced
+        scaling_relative_early_fixed32 PROPERTIES TIMEOUT 180)
 endif()
 
 if(BUILD_TESTING)
@@ -112,6 +120,9 @@ if(BUILD_TESTING)
     add_executable(fixed_point_check src/test/fixed_point_check.cpp)
     target_link_libraries(fixed_point_check PRIVATE voronoi_library)
     add_test(NAME fixed_point_contract COMMAND fixed_point_check)
+    add_executable(nearest_candidates_check src/test/nearest_candidates_check.cpp)
+    target_link_libraries(nearest_candidates_check PRIVATE voronoi_library)
+    add_test(NAME nearest_candidates_contract COMMAND nearest_candidates_check)
 endif()
 
 if(BUILD_TESTING)

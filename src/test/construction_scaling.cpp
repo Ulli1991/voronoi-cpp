@@ -107,12 +107,14 @@ void write_result(const Result& r,const std::string& csv_path) {
         << ',' << r.tensor_error << ',' << r.validation_errors << '\n';
 }
 
-template<class Tolerance, bool EarlyStop=false, bool FixedInput=false, bool Coalesced=false, bool Batched=false, int BatchRows=65536, bool Shared=false, bool Cooperative=false>
+template<class Tolerance, bool EarlyStop=false, bool FixedInput=false, bool Coalesced=false, bool Batched=false, int BatchRows=65536, bool Shared=false, bool Cooperative=false, bool NearestBatch=false>
 int run(int side,int repeats,const std::string& policy,const std::string& csv_path) {
     Result result;
     result.side=side; result.repeats=repeats; result.policy=policy;
     result.n=std::uint64_t(side)*side*side;
     result.estimated_arrays=array_bytes(side);
+    // Unsorted rows keep no per-entry distance table.
+    if constexpr (NearestBatch) result.estimated_arrays-=8ULL*capacity*result.n;
     if constexpr (Coalesced) result.estimated_arrays+=1536*(Batched ? std::min<std::uint64_t>(result.n,BatchRows) : result.n);
     const auto initial=device_memory();
     if (!initial.total && result.n>32768)
@@ -152,7 +154,7 @@ int run(int side,int repeats,const std::string& policy,const std::string& csv_pa
     exec.fence("scaling input ready");
     neighbor_search::DenseCellSearch<Exec> search;
     search.row_sort=neighbor_search::RowSort::team_bitonic;
-    neighbor_search::configure(search,n,box,0.75*radius,true,capacity,true,1);
+    neighbor_search::configure(search,n,box,0.75*radius,true,capacity,!NearestBatch,1);
     auto allocate=[](auto& view,const char* name,auto... sizes) {
         using View=std::decay_t<decltype(view)>;
         view=View(Kokkos::view_alloc(Kokkos::WithoutInitializing,std::string(name)),sizes...);
@@ -191,7 +193,8 @@ int run(int side,int repeats,const std::string& policy,const std::string& csv_pa
             local_voronoi::reconstruct_hydro_coalesced(exec,search.positions,search.counts,search.table,search.radii,box,faces,ids,areas,face_centers,volumes,centers,status,cache);
         } else
         local_voronoi::reconstruct_hydro_retry<local_voronoi::CachedVertexPositions,
-            local_voronoi::PlaneWorkspace<64,Tolerance,EarlyStop>>(exec,search.positions,search.counts,
+            local_voronoi::PlaneWorkspace<64,Tolerance,EarlyStop,
+                NearestBatch ? local_voronoi::default_nearest_batch<Exec>() : 0>>(exec,search.positions,search.counts,
                 search.table,search.radii,box,faces,ids,areas,face_centers,volumes,centers,status);
     };
     for (int warm=0;warm<2;++warm) { rebuild(); reconstruct(); }
@@ -297,6 +300,7 @@ int main(int argc,char** argv) {
         else if (policy=="relative_early_batched") result=run<local_voronoi::RelativeClippingTolerance,true,false,true,true>(side,repeats,policy,csv);
         else if (policy=="relative_early_coalesced") result=run<local_voronoi::RelativeClippingTolerance,true,false,true>(side,repeats,policy,csv);
         else if (policy=="relative_early_fixed32") result=run<local_voronoi::RelativeClippingTolerance,true,true>(side,repeats,policy,csv);
+        else if (policy=="relative_early_nearest_batch") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,false,false,true>(side,repeats,policy,csv);
         else if (policy=="relative_early") result=run<local_voronoi::RelativeClippingTolerance,true>(side,repeats,policy,csv);
         else if (policy=="relative") result=run<local_voronoi::RelativeClippingTolerance>(side,repeats,policy,csv);
         else if (policy=="legacy") result=run<local_voronoi::LegacyClippingTolerance>(side,repeats,policy,csv);

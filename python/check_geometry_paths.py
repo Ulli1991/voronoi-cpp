@@ -18,6 +18,9 @@ def main():
             ("early", "cached", "64", "relative_early", "insertion"),
             ("recomputed", "recomputed", "160", "legacy", "insertion"),
             ("team", "cached", "64", "relative_early", "team_bitonic"),
+            ("nearest_batch", "cached", "64", "relative_nearest_batch", "insertion"),
+            # Small enough that every distribution refills across equal distances.
+            ("nearest_batch_4", "cached", "64", "relative_nearest_batch_4", "insertion"),
         ):
             output = Path(directory) / f"{name}.csv"
             subprocess.run(

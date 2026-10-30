@@ -233,6 +233,61 @@ occupancy profiling remain separate work. LUNA's user-reported ~1 billion full
 hydro cell updates/s is a useful performance target, not a directly equivalent
 workload or a measured roofline for this construction kernel.
 
+## Experimental nearest-batch candidates
+
+`PlaneWorkspace<64,RelativeClippingTolerance,true,B>` with batch size `B>0`
+reads unsorted rows: configure the search with `nearest_first=false`, which
+skips the row sort and the per-entry distance table (8 bytes per table entry).
+The fourth template argument defaults to 0 (off). Each cell visits its
+candidates in (distance squared, slot) order, the insertion sort's order,
+selecting the `B` nearest remaining candidates per scan of its row. Because this
+order is exact, early stopping ends at the first candidate beyond the cutoff
+without the suffix check. The full-workspace retry preserves the option.
+`default_nearest_batch<ExecSpace>()` gives 8 on GPUs and 32 on host backends.
+
+Use `relative_nearest_batch` in `table_mesh_check` (with `insertion`, which is
+ignored) or `relative_early_nearest_batch` in `construction_scaling`; both use
+the backend default. `construction_nearest_batch_stress_check` runs the stress
+oracle with batches of 4, so its small fixtures rescan rows.
+
+Each output was byte-compared with `relative_early` under insertion sorting,
+for the five `table_mesh_check` distributions at 12 and 32 cubed, at the
+default batch and at batch 4. On OpenMP all 20 comparisons are byte-identical.
+On CUDA 18 of 20 are. The exceptions are the unjittered `regular` lattice at
+32 cubed, at both batch sizes:
+- The face sets match exactly.
+- 2,016 of the 32,768 cells list their faces in a different order. Matched by
+  face, every diagnostic value is bit-identical.
+- In the compact output, those cells' cell centroids differ by at most
+  1.08e-19. The values are near zero, about 5e-20.
+
+The likely cause is the lattice's many exact distance ties. The search and
+the reconstruction compute distances with different, separately contracted
+expressions, so tied neighbours can be visited in another order.
+
+Local measurements were taken on a Quadro RTX 6000 with the SM clock fixed at
+1,440 MHz, on the jittered lattice of `construction_scaling`. Each figure is
+the median of 3 alternating rounds, each round the median of 5 repeats. Times
+are per particle, as search / reconstruction / pipeline:
+
+| Side | Baseline (team bitonic) | Nearest batch (8) |
+|---:|---|---|
+| 32 | 258 / 650 / 906 ns | 91 / 571 / 662 ns |
+| 48 | 245 / 584 / 831 ns | 83 / 584 / 670 ns |
+| 64 | 246 / 553 / 803 ns | 82 / 585 / 663 ns |
+| 80 | 247 / 533 / 781 ns | 81 / 558 / 639 ns |
+
+The nearest-batch cost per particle is flat with size. Reconstruction is about
+5% slower than the baseline from 64 cubed up, while search is about 3× faster.
+Peak device memory at 64 cubed falls from 1,950 to 1,456 MiB, about 2.8 instead
+of 4.9 KB per particle.
+
+At the same fixed clock, GPU batches of 4, 6, 8, 12, 16, 24 and 32 gave
+reconstruction times of 629, 577, 573, 594, 631, 687 and 646 ns per particle
+at 80 cubed, and batch 8 was also fastest at 32 and 48 cubed. The host default
+of 32 has not been measured at a fixed clock. A100 performance is not yet
+measured.
+
 ## Repository layout
 
 - `src/neighbour_search/`: neighbor search and fixed-point position inputs.
