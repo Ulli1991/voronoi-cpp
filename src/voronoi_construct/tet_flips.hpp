@@ -586,7 +586,8 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 // Every tetrahedron the host changed is touched and listed, each edge around
 // them gets one representative (the lowest-numbered tetrahedron around it;
 // a tetrahedron whose edge bits change is touched too), and the device
-// repair runs again from them to settle the region's border. If that still
+// repair runs again from them and the stuck entries, to settle the region's
+// border and to find what the host could not repair. If that still
 // leaves stuck entries the region grows; after `attempts` the whole mesh is
 // repaired on the host.
 template <class ExecSpace>
@@ -762,12 +763,21 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                     }
                 }
             });
-        // Repair on the device from the changed ones.
+        // Repair on the device from the changed ones and the stuck ones (what
+        // the host could not repair is stuck again).
         Kokkos::deep_copy(exec, Kokkos::subview(counters, 3), 0);
         const auto& st = state;
         Kokkos::parallel_for(
             "tet_flips::region_dirty", Range(exec, 0, count), KOKKOS_LAMBDA(int i) {
                 if (update(i, 1)) tet_repair::detail::mark(st, update(i, 0));
+            });
+        Kokkos::parallel_for(
+            "tet_flips::region_recheck", Range(exec, 0, stuck), KOKKOS_LAMBDA(int i) {
+                const int t = st.stuck(i, 0), k = st.stuck(i, 1);
+                if (t < 0 || !alive(t)) return;
+                tet_repair::detail::mark(st, t);
+                const int u = k >= 0 ? adjacent(t, k) : -1;
+                if (u >= 0 && alive(u)) tet_repair::detail::mark(st, u);
             });
         const tet_repair::Stats device = tet_repair::repair(exec, dm, state);
         total.flips23 += device.flips23;
