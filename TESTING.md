@@ -29,7 +29,7 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 | `mesh` | 4096 | 0.6 s | `from_rings` gives the same tetrahedra as a host construction from the rings, each once, with mutual adjacency and one representative per edge; volumes from stored and from walked rings equal clipping to 1e-12; the exact check passes; a small ring pool grows; the circumcentre of a sliver is exact |
 | `start` | ~4096 (13 layouts), 32768 | 19 s | the start (`tet_start::build`) is the Delaunay tetrahedralization of the snapped positions for jittered, uniform, clustered, lattice, wave, sc/bcc/fcc, icosahedral shells, planes and pairs, in boxes of side 1, 2 and 3: a brute-force oracle checks that it triangulates the box (every triangle twice with apexes on opposite sides, adjacency, all particles used, exact volume sum) and that every circumsphere is empty (exact, perturbed); every edge has one representative (also wave at 32768, the dropped-face regression); jittered needs no patch; the oracle rejects a mesh with one corner moved |
 | `repair` | ~4096 | 10 s | steps of a smooth flow through `voronoi::Mesh`: jittered (0.03 and 0.3 spacings, 10 steps), lattice and wave (0.03 and 0.3, 4 steps; their starts are decided by the perturbation alone, wave's first step is the step-1 regression), shells@1e-9 (0.03, 2 steps), jittered in a box of side 2 (0.3, 3 steps); after every step no failing triangle (brute force), the same Delaunay neighbours and face count as an exact rebuild by clipping, volumes within 1e-10, total volume the box |
-| `voronoi_mesh` | 4096 | 2 s | the hydro contract of `voronoi::Mesh` on off-grid positions in a box of side 2: the first update builds an exact mesh; faces once with owner < neighbour, closing every cell; volumes fill the box; per-cell face lists name each face twice, in increasing id of the other particle; cell centroids equal clipping's; the same input gives the same volumes and centroids bit for bit; a permuted input gives the permuted faces; a local rebuild returns each face of the listed cells once with the mesh's area; updates repair and stay exact; `Fallback::rebuild` rebuilds a stuck step exactly |
+| `voronoi_mesh` | 4096 | 2 s | the hydro contract of `voronoi::Mesh` on off-grid positions in a box of side 2: the first update builds an exact mesh; faces once with owner < neighbour, closing every cell; volumes fill the box; per-cell face lists name each face twice, in increasing id of the other particle; cell centroids equal clipping's; the same input gives the same volumes and centroids bit for bit; a permuted input gives the permuted faces; a local rebuild returns each face of the listed cells once with the mesh's area; updates repair and stay exact; on icosahedral shells@1e-9, where the device repair leaves stuck triangles, the step is exact with `Fallback::host` (local rebuilds on the host) and with `Fallback::rebuild` |
 
 ### Oracles
 
@@ -62,8 +62,9 @@ Brute force exists only in tests and the benchmark, never in the library:
 ## Regression tests kept
 
 - Wave lattice, step 1 (`repair`: wave at 0.3 spacings): the device repair
-  once dropped failing triangles beyond its work capacity; the step now
-  passes with the stuck triangles rebuilt or repaired on the host.
+  once dropped failing triangles beyond its work capacity; since the
+  device tries every flip until one closes its cavity, it repairs the step
+  alone (nothing sticks).
 - Clustered input, missing face (`start`: every edge has one
   representative, wave at 32768): an edge whose owner cell dropped a
   rounding-level face had no representative and no Voronoi face.

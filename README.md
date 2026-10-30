@@ -109,7 +109,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 | `tet_mesh.hpp` | persistent tetrahedra: `from_rings`, circumcentres, face rings kept in place, faces, per-cell face lists |
 | `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of the cells around errors |
 | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
-| `tet_flips.hpp` | host fallback of the repair (flips, local Bowyer-Watson) |
+| `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the pipeline below behind one interface |
 
 **Clipping.** Each cell is built by walking the grid cells of its level
@@ -134,8 +134,9 @@ rebuilds the cells around anything wrong by exact clipping.
 **Persistent mesh.** Per step: snap; screen the tetrahedra whose local
 Delaunay test may fail (double, with a margin) and repair them by flips on
 the device (plans vote by a hash of their index; every flip decided by
-exact predicates and checked to close its cavity); finish stuck triangles
-on the host or rebuild; circumcentres of the created tetrahedra; walk only
+exact predicates and checked to close its cavity, the next candidate
+flip if it does not); rebuild the surroundings of stuck triangles on the
+host, or rebuild the mesh; circumcentres of the created tetrahedra; walk only
 the faces whose ring changed; face geometry.
 
 ## Measured performance
@@ -164,8 +165,9 @@ the step at 256^3 moves particles by the same number of spacings, but the
 flow varies on the box scale, so neighbours shear half as much per step
 (half the flips per cell). On jittered, uniform and clustered input at
 0.1 and 0.3 spacings no triangle ever sticks; the first step out of a
-degenerate start (wave lattice) leaves 178k stuck at 2.1M, rebuilt in
-0.17 s. The per-cell face lists account for most of the step peak above
+degenerate start (wave lattice, 2.1M) is repaired on the device alone in
+0.81 s (job 31701509; research_notes/shrink_2026-10-31.md), while
+icosahedral shells@1e-9 still leave ~8k of 262k stuck (host or rebuild). The per-cell face lists account for most of the step peak above
 2fd8b50's 2080 B/cell (about 140 B/cell; not measured separately).
 
 ## Tests
