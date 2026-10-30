@@ -91,6 +91,18 @@ KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
 }
 
+KOKKOS_INLINE_FUNCTION bool same_face(const int* a, const int* b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
+
+// The corner of tetrahedron t opposite its face f (sorted particles).
+template <class M>
+KOKKOS_INLINE_FUNCTION int opposite(const M& m, int t, const int* f) {
+    for (int k = 0; k < 3; ++k) {
+        const int v = m.vertex(t, k);
+        if (v != f[0] && v != f[1] && v != f[2]) return k;
+    }
+    return 3;
+}
+
 // The longest ring of tetrahedra around an edge that the walks follow.
 constexpr int max_ring_length = 64;
 

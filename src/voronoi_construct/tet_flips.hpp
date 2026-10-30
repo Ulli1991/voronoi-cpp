@@ -580,12 +580,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     const int u = adjacent(t, k);
                     int key[3];
                     tet_mesh::sorted_face(v, k, key);
-                    const int w[4] = {vertex(u, 0), vertex(u, 1), vertex(u, 2), vertex(u, 3)};
-                    for (int j = 0; j < 4; ++j) {
-                        int other[3];
-                        tet_mesh::sorted_face(w, j, other);
-                        if (other[0] == key[0] && other[1] == key[1] && other[2] == key[2]) adjacent(u, j) = t;
-                    }
+                    adjacent(u, tet_mesh::opposite(dm, u, key)) = t;
                 }
             });
         // One representative per edge around the changed tetrahedra.

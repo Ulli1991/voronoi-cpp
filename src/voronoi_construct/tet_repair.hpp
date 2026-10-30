@@ -77,14 +77,12 @@ struct Stats {
     int stuck = 0;  // entries listed in State::stuck
 };
 
-// Whether new tetrahedra `fresh` close the cavity of the old ones `old` of
-// mesh m exactly: six outer faces, each face of a new tetrahedron matched
-// once (outside or by another new one), each outer face used once, and no
-// new tetrahedron duplicating the outer one it attaches to. Near-degenerate
-// configurations can break this.
+// The outer faces of the cavity of tetrahedra old[0, olds): the sorted
+// particles of each and the tetrahedron across it (-1 if none). Returns
+// their number, or -1 if there are more than 8.
 template <class M>
-KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const int (*fresh)[4], int freshes) {
-    int outer_key[8][3], outer_tet[8], outers = 0;
+KOKKOS_INLINE_FUNCTION int outer_faces(const M& m, const int* old, int olds, int (*key)[3], int* across) {
+    int outers = 0;
     for (int r = 0; r < olds; ++r) {
         const int o = old[r];
         const int v[4] = {m.vertex(o, 0), m.vertex(o, 1), m.vertex(o, 2), m.vertex(o, 3)};
@@ -93,12 +91,23 @@ KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const i
             bool inner = false;
             for (int q = 0; q < olds; ++q) inner |= w == old[q];
             if (inner) continue;
-            if (outers == 8) return false;
-            tet_mesh::sorted_face(v, j, outer_key[outers]);
-            outer_tet[outers++] = w;
+            if (outers == 8) return -1;
+            tet_mesh::sorted_face(v, j, key[outers]);
+            across[outers++] = w;
         }
     }
-    if (outers != 6) return false;
+    return outers;
+}
+
+// Whether new tetrahedra `fresh` close the cavity of the old ones `old` of
+// mesh m exactly: six outer faces, each face of a new tetrahedron matched
+// once (outside or by another new one), each outer face used once, and no
+// new tetrahedron duplicating the outer one it attaches to. Near-degenerate
+// configurations can break this.
+template <class M>
+KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const int (*fresh)[4], int freshes) {
+    int outer_key[8][3], outer_tet[8];
+    if (outer_faces(m, old, olds, outer_key, outer_tet) != 6) return false;
     int used[6] = {0, 0, 0, 0, 0, 0};
     for (int r = 0; r < freshes; ++r)
         for (int c = 0; c < 4; ++c) {
@@ -106,7 +115,7 @@ KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const i
             tet_mesh::sorted_face(fresh[r], c, key);
             int matches = 0;
             for (int q = 0; q < 6; ++q)
-                if (key[0] == outer_key[q][0] && key[1] == outer_key[q][1] && key[2] == outer_key[q][2]) {
+                if (tet_mesh::same_face(key, outer_key[q])) {
                     ++matches;
                     ++used[q];
                     if (outer_tet[q] >= 0 && tet_mesh::position(m, outer_tet[q], fresh[r][c]) >= 0) return false;
@@ -116,7 +125,7 @@ KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const i
                 for (int c2 = 0; c2 < 4; ++c2) {
                     int other[3];
                     tet_mesh::sorted_face(fresh[s2], c2, other);
-                    matches += key[0] == other[0] && key[1] == other[1] && key[2] == other[2];
+                    matches += tet_mesh::same_face(key, other);
                 }
             }
             if (matches != 1) return false;
@@ -604,25 +613,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     detail::mark(st, p.old[0]);  // retry next round
                     return;
                 }
-                // Outer faces of the old tetrahedra: sorted triple, outer tet, its index back.
-                int outer_key[8][3], outer_tet[8], outer_back[8], outers = 0;
-                for (int r = 0; r < p.olds; ++r) {
-                    const int o = p.old[r];
-                    const int v[4] = {vertex(o, 0), vertex(o, 1), vertex(o, 2), vertex(o, 3)};
-                    for (int j = 0; j < 4; ++j) {
-                        const int w = adjacent(o, j);
-                        bool inner = false;
-                        for (int q = 0; q < p.olds; ++q) inner |= w == p.old[q];
-                        if (inner || outers == 8) continue;
-                        tet_mesh::sorted_face(v, j, outer_key[outers]);
-                        outer_tet[outers] = w;
-                        outer_back[outers] = -1;
-                        if (w >= 0)
-                            for (int b = 0; b < 4; ++b)
-                                if (adjacent(w, b) == o) outer_back[outers] = b;
-                        ++outers;
-                    }
-                }
+                // Outer faces of the old tetrahedra (six: the plan closes).
+                int outer_key[8][3], outer_tet[8];
+                const int outers = outer_faces(m, p.old, p.olds, outer_key, outer_tet);
                 Kokkos::atomic_inc(&counters(p.kind == detail::Plan::flip23 ? counter::flips23 : counter::flips32));
                 // Edges the old tetrahedra represented; they get new representatives below.
                 int kept_edge[19][2], kept_edges = 0;
@@ -663,17 +656,17 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         int key[3];
                         tet_mesh::sorted_face(v, c, key);
                         for (int q = 0; q < outers; ++q)
-                            if (key[0] == outer_key[q][0] && key[1] == outer_key[q][1] && key[2] == outer_key[q][2]) {
-                                adjacent(slot[r], c) = outer_tet[q];
-                                if (outer_tet[q] >= 0 && outer_back[q] >= 0) adjacent(outer_tet[q], outer_back[q]) = slot[r];
+                            if (tet_mesh::same_face(key, outer_key[q])) {
+                                const int w = outer_tet[q];
+                                adjacent(slot[r], c) = w;
+                                if (w >= 0) adjacent(w, tet_mesh::opposite(m, w, key)) = slot[r];
                             }
                         for (int s2 = 0; s2 < p.freshes; ++s2) {
                             if (s2 == r) continue;
-                            const int w[4] = {p.fresh[s2][0], p.fresh[s2][1], p.fresh[s2][2], p.fresh[s2][3]};
                             for (int c2 = 0; c2 < 4; ++c2) {
                                 int other[3];
-                                tet_mesh::sorted_face(w, c2, other);
-                                if (key[0] == other[0] && key[1] == other[1] && key[2] == other[2]) adjacent(slot[r], c) = slot[s2];
+                                tet_mesh::sorted_face(p.fresh[s2], c2, other);
+                                if (tet_mesh::same_face(key, other)) adjacent(slot[r], c) = slot[s2];
                             }
                         }
                     }
