@@ -310,6 +310,7 @@ struct Kernel {
     // this counter until none are left, so a slow cell holds up only its own
     // warp: 1.06x on uniform random points over one block per four cells.
     Kokkos::View<int, MemorySpace> next_cell;
+    Selection<MemorySpace> selection;
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
@@ -320,8 +321,8 @@ struct Kernel {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
             const int t = __shfl_sync(all_lanes, taken, 0);
-            if (t >= grid.n) return;  // the whole warp
-            build(c, t);
+            if (t >= selection.count(grid.n)) return;  // the whole warp
+            build(c, selection.slot(t));
         }
 #else
         (void)member;
@@ -457,6 +458,26 @@ struct Kernel {
         }
         __syncwarp(all_lanes);
 
+        // Owned faces go to one block per cell that lane 0 claims. Without
+        // rings it is claimed here, for every owned plane (faces below
+        // rounding level are dropped later), so that the atomic's latency
+        // hides behind the face walk.
+        int fits = 1;
+        long long block = 0;
+        if constexpr (!with_rings) {
+            int bound = 0;
+            for (int k = 0; k < per_lane; ++k) {
+                const int plane = l + k * lanes;
+                bound += plane >= box_planes && plane < planes && c.first[plane] != none &&
+                         selection.owns(id, c.neighbour[plane]);
+            }
+            const int total = static_cast<int>(__reduce_add_sync(all_lanes, static_cast<unsigned>(bound)));
+            if (l == 0 && status == ok) {
+                fits = claim_faces(out, id, total);
+                block = out.face_start(id);
+            }
+        }
+
         double volume = 0;
         Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
         double area_magnitude = 0;
@@ -502,7 +523,7 @@ struct Kernel {
             if (magnitude <= sliver) continue;
             ++faces;
             area_magnitude += magnitude;
-            if (c.neighbour[plane] > id) {
+            if (selection.owns(id, c.neighbour[plane])) {
                 owned_plane[owned_here] = plane;
                 owned_length[owned_here] = steps;
                 owned_area[owned_here] = area;
@@ -518,21 +539,21 @@ struct Kernel {
         area_magnitude = warp_sum(area_magnitude);
         faces = warp_sum(faces);
         int owned = 0;
-        exclusive_scan(owned_here, owned);
+        int offset = exclusive_scan(owned_here, owned);
         if (status == ok && !(volume > 0)) status = degenerate;
 
-        // The owned faces, in one block per cell that lane 0 claims: with
-        // rings each face as its neighbour, ring length and ring (see
-        // Cells::rings), otherwise its neighbour, area and centroid.
-        int need = 0;
-        for (int m = 0; m < owned_here; ++m) need += with_rings ? 2 + owned_length[m] : 1;
-        int total = 0;
-        const int offset = exclusive_scan(need, total);
-        int fits = 1;
-        long long block = 0;
-        if (l == 0 && status == ok) {
-            fits = with_rings ? claim_rings(out, id, total) : claim_faces(out, id, total);
-            block = with_rings ? out.ring_start(id) : out.face_start(id);
+        // With rings each owned face is its neighbour, ring length and ring
+        // (see Cells::rings), sized now; otherwise its neighbour, area and
+        // centroid.
+        if constexpr (with_rings) {
+            int need = 0;
+            for (int m = 0; m < owned_here; ++m) need += 2 + owned_length[m];
+            int total = 0;
+            offset = exclusive_scan(need, total);
+            if (l == 0 && status == ok) {
+                fits = claim_rings(out, id, total);
+                block = out.ring_start(id);
+            }
         }
         if (__shfl_sync(all_lanes, fits, 0) == 0) status = face_overflow;
         if (status == ok) {
@@ -587,13 +608,14 @@ struct Kernel {
 
 }  // namespace warp
 
-// Build every cell with one warp per cell, then rebuild cells that overflowed
-// the warp capacities with the per-thread kernel; with face rings if `out`
-// records them (Cells::with_rings). Other backends use the per-thread
-// kernel throughout.
+// Build the selected cells (default: all) with one warp per cell, then
+// rebuild cells that overflowed the warp capacities with the per-thread
+// kernel; with face rings if `out` records them (Cells::with_rings). Other
+// backends use the per-thread kernel throughout.
 template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
-                    Cells<typename ExecSpace::memory_space>& out) {
+                    Cells<typename ExecSpace::memory_space>& out,
+                    const Selection<typename ExecSpace::memory_space>& selection = {}) {
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
@@ -603,7 +625,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         using Memory = typename ExecSpace::memory_space;
         const Stencil<Memory> stencil = make_stencil(exec);
         Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
-        const int blocks = Kokkos::min((grid.n + warp::cells_per_block - 1) / warp::cells_per_block,
+        const int blocks = Kokkos::min((selection.count(grid.n) + warp::cells_per_block - 1) / warp::cells_per_block,
                                        2 * warp::min_blocks_per_sm * exec.cuda_device_prop().multiProcessorCount);
         // A block holds cells_per_block warps; each warp is a team's vector range.
         Kokkos::TeamPolicy<Kokkos::Cuda,
@@ -623,19 +645,19 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Kokkos::deep_copy(exec, next_cell, 0);
             if (rings)
                 Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
-                                     warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell});
+                                     warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, selection});
             else if (off_base > 0)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell});
+                                     warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, selection});
             else
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell});
-            detail::construct_cells(exec, grid, stencil, out, detail::Pass::failed);
+                                     warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, selection});
+            detail::construct_cells(exec, grid, stencil, out, detail::Pass::failed, selection);
         });
         return;
     }
 #endif
-    construct(exec, grid, out);
+    construct(exec, grid, out, selection);
 }
 
 }  // namespace shell_voronoi
