@@ -205,8 +205,10 @@ public:
         return local_;
     }
 
-    // Scratch memory the caller may use between updates (its contents are
-    // not kept): the spare ring pool, grown to `bytes` if smaller.
+    // Scratch memory the caller may use between updates: the spare face-ring
+    // pool, grown to `bytes` if smaller (the growth is kept). Valid only until
+    // the next update(), rebuild() or clip(), which reuse the pool and may move
+    // it: ask again after each of them, and keep nothing in it across them.
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         auto& spare = rings_.pool[1 - rings_.in_use];
@@ -233,7 +235,9 @@ public:
 
     int particles() const { return n_; }
     double box() const { return box_; }
-    // Faces f < faces(); the face arrays may hold more rows (capacity).
+    // Faces f < faces(). owner() and neighbour() have exactly faces() rows;
+    // area() and face_centroid() may hold more (spare capacity): loop to
+    // faces(), never to their extent.
     int faces() const { return static_cast<int>(tets_.owner.extent(0)); }
     View<const int*> owner() const { return tets_.owner; }
     View<const int*> neighbour() const { return tets_.neighbour; }
