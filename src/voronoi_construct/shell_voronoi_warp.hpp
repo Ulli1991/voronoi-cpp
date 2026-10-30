@@ -204,8 +204,9 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
                     int neighbour) {
     const int l = lane();
     const Real offset = Real(0.5) * dot(d, d);
-    const Real tolerance =
-        Real(64) * Kokkos::Experimental::epsilon_v<Real> * Kokkos::sqrt(dot(d, d) * radius2);
+    // A vertex is cut off when side > 64 eps |d| R, compared in squares.
+    const Real scale = Real(64) * Kokkos::Experimental::epsilon_v<Real>;
+    const Real tolerance2 = scale * scale * dot(d, d) * radius2;
     bool out[per_lane] = {};
     Real side[per_lane] = {};
     for (int k = 0; k < per_lane; ++k) {
@@ -213,7 +214,7 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
         if (!(live >> w & 1)) continue;
         side[k] = d.x * c.x[w] + d.y * c.y[w] + d.z * c.z[w] - offset;
         c.side[w] = side[k];
-        out[k] = side[k] > tolerance;
+        out[k] = side[k] > 0 && side[k] * side[k] > tolerance2;
     }
     const std::uint64_t removed = vertex_ballot(out);
     if (removed == 0) return ok;
@@ -299,7 +300,6 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     }
     planes = plane + 1;
     radius2 = warp_max(radius);
-    __syncwarp(all_lanes);
     return ok;
 }
 
