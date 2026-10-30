@@ -30,7 +30,7 @@ using Face = std::pair<int, int>;
 std::map<Face, Point> faces_of(const Mesh& mesh, const std::vector<int>& rename = {}) {
     const auto owner = to_host(mesh.owner());
     const auto neighbour = to_host(mesh.neighbour());
-    const auto area = to_host(mesh.area());
+    const auto area = face_areas(mesh);
     std::map<Face, Point> faces;
     for (int f = 0; f < mesh.faces(); ++f) {
         int i = owner(f), j = neighbour(f);
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
     {  // faces once, owner < neighbour, closing every cell; volumes fill the box
         const auto owner = to_host(mesh.owner());
         const auto neighbour = to_host(mesh.neighbour());
-        const auto area = to_host(mesh.area());
+        const auto area = face_areas(mesh);
         const auto volume = to_host(mesh.volume());
         std::vector<Point> closure(n, Point{0, 0, 0});
         std::vector<double> magnitude(n, 0);

@@ -438,6 +438,18 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
 
 using Mesh = voronoi::Mesh<Exec>;
 
+// The mesh's face area vectors on the host, rows [0, faces()) (packed on
+// the device first: the face arrays hold more rows).
+inline Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(const Mesh& mesh) {
+    Kokkos::View<double* [3], Kokkos::LayoutRight, Memory> packed("face_areas", mesh.faces());
+    const auto area = mesh.area();
+    Kokkos::parallel_for(
+        "support::face_areas", Kokkos::RangePolicy<Exec>(0, mesh.faces()), KOKKOS_LAMBDA(int f) {
+            for (int a = 0; a < 3; ++a) packed(f, a) = area(f, a);
+        });
+    return to_host(packed);
+}
+
 // A mesh compared with an exact rebuild by clipping of the same positions
 // (support::clipped): failing triangles and inverted tetrahedra (brute force
 // over all tetrahedra, tet_flips::failing), cells with other Delaunay
@@ -471,7 +483,7 @@ inline Comparison compare_with_rebuild(const Mesh& mesh, const Positions& x) {
     c.clipped_faces /= 2;
     const auto owner = to_host(mesh.owner());
     const auto neighbour = to_host(mesh.neighbour());
-    const auto area = to_host(mesh.area());
+    const auto area = face_areas(mesh);
     c.faces = mesh.faces();
     for (int f = 0; f < c.faces; ++f) {
         const int i = owner(f), j = neighbour(f);

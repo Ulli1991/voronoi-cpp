@@ -58,6 +58,10 @@ struct alignas(16) Polyhedron {
     float candidate_distance2[lanes];
     int candidate_slot[lanes];
     int candidate_image[lanes];
+    // Owned faces without rings: the warp claims face_block entries of the
+    // pool at a time, so the pool's counter sees one atomic per block
+    // instead of one per cell; this warp's block is [face_at, face_end).
+    long long face_at, face_end;
 };
 
 KOKKOS_INLINE_FUNCTION int byte(std::uint32_t packed, int k) { return (packed >> (8 * k)) & 255; }
@@ -317,13 +321,13 @@ struct Kernel {
         auto* base = static_cast<Polyhedron*>(
             member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron)));
         Polyhedron& c = base[member.team_rank()];
-        FaceBlock faces;
+        if (lane() == 0) c.face_at = c.face_end = 0;
         while (true) {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
             const int t = __shfl_sync(all_lanes, taken, 0);
             if (t >= selection.count(grid.n)) return;  // the whole warp
-            build(c, selection.slot(t), faces);
+            build(c, selection.slot(t));
         }
 #else
         (void)member;
@@ -331,20 +335,12 @@ struct Kernel {
     }
 
 #if defined(__CUDA_ARCH__)
-    // Build cell t in polyhedron c, with all lanes of the warp.
-    // Owned faces without rings: the warp claims face_block entries of the
-    // pool at a time (lane 0 holds them), so the pool's counter sees one
-    // atomic per block instead of one per cell.
-    struct FaceBlock {
-        long long at = 0, end = 0;
-    };
-
-    __device__ __forceinline__ void build(Polyhedron& c, int t, FaceBlock& block_of_faces) const {
+    // Build cell t (a slot) in polyhedron c, with all lanes of the warp.
+    __device__ __forceinline__ void build(Polyhedron& c, int t) const {
         const int l = lane();
         const auto& positions = grid.positions;
         const double box = grid.box;
         const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
-        const int id = grid.order(t);  // the particle: outputs and the owner rule use particle ids
 
         int planes = 0;
         std::uint64_t live = 0;  // slots holding vertices
@@ -363,17 +359,14 @@ struct Kernel {
             sort_candidates(key, slot, packed);
             // Lane i loads candidate i at once; the loop broadcasts it.
             Vec3 mine{0, 0, 0};
-            int mine_id = -1;
-            if (l < buffered) {
+            if (l < buffered)
                 mine = {positions(slot, 0) + image(packed, 0) * box - p.x,
                         positions(slot, 1) + image(packed, 1) * box - p.y,
                         positions(slot, 2) + image(packed, 2) * box - p.z};
-                mine_id = grid.order(slot);
-            }
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
-                const int q = __shfl_sync(all_lanes, mine_id, i);
+                const int q = __shfl_sync(all_lanes, slot, i);
                 const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
                              __shfl_sync(all_lanes, mine.z, i)};
                 const int before = planes;
@@ -453,6 +446,14 @@ struct Kernel {
                     for (int e = 0; e < 3; ++e) touches |= byte(c.corner[v], e) < box_planes;
             }
             if (__any_sync(all_lanes, touches)) status = uncertified;
+        }
+
+        // Outputs and the owner rule use particle ids: the planes' slots
+        // become the particles there.
+        const int id = grid.order(t);
+        for (int k = 0; k < per_lane; ++k) {
+            const int plane = l + k * lanes;
+            if (plane >= box_planes && plane < planes) c.neighbour[plane] = grid.order(c.neighbour[plane]);
         }
 
         // Faces: lane l walks planes l and l + 32 around their vertices.
@@ -546,16 +547,17 @@ struct Kernel {
                 block = out.ring_start(id);
             }
         } else if (l == 0 && status == ok) {
-            FaceBlock& b = block_of_faces;
-            if (b.at + owned > b.end) {  // a new block for this warp
+            if (c.face_at + owned > c.face_end) {  // a new block for this warp
                 const int size = Kokkos::max(owned, face_block);
-                fits = claim(out.face_used, static_cast<long long>(out.neighbour.extent(0)), 0, size, b.at);
-                b.end = fits ? b.at + size : b.at;
+                long long at = 0;
+                fits = claim(out.face_used, static_cast<long long>(out.neighbour.extent(0)), 0, size, at);
+                c.face_at = at;
+                c.face_end = fits ? at + size : at;
             }
             if (fits) {
-                block = b.at;
-                out.face_start(id) = static_cast<int>(b.at);
-                b.at += owned;
+                block = c.face_at;
+                out.face_start(id) = static_cast<int>(block);
+                c.face_at += owned;
             }
         }
         if (__shfl_sync(all_lanes, fits, 0) == 0) status = face_overflow;
