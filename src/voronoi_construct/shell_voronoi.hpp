@@ -623,8 +623,8 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             if (cut[u]) continue;
             if (holes == max_holes) return vertex_overflow;
             const std::uint8_t* across = cell.adjacent[u];
-            const std::uint8_t back = across[0] == w ? 0 : across[1] == w ? 1 : 2;
-            hole[holes++] = {cell.corner[w][k], cell.corner[w][(k + 1) % 3], u, back, 0};
+            hole[holes++] = {cell.corner[w][k], cell.corner[w][(k + 1) % 3], u,
+                             static_cast<std::uint8_t>(across[0] == w ? 0 : across[1] == w ? 1 : 2), 0};
         }
     }
     const int kept = cell.vertices - cell.free_count - cuts;
