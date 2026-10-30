@@ -307,6 +307,25 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
             }
             if (a >= 0 && b >= 0) Kokkos::atomic_or(&edges(e), 1 << edge_index(a, b));
         });
+    // Edges without such a face (the owner's cell dropped a rounding-level
+    // face its neighbour kept): the lowest-numbered tetrahedron around the
+    // edge represents it, so every edge has exactly one representative.
+    Kokkos::parallel_for(
+        "tet_mesh::represent_dropped", Range(exec, 0, tets), KOKKOS_LAMBDA(int e) {
+            for (int k = 0; k < 6; ++k) {
+                int ka, kb;
+                edge_ends(k, ka, kb);
+                const int a = vertex(e, ka), b = vertex(e, kb);
+                const int g = face_of(Kokkos::min(a, b), Kokkos::max(a, b));
+                const int first = g < 0 ? -1 : ring(ring_start(g));
+                if (first >= 0 && position(mesh, first, a) >= 0 && position(mesh, first, b) >= 0) continue;
+                int around[65];
+                const int length = Kokkos::min(walk_edge(mesh, e, a, b, around), 65);
+                int lowest = e;
+                for (int r = 0; r < length; ++r) lowest = Kokkos::min(lowest, around[r]);
+                if (lowest == e) Kokkos::atomic_or(&edges(e), 1 << k);
+            }
+        });
     return unresolved + open;
 }
 

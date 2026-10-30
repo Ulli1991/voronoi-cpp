@@ -8,7 +8,9 @@
 //      summing to the box;
 //   2. every circumsphere empty of every other particle (exact, perturbed).
 // Both hold only for the Delaunay tetrahedralization, which the perturbation
-// makes unique.
+// makes unique. Also every edge of the tetrahedra has exactly one
+// representative (a Voronoi face), also where the clipping dropped a
+// rounding-level face (wave, 32768 particles: 59 edges had none).
 
 #include "check.hpp"
 #include "support.hpp"
@@ -99,6 +101,25 @@ Verdict oracle(const Positions& x, const tet_mesh::Mesh<Memory>& mesh) {
     return verdict;
 }
 
+// Edges of the tetrahedra with no representative, and with more than one.
+std::pair<long long, long long> representatives(const tet_mesh::Mesh<Memory>& mesh) {
+    const auto vertex = to_host(mesh.vertex);
+    const auto edges = to_host(mesh.edges);
+    std::map<std::pair<int, int>, int> count;
+    for (int t = 0; t < static_cast<int>(vertex.extent(0)); ++t)
+        for (int k = 0; k < 6; ++k) {
+            int a, b;
+            tet_mesh::edge_ends(k, a, b);
+            count[std::minmax(vertex(t, a), vertex(t, b))] += edges(t) >> k & 1;
+        }
+    long long none = 0, many = 0;
+    for (const auto& [edge, reps] : count) {
+        none += reps == 0;
+        many += reps > 1;
+    }
+    return {none, many};
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -120,6 +141,9 @@ int main(int argc, char** argv) {
         check.expect(stats.exact && v.flat + v.unpaired + v.folded + v.wrong_adjacency + v.unused + v.not_empty == 0 &&
                          v.box_volume,
                      what.str());
+        const auto [none, many] = representatives(mesh);
+        check.expect(none + many == 0, kind + ": every edge has one representative (none " + std::to_string(none) +
+                                            ", several " + std::to_string(many) + ")");
         // Random input needs no patch: the clipping's rings are already right.
         if (kind == "jittered") check.expect(stats.patched == 0, "jittered: nothing patched");
         // The oracle is not blind: it rejects the clipping's guess on a lattice.
@@ -129,6 +153,14 @@ int main(int argc, char** argv) {
             const Verdict g = oracle(x, guess);
             check.expect(!g.box_volume && g.unpaired > 0, "lattice: the oracle rejects tetrahedra from the clipping's rings");
         }
+    }
+    {  // larger, representatives only (the oracle above is quadratic)
+        const Positions x = to_device(in_slot_order(make_points("wave", 32768)));
+        tet_mesh::Mesh<Memory> mesh;
+        const tet_start::Stats stats = start_mesh(x, mesh);
+        const auto [none, many] = representatives(mesh);
+        check.expect(stats.exact && none + many == 0, "wave (32768): every edge has one representative (none " +
+                                                          std::to_string(none) + ", several " + std::to_string(many) + ")");
     }
     return check.failed() != 0;
 }
