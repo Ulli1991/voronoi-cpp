@@ -130,6 +130,19 @@ __device__ T warp_max(T v) {
     return v;
 }
 
+// Largest of the lanes' non-negative values. Their bit patterns order like
+// unsigned integers, so 32-bit warp reductions find it exactly.
+__device__ inline float warp_max_nonnegative(float v) {
+    return __uint_as_float(__reduce_max_sync(all_lanes, __float_as_uint(v)));
+}
+__device__ inline double warp_max_nonnegative(double v) {
+    const auto bits = static_cast<unsigned long long>(__double_as_longlong(v));
+    const auto high_word = static_cast<unsigned>(bits >> 32), low_word = static_cast<unsigned>(bits);
+    const unsigned high = __reduce_max_sync(all_lanes, high_word);
+    const unsigned low = __reduce_max_sync(all_lanes, high_word == high ? low_word : 0u);
+    return __longlong_as_double(static_cast<long long>(static_cast<unsigned long long>(high) << 32 | low));
+}
+
 template <class T>
 __device__ T warp_sum(T v) {
     for (int o = lanes / 2; o > 0; o >>= 1) v += __shfl_xor_sync(all_lanes, v, o);
@@ -305,7 +318,7 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
         c.neighbour[plane] = neighbour;
     }
     planes = plane + 1;
-    radius2 = warp_max(radius);
+    radius2 = warp_max_nonnegative(radius);
     return ok;
 }
 
