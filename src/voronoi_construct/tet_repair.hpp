@@ -130,7 +130,7 @@ namespace detail {
 
 // A planned flip: the old tetrahedra and the new ones (vertex lists).
 struct Plan {
-    enum Kind : int { none = 0, flip23 = 2, flip32 = 3, unflippable = -1 };
+    enum Kind : int { none = 0, flip23 = 2, flip32 = 3, unflippable = -1, rejected = -2 };
     int kind = none;
     int old[3] = {-1, -1, -1};
     int fresh[3][4];
@@ -183,20 +183,12 @@ KOKKOS_INLINE_FUNCTION Plan unpack(const Packed& s) {
     return p;
 }
 
-// Plan the repair of triangle t|u (t's face opposite corner k): the first
-// valid 2->3 or 3->2 flip, or stuck. Unlike the host, it does not try
-// another flip when this one would not close its cavity.
-template <class Mesh, class Point>
-KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k) {
-    Plan p;
-    const int u = m.adjacent(t, k);
-    const int T[4] = {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)};
-    const int far = tet_mesh::far_vertex(m, t, u);
-    if (far < 0 || !ep::in_sphere(point, T, far)) return p;
-    const int a = T[k];
-    int f[3];
-    tet_mesh::sorted_face(T, k, f);
-    // 2->3: segment a-far crosses the shared face.
+// The 2->3 flip of triangle t|u, apex a of t and far vertex far of u, f the
+// triangle: valid when segment a-far crosses the triangle, i.e. the three
+// new tetrahedra share one orientation.
+template <class Point>
+KOKKOS_INLINE_FUNCTION bool flip23(const Point& point, int t, int u, int a, int far, const int* f, Plan& p) {
+    p = {Plan::flip23, {t, u, -1}, {}, 2, 3};
     int positive = 0, negative = 0;
     for (int e = 0; e < 3; ++e) {
         const int n[4] = {a, far, f[e], f[(e + 1) % 3]};
@@ -205,56 +197,73 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
         negative += o < 0;
         for (int c = 0; c < 4; ++c) p.fresh[e][c] = n[c];
     }
-    if (positive == 3 || negative == 3) {
-        p.kind = Plan::flip23;
-        p.old[0] = t;
-        p.old[1] = u;
-        p.olds = 2;
-        p.freshes = 3;
-        return p;
-    }
-    // 3->2: an edge p-q of the face with exactly three tetrahedra around it.
-    for (int e = 0; e < 3; ++e) {
-        const int pv = f[e], qv = f[(e + 1) % 3];
-        int ring[3] = {t, -1, -1}, size = 1;
-        bool closed = false;
-        for (int current = t, previous = -1; size <= 3;) {
-            const int next = tet_mesh::next_around_edge(m, current, previous, pv, qv);
-            if (next < 0) break;
-            if (next == t) {
-                closed = true;
-                break;
-            }
-            if (size == 3) break;
-            ring[size++] = next;
-            previous = current;
-            current = next;
+    return positive == 3 || negative == 3;
+}
+
+// The 3->2 flip around edge pv-qv of triangle t|u: valid when exactly three
+// tetrahedra, u among them, share the edge and pv and qv lie on opposite
+// sides of the triangle of their other particles.
+template <class Mesh, class Point>
+KOKKOS_INLINE_FUNCTION bool flip32(const Mesh& m, const Point& point, int t, int u, int pv, int qv, Plan& p) {
+    int ring[3] = {t, -1, -1}, size = 1;
+    bool closed = false;
+    for (int current = t, previous = -1; size <= 3;) {
+        const int next = tet_mesh::next_around_edge(m, current, previous, pv, qv);
+        if (next < 0) break;
+        if (next == t) {
+            closed = true;
+            break;
         }
-        if (!closed || size != 3 || (ring[1] != u && ring[2] != u)) continue;
-        int others[3], count = 0;
-        for (int r = 0; r < 3; ++r)
-            for (int j = 0; j < 4; ++j) {
-                const int v = m.vertex(ring[r], j);
-                bool seen = v == pv || v == qv;
-                for (int c = 0; c < count; ++c) seen |= others[c] == v;
-                if (!seen && count < 3) others[count++] = v;
-            }
-        if (count != 3) continue;
-        const int n1[4] = {pv, others[0], others[1], others[2]}, n2[4] = {qv, others[0], others[1], others[2]};
-        if (ep::orient(point, n1) == 0 || ep::orient(point, n2) == 0) continue;
-        const int side_p[4] = {others[0], others[1], others[2], pv}, side_q[4] = {others[0], others[1], others[2], qv};
-        if (ep::orient(point, side_p) * ep::orient(point, side_q) >= 0) continue;
-        p.kind = Plan::flip32;
-        for (int r = 0; r < 3; ++r) p.old[r] = ring[r];
-        p.olds = 3;
-        p.freshes = 2;
-        for (int c = 0; c < 4; ++c) {
-            p.fresh[0][c] = n1[c];
-            p.fresh[1][c] = n2[c];
-        }
-        return p;
+        if (size == 3) break;
+        ring[size++] = next;
+        previous = current;
+        current = next;
     }
-    p.kind = Plan::unflippable;
+    if (!closed || size != 3 || (ring[1] != u && ring[2] != u)) return false;
+    int others[3], count = 0;
+    for (int r = 0; r < 3; ++r)
+        for (int j = 0; j < 4; ++j) {
+            const int v = m.vertex(ring[r], j);
+            bool seen = v == pv || v == qv;
+            for (int c = 0; c < count; ++c) seen |= others[c] == v;
+            if (!seen && count < 3) others[count++] = v;
+        }
+    if (count != 3) return false;
+    const int n1[4] = {pv, others[0], others[1], others[2]}, n2[4] = {qv, others[0], others[1], others[2]};
+    if (ep::orient(point, n1) == 0 || ep::orient(point, n2) == 0) return false;
+    const int side_p[4] = {others[0], others[1], others[2], pv}, side_q[4] = {others[0], others[1], others[2], qv};
+    if (ep::orient(point, side_p) * ep::orient(point, side_q) >= 0) return false;
+    p = {Plan::flip32, {ring[0], ring[1], ring[2]}, {}, 3, 2};
+    for (int c = 0; c < 4; ++c) {
+        p.fresh[0][c] = n1[c];
+        p.fresh[1][c] = n2[c];
+    }
+    return true;
+}
+
+// Plan the repair of triangle t|u (t's face opposite corner k) if it fails
+// the local Delaunay test: the first of the 2->3 flip and the 3->2 flips
+// around its three edges that is valid and closes its cavity; else
+// unflippable (none is valid) or rejected (none of the valid ones closes).
+// The device repair and the host fallback plan alike.
+template <class Mesh, class Point>
+KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k) {
+    Plan p;
+    const int u = m.adjacent(t, k);
+    const int T[4] = {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)};
+    const int far = tet_mesh::far_vertex(m, t, u);
+    if (far < 0 || !ep::in_sphere(point, T, far)) return p;
+    int f[3];
+    tet_mesh::sorted_face(T, k, f);
+    bool rejected = false;
+    for (int candidate = 0; candidate < 4; ++candidate) {
+        const bool valid = candidate == 0 ? flip23(point, t, u, T[k], far, f, p)
+                                          : flip32(m, point, t, u, f[candidate - 1], f[candidate % 3], p);
+        if (!valid) continue;
+        if (closes(m, p.old, p.olds, p.fresh, p.freshes)) return p;
+        rejected = true;
+    }
+    p.kind = rejected ? Plan::rejected : Plan::unflippable;
     return p;
 }
 
@@ -268,6 +277,16 @@ KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
     x *= 0x85ebca6bu;
     x ^= x >> 13;
     return x;
+}
+
+// Add stuck entry (t, k).
+template <class Counters, class Stuck>
+KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& stuck, int t, int k) {
+    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
+    if (at < static_cast<int>(stuck.extent(0))) {
+        stuck(at, 0) = t;
+        stuck(at, 1) = k;
+    }
 }
 
 // List t as dirty unless it already is.
@@ -487,13 +506,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     const ep::Offset o[4] = {{0, 0, 0}, ep::offset(point, v[0], v[1]), ep::offset(point, v[0], v[2]),
                                              ep::offset(point, v[0], v[3])};
                     // Turned inside out: listed for the host, but flips usually untangle it.
-                    if (ep::orient(o[1], o[2], o[3]) <= 0) {
-                        const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                        if (at < static_cast<int>(stuck.extent(0))) {
-                            stuck(at, 0) = t;
-                            stuck(at, 1) = inverted;
-                        }
-                    }
+                    if (ep::orient(o[1], o[2], o[3]) <= 0) detail::list_stuck(counters, stuck, t, inverted);
                     for (int k = 0; k < 4; ++k) {
                         const int u = adjacent(t, k);
                         if (u < 0 || (dirty(u) && u < t)) continue;
@@ -548,23 +561,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 detail::Plan p;
                 const int u = adjacent(t, k);
                 if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k);
-                if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) {
-                    p.kind = detail::Plan::none;  // never votes, so it cannot block other flips
-                    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                    if (at < static_cast<int>(stuck.extent(0))) {
-                        stuck(at, 0) = t;
-                        stuck(at, 1) = rejected;
-                    }
-                }
                 plans(i) = detail::pack(p);
-                if (p.kind == detail::Plan::unflippable) {
-                    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                    if (at < static_cast<int>(stuck.extent(0))) {
-                        stuck(at, 0) = t;
-                        stuck(at, 1) = k;
-                    }
-                }
-                if (p.kind <= 0) return;
+                if (p.kind < 0) detail::list_stuck(counters, stuck, t, p.kind == detail::Plan::rejected ? rejected : k);
+                if (p.kind <= 0) return;  // never votes, so it cannot block other flips
                 for (int r = 0; r < p.olds; ++r) {
                     const int o = p.old[r];
                     Kokkos::atomic_max(&lock(o), vote);

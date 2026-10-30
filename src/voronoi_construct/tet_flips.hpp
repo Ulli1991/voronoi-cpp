@@ -305,15 +305,6 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     return {};
 }
 
-// tet_repair::closes for host lists of up to three new tetrahedra.
-inline bool closes(const Mesh& m, const std::vector<int>& old, const std::vector<Tet>& fresh) {
-    int tets[3][4];
-    for (std::size_t r = 0; r < fresh.size() && r < 3; ++r)
-        for (int c = 0; c < 4; ++c) tets[r][c] = fresh[r][c];
-    return fresh.size() <= 3 &&
-           tet_repair::closes(m, old.data(), static_cast<int>(old.size()), tets, static_cast<int>(fresh.size()));
-}
-
 // Whether the triangle between neighbours t and u fails the local Delaunay test.
 inline bool fails(const Mesh& m, int t, int u) {
     const int far = tet_mesh::far_vertex(m, t, u);
@@ -354,71 +345,18 @@ inline Stats repair(Mesh& m) {
             for (int k = 0; k < 4; ++k) {
                 const int u = m.adjacent(t, k);
                 if (u < 0) continue;
-                const int far = tet_mesh::far_vertex(m, t, u);
-                ++stats.checked;
-                if (far < 0 || !ep::in_sphere(m.point, T.data(), far)) continue;
-                const int a = T[k];  // apex of t opposite the shared face
-                int face[3];
-                tet_mesh::sorted_face(T.data(), k, face);
-                // 2->3: the segment a-far crosses the shared face exactly when the
-                // three tetrahedra (a, far, edge of the face) share one orientation.
-                std::vector<Tet> three;
-                int positive = 0, negative = 0;
-                for (int e = 0; e < 3; ++e) {
-                    const Tet n{a, far, face[e], face[(e + 1) % 3]};
-                    const int o = ep::orient(m.point, n.data());
-                    positive += o > 0;
-                    negative += o < 0;
-                    three.push_back(n);
+                const auto p = tet_repair::detail::plan(m, m.point, t, k);
+                if (p.kind == p.none) continue;
+                if (p.kind < 0) {
+                    stuck.emplace_back(t, u);
+                    continue;
                 }
-                if ((positive == 3 || negative == 3) && detail::closes(m, {t, u}, three)) {
-                    for (int s : detail::replace(m, {t, u}, three)) push(s);
-                    ++stats.flips23;
-                    break;
-                }
-                // 3->2: an edge of the face with exactly three tetrahedra around it.
-                bool done = false;
-                for (int e = 0; e < 3 && !done; ++e) {
-                    const int p = face[e], q = face[(e + 1) % 3];
-                    // Walk around edge p-q until the walk closes.
-                    std::vector<int> ring{t};
-                    bool closed = false;
-                    for (int current = t, previous = -1; ring.size() <= 3;) {
-                        const int next = tet_mesh::next_around_edge(m, current, previous, p, q);
-                        if (next < 0) break;
-                        if (next == t) {
-                            closed = true;
-                            break;
-                        }
-                        ring.push_back(next);
-                        previous = current;
-                        current = next;
-                    }
-                    if (!closed) continue;
-                    if (ring.size() != 3 || std::find(ring.begin(), ring.end(), u) == ring.end()) continue;
-                    // The three tetrahedra share edge p-q; their other vertices
-                    // form the triangle of the two new tetrahedra.
-                    std::vector<int> others;
-                    for (int r : ring)
-                        for (int j = 0; j < 4; ++j) {
-                            const int v = m.vertex(r, j);
-                            if (v != p && v != q && std::find(others.begin(), others.end(), v) == others.end())
-                                others.push_back(v);
-                        }
-                    if (others.size() != 3) continue;
-                    const std::vector<Tet> two{{p, others[0], others[1], others[2]}, {q, others[0], others[1], others[2]}};
-                    if (ep::orient(m.point, two[0].data()) == 0 || ep::orient(m.point, two[1].data()) == 0) continue;
-                    // Valid only if p and q lie on opposite sides of the new triangle.
-                    const Tet side_p{others[0], others[1], others[2], p}, side_q{others[0], others[1], others[2], q};
-                    if (ep::orient(m.point, side_p.data()) * ep::orient(m.point, side_q.data()) >= 0) continue;
-                    if (!detail::closes(m, ring, two)) continue;
-                    for (int s : detail::replace(m, ring, two)) push(s);
-                    ++stats.flips32;
-                    done = true;
-                }
-                if (done) break;
-                ++stats.stuck;
-                stuck.emplace_back(t, u);
+                const std::vector<int> old(p.old, p.old + p.olds);
+                std::vector<Tet> fresh;
+                for (int r = 0; r < p.freshes; ++r) fresh.push_back({p.fresh[r][0], p.fresh[r][1], p.fresh[r][2], p.fresh[r][3]});
+                for (int s : detail::replace(m, old, fresh)) push(s);
+                ++(p.kind == p.flip23 ? stats.flips23 : stats.flips32);
+                break;
             }
         }
         // Triangles no flip could repair: rebuild their surroundings.

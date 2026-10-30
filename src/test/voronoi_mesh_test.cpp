@@ -2,9 +2,9 @@
 // off the snapping grid in a box of side 2:
 //   - the first update builds the mesh; later ones repair it, and after
 //     each the faces are those of an exact rebuild (neighbours, volumes);
-//     with Fallback::host the host finishes what the device repair cannot;
-//     with Fallback::rebuild a step the device repair cannot finish
-//     rebuilds and is exact too;
+//     on near-cospherical shells, where the device repair leaves stuck
+//     triangles, Fallback::host (the host finishes them) and
+//     Fallback::rebuild (the step rebuilds) are exact too;
 //   - faces are stored once, owner < neighbour, and close every cell;
 //     volumes fill the box; cell centroids equal those of clipping;
 //   - the per-cell face lists (update_cells) name each cell's faces once,
@@ -209,9 +209,9 @@ int main(int argc, char** argv) {
                      "a local rebuild returns each face of the listed cells once (" + std::to_string(expected) +
                          " faces, areas within " + sci(worst) + " spacings^2)");
     }
-    {  // the scratch memory between updates, then steps (host fallback) and a rebuild guard
+    {  // the scratch memory between updates, then steps, then both fallbacks
         auto scratch = mesh.scratch(64 * static_cast<std::size_t>(n));
-        mesh.set_fallback(voronoi::Fallback::host);  // never a rebuild here
+        mesh.set_fallback(voronoi::Fallback::host);  // nothing sticks here: never a rebuild
         Kokkos::deep_copy(scratch, char(7));
         const Flow flow;
         bool exact = true, repaired = true;
@@ -227,18 +227,23 @@ int main(int argc, char** argv) {
         }
         check.expect(exact && repaired, "updates repair the mesh, exact after each:" + what.str());
 
-        Points wave = make_points("wave", 4096);
-        Positions xw = to_device(scaled(wave, box));
-        Mesh guarded(Exec{}, box);
-        guarded.set_fallback(voronoi::Fallback::rebuild);
-        guarded.update(xw);
-        flow.advect(wave, 0.3 * spacing / box);
-        xw = to_device(scaled(wave, box));
-        const voronoi::Report r = guarded.update(xw);
-        const Comparison c = compare_with_rebuild(guarded, xw);
-        check.expect(r.stuck > 0 && r.rebuilt && c.pass(),
-                     "Fallback::rebuild: a step the device repair leaves stuck (" + std::to_string(r.stuck) +
-                         ") is rebuilt, exact");
+        for (const auto fallback : {voronoi::Fallback::host, voronoi::Fallback::rebuild}) {
+            const bool host = fallback == voronoi::Fallback::host;
+            Points shells = make_points("shells@1e-9", 4096);
+            Positions xs = to_device(scaled(shells, box));
+            Mesh stuck(Exec{}, box);
+            stuck.set_fallback(fallback);
+            stuck.update(xs);
+            flow.advect(shells, 0.3 * spacing / box);
+            xs = to_device(scaled(shells, box));
+            const voronoi::Report r = stuck.update(xs);
+            const Comparison c = compare_with_rebuild(stuck, xs);
+            check.expect(r.stuck > 0 && (host || r.rebuilt) && c.pass(),
+                         std::string(host ? "Fallback::host" : "Fallback::rebuild") +
+                             ": a step the device repair leaves stuck (" + std::to_string(r.stuck) + "; host flips " +
+                             std::to_string(r.host_flips) + ", local rebuilds " + std::to_string(r.host_rebuilds) +
+                             ", rebuilt " + std::to_string(r.rebuilt) + ") is exact");
+        }
     }
     return check.failed() != 0;
 }
