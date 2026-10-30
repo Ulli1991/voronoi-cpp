@@ -264,9 +264,9 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
     return s;
 }
 
-// New positions x: snaps them and lists the tetrahedra that may need repair,
-// screened in double precision with their circumcentres (m.centre, computed
-// for x): those with a neighbour's far vertex inside or near the
+// New positions x: snaps them, computes the circumcentres (m.centre) of
+// the live tetrahedra, and lists those that may need repair, screened in
+// double precision with these circumcentres: those with a neighbour's far vertex inside or near the
 // circumsphere, and the badly shaped ones (possibly flat or inverted). The
 // margin covers the snapping of positions to the exact grid; what it lists
 // is decided exactly by repair.
@@ -289,22 +289,26 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
                 return Vec3<double>{tet_mesh::wrap(x(v, 0) - cx, box), tet_mesh::wrap(x(v, 1) - cy, box),
                                     tet_mesh::wrap(x(v, 2) - cz, box)};
             };
-            const int v0 = vertex(t, 0);
-            const Vec3<double> d1 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 1)),
-                               d2 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 2)),
-                               d3 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 3));
-            const double l1 = dot(d1, d1), l2 = dot(d2, d2), l3 = dot(d3, d3);
-            const double volume6 = dot(d1, cross(d2, d3));
+            const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+            const Vec3<double> d[3] = {from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[1]),
+                                       from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[2]),
+                                       from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[3])};
+            const Vec3<double> c = tet_mesh::circumcentre(x, box, v, d);
+            const double cx = x(v[0], 0) + c.x, cy = x(v[0], 1) + c.y, cz = x(v[0], 2) + c.z, r2 = dot(c, c);
+            centre(t, 0) = cx;
+            centre(t, 1) = cy;
+            centre(t, 2) = cz;
+            centre(t, 3) = r2;
+            const double volume6 = dot(d[0], cross(d[1], d[2]));
             // Well shaped and clearly positive, else decide exactly.
-            bool suspect = !(volume6 > 1e-3 * Kokkos::sqrt(l1 * l2 * l3));
-            const double r2 = centre(t, 3);
+            bool suspect = !(volume6 > 1e-3 * Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2])));
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);
                 if (u < 0) continue;
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
-                const Vec3<double> e = from(centre(t, 0), centre(t, 1), centre(t, 2), far);
+                const Vec3<double> e = from(cx, cy, cz, far);
                 suspect = dot(e, e) < r2 + margin;
             }
             if (suspect) detail::mark(st, t);

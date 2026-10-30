@@ -471,6 +471,42 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     return faces;
 }
 
+// The circumcentre of particles v[0..3] relative to x(v[0]), given the
+// offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images).
+template <class X>
+KOKKOS_INLINE_FUNCTION Vec3<double> circumcentre(const X& x, double box, const int* v, const Vec3<double>* d) {
+    Vec3<double> c = detail::circumcentre(d[0], d[1], d[2]);
+    // Nearly flat (sliver) tetrahedra: the double formula divides by a
+    // tiny determinant. Redo it on the snapped grid, where numerator
+    // and denominator are exact integers, and divide once at the end.
+    const double volume6 = dot(d[0], cross(d[1], d[2]));
+    if (!(Kokkos::abs(volume6) > 1e-4 * Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2])))) {
+        namespace ep = exact_predicates;
+        ep::Offset g[3];
+        const ep::i64 g0[3] = {ep::snap(x(v[0], 0) / box), ep::snap(x(v[0], 1) / box), ep::snap(x(v[0], 2) / box)};
+        for (int k = 0; k < 3; ++k)
+            for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(g0[a], ep::snap(x(v[k + 1], a) / box));
+        auto cross128 = [](const ep::Offset& p, const ep::Offset& q, ep::i128* r) {
+            r[0] = ep::i128(p[1]) * q[2] - ep::i128(p[2]) * q[1];
+            r[1] = ep::i128(p[2]) * q[0] - ep::i128(p[0]) * q[2];
+            r[2] = ep::i128(p[0]) * q[1] - ep::i128(p[1]) * q[0];
+        };
+        ep::i128 bc[3], ca[3], ab[3];
+        cross128(g[1], g[2], bc);
+        cross128(g[2], g[0], ca);
+        cross128(g[0], g[1], ab);
+        const ep::i128 la = ep::lift(g[0]), lb = ep::lift(g[1]), lc = ep::lift(g[2]);
+        const ep::i128 det = ep::det3(g[0], g[1], g[2]);
+        if (det != 0) {
+            const double unit = box / ep::scale / (2 * double(det));
+            c = {double(la * bc[0] + lb * ca[0] + lc * ab[0]) * unit,
+                 double(la * bc[1] + lb * ca[1] + lc * ab[1]) * unit,
+                 double(la * bc[2] + lb * ca[2] + lc * ab[2]) * unit};
+        }
+    }
+    return c;
+}
+
 // 1. Circumcentres, one thread per tetrahedron; with `only`, just those
 // with only(t) != 0 (e.g. the ones a repair touched at unchanged positions).
 template <class ExecSpace, class X>
@@ -482,47 +518,15 @@ void circumcentres(const ExecSpace& exec, const X& x, double box,
         Kokkos::RangePolicy<ExecSpace>(exec, 0, count < 0 ? static_cast<int>(mesh.vertex.extent(0)) : count),
         KOKKOS_LAMBDA(int t) {
             if (only.data() && !only(t)) return;
-            const int v0 = mesh.vertex(t, 0);
+            const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
             Vec3<double> d[3];
-            for (int k = 0; k < 3; ++k) {
-                const int v = mesh.vertex(t, k + 1);
-                d[k] = {wrap(x(v, 0) - x(v0, 0), box), wrap(x(v, 1) - x(v0, 1), box),
-                        wrap(x(v, 2) - x(v0, 2), box)};
-            }
-            Vec3<double> c = detail::circumcentre(d[0], d[1], d[2]);
-            // Nearly flat (sliver) tetrahedra: the double formula divides by a
-            // tiny determinant. Redo it on the snapped grid, where numerator
-            // and denominator are exact integers, and divide once at the end.
-            const double volume6 = dot(d[0], cross(d[1], d[2]));
-            if (!(Kokkos::abs(volume6) > 1e-4 * Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2])))) {
-                namespace ep = exact_predicates;
-                ep::Offset g[3];
-                const ep::i64 g0[3] = {ep::snap(x(v0, 0) / box), ep::snap(x(v0, 1) / box), ep::snap(x(v0, 2) / box)};
-                for (int k = 0; k < 3; ++k) {
-                    const int v = mesh.vertex(t, k + 1);
-                    for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(g0[a], ep::snap(x(v, a) / box));
-                }
-                auto cross128 = [](const ep::Offset& p, const ep::Offset& q, ep::i128* r) {
-                    r[0] = ep::i128(p[1]) * q[2] - ep::i128(p[2]) * q[1];
-                    r[1] = ep::i128(p[2]) * q[0] - ep::i128(p[0]) * q[2];
-                    r[2] = ep::i128(p[0]) * q[1] - ep::i128(p[1]) * q[0];
-                };
-                ep::i128 bc[3], ca[3], ab[3];
-                cross128(g[1], g[2], bc);
-                cross128(g[2], g[0], ca);
-                cross128(g[0], g[1], ab);
-                const ep::i128 la = ep::lift(g[0]), lb = ep::lift(g[1]), lc = ep::lift(g[2]);
-                const ep::i128 det = ep::det3(g[0], g[1], g[2]);
-                if (det != 0) {
-                    const double unit = box / ep::scale / (2 * double(det));
-                    c = {double(la * bc[0] + lb * ca[0] + lc * ab[0]) * unit,
-                         double(la * bc[1] + lb * ca[1] + lc * ab[1]) * unit,
-                         double(la * bc[2] + lb * ca[2] + lc * ab[2]) * unit};
-                }
-            }
-            mesh.centre(t, 0) = x(v0, 0) + c.x;
-            mesh.centre(t, 1) = x(v0, 1) + c.y;
-            mesh.centre(t, 2) = x(v0, 2) + c.z;
+            for (int k = 0; k < 3; ++k)
+                d[k] = {wrap(x(v[k + 1], 0) - x(v[0], 0), box), wrap(x(v[k + 1], 1) - x(v[0], 1), box),
+                        wrap(x(v[k + 1], 2) - x(v[0], 2), box)};
+            const Vec3<double> c = circumcentre(x, box, v, d);
+            mesh.centre(t, 0) = x(v[0], 0) + c.x;
+            mesh.centre(t, 1) = x(v[0], 1) + c.y;
+            mesh.centre(t, 2) = x(v[0], 2) + c.z;
             mesh.centre(t, 3) = dot(c, c);
         });
 }

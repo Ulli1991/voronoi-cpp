@@ -350,7 +350,7 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
 }
 
 // The persistent mesh of moving particles, stepped as the pipeline does:
-//   repair: pad positions, circumcentres, screen, flip on the device;
+//   repair: pad positions, circumcentres and screening, flips on the device;
 //   finish: the host fallback, only when the device repair left stuck entries;
 //   update_geometry: circumcentres of the touched tetrahedra, face rings,
 //   faces and volumes.
@@ -379,7 +379,6 @@ struct MovingMesh {
 
     tet_repair::Stats repair(const Positions& x) {
         tet_mesh::pad(exec, x, padded);
-        tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count);
         tet_repair::move_screened(exec, padded, 1.0, mesh, state);
         return tet_repair::repair(exec, mesh, state);
     }
