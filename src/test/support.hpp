@@ -30,6 +30,16 @@ using Positions = Kokkos::View<double* [3], Memory>;
 using NeighbourSets = std::vector<std::vector<int>>;
 
 inline double wrap(double x) { return x - std::floor(x); }
+
+// Positions on the grid of the exact predicates (2^30 steps across the box).
+// The mesh's topology is decided on snapped positions and its geometry
+// computed from the positions themselves; off the grid, the two disagree on
+// near-degenerate cells (volumes ~1e-9 apart) and for particles closer than
+// ~1e3 grid steps. Every input and flow step here is kept on the grid.
+inline void to_grid(Points& points) {
+    for (auto& p : points)
+        for (double& x : p) x = std::floor(x * exact_predicates::scale) / exact_predicates::scale;
+}
 inline double nearest_image(double d) { return d - std::nearbyint(d); }
 
 template <class View>
@@ -99,7 +109,7 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
 // Points in the unit box: uniform, jittered (lattice moved by up to 0.1
 // spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, or a
 // degenerate layout. Lattices round n to a cube.
-inline Points make_points(const std::string& kind, int n) {
+inline Points make_points_off_grid(const std::string& kind, int n) {
     if (const auto at = kind.find('@'); at != std::string::npos)
         return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n);
     std::mt19937_64 rng(20261029);
@@ -133,6 +143,13 @@ inline Points make_points(const std::string& kind, int n) {
     } else {
         throw std::invalid_argument("unknown distribution " + kind);
     }
+    return points;
+}
+
+// The same on the grid of the exact predicates (to_grid).
+inline Points make_points(const std::string& kind, int n) {
+    Points points = make_points_off_grid(kind, n);
+    to_grid(points);
     return points;
 }
 
@@ -186,12 +203,14 @@ public:
         return v;
     }
 
-    // Move every point by `distance` times the velocity, wrapped into the box.
+    // Move every point by `distance` times the velocity, wrapped into the box
+    // and kept on the grid.
     void advect(Points& x, double distance) const {
         for (auto& p : x) {
             const Point v = velocity(p);
             for (int a = 0; a < 3; ++a) p[a] = wrap(p[a] + distance * v[a]);
         }
+        to_grid(x);
     }
 
 private:

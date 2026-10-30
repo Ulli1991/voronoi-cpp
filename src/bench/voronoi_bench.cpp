@@ -9,7 +9,8 @@
 //       tet_start::build) and the per-step kernels on it, then `steps` steps of the flow, `displacement`
 //       spacings each: device repair (screened), host fallback when stuck,
 //       circumcentres, face rings and faces. --verify compares every step
-//       with an exact rebuild; --debug adds adjacency and stuck details.
+//       with an exact rebuild (faces the clipping lacks must have area below
+//       1e-9 spacings^2); --debug adds adjacency and stuck details.
 //
 // Distributions: uniform, jittered, lattice, wave, clustered, or
 // <sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>.
@@ -213,10 +214,28 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         const long long failing = tet_flips::failing(mesh);
         const Reference exact = clipped(x);
         const NeighbourSets neighbours = delaunay_neighbours(mesh, n);
-        long long mismatched = 0, exact_faces = 0;
+        long long mismatched = 0, exact_faces = 0, missing = 0, extra = 0;
         for (int i = 0; i < n; ++i) {
             mismatched += neighbours[i] != exact.neighbours[i];
             exact_faces += static_cast<long long>(exact.neighbours[i].size());
+        }
+        // Faces the clipping lacks must be rounding-level: clipping drops
+        // faces below 64 eps R^2, the mesh keeps every Delaunay edge.
+        double extra_area = 0;
+        {
+            const auto owner = to_host(moving.mesh.owner);
+            const auto neighbour = to_host(moving.mesh.neighbour);
+            const auto area = to_host(moving.geometry.area);
+            for (int f = 0; f < faces; ++f) {
+                const int i = owner(f), j = neighbour(f);
+                if (std::binary_search(exact.neighbours[i].begin(), exact.neighbours[i].end(), j)) continue;
+                ++extra;
+                extra_area = std::max(extra_area, std::sqrt(area(f, 0) * area(f, 0) + area(f, 1) * area(f, 1) +
+                                                            area(f, 2) * area(f, 2)) / (spacing * spacing));
+            }
+            for (int i = 0; i < n; ++i)
+                for (int j : exact.neighbours[i])
+                    missing += i < j && !std::binary_search(neighbours[i].begin(), neighbours[i].end(), j);
         }
         const auto volume = to_host(moving.geometry.volume);
         double worst = 0, total = 0;
@@ -229,9 +248,10 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
                 worst_cell = i;
             }
         }
-        const bool pass = failing == 0 && mismatched == 0 && worst < 1e-10;
+        const bool pass = failing == 0 && missing == 0 && extra_area < 1e-9 && worst < 1e-10;
         failures += !pass;
         std::cout << "verify: step=" << s << " failing=" << failing << " mismatched_cells=" << mismatched
+                  << " missing_faces=" << missing << " extra_faces=" << extra << " extra_max_area=" << extra_area
                   << " faces=" << faces << " exact_faces=" << exact_faces / 2 << " total_volume=" << total
                   << " max_relative_volume_difference=" << worst << (pass ? "  PASS" : "  FAIL") << "\n";
         if (debug && worst_cell >= 0)
