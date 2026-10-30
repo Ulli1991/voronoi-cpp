@@ -10,6 +10,7 @@ struct WorkspaceUsage {
     int planes=0, vertices=0, hole_edges=0, faces=0, face_vertices=0;
     int candidates=0, vertex_tests=0, coordinate_reads=0, created_vertices=0;
     int intersection_solves=0, status=success;
+    int suffix_tests=0, edge_tests=0, face_seed_tests=0, face_link_tests=0;
 };
 
 namespace detail {
@@ -23,6 +24,10 @@ struct WorkspaceTrace {
     KOKKOS_INLINE_FUNCTION void faces(int n) { usage.faces=Kokkos::max(usage.faces,n); }
     KOKKOS_INLINE_FUNCTION void face_vertices(int n) { usage.face_vertices=Kokkos::max(usage.face_vertices,n); }
     KOKKOS_INLINE_FUNCTION void candidate() { ++usage.candidates; }
+    KOKKOS_INLINE_FUNCTION void suffix_test() { ++usage.suffix_tests; }
+    KOKKOS_INLINE_FUNCTION void edge_test() { ++usage.edge_tests; }
+    KOKKOS_INLINE_FUNCTION void face_seed_test() { ++usage.face_seed_tests; }
+    KOKKOS_INLINE_FUNCTION void face_link_test() { ++usage.face_link_tests; }
     KOKKOS_INLINE_FUNCTION void vertex_test() { ++usage.vertex_tests; }
     KOKKOS_INLINE_FUNCTION void coordinate_read() { ++usage.coordinate_reads; }
     KOKKOS_INLINE_FUNCTION void created_vertex() { ++usage.created_vertices; }

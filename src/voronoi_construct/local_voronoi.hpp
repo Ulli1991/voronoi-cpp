@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Kokkos_Core.hpp>
+#include "fixed_point_positions.hpp"
 
 #include <cstdint>
+#include <type_traits>
 
 namespace local_voronoi {
 
@@ -65,7 +67,7 @@ struct RelativeClippingTolerance {
 // scan of the row; the search then needs neither nearest_first nor its
 // distance table. Zero keeps the row's own order.
 template<int Planes = max_planes, class Tolerance = LegacyClippingTolerance, bool EarlyStop = false,
-         int NearestBatch = 0>
+         bool DirectFaceLinks = false, int NearestBatch = 0>
 struct PlaneWorkspace {
     static_assert(Planes >= n_box_planes && Planes <= 65535,
                   "plane capacity must fit the vertex plane indices");
@@ -74,12 +76,13 @@ struct PlaneWorkspace {
                   "without early stop a nearest batch only rescans the row; keep the row order");
     static constexpr int plane_capacity = Planes;
     static constexpr bool early_stop = EarlyStop;
+    static constexpr bool direct_face_links = DirectFaceLinks;
     static constexpr bool nearest_batch = NearestBatch > 0;
     static constexpr int nearest_batch_size = NearestBatch;
     using tolerance = Tolerance;
     // The same options at another plane capacity, as used by the full-workspace retry.
     template<int OtherPlanes>
-    using with_planes = PlaneWorkspace<OtherPlanes,Tolerance,EarlyStop,NearestBatch>;
+    using with_planes = PlaneWorkspace<OtherPlanes,Tolerance,EarlyStop,DirectFaceLinks,NearestBatch>;
 };
 
 // The clipping state can be owned privately or supplied by a team scratch
@@ -100,6 +103,10 @@ struct NoWorkspaceTrace {
     KOKKOS_INLINE_FUNCTION void faces(int) {}
     KOKKOS_INLINE_FUNCTION void face_vertices(int) {}
     KOKKOS_INLINE_FUNCTION void candidate() {}
+    KOKKOS_INLINE_FUNCTION void suffix_test() {}
+    KOKKOS_INLINE_FUNCTION void edge_test() {}
+    KOKKOS_INLINE_FUNCTION void face_seed_test() {}
+    KOKKOS_INLINE_FUNCTION void face_link_test() {}
     KOKKOS_INLINE_FUNCTION void vertex_test() {}
     KOKKOS_INLINE_FUNCTION void coordinate_read() {}
     KOKKOS_INLINE_FUNCTION void created_vertex() {}
@@ -290,11 +297,39 @@ struct CachedVertexPositions {
     }
 };
 
-template<class Edges>
+// Opt-in mixed cache: only clipping uses rounded coordinates. Boundary tests
+// fall back to the double plane intersection; certification/output always do.
+struct FloatCachedVertexPositions {
+    // position() reconstructs in double; approximate() is the separate FP32 cache.
+    static constexpr bool caches_coordinates = false;
+    struct Position { float x,y,z; };
+    Kokkos::Array<Position,max_vertices> positions;
+    KOKKOS_INLINE_FUNCTION void set(int i, Vec3 x) {
+        positions[i]={static_cast<float>(x.x),static_cast<float>(x.y),static_cast<float>(x.z)};
+    }
+    KOKKOS_INLINE_FUNCTION void initialize(int c,double reach) {
+        set(c,{(c&1)?-reach:reach,(c&2)?-reach:reach,(c&4)?-reach:reach});
+    }
+    KOKKOS_INLINE_FUNCTION void keep(int destination,int source) {
+        positions[destination]=positions[source];
+    }
+    KOKKOS_INLINE_FUNCTION Vec3 approximate(int i) const {
+        return {positions[i].x,positions[i].y,positions[i].z};
+    }
+    template<class Tolerance=LegacyClippingTolerance,class Planes>
+    KOKKOS_INLINE_FUNCTION bool position(int,const VertexPlanes& vertex,
+                                        const Planes& planes,Vec3& x) const {
+        return vertex_position<Tolerance>(vertex,planes,x);
+    }
+};
+static_assert(sizeof(FloatCachedVertexPositions)*2==sizeof(CachedVertexPositions));
+
+template<class Edges, class Trace=NoWorkspaceTrace>
 KOKKOS_INLINE_FUNCTION int edge_add_or_cancel(Edges& edges,
                                                int& count, std::uint16_t a,
-                                               std::uint16_t b) {
+                                               std::uint16_t b, Trace&& trace={}) {
     for (int i=0;i<count;++i) {
+        trace.edge_test();
         if (edges[i].a==b && edges[i].b==a) {
             edges[i]=edges[count-1];
             --count;
@@ -360,13 +395,9 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
     // the cell. Refresh it during the existing classification traversal.
     double enclosing_radius2=3.0*reach*reach;
     auto separation = [&](int other) {
-        Vec3 d{positions(other,0)-positions(row,0),
-               positions(other,1)-positions(row,1),
-               positions(other,2)-positions(row,2)};
-        if (box[0]>0) d.x-=box[0]*Kokkos::floor(d.x/box[0]+0.5);
-        if (box[1]>0) d.y-=box[1]*Kokkos::floor(d.y/box[1]+0.5);
-        if (box[2]>0) d.z-=box[2]*Kokkos::floor(d.z/box[2]+0.5);
-        return d;
+        return Vec3{coordinate_displacement(positions,other,row,0,box[0]),
+                    coordinate_displacement(positions,other,row,1,box[1]),
+                    coordinate_displacement(positions,other,row,2,box[2])};
     };
     const int first_candidate=neighbor_offsets(row), end_candidate=neighbor_offsets(row+1);
     int q=first_candidate;
@@ -393,7 +424,9 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
                 // retain the reference path.
                 if constexpr (Workspace::nearest_batch) break;
                 bool safe=true;
+                // q already points past the current candidate.
                 for (int k=q;k<end_candidate;++k) {
+                    trace.suffix_test();
                     const Vec3 delta=separation(neighbor_ids(k));
                     const double distance2=dot(delta,delta);
                     if (!(distance2>cutoff) || Tolerance::coincident(distance2)) { safe=false; break; }
@@ -412,9 +445,29 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
         for (int v=0;v<vertex_count;++v) {
             Vec3 x;
             trace.vertex_test();
-            if (!position(v,x)) { status=degenerate_geometry; break; }
-            if constexpr (Workspace::early_stop)
-                visited_radius2=Kokkos::fmax(visited_radius2,dot(x,x));
+            if constexpr (std::is_same_v<VertexStorage,FloatCachedVertexPositions>) {
+                x=vertex_storage.approximate(v);
+                // Bound cache rounding (including float subnormals) separately
+                // from the existing double arithmetic classification tolerance.
+                const double magnitude=Kokkos::abs(d.x*x.x)+Kokkos::abs(d.y*x.y)+Kokkos::abs(d.z*x.z);
+                const double uncertainty=2.0e-7*magnitude+1.5e-45*
+                    (Kokkos::abs(d.x)+Kokkos::abs(d.y)+Kokkos::abs(d.z));
+                const double residual=dot(d,x)-plane_offset;
+                if (!Kokkos::isfinite(magnitude) ||
+                    Kokkos::abs(residual)<=uncertainty+Kokkos::abs(tol)+
+                        1.4210854715202004e-14*(magnitude+Kokkos::abs(plane_offset))) {
+                    if (!position(v,x)) { status=degenerate_geometry; break; }
+                }
+                if constexpr (Workspace::early_stop) {
+                    const double pad=2.0e-7*(Kokkos::abs(x.x)+Kokkos::abs(x.y)+Kokkos::abs(x.z))+4.5e-45;
+                    const double radius=Kokkos::sqrt(dot(x,x))+pad;
+                    visited_radius2=Kokkos::fmax(visited_radius2,radius*radius);
+                }
+            } else {
+                if (!position(v,x)) { status=degenerate_geometry; break; }
+                if constexpr (Workspace::early_stop)
+                    visited_radius2=Kokkos::fmax(visited_radius2,dot(x,x));
+            }
             const bool is_outside=Tolerance::outside(d,x,plane_offset,tol);
             if (is_outside) outside_mask|=std::uint64_t(1)<<v;
             any_outside=any_outside||is_outside;
@@ -430,7 +483,7 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
             if (!(outside_mask & (std::uint64_t(1)<<v))) continue;
             const auto p=vertices[v].p;
             for (int e=0;e<3;++e) {
-                status=edge_add_or_cancel(hole,hole_count,p[e],p[(e+1)%3]);
+                status=edge_add_or_cancel(hole,hole_count,p[e],p[(e+1)%3],trace);
                 trace.hole(hole_count+(status==hole_capacity ? 1 : 0));
                 if (status!=success) break;
             }
@@ -485,10 +538,24 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
             Vec3 twice_area{0,0,0};
             // A vertex triple containing p lies on that face. Adjacent vertices
             // are linked by the directed pair of planes around that face.
+            // One byte per plane, reused for each face. A directed (p,q)
+            // plane pair identifies its vertex; 255 is an invalid vertex.
+            Kokkos::Array<std::uint8_t,Workspace::direct_face_links ? Workspace::plane_capacity : 1> links;
+            if constexpr (Workspace::direct_face_links)
+                for (int q=0;q<plane_count;++q) links[q]=255;
             int start=-1;
-            for (int v=0;v<vertex_count;++v)
+            for (int v=0;v<vertex_count;++v) {
+                trace.face_seed_test();
                 for (int k=0;k<3;++k)
-                    if (vertices[v].p[k]==p) start=v;
+                    if (vertices[v].p[k]==p) {
+                        start=v;
+                        if constexpr (Workspace::direct_face_links) {
+                            const int q=vertices[v].p[(k+1)%3];
+                            // Preserve the reference's first matching vertex.
+                            if (links[q]==255) links[q]=static_cast<std::uint8_t>(v);
+                        }
+                    }
+            }
             if (start<0) continue;
             trace.faces(output_count+1);
             if (output_count==max_faces) { status=face_capacity; break; }
@@ -514,11 +581,17 @@ KOKKOS_INLINE_FUNCTION void reconstruct_row(
                 if (at<0) { status=degenerate_geometry; break; }
                 const std::uint16_t last=ids[(at+2)%3];
                 int next=-1;
+                if constexpr (Workspace::direct_face_links) {
+                    trace.face_link_test();
+                    if (links[last]!=255) next=links[last];
+                } else {
                 for (int w=0;w<vertex_count;++w) {
+                    trace.face_link_test();
                     const auto other=vertices[w].p;
                     int pos=-1;
                     for (int k=0;k<3;++k) if (other[k]==p) pos=k;
                     if (pos>=0 && other[(pos+1)%3]==last) { next=w; break; }
+                }
                 }
                 if (next<0) { status=degenerate_geometry; break; }
                 Vec3 y;

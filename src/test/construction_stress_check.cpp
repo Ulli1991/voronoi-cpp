@@ -1,3 +1,10 @@
+#ifndef VORONOI_TEST_FACE_LINKS
+#define VORONOI_TEST_FACE_LINKS false
+#endif
+#ifndef VORONOI_TEST_TEAM
+#define VORONOI_TEST_TEAM false
+#endif
+#include "local_voronoi_team.hpp"
 #ifndef VORONOI_TEST_EARLY_STOP
 #define VORONOI_TEST_EARLY_STOP false
 #endif
@@ -153,7 +160,11 @@ int check(const Case& input) {
         reach,no_box,faces,ids,areas,face_centers,volumes,centers,status);
     const int legacy_status=host(status)(0);
     using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP,
-        VORONOI_TEST_NEAREST_BATCH>;
+        VORONOI_TEST_FACE_LINKS,VORONOI_TEST_NEAREST_BATCH>;
+    if constexpr (VORONOI_TEST_TEAM)
+        local_voronoi::reconstruct_hydro_team(
+            Exec{},positions,counts,table,reach,no_box,faces,ids,areas,face_centers,volumes,centers,status);
+    else
     local_voronoi::reconstruct_hydro_retry<local_voronoi::CachedVertexPositions,Relative>(
         Exec{},positions,counts,table,reach,no_box,faces,ids,areas,face_centers,volumes,centers,status);
     auto hs=host(status),hf=host(faces); auto hi=host(ids);
@@ -247,7 +258,7 @@ int check_cloud() {
     Kokkos::View<double****,Memory> vertices("cloud_vertices",n,local_voronoi::max_faces,
         local_voronoi::max_face_vertices,3);
     using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP,
-        VORONOI_TEST_NEAREST_BATCH>;
+        VORONOI_TEST_FACE_LINKS,VORONOI_TEST_NEAREST_BATCH>;
     local_voronoi::reconstruct_table_retry<local_voronoi::CachedVertexPositions,Relative>(
         Exec{},search.positions,search.counts,search.table,search.radii,{1,1,1},
         faces,ids,areas,vertices_per_face,vertices,status);
@@ -329,7 +340,7 @@ int check_non_finite() {
     Kokkos::deep_copy(positions,p); Kokkos::deep_copy(table,t); Kokkos::deep_copy(counts,c);
     Kokkos::deep_copy(reach,2.0);
     using Relative=local_voronoi::PlaneWorkspace<64,local_voronoi::RelativeClippingTolerance,VORONOI_TEST_EARLY_STOP,
-        VORONOI_TEST_NEAREST_BATCH>;
+        VORONOI_TEST_FACE_LINKS,VORONOI_TEST_NEAREST_BATCH>;
     local_voronoi::reconstruct_hydro_retry<local_voronoi::CachedVertexPositions,Relative>(
         Exec{},positions,counts,table,reach,{0,0,0},faces,ids,areas,face_centers,volumes,centers,status);
     auto hs=host(status),hf=host(faces); auto hv=host(volumes);

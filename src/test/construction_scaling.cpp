@@ -1,4 +1,5 @@
 #include "local_voronoi_retry.hpp"
+#include "local_voronoi_order_retry.hpp"
 #include "neighbor_search.hpp"
 #include "fixed_point_positions.hpp"
 #include "local_voronoi_coalesced.hpp"
@@ -6,6 +7,7 @@
 #include "local_voronoi_team.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -64,6 +66,33 @@ double median(std::vector<double> values) {
     return values[values.size()/2];
 }
 
+// Instrumented passes are separate from the ordinary throughput measurements.
+// Per-stage medians need not add up to the median total; each sample is fenced.
+void write_search_profile(const std::string& path, const std::string& policy, int side,
+                          const std::vector<neighbor_search::StageProfile>& samples,
+                          const std::vector<double>& wall_times) {
+    using Profile=neighbor_search::StageProfile;
+    constexpr std::array<double Profile::*,7> fields{
+        &Profile::key_count_ms,&Profile::scan_ms,&Profile::scatter_ms,
+        &Profile::cell_order_gather_ms,&Profile::candidate_fill_ms,
+        &Profile::nearest_order_ms,&Profile::overflow_check_ms};
+    std::ifstream existing(path);
+    const bool header=!existing.good() || existing.peek()==std::ifstream::traits_type::eof();
+    existing.close();
+    std::ofstream out(path,std::ios::app);
+    if (!out) throw std::runtime_error("cannot append search-stage CSV");
+    if (header) out << "backend,policy,side,repeats,key_count_ms,scan_ms,scatter_ms,"
+        "cell_order_gather_ms,candidate_fill_ms,nearest_order_ms,overflow_check_ms,"
+        "instrumented_wall_ms\n";
+    out << std::setprecision(17) << Exec::name() << ',' << policy << ',' << side << ',' << samples.size();
+    for (const auto field:fields) {
+        std::vector<double> times;
+        for (const auto& sample:samples) times.push_back(sample.*field);
+        out << ',' << median(times);
+    }
+    out << ',' << median(wall_times) << '\n';
+}
+
 struct Result {
     std::string status="PASS",policy;
     int side=0,repeats=0;
@@ -107,15 +136,23 @@ void write_result(const Result& r,const std::string& csv_path) {
         << ',' << r.tensor_error << ',' << r.validation_errors << '\n';
 }
 
-template<class Tolerance, bool EarlyStop=false, bool FixedInput=false, bool Coalesced=false, bool Batched=false, int BatchRows=65536, bool Shared=false, bool Cooperative=false, bool NearestBatch=false>
-int run(int side,int repeats,const std::string& policy,const std::string& csv_path) {
+template<class Tolerance, bool EarlyStop=false, bool FixedInput=false, bool Coalesced=false, bool Batched=false, int BatchRows=65536, bool Shared=false, bool Cooperative=false, class VertexStorage=local_voronoi::CachedVertexPositions, bool DirectFaceLinks=false, bool IntegerReconstruction=false, bool NearestBatch=false>
+int run(int side,int repeats,const std::string& policy,const std::string& csv_path, const std::string& stage_path) {
     Result result;
     result.side=side; result.repeats=repeats; result.policy=policy;
     result.n=std::uint64_t(side)*side*side;
     result.estimated_arrays=array_bytes(side);
+    const bool unsorted = policy=="relative_early_unsorted" || policy=="relative_early_morton_unsorted";
+    const bool morton = policy=="relative_early_morton" || policy=="relative_early_morton_unsorted";
+    const bool scratch_sort = policy=="relative_early_scratch_sort" || policy=="relative_early_float_cache" || policy=="relative_early_face_links" || policy=="relative_early_integer32" || policy=="relative_early_integer32_decoded" || morton;
+    if (morton) {
+        const auto nx=std::uint64_t(std::ceil(1.0/(0.75*(radius_scale/side))));
+        result.estimated_arrays+=4*nx*nx*nx;
+    }
     // Unsorted rows keep no per-entry distance table.
-    if constexpr (NearestBatch) result.estimated_arrays-=8ULL*capacity*result.n;
+    if (scratch_sort || unsorted || NearestBatch) result.estimated_arrays-=8ULL*capacity*result.n;
     if constexpr (Coalesced) result.estimated_arrays+=1536*(Batched ? std::min<std::uint64_t>(result.n,BatchRows) : result.n);
+    if constexpr (IntegerReconstruction) result.estimated_arrays+=12*result.n;
     const auto initial=device_memory();
     if (!initial.total && result.n>32768)
         throw std::runtime_error("large scaling requires the CUDA build; CPU smoke checks are limited to 32^3");
@@ -153,8 +190,10 @@ int run(int side,int repeats,const std::string& policy,const std::string& csv_pa
     });
     exec.fence("scaling input ready");
     neighbor_search::DenseCellSearch<Exec> search;
-    search.row_sort=neighbor_search::RowSort::team_bitonic;
-    neighbor_search::configure(search,n,box,0.75*radius,true,capacity,!NearestBatch,1);
+    search.row_sort=scratch_sort ? neighbor_search::RowSort::team_bitonic_recompute
+                                 : neighbor_search::RowSort::team_bitonic;
+    search.morton_cells=morton;
+    neighbor_search::configure(search,n,box,0.75*radius,true,capacity,!unsorted && !NearestBatch,1);
     auto allocate=[](auto& view,const char* name,auto... sizes) {
         using View=std::decay_t<decltype(view)>;
         view=View(Kokkos::view_alloc(Kokkos::WithoutInitializing,std::string(name)),sizes...);
@@ -174,17 +213,45 @@ int run(int side,int repeats,const std::string& policy,const std::string& csv_pa
         if (memory.total) result.max_observed_used=std::max(result.max_observed_used,memory.total-memory.free);
     };
     observe_memory();
-    auto rebuild=[&] {
-        neighbor_search::build(exec,search,positions,radii);
-        neighbor_search::fill(exec,search);
+    local_voronoi::FixedPointPositions32<Memory> integer_slots;
+    if constexpr (IntegerReconstruction)
+        integer_slots.values=decltype(integer_slots.values)("integer_reconstruction_slots",n);
+    auto rebuild=[&](neighbor_search::StageProfile* profile=nullptr) {
+        neighbor_search::build(exec,search,positions,radii,profile);
+        neighbor_search::fill(exec,search,profile);
+        if constexpr (IntegerReconstruction) {
+            const auto order=search.order;
+            Kokkos::parallel_for("gather_integer_reconstruction_slots",Range(exec,0,n),KOKKOS_LAMBDA(int slot) {
+                for (int a=0;a<3;++a) integer_slots.values(slot,a)=positions.values(order(slot),a);
+            });
+            exec.fence("integer reconstruction slots ready");
+        }
+        std::optional<Kokkos::Timer> overflow_timer;
+        if (profile) overflow_timer.emplace();
         int longest=0;
         Kokkos::deep_copy(exec,longest,search.max_count);
         exec.fence("scaling neighbor completeness");
+        if (profile) profile->overflow_check_ms+=overflow_timer->seconds()*1e3;
         if (longest>capacity) throw std::runtime_error("lattice neighbor capacity bound exceeded");
     };
     local_voronoi::CoalescedVertexPositions<Memory> cache;
     if constexpr(Coalesced) cache.coordinates=decltype(cache.coordinates)(Kokkos::view_alloc(Kokkos::WithoutInitializing,"coalesced_vertex_cache"),Batched ? std::min(n,BatchRows) : n,local_voronoi::max_vertices,3);
+    auto reconstruction_positions=[&] {
+        if constexpr (IntegerReconstruction) return integer_slots;
+        else return search.positions;
+    }();
     auto reconstruct=[&] {
+        if constexpr (IntegerReconstruction) {
+            // Matched control: identical quantized input, search and gather;
+            // only reconstruction position loads/displacements differ.
+            if (policy=="relative_early_integer32_decoded") {
+                local_voronoi::reconstruct_hydro_retry<VertexStorage,
+                    local_voronoi::PlaneWorkspace<64,Tolerance,EarlyStop,DirectFaceLinks>>(
+                        exec,search.positions,search.counts,search.table,search.radii,box,
+                        faces,ids,areas,face_centers,volumes,centers,status);
+                return;
+            }
+        }
         if constexpr(Cooperative) {
             local_voronoi::reconstruct_hydro_team(exec,search.positions,search.counts,search.table,search.radii,box,faces,ids,areas,face_centers,volumes,centers,status);
         } else if constexpr(Shared) {
@@ -192,10 +259,13 @@ int run(int side,int repeats,const std::string& policy,const std::string& csv_pa
         } else if constexpr(Coalesced) {
             local_voronoi::reconstruct_hydro_coalesced(exec,search.positions,search.counts,search.table,search.radii,box,faces,ids,areas,face_centers,volumes,centers,status,cache);
         } else
-        local_voronoi::reconstruct_hydro_retry<local_voronoi::CachedVertexPositions,
-            local_voronoi::PlaneWorkspace<64,Tolerance,EarlyStop,
-                NearestBatch ? local_voronoi::default_nearest_batch<Exec>() : 0>>(exec,search.positions,search.counts,
+        local_voronoi::reconstruct_hydro_retry<VertexStorage,
+            local_voronoi::PlaneWorkspace<64,Tolerance,EarlyStop,DirectFaceLinks,
+                NearestBatch ? local_voronoi::default_nearest_batch<Exec>() : 0>>(exec,reconstruction_positions,search.counts,
                 search.table,search.radii,box,faces,ids,areas,face_centers,volumes,centers,status);
+        if (unsorted) local_voronoi::retry_hydro_order<local_voronoi::CachedVertexPositions,
+            local_voronoi::PlaneWorkspace<64,Tolerance,EarlyStop>>(exec,search,faces,ids,areas,
+                face_centers,volumes,centers,status);
     };
     for (int warm=0;warm<2;++warm) { rebuild(); reconstruct(); }
     observe_memory();
@@ -209,6 +279,17 @@ int run(int side,int repeats,const std::string& policy,const std::string& csv_pa
     }
     result.search_ms=median(search_times); result.build_ms=median(build_times);
     result.pipeline_ms=median(pipeline_times);
+    if (!stage_path.empty()) {
+        std::vector<neighbor_search::StageProfile> samples(repeats);
+        std::vector<double> wall_times;
+        for (auto& sample:samples) {
+            Kokkos::Timer timer;
+            rebuild(&sample);
+            wall_times.push_back(timer.seconds()*1e3);
+        }
+        write_search_profile(stage_path,policy,side,samples,wall_times);
+        reconstruct(); // Validate the final profiled candidate table as well.
+    }
     const auto counts=search.counts; const auto p=search.positions; const auto table=search.table;
     long long bad=0,edges=0;
     double volume_sum=0,max_closure=0,max_tensor=0;
@@ -278,6 +359,33 @@ int run(int side,int repeats,const std::string& policy,const std::string& csv_pa
     observe_memory();
     if (result.validation_errors) result.status="FAIL_VALIDATION";
     write_result(result,csv_path);
+#ifdef VORONOI_REFERENCE_PROFILE
+    // Untimed work-count kernel, intentionally distinct from production timing.
+    Kokkos::View<local_voronoi::WorkspaceUsage*,Memory> usage("profile_usage",n);
+    local_voronoi::profile_workspace<local_voronoi::CachedVertexPositions,
+        local_voronoi::PlaneWorkspace<64,Tolerance,EarlyStop>>(
+            exec,search.positions,search.counts,search.table,search.radii,box,usage);
+    const auto host_usage=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},usage);
+    using Usage=local_voronoi::WorkspaceUsage;
+    constexpr std::array<int Usage::*,8> fields{
+        &Usage::candidates,&Usage::suffix_tests,&Usage::vertex_tests,&Usage::intersection_solves,
+        &Usage::edge_tests,&Usage::face_seed_tests,&Usage::face_link_tests,&Usage::coordinate_reads};
+    std::array<long long,8> totals{};
+    std::array<long long,9> statuses{};
+    for (int i=0;i<n;++i) {
+        const auto& u=host_usage(i);
+        if (u.status<0 || u.status>=9) throw std::runtime_error("invalid profiling status");
+        ++statuses[u.status];
+        for (std::size_t j=0;j<fields.size();++j) totals[j]+=u.*fields[j];
+    }
+    std::cout << "work_counts rows=" << n << " success_rows=" << statuses[0]
+              << " plane_overflow_rows=" << statuses[local_voronoi::plane_capacity];
+    constexpr const char* names[]={"candidates","suffix_tests","vertex_tests","intersection_solves",
+        "edge_tests","face_seed_tests","face_link_tests","coordinate_reads"};
+    for (std::size_t j=0;j<totals.size();++j)
+        std::cout << ' ' << names[j] << "_per_cell=" << double(totals[j])/n;
+    std::cout << '\n';
+#endif
     return result.validation_errors ? 2 : 0;
 }
 } // namespace
@@ -290,21 +398,31 @@ int main(int argc,char** argv) {
         const int repeats=argc>2 ? std::stoi(argv[2]) : 5;
         const std::string policy=argc>3 ? argv[3] : "relative";
         const std::string csv=argc>4 ? argv[4] : "";
+        const std::string stage_csv=argc>5 ? argv[5] : "";
         if (side<12 || side>1024 || repeats<1 || repeats>101)
-            throw std::invalid_argument("usage: construction_scaling [side 12..1024] [repeats 1..101] [relative|relative_early|legacy] [CSV]");
+            throw std::invalid_argument("usage: construction_scaling [side 12..1024] [repeats 1..101] [policy] [CSV] [SEARCH_STAGE_CSV]");
         const std::uint64_t n=std::uint64_t(side)*side*side;
         if (n>std::numeric_limits<int>::max()) throw std::invalid_argument("particle IDs exceed int range");
-        if (policy=="cooperative") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,false,true>(side,repeats,policy,csv);
-        else if (policy=="relative_early_shared") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,true>(side,repeats,policy,csv);
-        else if (policy=="relative_early_batched_test") result=run<local_voronoi::RelativeClippingTolerance,true,false,true,true,257>(side,repeats,policy,csv);
-        else if (policy=="relative_early_batched") result=run<local_voronoi::RelativeClippingTolerance,true,false,true,true>(side,repeats,policy,csv);
-        else if (policy=="relative_early_coalesced") result=run<local_voronoi::RelativeClippingTolerance,true,false,true>(side,repeats,policy,csv);
-        else if (policy=="relative_early_fixed32") result=run<local_voronoi::RelativeClippingTolerance,true,true>(side,repeats,policy,csv);
-        else if (policy=="relative_early_nearest_batch") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,false,false,true>(side,repeats,policy,csv);
-        else if (policy=="relative_early") result=run<local_voronoi::RelativeClippingTolerance,true>(side,repeats,policy,csv);
-        else if (policy=="relative") result=run<local_voronoi::RelativeClippingTolerance>(side,repeats,policy,csv);
-        else if (policy=="legacy") result=run<local_voronoi::LegacyClippingTolerance>(side,repeats,policy,csv);
+#ifdef VORONOI_REFERENCE_PROFILE
+        if (policy!="relative_early_scratch_sort")
+            throw std::invalid_argument("reference profile requires relative_early_scratch_sort");
+        result=run<local_voronoi::RelativeClippingTolerance,true>(side,repeats,policy,csv,stage_csv);
+#else
+        if (policy=="relative_early_integer32" || policy=="relative_early_integer32_decoded") result=run<local_voronoi::RelativeClippingTolerance,true,true,false,false,65536,false,false,local_voronoi::CachedVertexPositions,false,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_face_links") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,false,false,local_voronoi::CachedVertexPositions,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_float_cache") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,false,false,local_voronoi::FloatCachedVertexPositions>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="cooperative") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,false,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_shared") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_batched_test") result=run<local_voronoi::RelativeClippingTolerance,true,false,true,true,257>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_batched") result=run<local_voronoi::RelativeClippingTolerance,true,false,true,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_coalesced") result=run<local_voronoi::RelativeClippingTolerance,true,false,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_fixed32") result=run<local_voronoi::RelativeClippingTolerance,true,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early_nearest_batch") result=run<local_voronoi::RelativeClippingTolerance,true,false,false,false,65536,false,false,local_voronoi::CachedVertexPositions,false,false,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative_early" || policy=="relative_early_scratch_sort" || policy=="relative_early_unsorted" || policy=="relative_early_morton" || policy=="relative_early_morton_unsorted") result=run<local_voronoi::RelativeClippingTolerance,true>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="relative") result=run<local_voronoi::RelativeClippingTolerance>(side,repeats,policy,csv,stage_csv);
+        else if (policy=="legacy") result=run<local_voronoi::LegacyClippingTolerance>(side,repeats,policy,csv,stage_csv);
         else throw std::invalid_argument("policy must be relative, relative_early or legacy");
+#endif
     } catch (const std::exception& error) {
         std::cerr << "scaling_error=" << error.what() << '\n';
         result=1;

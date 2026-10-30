@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
+#include <utility>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -11,7 +14,7 @@
 
 namespace neighbor_search {
 
-enum class RowSort { insertion, team_bitonic };
+enum class RowSort { insertion, team_bitonic, team_bitonic_recompute };
 
 // Opt-in, synchronized stage measurements. Production calls omit this pointer
 // and retain their original asynchronous launches and single overflow read.
@@ -46,6 +49,10 @@ struct DenseCellSearch {
     Kokkos::Array<double, 3> box{1.0, 1.0, 1.0};
     bool periodic = false;
     bool nearest_first = false;
+    // Opt-in Morton order of cell blocks; IDs within a cell remain deterministic.
+    // Select before configure. The spatial query still visits every required cell.
+    bool morton_cells = false;
+    int morton_nx = 0, morton_ny = 0, morton_nz = 0;
     // Explicit experimental option; configure/rebuild preserve this selection.
     // The insertion path remains the default until GPU comparison is complete.
     RowSort row_sort = RowSort::insertion;
@@ -53,6 +60,7 @@ struct DenseCellSearch {
     int vector_length = 1;
 
     IntView keys, order, cell_counts, cell_offsets, counts;
+    IntView cell_rank; // Cartesian cell key -> rank in Morton cell order
     Positions positions;
     ScalarView radii;
     Table table;
@@ -71,6 +79,17 @@ void record_stage(const ExecSpace& exec, std::optional<Kokkos::Timer>& timer,
     exec.fence("neighbor search stage profile");
     *elapsed+=timer->seconds()*1e3;
     timer->reset();
+}
+
+// 21 coordinate bits per axis fit in a 64-bit Morton key.
+inline std::uint64_t morton_key(unsigned x, unsigned y, unsigned z) {
+    std::uint64_t result=0;
+    for (unsigned bit=0;bit<21;++bit) {
+        result|=std::uint64_t((x>>bit)&1)<<(3*bit+2);
+        result|=std::uint64_t((y>>bit)&1)<<(3*bit+1);
+        result|=std::uint64_t((z>>bit)&1)<<(3*bit);
+    }
+    return result;
 }
 
 template<class View, class... Extents>
@@ -120,6 +139,23 @@ void configure(DenseCellSearch<ExecSpace>& s, int n, Kokkos::Array<double, 3> bo
     s.hy = box[1] / s.ny;
     s.hz = box[2] / s.nz;
     const int cells = s.cell_count();
+    if (s.morton_cells && (s.morton_nx!=s.nx || s.morton_ny!=s.ny || s.morton_nz!=s.nz)) {
+        if (s.nx>(1<<21) || s.ny>(1<<21) || s.nz>(1<<21))
+            throw std::invalid_argument("Morton cell coordinates exceed 21 bits");
+        // Geometry-dependent map, cached across rebuilds and capacity growth.
+        std::vector<std::pair<std::uint64_t,int>> cells_by_key;
+        cells_by_key.reserve(cells);
+        for (int x=0;x<s.nx;++x)
+            for (int y=0;y<s.ny;++y)
+                for (int z=0;z<s.nz;++z)
+                    cells_by_key.emplace_back(detail::morton_key(x,y,z),(x*s.ny+y)*s.nz+z);
+        std::sort(cells_by_key.begin(),cells_by_key.end());
+        detail::ensure(s.cell_rank,"morton_cell_rank",cells);
+        auto rank=Kokkos::create_mirror(s.cell_rank);
+        for (int i=0;i<cells;++i) rank(cells_by_key[i].second)=i;
+        Kokkos::deep_copy(s.cell_rank,rank);
+        s.morton_nx=s.nx; s.morton_ny=s.ny; s.morton_nz=s.nz;
+    }
     const bool fresh_counts = !s.cell_counts.is_allocated() ||
                               s.cell_counts.extent(0) != static_cast<std::size_t>(cells);
     detail::ensure(s.keys, "cell_keys", n);
@@ -130,7 +166,10 @@ void configure(DenseCellSearch<ExecSpace>& s, int n, Kokkos::Array<double, 3> bo
     detail::ensure(s.positions, "slot_positions", n);
     detail::ensure(s.radii, "slot_radii", n);
     detail::ensure(s.table, "neighbor_table", n, capacity);
-    if (nearest_first) detail::ensure(s.distance2, "neighbor_distance2", n, capacity);
+    // The opt-in scratch sort keeps only candidate IDs globally. Oversized
+    // rows retain the insertion fallback and its persistent distance storage.
+    if (nearest_first && (s.row_sort != RowSort::team_bitonic_recompute || capacity > 2048))
+        detail::ensure(s.distance2, "neighbor_distance2", n, capacity);
     if (!s.max_count.is_allocated())
         s.max_count = Kokkos::View<int, typename ExecSpace::memory_space>("max_neighbor_count");
     // Builds leave cell_counts at zero, so it is cleared only on allocation.
@@ -153,6 +192,8 @@ void build(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
     const int nx = s.nx, ny = s.ny, nz = s.nz;
     const double hx = s.hx, hy = s.hy, hz = s.hz;
     const auto keys = s.keys;
+    const auto cell_rank = s.cell_rank;
+    const bool morton = s.morton_cells;
     const auto order = s.order;
     const auto cell_counts = s.cell_counts;
     const auto cell_offsets = s.cell_offsets;
@@ -164,7 +205,8 @@ void build(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
         const int ix = Kokkos::clamp(static_cast<int>(in_positions(i, 0) / hx), 0, nx - 1);
         const int iy = Kokkos::clamp(static_cast<int>(in_positions(i, 1) / hy), 0, ny - 1);
         const int iz = Kokkos::clamp(static_cast<int>(in_positions(i, 2) / hz), 0, nz - 1);
-        const int key = (ix * ny + iy) * nz + iz;
+        const int cartesian = (ix * ny + iy) * nz + iz;
+        const int key = morton ? cell_rank(cartesian) : cartesian;
         keys(i) = key;
         Kokkos::atomic_inc(&cell_counts(key));
     });
@@ -240,6 +282,8 @@ struct RowSearch {
     int nx, ny, nz;
     double hx, hy, hz, lx, ly, lz;
     bool periodic;
+    Kokkos::View<int*, memory_space> cell_rank;
+    bool morton=false;
 
     struct Query {
         double r2;
@@ -278,23 +322,38 @@ struct RowSearch {
                 if (gx * gx + gy * gy > query.r2) return;
                 const double qy = py - (uy - y) * hy;
                 const int column = (x * ny + y) * nz;
-                // Along z, the cells of one (x, y) column are consecutive keys,
-                // so each z segment is one contiguous slot range.
+                // Cartesian blocks can merge a whole z segment. Morton blocks
+                // use per-cell ranges: the same spatial coverage, different layout.
+                auto segment=[&](int first_z,int last_z,double shifted_z) {
+                    if (first_z>=last_z) return;
+                    if (!morton) {
+                        scan(offsets(column+first_z),offsets(column+last_z),qx,qy,shifted_z,query);
+                    } else {
+                        for (int z=first_z;z<last_z;++z) {
+                            const int rank=cell_rank(column+z);
+                            scan(offsets(rank),offsets(rank+1),qx,qy,shifted_z,query);
+                        }
+                    }
+                };
                 if (query.wide_z) {
-                    scan(offsets(column), offsets(column + nz), qx, qy, pz, query);
+                    segment(0,nz,pz);
                     return;
                 }
                 const int z_lo = iz0 - rz, z_hi = iz0 + rz;
                 const int a = Kokkos::max(z_lo, 0), b = Kokkos::min(z_hi, nz - 1);
-                scan(offsets(column + a), offsets(column + b + 1), qx, qy, pz, query);
+                segment(a,b+1,pz);
                 if (periodic && z_lo < 0)
-                    scan(offsets(column + z_lo + nz), offsets(column + nz), qx, qy, pz + lz, query);
+                    segment(z_lo+nz,nz,pz+lz);
                 if (periodic && z_hi >= nz)
-                    scan(offsets(column), offsets(column + z_hi - nz + 1), qx, qy, pz - lz, query);
+                    segment(0,z_hi-nz+1,pz-lz);
             });
         });
         return query;
     }
+};
+
+struct AllRows {
+    KOKKOS_INLINE_FUNCTION bool operator()(int) const { return true; }
 };
 
 // Parallel bitonic network in team scratch: each candidate is loaded/stored
@@ -302,8 +361,8 @@ struct RowSearch {
 // The network compares (distance squared, slot), matching insertion exactly.
 // Return false for oversized tables so callers can use the preserved fallback.
 // Scratch is bounded at about 24 KiB/team, with no persistent or host allocations.
-template<class ExecSpace>
-bool sort_rows_team(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) {
+template<class ExecSpace, class RowFilter=AllRows>
+bool sort_rows_team(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s, RowFilter selected={}) {
     constexpr int max_team_capacity = 2048;
     if (s.capacity > max_team_capacity || s.capacity < 0) return false;
     if (s.n == 0) return true;
@@ -320,6 +379,10 @@ bool sort_rows_team(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) 
     const auto table = s.table;
     const auto distance2 = s.distance2;
     const auto counts = s.counts;
+    const auto positions = s.positions;
+    const auto box = s.box;
+    const bool periodic = s.periodic;
+    const bool recompute = s.row_sort == RowSort::team_bitonic_recompute;
     const int capacity = s.capacity;
     const double padding_distance = std::numeric_limits<double>::infinity();
     const int padding_id = std::numeric_limits<int>::max();
@@ -328,14 +391,30 @@ bool sort_rows_team(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) 
         Distances::shmem_size(padded_capacity)+Ids::shmem_size(padded_capacity)));
     Kokkos::parallel_for("dense_neighbor_team_bitonic",policy,KOKKOS_LAMBDA(const Member& member) {
         const int row = member.league_rank();
+        if (!selected(row)) return;
         const int count = Kokkos::clamp(counts(row),0,capacity);
         int padded = 1;
         while (padded < count) padded *= 2;
         Distances distances(member.team_scratch(0),padded_capacity);
         Ids ids(member.team_scratch(0),padded_capacity);
         Kokkos::parallel_for(Kokkos::TeamThreadRange(member,padded),[&](int i) {
-            distances(i) = i < count ? distance2(row,i) : padding_distance;
             ids(i) = i < count ? table(row,i) : padding_id;
+            double d2 = padding_distance;
+            if (i < count) {
+                if (recompute) {
+                    const int other = ids(i);
+                    double dx = positions(other,0)-positions(row,0);
+                    double dy = positions(other,1)-positions(row,1);
+                    double dz = positions(other,2)-positions(row,2);
+                    if (periodic) {
+                        dx = detail::minimum_image(dx,box[0]);
+                        dy = detail::minimum_image(dy,box[1]);
+                        dz = detail::minimum_image(dz,box[2]);
+                    }
+                    d2 = dx*dx+dy*dy+dz*dz;
+                } else d2 = distance2(row,i);
+            }
+            distances(i) = d2;
         });
         member.team_barrier();
         for (int width=2;width<=padded;width*=2) {
@@ -356,7 +435,7 @@ bool sort_rows_team(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s) 
             }
         }
         Kokkos::parallel_for(Kokkos::TeamThreadRange(member,count),[&](int i) {
-            distance2(row,i)=distances(i);
+            if (!recompute) distance2(row,i)=distances(i);
             table(row,i)=ids(i);
         });
     });
@@ -379,8 +458,10 @@ void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
     }
     const int n = s.n, capacity = s.capacity;
     const bool nearest_first = s.nearest_first;
+    const bool store_distances = nearest_first &&
+        (s.row_sort != RowSort::team_bitonic_recompute || capacity > 2048);
     const RowSearch<ExecSpace> search{s.positions, s.radii, s.cell_offsets, s.nx, s.ny, s.nz,
-                                      s.hx, s.hy, s.hz, s.box[0], s.box[1], s.box[2], s.periodic};
+                                      s.hx, s.hy, s.hz, s.box[0], s.box[1], s.box[2], s.periodic, s.cell_rank, s.morton_cells};
     const auto table = s.table;
     const auto distance2 = s.distance2;
     const auto counts = s.counts;
@@ -400,7 +481,7 @@ void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
                         if (d2 > query.r2) continue;
                         if (count < capacity) {
                             table(t, count) = q;
-                            if (nearest_first) distance2(t, count) = d2;
+                            if (store_distances) distance2(t, count) = d2;
                         }
                         ++count;
                     }
@@ -434,7 +515,7 @@ void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
                             const int c = count + position;
                             if (final && c < capacity) {
                                 table(t, c) = q;
-                                if (nearest_first) distance2(t, c) = d2;
+                                if (store_distances) distance2(t, c) = d2;
                             }
                             ++position;
                         }, found);
@@ -448,7 +529,7 @@ void fill(const ExecSpace& exec, const DenseCellSearch<ExecSpace>& s,
 
     detail::record_stage(exec,stage_timer,profile ? &profile->candidate_fill_ms : nullptr);
     if (!nearest_first) return;
-    if (s.row_sort == RowSort::team_bitonic && sort_rows_team(exec,s)) {
+    if (s.row_sort != RowSort::insertion && sort_rows_team(exec,s)) {
         detail::record_stage(exec,stage_timer,profile ? &profile->nearest_order_ms : nullptr);
         return;
     }

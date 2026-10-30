@@ -20,6 +20,15 @@ void reconstruct_hydro_team(Exec exec,Positions positions,Counts counts,Table ta
     Reach reaches,Kokkos::Array<double,3> box,FaceCounts face_counts,FaceIds face_ids,
     FaceAreas face_areas,FaceCenters face_centers,Volumes volumes,Centers centers,
     StatusView row_status){
+    const auto n=positions.extent(0);
+    if (positions.extent(1)!=3 || counts.extent(0)!=n || table.extent(0)!=n ||
+        reaches.extent(0)!=n || face_counts.extent(0)!=n || row_status.extent(0)!=n ||
+        face_ids.extent(0)!=n || face_ids.extent(1)<max_faces ||
+        face_areas.extent(0)!=n || face_areas.extent(1)<max_faces || face_areas.extent(2)!=3 ||
+        face_centers.extent(0)!=n || face_centers.extent(1)<max_faces ||
+        face_centers.extent(2)!=3 || volumes.extent(0)!=n ||
+        centers.extent(0)!=n || centers.extent(1)!=3)
+        throw std::invalid_argument("local_voronoi::reconstruct_hydro_team: incompatible view extents");
     using Policy=Kokkos::TeamPolicy<Exec>;
     using Member=typename Policy::member_type;
     using Scratch=Kokkos::View<CooperativeCell,typename Member::scratch_memory_space,Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
@@ -62,6 +71,7 @@ void reconstruct_hydro_team(Exec exec,Positions positions,Counts counts,Table ta
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team,vertex_count),[&](int v,std::uint64_t& bits){
                 if(RelativeClippingTolerance::outside(cell.delta,cell.coordinates[v],0.5*cell.distance2,0))bits|=std::uint64_t(1)<<v;
             },Kokkos::BOr<std::uint64_t>(mask));
+            team.team_broadcast(mask,0);
             if(mask==0)continue;
             Kokkos::single(Kokkos::PerTeam(team),[&](){
                 cell.hole_count=0;
@@ -185,6 +195,20 @@ void reconstruct_hydro_team(Exec exec,Positions positions,Counts counts,Table ta
             if(row_status(row)!=success)face_counts(row)=0;
         });
     });
+    // Keep the large private workspace out of the cooperative kernel. Only
+    // overflowing rows enter this separate fallback; other failures persist.
+    Kokkos::parallel_for("local_voronoi::cooperative_plane_retry",
+        Kokkos::RangePolicy<Exec>(exec,0,n), KOKKOS_LAMBDA(int row) {
+            if(row_status(row)!=plane_capacity) return;
+            detail::HydroGeometry<Volumes,Centers,FaceCenters> geometry{
+                volumes,centers,face_centers,row};
+            reconstruct_row<CachedVertexPositions,PlaneWorkspace<max_planes,RelativeClippingTolerance,true>>(
+                row,positions,detail::TableRowOffsets<Counts>{counts,row},
+                detail::TableRowIds<Table>{table,row},reaches(row),box,face_counts,
+                face_ids,face_areas,detail::NoDiagnosticVertices{},detail::NoDiagnosticVertices{},
+                row_status,geometry);
+            if(row_status(row)!=success) face_counts(row)=0;
+        });
     exec.fence("cooperative full reconstruction");
 }
 }
