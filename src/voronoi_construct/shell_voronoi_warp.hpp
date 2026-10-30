@@ -49,6 +49,7 @@ struct alignas(16) Polyhedron {
     std::uint32_t corner[max_vertices];
     std::uint32_t adjacent[max_vertices];
     std::uint8_t free_slots[max_vertices];  // stack of the slots not in use
+    std::uint8_t crossing[max_vertices];    // edges a cut crosses: removed vertex | edge << 6
     std::uint8_t starts[max_planes];        // new vertex whose hole edge starts at a plane
     std::uint8_t ends[max_planes];          // ... and ends at a plane
     std::uint8_t first[max_planes];         // a vertex on each face, for the face walk
@@ -220,20 +221,18 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     __syncwarp(all_lanes);
 
     // Each edge from a removed vertex to a kept one crosses the plane and
-    // becomes a new vertex; one ballot per edge numbers them.
+    // becomes a new vertex. One ballot per edge numbers them; lane j builds
+    // new vertices j and j + 32.
     const unsigned below = (1u << l) - 1;
-    std::uint32_t corner[per_lane] = {}, adjacent[per_lane] = {};
-    int number[per_lane][3];
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
-        if (out[k]) {
-            corner[k] = c.corner[l + k * lanes];
-            adjacent[k] = c.adjacent[l + k * lanes];
-        }
+        const int w = l + k * lanes;
+        const std::uint32_t adjacent = out[k] ? c.adjacent[w] : 0;
         for (int e = 0; e < 3; ++e) {
-            const bool crossing = out[k] && !(removed >> byte(adjacent[k], e) & 1);
+            const bool crossing = out[k] && !(removed >> byte(adjacent, e) & 1);
             const unsigned crossings = __ballot_sync(all_lanes, crossing);
-            number[k][e] = crossing ? created + __popc(crossings & below) : -1;
+            const int number = created + __popc(crossings & below);
+            if (crossing && number < max_vertices) c.crossing[number] = w | e << 6;
             created += __popc(crossings);
         }
     }
@@ -244,48 +243,51 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     if (kept + created < 4) return degenerate;
     const int plane = planes;
     const int free = max_vertices - in_use;
+    __syncwarp(all_lanes);
 
-    // New vertices, each into a free slot: position, planes, and the kept
-    // vertex across (a, b), whose edge back now ends at the new vertex.
+    // New vertex j lies on the edge from removed w to kept u, between planes
+    // a and b. It takes a free slot; u's edge back now ends at it.
+    Real radius = 0;
+    int slot[per_lane], kept_end[per_lane], a[per_lane], b[per_lane];
     for (int k = 0; k < per_lane; ++k) {
-        const int w = l + k * lanes;
-        for (int e = 0; e < 3; ++e) {
-            if (number[k][e] < 0) continue;
-            const int u = byte(adjacent[k], e);
-            const int slot = c.free_slots[free - 1 - number[k][e]];
-            const Real t = side[k] / (side[k] - c.side[u]);
-            c.x[slot] = c.x[w] + (c.x[u] - c.x[w]) * t;
-            c.y[slot] = c.y[w] + (c.y[u] - c.y[w]) * t;
-            c.z[slot] = c.z[w] + (c.z[u] - c.z[w]) * t;
-            const int a = byte(corner[k], e), b = byte(corner[k], (e + 1) % 3);
-            c.corner[slot] = pack(a, b, plane);
-            c.adjacent[slot] = u;
-            const std::uint32_t back = c.adjacent[u];
-            store_byte(c.adjacent[u], byte(back, 0) == w ? 0 : byte(back, 1) == w ? 1 : 2, slot);
-            c.starts[a] = slot;
-            c.ends[b] = slot;
-        }
+        const int j = l + k * lanes;
+        if (j >= created) continue;
+        const int code = c.crossing[j], w = code & 63, e = code >> 6;
+        const std::uint32_t corner = c.corner[w];
+        const int u = byte(c.adjacent[w], e);
+        const int s = c.free_slots[free - 1 - j];
+        const Real t = c.side[w] / (c.side[w] - c.side[u]);
+        const Real px = c.x[w] + (c.x[u] - c.x[w]) * t, py = c.y[w] + (c.y[u] - c.y[w]) * t,
+                   pz = c.z[w] + (c.z[u] - c.z[w]) * t;
+        c.x[s] = px;
+        c.y[s] = py;
+        c.z[s] = pz;
+        radius = Kokkos::max(radius, px * px + py * py + pz * pz);
+        a[k] = byte(corner, e);
+        b[k] = byte(corner, (e + 1) % 3);
+        c.corner[s] = pack(a[k], b[k], plane);
+        const std::uint32_t back = c.adjacent[u];
+        store_byte(c.adjacent[u], byte(back, 0) == w ? 0 : byte(back, 1) == w ? 1 : 2, s);
+        c.starts[a[k]] = s;
+        c.ends[b[k]] = s;
+        slot[k] = s;
+        kept_end[k] = u;
     }
     __syncwarp(all_lanes);
-    // Removed slots go back on the stack. A new vertex (the only ones on the
-    // new plane) links to its neighbours on the new face: across (b, plane)
-    // the new vertex whose hole edge starts at b, across (plane, a) the one
-    // whose hole edge ends at a.
-    Real radius = 0;
+    // Across (a, b) is u, across (b, plane) the new vertex whose hole edge
+    // starts at b, across (plane, a) the one whose hole edge ends at a.
+    for (int k = 0; k < per_lane; ++k)
+        if (l + k * lanes < created) c.adjacent[slot[k]] = pack(kept_end[k], c.starts[b[k]], c.ends[a[k]]);
+    // Removed slots go back on the stack; slots that took new vertices (the
+    // only ones on the new plane) join the polyhedron.
     bool in[per_lane];
     for (int k = 0; k < per_lane; ++k) {
         const int w = l + k * lanes;
         if (out[k]) c.free_slots[free - created + __popcll(removed & ((std::uint64_t(1) << w) - 1))] = w;
         const bool was = live >> w & 1;
-        bool fresh = false;
-        if (!was) {
-            const std::uint32_t cw = c.corner[w];
-            fresh = byte(cw, 2) == plane;
-            if (fresh)
-                c.adjacent[w] |= std::uint32_t(c.starts[byte(cw, 1)]) << 8 | std::uint32_t(c.ends[byte(cw, 0)]) << 16;
-        }
+        const bool fresh = !was && byte(c.corner[w], 2) == plane;
         in[k] = fresh || (was && !out[k]);
-        if (in[k]) radius = Kokkos::max(radius, c.x[w] * c.x[w] + c.y[w] * c.y[w] + c.z[w] * c.z[w]);
+        if (was && !out[k]) radius = Kokkos::max(radius, c.x[w] * c.x[w] + c.y[w] * c.y[w] + c.z[w] * c.z[w]);
     }
     live = vertex_ballot(in);
     if (l == 0) {
