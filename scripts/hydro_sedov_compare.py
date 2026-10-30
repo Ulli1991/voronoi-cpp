@@ -11,7 +11,8 @@ binning: N/2 bins from 0 to the farthest cell), the analytic radius, the
 largest cell density, the radius beyond which every cell is within 1e-6 of the
 background, and at the last snapshot the volume-weighted L1 errors of density,
 radial velocity and pressure against the analytic solution over r < 1.5 R_s
-(not a LUNA metric: LUNA's l1_error is a per-cell mean on its grid). Plots the
+(not a LUNA metric: LUNA's l1_error is a per-cell mean on its grid), the same
+for density over r < R_s / 2 and the smallest cell density. Plots the
 final radial profiles and R_s(t).
 """
 import glob
@@ -99,8 +100,12 @@ def analyse(label, root):
         "v_r": (w * np.abs(s["vr"] - vr_a)[inside]).sum() / vr_a.max(),
         "P": (w * np.abs(s["P"] - P_a)[inside]).sum() / P_a.max(),
     }
+    centre = s["r"] < 0.5 * Ra
+    wc = s["vol"][centre] / s["vol"][centre].sum()
+    l1_centre = (wc * np.abs(s["rho"] - rho_a)[centre]).sum() / RHO0
     print(f"{label}: final R_s/analytic={R / Ra:.4f}  peak profile rho/rho0={profile(s, s['rho'])[1].max() / RHO0:.3f}  "
-          f"L1(rho)/rho0={l1['rho']:.4f}  L1(v_r)/v2={l1['v_r']:.4f}  L1(P)/p2={l1['P']:.4f}")
+          f"L1(rho)/rho0={l1['rho']:.4f}  L1(v_r)/v2={l1['v_r']:.4f}  L1(P)/p2={l1['P']:.4f}  "
+          f"min rho/rho0={s['rho'].min() / RHO0:.3e}  L1(rho, r<R_s/2)/rho0={l1_centre:.4f}")
     return rows
 
 

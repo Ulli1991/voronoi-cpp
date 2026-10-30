@@ -2,7 +2,8 @@
 // on the static Voronoi mesh (hydro::FiniteVolume), with phase timings.
 //
 //   hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face]
-//               [--out=<dir>] [--snapshots=10] [--steps=<max>] [--input-order] [--memory]
+//               [--limiter=face|cell|none] [--riemann=hllc|hll] [--out=<dir>] [--snapshots=10]
+//               [--steps=<max>] [--input-order] [--memory]
 //
 // side^3 generating points in a 50 pc periodic box (jittered: a lattice
 // moved by up to 0.1 spacings; uniform: uniform random). AREPO units (kpc,
@@ -14,9 +15,12 @@
 // time_bet_snaps = t_end / n_snaps). --steps stops after that many steps
 // (timing runs). Particles are numbered in Morton order of their positions
 // (--input-order: as generated, lattice rows or random). --update: the
-// update loop, default face at order 1 and cell at order 0. Prints per step
-// phase medians and cell updates per second; --memory adds device memory
-// (Kokkos allocations) per phase.
+// update loop, default face at order 1 and cell at order 0. --limiter: the
+// gradient limiter (hydro::Limiter: face or cell centroids, or none; default
+// face). --riemann: HLLC (default, as LUNA) or HLL. Prints per step phase medians and cell updates per second, and the
+// face sides whose extrapolation fell back to the cell state (total, steps
+// with any, most in one step); --memory adds device memory (Kokkos
+// allocations) per phase.
 
 #include "finite_volume.hpp"
 #include "snapshot.hpp"
@@ -171,7 +175,8 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::string(argv[i]).rfind("--", 0) != 0) args.push_back(argv[i]);
     if (args.size() < 2) {
-        std::cerr << "usage: hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--out=dir]"
+        std::cerr << "usage: hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--limiter=face|cell|none]"
+                     " [--riemann=hllc|hll] [--out=dir]"
                      " [--snapshots=10] [--steps=max] [--input-order] [--memory]\n";
         return 2;
     }
@@ -182,6 +187,14 @@ int main(int argc, char** argv) {
     // Default loop: the faster one measured on the A100 (research_notes/hydro_stage1_2026-10-31.md).
     const std::string loop = flag(argc, argv, "--update", order == 1 ? "face" : "cell");
     const hydro::Update update = loop == "face" ? hydro::Update::per_face : hydro::Update::per_cell;
+    const std::string limit = flag(argc, argv, "--limiter", "face");
+    const hydro::Limiter limiter = limit == "none"   ? hydro::Limiter::none
+                                   : limit == "cell" ? hydro::Limiter::cell_centroid
+                                                     : hydro::Limiter::face_centroid;
+    const std::string riemann = flag(argc, argv, "--riemann", "hllc");
+    // CourantFac of AREPO next generation's Sedov examples
+    // (examples/sedov_3d/sedov_globaltstp_3d/param.txt:52).
+    const double courant = 0.3;
     const std::string out = flag(argc, argv, "--out", "");
     const int snapshots = std::stoi(flag(argc, argv, "--snapshots", "10"));
     const long long max_steps = std::stoll(flag(argc, argv, "--steps", "0"));
@@ -237,95 +250,111 @@ int main(int argc, char** argv) {
               << " deposit_cells=" << deposit << " deposit_volume=" << deposited << " luna_volume=" << target
               << " deposit_radius_max=" << r[by_distance[deposit - 1]] << " p_inject=" << p_inject << "\n";
 
-    hydro::FiniteVolume<Exec> fv(exec, mesh, gas, order, update);
-    {
-        auto U = Kokkos::create_mirror_view(fv.state());
-        for (long long i = 0; i < n; ++i) {
-            const hydro::State W{sedov.rho(), 0, 0, 0, sedov.pressure()};
-            const hydro::State u = hydro::conserved(W, gas);
-            for (int v = 0; v < 5; ++v) U(i, v) = u[v];
+    // The run with Riemann solver R (the type of `solver`).
+    auto simulate = [&](auto solver) {
+        using R = decltype(solver);
+        (void)solver;
+        hydro::FiniteVolume<Exec, R> fv(exec, mesh, gas, order, update, limiter);
+        {
+            auto U = Kokkos::create_mirror_view(fv.state());
+            for (long long i = 0; i < n; ++i) {
+                const hydro::State W{sedov.rho(), 0, 0, 0, sedov.pressure()};
+                const hydro::State u = hydro::conserved(W, gas);
+                for (int v = 0; v < 5; ++v) U(i, v) = u[v];
+            }
+            for (int k = 0; k < deposit; ++k) U(by_distance[k], 4) += p_inject / (gas.gamma - 1.0);
+            Kokkos::deep_copy(fv.state(), U);
         }
-        for (int k = 0; k < deposit; ++k) U(by_distance[k], 4) += p_inject / (gas.gamma - 1.0);
-        Kokkos::deep_copy(fv.state(), U);
-    }
-    DeviceMemory::phase("hydro_setup", n);
+        DeviceMemory::phase("hydro_setup", n);
 
-    hydro::SnapshotData snap;
-    snap.box = sedov.box;
-    snap.order = order;
-    snap.gas = gas;
-    snap.units = sedov.units;
-    snap.x.resize(n);
-    snap.y.resize(n);
-    snap.z.resize(n);
-    snap.volume.resize(n);
-    for (long long i = 0; i < n; ++i) {
-        snap.x[i] = positions(i, 0);
-        snap.y[i] = positions(i, 1);
-        snap.z[i] = positions(i, 2);
-        snap.volume[i] = volume(i);
-    }
-    // The radius of the disturbed region: the farthest cell whose density or
-    // pressure differs from the background by more than 1e-6.
-    auto write = [&](int index, double t) {
-        const auto U = to_host(fv.state());
-        snap.index = index;
-        snap.time = t;
-        double disturbed = 0;
-        for (int v = 0; v < 5; ++v) snap.U[v].resize(n);
+        hydro::SnapshotData snap;
+        snap.box = sedov.box;
+        snap.order = order;
+        snap.gas = gas;
+        snap.units = sedov.units;
+        snap.x.resize(n);
+        snap.y.resize(n);
+        snap.z.resize(n);
+        snap.volume.resize(n);
         for (long long i = 0; i < n; ++i) {
-            for (int v = 0; v < 5; ++v) snap.U[v][i] = U(i, v);
-            const hydro::State W = hydro::primitive({U(i, 0), U(i, 1), U(i, 2), U(i, 3), U(i, 4)}, gas);
-            if (std::abs(W[0] / sedov.rho() - 1) > 1e-6 || std::abs(W[4] / sedov.pressure() - 1) > 1e-6)
-                disturbed = std::max(disturbed, r[i]);
+            snap.x[i] = positions(i, 0);
+            snap.y[i] = positions(i, 1);
+            snap.z[i] = positions(i, 2);
+            snap.volume[i] = volume(i);
         }
-        std::cout << "snapshot: index=" << index << " time=" << t << " disturbed_radius=" << disturbed
-                  << " half_box=" << 0.5 * sedov.box;
-        if (!out.empty()) std::cout << " file=" << hydro::write_snapshot(out, snap);
-        std::cout << "\n";
+        // The radius of the disturbed region: the farthest cell whose density or
+        // pressure differs from the background by more than 1e-6.
+        auto write = [&](int index, double t) {
+            const auto U = to_host(fv.state());
+            snap.index = index;
+            snap.time = t;
+            double disturbed = 0;
+            for (int v = 0; v < 5; ++v) snap.U[v].resize(n);
+            for (long long i = 0; i < n; ++i) {
+                for (int v = 0; v < 5; ++v) snap.U[v][i] = U(i, v);
+                const hydro::State W = hydro::primitive({U(i, 0), U(i, 1), U(i, 2), U(i, 3), U(i, 4)}, gas);
+                if (std::abs(W[0] / sedov.rho() - 1) > 1e-6 || std::abs(W[4] / sedov.pressure() - 1) > 1e-6)
+                    disturbed = std::max(disturbed, r[i]);
+            }
+            std::cout << "snapshot: index=" << index << " time=" << t << " disturbed_radius=" << disturbed
+                      << " half_box=" << 0.5 * sedov.box;
+            if (!out.empty()) std::cout << " file=" << hydro::write_snapshot(out, snap);
+            std::cout << "\n";
+        };
+
+        const Totals before = totals(fv, mesh.volume());
+        if (!out.empty()) write(0, 0.0);
+        std::vector<double> dt_ms, gradient_ms, flux_ms, update_ms;
+        double t = 0, gpu_ms = 0;
+        long long steps = 0, fallbacks = 0, most_fallbacks = 0, steps_with_fallbacks = 0;
+        int next = 1;
+        Kokkos::Timer wall;
+        while (t < sedov.t_end() && (max_steps == 0 || steps < max_steps)) {
+            timer.reset();
+            double dt = fv.time_step(courant);
+            dt_ms.push_back(timer.seconds() * 1e3);
+            const double t_next = sedov.t_end() * next / snapshots;
+            bool snapshot = false;
+            if (t + dt >= t_next) {
+                dt = t_next - t;
+                snapshot = true;
+            }
+            hydro::Timings timings;
+            fv.step(dt, &timings);
+            gradient_ms.push_back(timings.gradients);
+            flux_ms.push_back(timings.fluxes);
+            update_ms.push_back(timings.update);
+            gpu_ms += dt_ms.back() + timings.gradients + timings.fluxes + timings.update;
+            fallbacks = fv.fallbacks() < 0 ? -1 : fallbacks + fv.fallbacks();  // -1: not counted (per-cell loop)
+            most_fallbacks = std::max(most_fallbacks, fv.fallbacks());
+            steps_with_fallbacks += fv.fallbacks() > 0;
+            t = snapshot ? t_next : t + dt;
+            ++steps;
+            if (snapshot) {
+                if (!out.empty() || next == snapshots) write(next, t);
+                ++next;
+            }
+        }
+        exec.fence();
+        const double wall_s = wall.seconds();
+        DeviceMemory::phase("steps", n);
+        const Totals after = totals(fv, mesh.volume());
+        const double step_ms = median(dt_ms) + median(gradient_ms) + median(flux_ms) + median(update_ms);
+        std::cout << "run: order=" << order << " update=" << (update == hydro::Update::per_cell ? "cell" : "face") << " steps=" << steps
+                  << " limiter=" << limit << " riemann=" << riemann << " t=" << t << " wall_s=" << wall_s << " s_per_step=" << wall_s / steps
+                  << " gpu_s=" << gpu_ms * 1e-3 << "\n";
+        std::cout << "fallbacks: total=" << fallbacks << " steps_with=" << steps_with_fallbacks << " most_in_a_step=" << most_fallbacks
+                  << " face_sides_per_step=" << 2 * static_cast<long long>(mesh.faces()) << "\n";
+        std::cout << "phases_ms_median: time_step=" << median(dt_ms) << " gradients=" << median(gradient_ms)
+                  << " fluxes=" << median(flux_ms) << " update=" << median(update_ms) << " step=" << step_ms
+                  << " cell_updates_per_s=" << n / (step_ms * 1e-3) << "\n";
+        std::cout << "conservation: mass=" << (after.mass - before.mass) / before.mass
+                  << " energy=" << (after.energy - before.energy) / before.energy << " momentum=(" << after.px << "," << after.py << ","
+                  << after.pz << ") momentum_scale=" << before.mass * std::sqrt(2 * before.energy / before.mass) << "\n";
     };
-
-    const Totals before = totals(fv, mesh.volume());
-    if (!out.empty()) write(0, 0.0);
-    std::vector<double> dt_ms, gradient_ms, flux_ms, update_ms;
-    double t = 0;
-    long long steps = 0;
-    int next = 1;
-    Kokkos::Timer wall;
-    while (t < sedov.t_end() && (max_steps == 0 || steps < max_steps)) {
-        timer.reset();
-        double dt = fv.time_step(0.3);
-        dt_ms.push_back(timer.seconds() * 1e3);
-        const double t_next = sedov.t_end() * next / snapshots;
-        bool snapshot = false;
-        if (t + dt >= t_next) {
-            dt = t_next - t;
-            snapshot = true;
-        }
-        hydro::Timings timings;
-        fv.step(dt, &timings);
-        gradient_ms.push_back(timings.gradients);
-        flux_ms.push_back(timings.fluxes);
-        update_ms.push_back(timings.update);
-        t = snapshot ? t_next : t + dt;
-        ++steps;
-        if (snapshot) {
-            if (!out.empty() || next == snapshots) write(next, t);
-            ++next;
-        }
-    }
-    exec.fence();
-    const double wall_s = wall.seconds();
-    DeviceMemory::phase("steps", n);
-    const Totals after = totals(fv, mesh.volume());
-    const double step_ms = median(dt_ms) + median(gradient_ms) + median(flux_ms) + median(update_ms);
-    std::cout << "run: order=" << order << " update=" << (update == hydro::Update::per_cell ? "cell" : "face") << " steps=" << steps
-              << " t=" << t << " wall_s=" << wall_s << " s_per_step=" << wall_s / steps << "\n";
-    std::cout << "phases_ms_median: time_step=" << median(dt_ms) << " gradients=" << median(gradient_ms)
-              << " fluxes=" << median(flux_ms) << " update=" << median(update_ms) << " step=" << step_ms
-              << " cell_updates_per_s=" << n / (step_ms * 1e-3) << "\n";
-    std::cout << "conservation: mass=" << (after.mass - before.mass) / before.mass
-              << " energy=" << (after.energy - before.energy) / before.energy << " momentum=(" << after.px << "," << after.py << ","
-              << after.pz << ") momentum_scale=" << before.mass * std::sqrt(2 * before.energy / before.mass) << "\n";
+    if (riemann == "hll")
+        simulate(hydro::HLL{});
+    else
+        simulate(hydro::HLLC{});
     return 0;
 }
