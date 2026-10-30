@@ -615,9 +615,21 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
             },
             entries);
         rings.used = entries;
-        // The pool just emptied is the next spare: as large as this one.
+        // The pool just emptied is the next spare. If it is the smaller one
+        // (the spare had been grown, e.g. as scratch memory) and holds the
+        // rings with a quarter to append, the rings move back into it and the
+        // larger pool stays the spare; else it grows to this one's size.
+        // Without the move both pools end up as large as the grown spare.
         auto& spare = rings.pool[1 - rings.in_use];
-        if (spare.extent(0) < pool.extent(0)) Kokkos::realloc(Kokkos::WithoutInitializing, spare, pool.extent(0));
+        if (spare.extent(0) < pool.extent(0)) {
+            if (static_cast<std::size_t>(entries) + entries / 4 <= spare.extent(0)) {
+                Kokkos::deep_copy(exec, Kokkos::subview(spare, std::make_pair(0, entries)),
+                                  Kokkos::subview(pool, std::make_pair(0, entries)));
+                rings.in_use = 1 - rings.in_use;
+            } else {
+                Kokkos::realloc(Kokkos::WithoutInitializing, spare, pool.extent(0));
+            }
+        }
     }
     rings.faces = faces;
     rings.current = now;
