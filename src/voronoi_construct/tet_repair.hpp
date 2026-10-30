@@ -249,14 +249,6 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
     return p;
 }
 
-template <class ExecSpace, class X>
-void snap(const ExecSpace& exec, const X& x, const ep::Points<typename ExecSpace::memory_space>& point) {
-    Kokkos::parallel_for(
-        "tet_repair::snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(ep::snap(x(i, a)));
-        });
-}
-
 // List t as dirty unless it already is.
 template <class State>
 KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
@@ -287,8 +279,7 @@ void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity
 // grows all of them when needed, and the list of created tetrahedra (a
 // quarter of the capacity at first) after a step it overflowed.
 template <class ExecSpace, class X>
-State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
-                                                const X& x,
+State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& x, double box,
                                                 tet_mesh::Mesh<typename ExecSpace::memory_space>& m, int capacity,
                                                 int work_capacity) {
     using Memory = typename ExecSpace::memory_space;
@@ -311,7 +302,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
     s.touched_list = Kokkos::View<int*, Memory>("tet_repair_touched_list", capacity / 4 + 1024);
     s.counters = Kokkos::View<int*, Memory>("tet_repair_counters", 9);
     s.host_counters = Kokkos::View<int*, Kokkos::SharedHostPinnedSpace>("tet_repair_host_counters", 9);
-    detail::snap(exec, x, s.point);
+    ep::snap(exec, x, box, s.point);
     const auto point = s.point;
     const auto alive = s.alive;
     const auto vertex = m.vertex;
@@ -344,7 +335,7 @@ template <class ExecSpace, class X>
 void move_screened(const ExecSpace& exec, const X& x, double box,
                    const tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
                    State<typename ExecSpace::memory_space>& s) {
-    detail::snap(exec, x, s.point);
+    ep::snap(exec, x, box, s.point);
     Kokkos::deep_copy(exec, s.counters, 0);
     const auto& st = s;
     const auto vertex = m.vertex;

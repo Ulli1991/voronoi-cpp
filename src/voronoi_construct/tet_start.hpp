@@ -393,15 +393,6 @@ void grow(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory
 
 }  // namespace detail
 
-// Snapped positions for the exact predicates (as tet_repair uses them).
-template <class ExecSpace, class X>
-void snap(const ExecSpace& exec, const X& x, double box, const ep::Points<typename ExecSpace::memory_space>& point) {
-    Kokkos::parallel_for(
-        "tet_start::snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(ep::snap(x(i, a) / box));
-        });
-}
-
 // Exact check of a tetrahedralization of all n particles, one thread per
 // tetrahedron: it is not flat; across each face lies a tetrahedron sharing
 // that face and pointing back, with its far vertex on the other side and
@@ -501,7 +492,7 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
     const int n = grid.n;
     Stats stats;
     ep::Points<Memory> point("tet_start_point", n);
-    snap(exec, grid.positions, grid.box, point);
+    ep::snap(exec, grid.positions, grid.box, point);
     Kokkos::View<int*, Memory> marked("tet_start_marked", n), grown("tet_start_grown", n), todo("tet_start_todo", n);
     // Cells the clipping did not finish count as bad from the start.
     const auto status = cells.status;

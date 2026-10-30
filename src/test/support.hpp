@@ -179,6 +179,13 @@ inline Points make_points(const std::string& kind, int n) {
     return points;
 }
 
+// The points scaled from the unit box to a box of side `box`.
+inline Points scaled(Points points, double box) {
+    for (auto& p : points)
+        for (double& x : p) x *= box;
+    return points;
+}
+
 inline Positions to_device(const Points& points) {
     Positions x("positions", points.size());
     auto h = Kokkos::create_mirror_view(x);
@@ -188,12 +195,12 @@ inline Positions to_device(const Points& points) {
     return x;
 }
 
-// A cell list over the unit box whose base grid has about one particle per
-// cell (times width_factor^-3).
-inline neighbor_search::CellList<Exec> cell_list(const Positions& x, double width_factor = 1.0) {
+// A cell list over the box [0, box)^3 whose base grid has about one particle
+// per cell (times width_factor^-3).
+inline neighbor_search::CellList<Exec> cell_list(const Positions& x, double box = 1.0, double width_factor = 1.0) {
     neighbor_search::CellList<Exec> list;
     const int n = static_cast<int>(x.extent(0));
-    neighbor_search::configure(list, n, 1.0, width_factor * std::cbrt(1.0 / n));
+    neighbor_search::configure(list, n, box, width_factor * box * std::cbrt(1.0 / n));
     neighbor_search::build(Exec{}, list, x);
     return list;
 }
@@ -350,12 +357,14 @@ inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::Cell
     return cells;
 }
 
-inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x) { return cells_with_rings(cell_list(x)); }
+inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x, double box = 1.0) {
+    return cells_with_rings(cell_list(x, box));
+}
 
 // The exact starting tetrahedralization of x (in slot order): clipping with
 // rings, then tet_start::build.
-inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh) {
-    const auto list = cell_list(x);
+inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh, double box = 1.0) {
+    const auto list = cell_list(x, box);
     auto cells = cells_with_rings(list);
     auto stats = tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
     const long long needed = cells.ring_entries_needed();
@@ -397,9 +406,9 @@ inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells, const Ko
     return r;
 }
 
-inline Reference clipped(const Positions& x) {
+inline Reference clipped(const Positions& x, double box = 1.0) {
     const int n = static_cast<int>(x.extent(0));
-    const auto list = cell_list(x);
+    const auto list = cell_list(x, box);
     shell_voronoi::Cells<Memory> cells(n, false);
     shell_voronoi::construct_warp<double>(Exec{}, shell_voronoi::make_grid(list), cells);
     return by_particle(cells, list.order);
@@ -445,6 +454,7 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
 struct MovingMesh {
     Exec exec;
     int n = 0;
+    double box = 1.0;
     tet_mesh::Mesh<Memory> mesh;
     tet_repair::State<Memory> state;
     tet_mesh::FaceRings<Memory> rings;
@@ -455,14 +465,14 @@ struct MovingMesh {
     // Capacities: 1/8 more than the starting mesh needs (ring pools 1/2
     // more, room to append between compactions); the repair and the face
     // rings grow them when a step needs more.
-    explicit MovingMesh(const Positions& x) : n(static_cast<int>(x.extent(0))) {
-        start = start_mesh(x, mesh);
+    explicit MovingMesh(const Positions& x, double box_side = 1.0) : n(static_cast<int>(x.extent(0))), box(box_side) {
+        start = start_mesh(x, mesh, box);
         const int tets = static_cast<int>(mesh.vertex.extent(0));
         const int start_faces = static_cast<int>(mesh.owner.extent(0)), start_entries = static_cast<int>(mesh.ring.extent(0));
         const int faces = start_faces + start_faces / 8;
         // The first step walks every face, so the starting faces are not kept.
         mesh.owner = mesh.neighbour = mesh.ring_start = mesh.ring_length = mesh.ring = {};
-        state = tet_repair::prepare(exec, x, mesh, tets + tets / 8, n / 4 + 1024);
+        state = tet_repair::prepare(exec, x, box, mesh, tets + tets / 8, n / 4 + 1024);
         rings = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, start_entries + start_entries / 2);
         geometry = {Kokkos::View<double* [3], Memory>("face_area", faces),
                     Kokkos::View<double* [3], Memory>("face_centroid", faces),
@@ -472,7 +482,7 @@ struct MovingMesh {
 
     tet_repair::Stats repair(const Positions& x) {
         tet_mesh::pad(exec, x, padded);
-        tet_repair::move_screened(exec, padded, 1.0, mesh, state);
+        tet_repair::move_screened(exec, padded, box, mesh, state);
         return tet_repair::repair(exec, mesh, state);
     }
 
@@ -484,13 +494,13 @@ struct MovingMesh {
         const Kokkos::View<const int*, Memory> created =
             state.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
                                       : Kokkos::subview(state.touched_list, std::make_pair(0, state.touched_entries));
-        tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count, created);
+        tet_mesh::circumcentres(exec, padded, box, mesh, state.count, created);
         const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, created, rings);
         if (faces > static_cast<int>(geometry.area.extent(0))) {
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry.area, faces + faces / 8);
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry.centroid, faces + faces / 8);
         }
-        tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
+        tet_mesh::faces(exec, padded, box, mesh, geometry);
         Kokkos::deep_copy(exec, state.touched, 0);
         return faces;
     }

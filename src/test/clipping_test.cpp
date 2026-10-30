@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
         check.expect(d.neighbours == 0 && d.volume < 1e-12, "warp and thread cells agree" + agree(d));
 
         // A base grid twice as coarse: other slots, the same cells.
-        const auto coarse = cell_list(x, 2.0);
+        const auto coarse = cell_list(x, 1.0, 2.0);
         shell_voronoi::Cells<Memory> cells(n, false);
         shell_voronoi::construct_warp<double>(exec, shell_voronoi::make_grid(coarse), cells);
         const Difference c = compare(reference, by_particle(cells, coarse.order));

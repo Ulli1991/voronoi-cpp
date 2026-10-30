@@ -611,9 +611,8 @@ KOKKOS_INLINE_FUNCTION Vec3<double> circumcentre(const X& x, double box, const i
     if (!(Kokkos::abs(volume6) > 1e-4 * Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2])))) {
         namespace ep = exact_predicates;
         ep::Offset g[3];
-        const ep::i64 g0[3] = {ep::snap(x(v[0], 0) / box), ep::snap(x(v[0], 1) / box), ep::snap(x(v[0], 2) / box)};
         for (int k = 0; k < 3; ++k)
-            for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(g0[a], ep::snap(x(v[k + 1], a) / box));
+            for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(ep::snap(x(v[0], a), box), ep::snap(x(v[k + 1], a), box));
         auto cross128 = [](const ep::Offset& p, const ep::Offset& q, ep::i128* r) {
             r[0] = ep::i128(p[1]) * q[2] - ep::i128(p[2]) * q[1];
             r[1] = ep::i128(p[2]) * q[0] - ep::i128(p[0]) * q[2];

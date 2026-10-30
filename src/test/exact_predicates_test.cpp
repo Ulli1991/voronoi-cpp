@@ -54,8 +54,12 @@ int main(int argc, char** argv) {
     std::mt19937_64 rng(5);
 
     // Periodic offsets on the 2^30 grid.
-    const ep::i64 period = ep::i64(1) << 30;
-    check.expect(ep::snap(0.5) == period / 2 && ep::snap(0.0) == 0, "snap maps the unit box onto [0, 2^30)");
+    const ep::i64 period = ep::period;
+    check.expect(ep::snap(0.5, 1.0) == period / 2 && ep::snap(0.0, 1.0) == 0 && ep::snap(1.0, 2.0) == period / 2 &&
+                     ep::snap(3.0 * 0.75, 3.0) == 3 * period / 4,
+                 "snap maps the box [0, box) onto [0, 2^30) for any box");
+    check.expect(ep::snap(2.0, 2.0) == 0 && ep::snap(-0.5 / ep::scale, 1.0) == period - 1,
+                 "snap wraps positions on or just outside the box edge");
     check.expect(ep::delta(0, period - 1) == -1 && ep::delta(period - 1, 0) == 1 && ep::delta(5, 9) == 4,
                  "delta takes the nearest periodic image");
 
@@ -153,7 +157,7 @@ int main(int argc, char** argv) {
         const double x[5][3] = {{0.999, 0.5, 0.5}, {0.001, 0.5, 0.5}, {0.999, 0.502, 0.5}, {0.999, 0.5, 0.502},
                                 {0.0005, 0.501, 0.501}};
         for (int i = 0; i < 5; ++i)
-            for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(ep::snap(x[i][a]));
+            for (int a = 0; a < 3; ++a) point(i, a) = ep::snap(x[i][a], 1.0);
         const int tet[4] = {0, 1, 2, 3}, flipped[4] = {0, 1, 3, 2};
         check.expect(ep::orient(point, tet) == 1 && ep::orient(point, flipped) == -1,
                      "orient on particles across the periodic boundary");

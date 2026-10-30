@@ -28,14 +28,14 @@ struct Verdict {
     bool box_volume = false;
 };
 
-Verdict oracle(const Positions& x, const tet_mesh::Mesh<Memory>& mesh) {
+Verdict oracle(const Positions& x, double box, const tet_mesh::Mesh<Memory>& mesh) {
     const auto vertex = to_host(mesh.vertex);
     const auto adjacent = to_host(mesh.adjacent);
     const auto hx = to_host(x);
     const int n = static_cast<int>(hx.extent(0)), count = static_cast<int>(vertex.extent(0));
     ep::Points<Kokkos::HostSpace> point("point", n);
     for (int i = 0; i < n; ++i)
-        for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(ep::snap(hx(i, a)));
+        for (int a = 0; a < 3; ++a) point(i, a) = ep::snap(hx(i, a), box);
     Verdict verdict;
     std::map<std::array<int, 3>, std::vector<std::pair<int, int>>> triangles;  // -> (tetrahedron, apex corner)
     std::vector<char> used(n, 0);
@@ -126,12 +126,22 @@ int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     Check check;
     const int n = 4096;
-    for (const std::string kind : {"jittered", "uniform", "clustered", "lattice", "wave", "sc@1e-6", "bcc@0",
-                                   "fcc@0", "fcc@1e-6", "shells@0", "shells@1e-9", "planes@0", "pairs@1e-6"}) {
-        const Positions x = to_device(in_slot_order(make_points(kind, n)));
+    struct Case {
+        std::string kind;
+        double box;
+    };
+    // Boxes of side 2 and 3 as well: snapping divides by the box (box 3
+    // positions are not on the grid; the start is exact on their snapped
+    // positions all the same).
+    for (const Case& c : {Case{"jittered", 1}, Case{"uniform", 1}, Case{"clustered", 1}, Case{"lattice", 1},
+                         Case{"wave", 1}, Case{"sc@1e-6", 1}, Case{"bcc@0", 1}, Case{"fcc@0", 1}, Case{"fcc@1e-6", 1},
+                         Case{"shells@0", 1}, Case{"shells@1e-9", 1}, Case{"planes@0", 1}, Case{"pairs@1e-6", 1},
+                         Case{"jittered", 3}, Case{"lattice", 2}}) {
+        const std::string kind = c.box == 1 ? c.kind : c.kind + " in a box of side " + std::to_string(int(c.box));
+        const Positions x = to_device(scaled(in_slot_order(make_points(c.kind, n)), c.box));
         tet_mesh::Mesh<Memory> mesh;
-        const tet_start::Stats stats = start_mesh(x, mesh);
-        const Verdict v = oracle(x, mesh);
+        const tet_start::Stats stats = start_mesh(x, mesh, c.box);
+        const Verdict v = oracle(x, c.box, mesh);
         std::ostringstream what;
         what << kind << " (" << x.extent(0) << "): tetrahedra " << stats.tets << ", first check " << stats.bad_tets
              << " bad, " << stats.patched << " cells patched in " << stats.rounds << " rounds; flat " << v.flat
@@ -150,7 +160,7 @@ int main(int argc, char** argv) {
         if (kind == "lattice") {
             tet_mesh::Mesh<Memory> guess;
             tet_mesh::from_rings(Exec{}, cells_with_rings(x), guess);
-            const Verdict g = oracle(x, guess);
+            const Verdict g = oracle(x, 1.0, guess);
             check.expect(!g.box_volume && g.unpaired > 0, "lattice: the oracle rejects tetrahedra from the clipping's rings");
         }
     }
