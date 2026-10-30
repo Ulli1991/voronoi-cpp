@@ -155,7 +155,7 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box, job
 | Step at 0.03 spacings (repair, centres, rings, faces) | 11.1 ms (189 M/s) | 64 ms (262 M/s) |
 | Step at 0.1 spacings | 18.9 ms | |
 | Step at 0.3 spacings | 37.1 ms | 180 ms |
-| `update_cells()` (face lists, ordered volumes and centroids) | 12.6 ms | 90 ms |
+| `update_cells()` (face lists, ordered volumes and centroids; job 31697589) | 6.9 ms | 54 ms |
 | Device memory, plain warp rebuild | 701 B/cell | 656 B/cell |
 | Device memory peak, start and steps (with face lists) | 2221 B/cell | 2200 B/cell (37.9 GB in use) |
 

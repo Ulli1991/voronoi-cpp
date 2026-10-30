@@ -207,8 +207,9 @@ public:
 
     // Scratch memory the caller may use between updates: the spare face-ring
     // pool, grown to `bytes` if smaller (the growth is kept). Valid only until
-    // the next update(), rebuild() or clip(), which reuse the pool and may move
-    // it: ask again after each of them, and keep nothing in it across them.
+    // the next update(), rebuild() or update_cells(), which reuse the pool and
+    // may move it: ask again after each of them, and keep nothing in it
+    // across them (clip() does not touch it).
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         auto& spare = rings_.pool[1 - rings_.in_use];
@@ -223,7 +224,9 @@ public:
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
         Kokkos::Timer timer;
-        tet_mesh::cells(exec_, positions_, box_, tets_, geometry_, cells_);
+        // Its temporaries live in the spare ring pool (see scratch).
+        tet_mesh::cells(exec_, positions_, box_, tets_, geometry_, cells_,
+                        scratch(tet_mesh::cells_scratch_bytes(faces())).data());
         cells_current_ = true;
         if (timings) {
             exec_.fence();

@@ -3,7 +3,9 @@
 #include "exact_predicates.hpp"
 #include "shell_voronoi.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 // A persistent Delaunay tetrahedralization and the Voronoi geometry it implies.
 //
@@ -46,7 +48,8 @@ struct Mesh {
 // and cell volumes, one per particle.
 template <class MemorySpace>
 struct Geometry {
-    Kokkos::View<double* [3], MemorySpace> area, centroid;
+    using Areas = Kokkos::View<double* [3], MemorySpace>;
+    Areas area, centroid;
     Kokkos::View<double*, MemorySpace> volume;
 };
 
@@ -707,18 +710,143 @@ struct CellFaces {
     Kokkos::View<double* [3], MemorySpace> centroid;
 };
 
+// Bytes of scratch cells() needs for `faces` faces: the other particle of
+// each list entry.
+inline std::size_t cells_scratch_bytes(int faces) { return 2 * static_cast<std::size_t>(faces) * sizeof(int); }
+
+namespace detail {
+
+// Cell i's pyramid over face f (other particle j): volume |A| |d| / 6 and
+// centroid at 3/4 of the way to the face centroid, which is given relative
+// to the owner, the lower id.
+template <class X, class Area, class Centroid>
+KOKKOS_INLINE_FUNCTION double pyramid(const X& x, double box, const Area& area, const Centroid& centroid, int i, int j,
+                                      int f, Vec3& c) {
+    const Vec3 d{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box), wrap(x(j, 2) - x(i, 2), box)};
+    const Vec3 A{area(f, 0), area(f, 1), area(f, 2)};
+    c = {centroid(f, 0), centroid(f, 1), centroid(f, 2)};
+    if (j < i) c = c + d;
+    return Kokkos::sqrt(dot(A, A) * dot(d, d)) / 6.0;
+}
+
+// Sort cell i's list entries [begin, end) by the other particle (in place)
+// and sum its pyramids in that order: one thread per cell.
+template <class X, class Area, class Centroid, class Ints, class Others, class Volume, class Centroids>
+KOKKOS_INLINE_FUNCTION void cell_geometry(const X& x, double box, const Area& area, const Centroid& centroid,
+                                          const Ints& face, const Others& other, int i, int begin, int end,
+                                          const Volume& volume, const Centroids& cell_centroid) {
+    for (int a = begin + 1; a < end; ++a) {
+        const int k = other(a), f = face(a);
+        int b = a;
+        for (; b > begin && other(b - 1) > k; --b) {
+            other(b) = other(b - 1);
+            face(b) = face(b - 1);
+        }
+        other(b) = k;
+        face(b) = f;
+    }
+    double v = 0;
+    Vec3 moment{0, 0, 0};
+    for (int a = begin; a < end; ++a) {
+        Vec3 c;
+        const double p = pyramid(x, box, area, centroid, i, other(a), face(a), c);
+        v += p;
+        moment = moment + c * (0.75 * p);
+    }
+    volume(i) = v;
+    cell_centroid(i, 0) = moment.x / v;
+    cell_centroid(i, 1) = moment.y / v;
+    cell_centroid(i, 2) = moment.z / v;
+}
+
+#if defined(KOKKOS_ENABLE_CUDA)
+// The cell geometry pass on CUDA, a warp per cell: lane l sorts (a warp
+// bitonic sort) and gathers entry l, lane 0 sums in sorted order, so the
+// sums are the bits of the sequential loop of cell_geometry.
+template <class X, class Areas, class Ints, class Others, class Volume, class Centroids>
+struct CellGeometryWarp {
+    static constexpr int warps = 4;  // cells per block
+    X x;
+    double box;
+    Areas area, centroid;
+    Ints start, face;
+    Others other;
+    Volume volume;
+    Centroids cell_centroid;
+    int n;
+
+    KOKKOS_FUNCTION void operator()(const typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& member) const {
+        const int i = member.league_rank() * warps + member.team_rank();
+        if (i >= n) return;  // the whole warp
+#if defined(__CUDA_ARCH__)
+        const int begin = start(i), end = start(i + 1);
+        constexpr unsigned all = 0xffffffffu;
+        const int l = threadIdx.x;
+        if (end - begin > 32) {  // rare: one thread sorts and sums
+            if (l == 0) cell_geometry(x, box, area, centroid, face, other, i, begin, end, volume, cell_centroid);
+            return;
+        }
+        int key = begin + l < end ? other(begin + l) : 0x7fffffff;
+        int f = begin + l < end ? face(begin + l) : -1;
+        for (int size = 2; size <= 32; size <<= 1)
+            for (int stride = size / 2; stride > 0; stride >>= 1) {
+                const int other_key = __shfl_xor_sync(all, key, stride);
+                const int other_f = __shfl_xor_sync(all, f, stride);
+                const bool ascending = (l & size) == 0, lower = (l & stride) == 0;
+                if ((other_key < key) == (lower == ascending) && other_key != key) {
+                    key = other_key;
+                    f = other_f;
+                }
+            }
+        double p = 0;
+        Vec3 c{0, 0, 0};
+        if (begin + l < end) {
+            face(begin + l) = f;
+            other(begin + l) = key;
+            p = pyramid(x, box, area, centroid, i, key, f, c);
+        }
+        double v = 0;
+        Vec3 moment{0, 0, 0};
+        for (int r = 0; r < end - begin; ++r) {
+            const double pr = __shfl_sync(all, p, r);
+            const Vec3 cr{__shfl_sync(all, c.x, r), __shfl_sync(all, c.y, r), __shfl_sync(all, c.z, r)};
+            v += pr;
+            moment = moment + cr * (0.75 * pr);
+        }
+        if (l == 0) {
+            volume(i) = v;
+            cell_centroid(i, 0) = moment.x / v;
+            cell_centroid(i, 1) = moment.y / v;
+            cell_centroid(i, 2) = moment.z / v;
+        }
+#endif
+    }
+};
+#endif
+
+}  // namespace detail
+
 // 3. The cell face lists and cell volumes and centroids from the faces of
 // mesh (owner, neighbour) and their geometry (area, centroid), x the
-// positions the geometry was computed from. Grows out.face when needed.
-// Volumes are the same sums as those of faces(), in fixed order.
+// positions the geometry was computed from; `scratch` holds
+// cells_scratch_bytes(faces) bytes. Grows out.face when needed. Volumes
+// are the same sums as those of faces(), in fixed order.
+//
+// One pass over the faces appends each face, with the other particle's id,
+// to both cells' lists; then each cell sorts its list by those ids and sums
+// its pyramids in that order (on CUDA a warp per cell, CellGeometryWarp).
 template <class ExecSpace, class X>
 void cells(const ExecSpace& exec, const X& x, double box, const Mesh<typename ExecSpace::memory_space>& mesh,
-           const Geometry<typename ExecSpace::memory_space>& geometry, CellFaces<typename ExecSpace::memory_space>& out) {
+           const Geometry<typename ExecSpace::memory_space>& geometry, CellFaces<typename ExecSpace::memory_space>& out,
+           char* scratch) {
+    using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(out.volume.extent(0)), faces = static_cast<int>(mesh.owner.extent(0));
     const auto owner = mesh.owner, neighbour = mesh.neighbour;
     if (static_cast<int>(out.face.extent(0)) < 2 * faces)
         Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 4);
+    const Kokkos::View<int*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>> other(reinterpret_cast<int*>(scratch),
+                                                                                    2 * faces);
     const auto start = out.start, cursor = out.cursor, face = out.face;
     Kokkos::deep_copy(exec, start, 0);
     Kokkos::parallel_for(
@@ -737,58 +865,30 @@ void cells(const ExecSpace& exec, const X& x, double box, const Mesh<typename Ex
         });
     Kokkos::parallel_for(
         "tet_mesh::cell_face_fill", Range(exec, 0, faces), KOKKOS_LAMBDA(int f) {
-            face(Kokkos::atomic_fetch_inc(&cursor(owner(f)))) = f;
-            face(Kokkos::atomic_fetch_inc(&cursor(neighbour(f)))) = f;
+            const int o = owner(f), j = neighbour(f);
+            const int at_owner = Kokkos::atomic_fetch_inc(&cursor(o)), at_neighbour = Kokkos::atomic_fetch_inc(&cursor(j));
+            face(at_owner) = f;
+            other(at_owner) = j;
+            face(at_neighbour) = f;
+            other(at_neighbour) = o;
         });
     const auto area = geometry.area, centroid = geometry.centroid;
     const auto volume = out.volume;
     const auto cell_centroid = out.centroid;
+#if defined(KOKKOS_ENABLE_CUDA)
+    if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
+        using Warp = detail::CellGeometryWarp<X, typename Geometry<Memory>::Areas, Kokkos::View<int*, Memory>,
+                                              decltype(other), Kokkos::View<double*, Memory>,
+                                              Kokkos::View<double* [3], Memory>>;
+        Kokkos::parallel_for("tet_mesh::cell_geometry",
+                             Kokkos::TeamPolicy<ExecSpace>(exec, (n + Warp::warps - 1) / Warp::warps, Warp::warps, 32),
+                             Warp{x, box, area, centroid, start, face, other, volume, cell_centroid, n});
+        return;
+    }
+#endif
     Kokkos::parallel_for(
         "tet_mesh::cell_geometry", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
-            const int begin = start(i), end = start(i + 1);
-            // Fixed order: by the other particle, sorted in registers (cells
-            // with more than `local` faces sort in place).
-            constexpr int local = 48;
-            auto other = [&](int f) { return owner(f) == i ? neighbour(f) : owner(f); };
-            if (end - begin <= local) {
-                int key[local], value[local];
-                for (int a = 0; a < end - begin; ++a) {
-                    const int f = face(begin + a), k = other(f);
-                    int b = a;
-                    for (; b > 0 && key[b - 1] > k; --b) {
-                        key[b] = key[b - 1];
-                        value[b] = value[b - 1];
-                    }
-                    key[b] = k;
-                    value[b] = f;
-                }
-                for (int a = 0; a < end - begin; ++a) face(begin + a) = value[a];
-            } else {
-                for (int a = begin + 1; a < end; ++a) {
-                    const int f = face(a), k = other(f);
-                    int b = a;
-                    for (; b > begin && other(face(b - 1)) > k; --b) face(b) = face(b - 1);
-                    face(b) = f;
-                }
-            }
-            // Pyramids from the generator over each face: volume |A| |d| / 6,
-            // centroid at 3/4 of the way to the face centroid.
-            double v = 0;
-            Vec3 moment{0, 0, 0};
-            for (int a = begin; a < end; ++a) {
-                const int f = face(a), o = owner(f), j = o == i ? neighbour(f) : o;
-                const Vec3 d{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box), wrap(x(j, 2) - x(i, 2), box)};
-                const Vec3 A{area(f, 0), area(f, 1), area(f, 2)};
-                Vec3 c{centroid(f, 0), centroid(f, 1), centroid(f, 2)};
-                if (o != i) c = c + d;  // given relative to the owner j
-                const double pyramid = Kokkos::sqrt(dot(A, A) * dot(d, d)) / 6.0;
-                v += pyramid;
-                moment = moment + c * (0.75 * pyramid);
-            }
-            volume(i) = v;
-            cell_centroid(i, 0) = moment.x / v;
-            cell_centroid(i, 1) = moment.y / v;
-            cell_centroid(i, 2) = moment.z / v;
+            detail::cell_geometry(x, box, area, centroid, face, other, i, start(i), start(i + 1), volume, cell_centroid);
         });
 }
 

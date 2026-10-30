@@ -194,6 +194,32 @@ void report_stuck(const tet_repair::State<Memory>& state) {
               << " rejected=" << rejected << "\n";
 }
 
+// A checksum of the per-cell face lists and the bits of the cell volumes
+// and centroids (FNV-1a), to compare builds of the same mesh.
+std::uint64_t cells_checksum(const Mesh& mesh) {
+    const auto start = to_host(mesh.cell_face_start());
+    const auto face = to_host(mesh.cell_face());
+    const auto volume = to_host(mesh.volume());
+    const auto centroid = to_host(mesh.centroid());
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](std::uint64_t v) {
+        for (int b = 0; b < 8; ++b) h = (h ^ ((v >> (8 * b)) & 255)) * 1099511628211ull;
+    };
+    auto bits = [](double d) {
+        std::uint64_t u;
+        std::memcpy(&u, &d, sizeof u);
+        return u;
+    };
+    const int n = mesh.particles();
+    for (int i = 0; i < n; ++i) {
+        mix(static_cast<std::uint64_t>(start(i + 1)));
+        for (int a = start(i); a < start(i + 1); ++a) mix(static_cast<std::uint64_t>(face(a)));
+        mix(bits(volume(i)));
+        for (int a = 0; a < 3; ++a) mix(bits(centroid(i, a)));
+    }
+    return h;
+}
+
 int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi::Fallback fallback) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
@@ -245,7 +271,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
         mesh.update_cells(&t);
         std::cout << "mesh: build_ms=" << t.build << " geometry_ms=" << t.geometry << " cells_ms=" << t.cells
                   << " total_ms=" << t.build + t.geometry << " faces=" << r.faces
-                  << " faces_per_cell=" << double(r.faces) / n << "\n";
+                  << " faces_per_cell=" << double(r.faces) / n << " cells_checksum=" << cells_checksum(mesh) << "\n";
     }
     DeviceMemory::phase("start_and_prepare", n);
     const Flow flow;
