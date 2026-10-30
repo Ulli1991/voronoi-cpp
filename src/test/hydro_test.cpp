@@ -9,7 +9,11 @@
 //     random meshes, first and second order, both update loops;
 //   - mass, momentum and energy are conserved to rounding in the periodic
 //     box (a blast plus random perturbations, second order);
-//   - two runs give the same bits; the two update loops agree to rounding.
+//   - two runs give the same bits; the two update loops agree to rounding;
+//   - moving mesh: a uniform state with a bulk velocity stays uniform;
+//     mass, momentum and energy are conserved to rounding while the cells
+//     move; a blast moving with the box equals the blast at rest
+//     (Galilean invariance), while on a static mesh it smears.
 
 #include "check.hpp"
 #include "finite_volume.hpp"
@@ -135,20 +139,33 @@ void flux_tests(Check& check, const std::string& name, const LunaCase (&cases)[N
 
 using HostCells = Kokkos::View<double* [5], Kokkos::LayoutRight, Kokkos::HostSpace>;
 
+// The extensive state Q of each cell (mass, momentum, energy).
 template <class FV>
-HostCells host_state(const FV& fv) {
-    HostCells h("state", fv.state().extent(0));
+HostCells host_extensive(const FV& fv) {
+    HostCells h("extensive", fv.state().extent(0));
     auto m = to_host(fv.state());
     for (std::size_t i = 0; i < h.extent(0); ++i)
         for (int v = 0; v < 5; ++v) h(i, v) = m(i, v);
     return h;
 }
 
+// The state per unit volume, Q / V with the mesh's current volumes.
 template <class FV>
-void set_state(FV& fv, const HostCells& h) {
-    auto m = Kokkos::create_mirror_view(fv.state());
+HostCells host_state(const FV& fv, const voronoi::Mesh<Exec>& mesh) {
+    HostCells h = host_extensive(fv);
+    const auto volume = to_host(mesh.volume());
     for (std::size_t i = 0; i < h.extent(0); ++i)
-        for (int v = 0; v < 5; ++v) m(i, v) = h(i, v);
+        for (int v = 0; v < 5; ++v) h(i, v) /= volume(i);
+    return h;
+}
+
+// Sets Q = U V from the state per unit volume.
+template <class FV>
+void set_state(FV& fv, const voronoi::Mesh<Exec>& mesh, const HostCells& h) {
+    auto m = Kokkos::create_mirror_view(fv.state());
+    const auto volume = to_host(mesh.volume());
+    for (std::size_t i = 0; i < h.extent(0); ++i)
+        for (int v = 0; v < 5; ++v) m(i, v) = h(i, v) * volume(i);
     Kokkos::deep_copy(fv.state(), m);
 }
 
@@ -188,25 +205,25 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
                 HostCells h("uniform", n);
                 for (int i = 0; i < n; ++i)
                     for (int v = 0; v < 5; ++v) h(i, v) = U[v];
-                set_state(fv, h);
+                set_state(fv, mesh, h);
                 for (int s = 0; s < 3; ++s) fv.step(fv.time_step(0.3));
-                const HostCells after = host_state(fv);
+                const HostCells after = host_state(fv, mesh);
                 double worst = 0;
                 for (int i = 0; i < n; ++i)
                     worst = std::max(worst, relative({after(i, 0), after(i, 1), after(i, 2), after(i, 3), after(i, 4)}, U));
                 check.expect(worst < 1e-13, what + ": a uniform state stays uniform over 3 steps (" + sci(worst) + ")");
             }
             {  // conservation, a rough state
-                set_state(fv, rough_state(n, gas));
+                set_state(fv, mesh, rough_state(n, gas));
                 auto sums = [&](const HostCells& h) {
                     std::array<long double, 5> s{};
                     for (int i = 0; i < n; ++i)
                         for (int v = 0; v < 5; ++v) s[v] += static_cast<long double>(h(i, v)) * volume(i);
                     return s;
                 };
-                const auto before = sums(host_state(fv));
+                const auto before = sums(host_state(fv, mesh));
                 for (int s = 0; s < 10; ++s) fv.step(fv.time_step(0.3));
-                const auto after = sums(host_state(fv));
+                const auto after = sums(host_state(fv, mesh));
                 const double momentum_scale = static_cast<double>(before[0]) * std::sqrt(static_cast<double>(before[4] / before[0]));
                 const double mass = std::abs(static_cast<double>((after[0] - before[0]) / before[0]));
                 const double energy = std::abs(static_cast<double>((after[4] - before[4]) / before[4]));
@@ -224,9 +241,9 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
     for (const auto update : {hydro::Update::per_cell, hydro::Update::per_face})
         for (int run = 0; run < 2; ++run) {
             FV fv(Exec{}, mesh, gas, 1, update);
-            set_state(fv, rough_state(n, gas));
+            set_state(fv, mesh, rough_state(n, gas));
             for (int s = 0; s < 10; ++s) fv.step(fv.time_step(0.3));
-            result[update == hydro::Update::per_face][run] = host_state(fv);
+            result[update == hydro::Update::per_face][run] = host_state(fv, mesh);
         }
     auto same = [&](const HostCells& a, const HostCells& b) { return std::memcmp(a.data(), b.data(), sizeof(double) * 5 * n) == 0; };
     check.expect(same(result[0][0], result[0][1]) && same(result[1][0], result[1][1]),
@@ -242,6 +259,145 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
                                     (same(result[0][0], result[1][0]) ? ", same bits)" : ")"));
 }
 
+
+// Moving-mesh tests. Points on the snapping grid (make_points) and steps
+// whose displacement v dt is a multiple of the grid step (2^-30 of the
+// box), so a uniform translation of the points translates the snapped mesh
+// exactly.
+using Moving = hydro::FiniteVolume<Exec>;
+
+// A mesh and a FiniteVolume on it (members in this order: the mesh is built first).
+struct MovingRun {
+    voronoi::Mesh<Exec> mesh;
+    Moving fv;
+    MovingRun(const Points& points, const hydro::Gas& gas, hydro::Motion motion)
+        : mesh(Exec{}, 1.0), fv(Exec{}, build(mesh, points), gas, 1, hydro::Update::per_face, hydro::Limiter::face_centroid, motion) {}
+    static voronoi::Mesh<Exec>& build(voronoi::Mesh<Exec>& mesh, const Points& points) {
+        mesh.update(to_device(points));
+        mesh.update_cells();
+        return mesh;
+    }
+};
+
+// A blast at the box centre (pressure 100 within r < 0.15, else 1), moving
+// with velocity (bulk, 0, 0).
+HostCells blast(const voronoi::Mesh<Exec>& mesh, double bulk, const hydro::Gas& gas) {
+    const auto x = to_host(mesh.positions());
+    HostCells h("blast", x.extent(0));
+    for (std::size_t i = 0; i < x.extent(0); ++i) {
+        double r2 = 0;
+        for (int a = 0; a < 3; ++a) r2 += (x(i, a) - 0.5) * (x(i, a) - 0.5);
+        const State U = hydro::conserved({1.0, bulk, 0, 0, r2 < 0.15 * 0.15 ? 100.0 : 1.0}, gas);
+        for (int v = 0; v < 5; ++v) h(i, v) = U[v];
+    }
+    return h;
+}
+
+// The density in 8 radial bins (r < 0.4) around centre (cx, 0.5, 0.5), by generator.
+std::array<double, 8> profile(const voronoi::Mesh<Exec>& mesh, const HostCells& u, double cx) {
+    const auto x = to_host(mesh.positions());
+    std::array<double, 8> sum{}, count{};
+    for (std::size_t i = 0; i < x.extent(0); ++i) {
+        double r2 = 0;
+        for (int a = 0; a < 3; ++a) {
+            const double d = nearest_image(x(i, a) - (a == 0 ? cx : 0.5));
+            r2 += d * d;
+        }
+        const int bin = static_cast<int>(std::sqrt(r2) / 0.05);
+        if (bin >= 8) continue;
+        sum[bin] += u(i, 0);
+        count[bin] += 1;
+    }
+    for (int b = 0; b < 8; ++b) sum[b] /= std::max(count[b], 1.0);
+    return sum;
+}
+
+void moving_tests(Check& check) {
+    const hydro::Gas gas{5.0 / 3.0};
+    const int n = 4096;
+    const Points points = make_points("jittered", n);
+    {  // a uniform state with a bulk velocity
+        MovingRun run(points, gas, hydro::Motion::moving);
+        const State U = hydro::conserved({1.3, 1.0, 0.5, -0.25, 0.7}, gas);
+        HostCells h("uniform", n);
+        for (int i = 0; i < n; ++i)
+            for (int v = 0; v < 5; ++v) h(i, v) = U[v];
+        set_state(run.fv, run.mesh, h);
+        const double dt = std::ldexp(1.0, -12);  // v dt: 2^18, 2^17, 2^16 grid steps
+        double cfl = 1;
+        for (int s = 0; s < 5; ++s) {
+            cfl = std::min(cfl, run.fv.time_step(0.3));
+            run.fv.step(dt);
+        }
+        const HostCells after = host_state(run.fv, run.mesh);
+        double worst = 0;
+        for (int i = 0; i < n; ++i) worst = std::max(worst, relative({after(i, 0), after(i, 1), after(i, 2), after(i, 3), after(i, 4)}, U));
+        check.expect(dt <= cfl && worst < 1e-13,
+                     "moving mesh: a uniform state with a bulk velocity stays uniform over 5 steps (" + sci(worst) + ")");
+    }
+    {  // conservation with moving cells
+        MovingRun run(points, gas, hydro::Motion::moving);
+        set_state(run.fv, run.mesh, rough_state(n, gas));
+        auto sums = [&](const HostCells& q) {
+            std::array<long double, 5> s{};
+            for (int i = 0; i < n; ++i)
+                for (int v = 0; v < 5; ++v) s[v] += q(i, v);
+            return s;
+        };
+        const auto before = sums(host_extensive(run.fv));
+        for (int s = 0; s < 10; ++s) run.fv.step(run.fv.time_step(0.3));
+        const auto after = sums(host_extensive(run.fv));
+        const double scale = static_cast<double>(before[0]) * std::sqrt(static_cast<double>(before[4] / before[0]));
+        double worst = std::max(std::abs(static_cast<double>((after[0] - before[0]) / before[0])),
+                                std::abs(static_cast<double>((after[4] - before[4]) / before[4])));
+        for (int v = 1; v <= 3; ++v) worst = std::max(worst, std::abs(static_cast<double>(after[v] - before[v])) / scale);
+        const auto& stats = run.fv.mesh_stats();
+        check.expect(worst < 1e-14 && stats.updates == 10, "moving mesh: mass, momentum, energy conserved over 10 steps (" + sci(worst) +
+                                                               ", " + std::to_string(stats.device_flips) + " flips, " +
+                                                               std::to_string(stats.rebuilds) + " rebuilds)");
+    }
+    {  // Galilean invariance: a blast at rest and the same blast moving with the box
+        const double bulk = 16, dt = std::ldexp(1.0, -12);  // bulk dt = 2^-8 of the box
+        const int steps = 40;
+        double moving_error = 0, cfl = 1;
+        double profile_error[2] = {};
+        for (const auto motion : {hydro::Motion::moving, hydro::Motion::static_mesh}) {
+            MovingRun rest(points, gas, motion), flow(points, gas, motion);
+            set_state(rest.fv, rest.mesh, blast(rest.mesh, 0, gas));
+            set_state(flow.fv, flow.mesh, blast(flow.mesh, bulk, gas));
+            for (int s = 0; s < steps; ++s) {
+                cfl = std::min({cfl, rest.fv.time_step(0.3), flow.fv.time_step(0.3)});
+                rest.fv.step(dt);
+                flow.fv.step(dt);
+            }
+            const HostCells a = host_state(rest.fv, rest.mesh), b = host_state(flow.fv, flow.mesh);
+            if (motion == hydro::Motion::moving)
+                for (int i = 0; i < n; ++i) {  // cell by cell: the same cells, moved by bulk t
+                    const State Wa = hydro::primitive({a(i, 0), a(i, 1), a(i, 2), a(i, 3), a(i, 4)}, gas);
+                    State Wb = hydro::primitive({b(i, 0), b(i, 1), b(i, 2), b(i, 3), b(i, 4)}, gas);
+                    Wb[1] -= bulk;
+                    double d = std::abs(Wb[0] - Wa[0]) / Wa[0] + std::abs(Wb[4] - Wa[4]) / Wa[4];
+                    for (int v = 1; v <= 3; ++v) d += std::abs(Wb[v] - Wa[v]) / bulk;
+                    moving_error = std::max(moving_error, d);
+                }
+            const auto pa = profile(rest.mesh, a, 0.5), pb = profile(flow.mesh, b, 0.5 + bulk * dt * steps);
+            double diff = 0, total = 0;
+            for (int k = 0; k < 8; ++k) {
+                diff += std::abs(pb[k] - pa[k]);
+                total += pa[k];
+            }
+            profile_error[motion == hydro::Motion::static_mesh] = diff / total;
+        }
+        check.expect(dt <= cfl, "Galilean test: the fixed step " + sci(dt) + " is within the time-step criterion (" + sci(cfl) + ")");
+        // Rounding (v - bulk is not exact) grows through the nonlinear blast
+        // and the limiter; measured 7e-8 on the CPU.
+        check.expect(moving_error < 1e-6, "moving mesh: a blast moving with the box equals the blast at rest, cell by cell, after " +
+                                               std::to_string(steps) + " steps (" + sci(moving_error) + ")");
+        check.expect(profile_error[0] < 1e-10 && profile_error[1] > 1e3 * profile_error[0],
+                     "radial density profiles, moving blast against blast at rest: moving mesh " + sci(profile_error[0]) +
+                         ", static mesh " + sci(profile_error[1]));
+    }
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -252,5 +408,6 @@ int main(int argc, char** argv) {
     mesh_tests<hydro::HLLC>(check, "jittered", "HLLC");
     mesh_tests<hydro::HLLC>(check, "uniform", "HLLC");
     mesh_tests<hydro::HLL>(check, "jittered", "HLL");
+    moving_tests(check);
     return check.failed() != 0;
 }
