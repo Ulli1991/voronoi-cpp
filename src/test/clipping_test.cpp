@@ -27,13 +27,13 @@ int main(int argc, char** argv) {
         shell_voronoi::construct_warp(exec, grid, warp);
         for (const auto& [name, cells] : {std::pair{"thread", thread}, std::pair{"warp", warp}}) {
             std::ostringstream summary;
-            const bool valid = check_cells(cells, list.positions, summary) == 0;
+            const bool valid = check_cells(cells, x, summary) == 0;
             std::string details = summary.str();
             details.pop_back();  // the newline
             check.expect(valid, std::string(name) + " kernel cells valid\n" + details);
         }
-        const Reference reference = by_particle(thread, list.order);
-        const Difference d = compare(reference, by_particle(warp, list.order));
+        const Reference reference = by_particle(thread);
+        const Difference d = compare(reference, by_particle(warp));
         auto agree = [](const Difference& x) {
             return " (" + std::to_string(x.neighbours) + " neighbour sets, volumes " + sci(x.volume) + ")";
         };
@@ -43,13 +43,13 @@ int main(int argc, char** argv) {
         const auto coarse = cell_list(x, 1.0, 2.0);
         shell_voronoi::Cells<Memory> cells(n, false);
         shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(coarse), cells);
-        const Difference c = compare(reference, by_particle(cells, coarse.order));
+        const Difference c = compare(reference, by_particle(cells));
         check.expect(c.neighbours == 0 && c.volume < 1e-12, "coarser base grid gives the same cells" + agree(c));
 
         // A face pool for one face per cell grows to what the build needs.
         shell_voronoi::Cells<Memory> small(n, false, 1);
         shell_voronoi::construct_warp(exec, grid, small);
-        const Difference w = compare(reference, by_particle(small, list.order));
+        const Difference w = compare(reference, by_particle(small));
         check.expect(small.capacity() > n && w.neighbours == 0 && w.volume < 1e-12,
                      "a small face pool grows to " + std::to_string(double(small.capacity()) / n) +
                          " faces per cell, same cells");

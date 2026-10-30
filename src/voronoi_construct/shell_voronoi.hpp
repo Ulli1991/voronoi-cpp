@@ -61,6 +61,7 @@ KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
 template <class MemorySpace>
 struct Grid {
     Kokkos::View<double* [3], MemorySpace> positions;
+    Kokkos::View<int*, MemorySpace> order;  // the particle in each slot
     Kokkos::View<int*, MemorySpace> cell_offsets;  // base cells in Morton order
     Kokkos::View<std::uint32_t*, MemorySpace> fine;
     Kokkos::View<std::uint8_t*, MemorySpace> level;
@@ -97,7 +98,7 @@ struct Grid {
 
 template <class ExecSpace>
 Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList<ExecSpace>& list) {
-    return {list.positions, list.cell_offsets, list.fine, list.level, list.n, list.levels, list.box};
+    return {list.positions, list.order, list.cell_offsets, list.fine, list.level, list.n, list.levels, list.box};
 }
 
 // The walk around a generator. Each cell is walked on the grid level whose
@@ -212,7 +213,8 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
     return begin < end;
 }
 
-// Per-cell results. Owned faces live in a pool of blocks, one per cell:
+// Per-cell results, indexed by particle (CellList::order), as are the
+// neighbours and rings. Owned faces live in a pool of blocks, one per cell:
 // cell t's faces are face_start(t) + [0, owned_count(t)), each with its
 // neighbour, area vector (out of t) and centroid (relative to t's
 // generator). A build with face rings records rings in a second pool
@@ -561,8 +563,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
     Kokkos::parallel_for(
         "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, pass == Pass::listed ? count : n),
         KOKKOS_LAMBDA(int i) {
-            const int t = pass == Pass::listed ? list(i) : i;
-            const int before = out.status(t);
+            const int t = pass == Pass::listed ? list(i) : i;  // the slot
+            const int id = grid.order(t);                      // the particle
+            const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
             if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
                 (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow))
@@ -599,7 +602,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     for (int k = 0; k < 3; ++k)
                         e[k] = ep::snap(positions(c.slot, k), box) + c.image[k] * ep::period - self[k];
                     const int planes_before = cell.planes;
-                    status = clip(cell, e, c.slot, t);
+                    status = clip(cell, e, grid.order(c.slot), id);
                     ++clipped;
                     cuts += cell.planes > planes_before;
                 }
@@ -661,15 +664,15 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 compact_planes(cell);  // only planes that bound a face
                 int need = 0;
                 for (int plane = box_planes; plane < cell.planes; ++plane)
-                    need += (with_rings ? 2 : 1) * (cell.id[plane] > t);
+                    need += (with_rings ? 2 : 1) * (cell.id[plane] > id);
                 if (with_rings)
                     for (int v = 0; v < cell.vertices; ++v)
-                        for (int k = 0; k < 3; ++k) need += cell.id[cell.corner[v][k]] > t;
-                if (!(with_rings ? claim_rings(out, t, need) : claim_faces(out, t, need))) status = face_overflow;
+                        for (int k = 0; k < 3; ++k) need += cell.id[cell.corner[v][k]] > id;
+                if (!(with_rings ? claim_rings(out, id, need) : claim_faces(out, id, need))) status = face_overflow;
                 if (with_rings)
-                    ring_at = out.ring_start(t);
+                    ring_at = out.ring_start(id);
                 else
-                    face_at = out.face_start(t);
+                    face_at = out.face_start(id);
             }
 
             // Faces: walk each plane's vertices in order, integrating the face
@@ -693,7 +696,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 double weight = 0;
                 int current = start, length = 0;
                 const int neighbour = cell.id[plane];
-                const bool record = with_rings && neighbour > t;
+                const bool record = with_rings && neighbour > id;
                 do {
                     int at = 0;
                     while (cell.corner[current][at] != plane) ++at;
@@ -730,7 +733,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 if (!with_rings && magnitude <= sliver) continue;
                 ++faces;
                 area_magnitude += magnitude;
-                if (neighbour <= t) continue;
+                if (neighbour <= id) continue;
                 if (with_rings) {
                     out.rings(ring_at + ring_used) = neighbour;
                     out.rings(ring_at + ring_used + 1) = length;
@@ -751,19 +754,19 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             }
             if (status == ok && !(volume > 0)) status = degenerate;
 
-            out.status(t) = status;
-            out.face_count(t) = status == ok ? faces : 0;
-            out.owned_count(t) = status == ok ? owned : 0;
-            out.volume(t) = status == ok ? volume * unit * unit * unit : 0.0;
+            out.status(id) = status;
+            out.face_count(id) = status == ok ? faces : 0;
+            out.owned_count(id) = status == ok ? owned : 0;
+            out.volume(id) = status == ok ? volume * unit * unit * unit : 0.0;
             const Vec3 c = status == ok ? moment * (unit / volume) : Vec3{0, 0, 0};
-            out.centroid(t, 0) = c.x;
-            out.centroid(t, 1) = c.y;
-            out.centroid(t, 2) = c.z;
+            out.centroid(id, 0) = c.x;
+            out.centroid(id, 1) = c.y;
+            out.centroid(id, 2) = c.z;
             if (with_closure) {
-                out.closure(t) = status == ok ? Kokkos::sqrt(dot(area_sum, area_sum)) / area_magnitude : 0.0;
-                out.work(t, 0) = batches;
-                out.work(t, 1) = clipped;
-                out.work(t, 2) = cuts;
+                out.closure(id) = status == ok ? Kokkos::sqrt(dot(area_sum, area_sum)) / area_magnitude : 0.0;
+                out.work(id, 0) = batches;
+                out.work(id, 1) = clipped;
+                out.work(id, 2) = cuts;
             }
         });
 }

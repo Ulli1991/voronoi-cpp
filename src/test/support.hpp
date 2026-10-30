@@ -271,7 +271,7 @@ double median_ms(int repeats, const F& f) {
 // owned face centroid equidistant from its two generators with no generator
 // closer (brute force over all generators for a sample of cells). Prints a
 // one-line summary; returns the number of failed checks.
-inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& slot_positions, std::ostream& out) {
+inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& positions, std::ostream& out) {
     constexpr double volume_tolerance = 1e-12, closure_tolerance = 1e-12, distance_tolerance = 1e-9;
     const auto status = to_host(cells.status);
     const auto face_count = to_host(cells.face_count);
@@ -282,7 +282,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     const auto volume = to_host(cells.volume);
     const auto closure = to_host(cells.closure);
     const auto work = to_host(cells.work);
-    const auto x = to_host(slot_positions);
+    const auto x = to_host(positions);
     const int n = static_cast<int>(status.extent(0));
     std::array<int, shell_voronoi::status_count> statuses{};
     double total_volume = 0, min_volume = 1e300, max_closure = 0;
@@ -340,7 +340,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     return failures;
 }
 
-// Clipping build of the particles of `list` (in slot order) that records
+// Clipping build of the particles of `list` that records
 // face rings, for tet_mesh::from_rings and tet_start::build.
 inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list,
                                                      long long entries = 0) {
@@ -353,7 +353,7 @@ inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x, double 
     return cells_with_rings(cell_list(x, box));
 }
 
-// The exact starting tetrahedralization of x (in slot order): clipping with
+// The exact starting tetrahedralization of x: clipping with
 // rings, then tet_start::build.
 inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh, double box = 1.0) {
     const auto list = cell_list(x, box);
@@ -375,26 +375,22 @@ struct Reference {
     std::vector<int> status;
 };
 
-// The cells of a clipping build, by particle (`order` maps slots to particles).
-inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells, const Kokkos::View<int*, Memory>& slot_order) {
-    const auto order = to_host(slot_order);
+// The cells of a clipping build, by particle.
+inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells) {
     const auto owned = to_host(cells.owned_count);
     const auto start = to_host(cells.face_start);
     const auto neighbour = to_host(cells.neighbour);
     const auto volume = to_host(cells.volume);
     const auto status = to_host(cells.status);
-    const int n = static_cast<int>(order.extent(0));
-    Reference r{NeighbourSets(n), std::vector<double>(n), std::vector<int>(n)};
-    for (int t = 0; t < n; ++t) {
-        const int i = order(t);
-        r.volume[i] = volume(t);
-        r.status[i] = status(t);
-        for (int f = 0; f < owned(t); ++f) {
-            const int j = order(neighbour(start(t) + f));
+    const int n = static_cast<int>(owned.extent(0));
+    Reference r{NeighbourSets(n), std::vector<double>(volume.data(), volume.data() + n),
+                std::vector<int>(status.data(), status.data() + n)};
+    for (int i = 0; i < n; ++i)
+        for (int f = 0; f < owned(i); ++f) {
+            const int j = neighbour(start(i) + f);
             r.neighbours[i].push_back(j);
             r.neighbours[j].push_back(i);
         }
-    }
     for (auto& s : r.neighbours) std::sort(s.begin(), s.end());
     return r;
 }
@@ -404,7 +400,7 @@ inline Reference clipped(const Positions& x, double box = 1.0) {
     const auto list = cell_list(x, box);
     shell_voronoi::Cells<Memory> cells(n, false);
     shell_voronoi::construct_warp(Exec{}, shell_voronoi::make_grid(list), cells);
-    return by_particle(cells, list.order);
+    return by_particle(cells);
 }
 
 // Cells of two builds that differ: particles with other neighbour sets, and

@@ -335,6 +335,7 @@ struct Kernel {
         const auto& positions = grid.positions;
         const double box = grid.box;
         const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
+        const int id = grid.order(t);  // the particle: outputs and the owner rule use particle ids
 
         int planes = 0;
         std::uint64_t live = 0;  // slots holding vertices
@@ -353,16 +354,19 @@ struct Kernel {
             sort_candidates(key, slot, packed);
             // Lane i loads candidate i at once; the loop broadcasts it.
             Vec3 mine{0, 0, 0};
-            if (l < buffered)
+            int mine_id = -1;
+            if (l < buffered) {
                 mine = {positions(slot, 0) + image(packed, 0) * box - p.x,
                         positions(slot, 1) + image(packed, 1) * box - p.y,
                         positions(slot, 2) + image(packed, 2) * box - p.z};
+                mine_id = grid.order(slot);
+            }
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
-                const int q = __shfl_sync(all_lanes, slot, i);
+                const int q = __shfl_sync(all_lanes, mine_id, i);
                 const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
-                                     __shfl_sync(all_lanes, mine.z, i)};
+                             __shfl_sync(all_lanes, mine.z, i)};
                 const int before = planes;
                 status = clip(c, planes, live, radius2, d, q);
                 ++clipped;
@@ -498,7 +502,7 @@ struct Kernel {
             if (magnitude <= sliver) continue;
             ++faces;
             area_magnitude += magnitude;
-            if (c.neighbour[plane] > t) {
+            if (c.neighbour[plane] > id) {
                 owned_plane[owned_here] = plane;
                 owned_length[owned_here] = steps;
                 owned_area[owned_here] = area;
@@ -527,8 +531,8 @@ struct Kernel {
         int fits = 1;
         long long block = 0;
         if (l == 0 && status == ok) {
-            fits = with_rings ? claim_rings(out, t, total) : claim_faces(out, t, total);
-            block = with_rings ? out.ring_start(t) : out.face_start(t);
+            fits = with_rings ? claim_rings(out, id, total) : claim_faces(out, id, total);
+            block = with_rings ? out.ring_start(id) : out.face_start(id);
         }
         if (__shfl_sync(all_lanes, fits, 0) == 0) status = face_overflow;
         if (status == ok) {
@@ -561,18 +565,18 @@ struct Kernel {
         }
         if (l == 0) {
             const bool good = status == ok;
-            out.status(t) = status;
-            out.face_count(t) = good ? faces : 0;
-            out.owned_count(t) = good ? owned : 0;
-            out.volume(t) = good ? volume : 0.0;
-            out.centroid(t, 0) = good ? moment.x / volume : 0.0;
-            out.centroid(t, 1) = good ? moment.y / volume : 0.0;
-            out.centroid(t, 2) = good ? moment.z / volume : 0.0;
+            out.status(id) = status;
+            out.face_count(id) = good ? faces : 0;
+            out.owned_count(id) = good ? owned : 0;
+            out.volume(id) = good ? volume : 0.0;
+            out.centroid(id, 0) = good ? moment.x / volume : 0.0;
+            out.centroid(id, 1) = good ? moment.y / volume : 0.0;
+            out.centroid(id, 2) = good ? moment.z / volume : 0.0;
             if (out.closure.extent(0) > 0) {
-                out.closure(t) = good ? Kokkos::sqrt(dot(area_sum, area_sum)) / area_magnitude : 0.0;
-                out.work(t, 0) = rings;
-                out.work(t, 1) = clipped;
-                out.work(t, 2) = cuts;
+                out.closure(id) = good ? Kokkos::sqrt(dot(area_sum, area_sum)) / area_magnitude : 0.0;
+                out.work(id, 0) = rings;
+                out.work(id, 1) = clipped;
+                out.work(id, 2) = cuts;
             }
         }
     }

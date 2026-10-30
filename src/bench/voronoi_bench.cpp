@@ -136,7 +136,7 @@ int rebuild(const std::vector<std::string>& args, double width_factor) {
         std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
                   << " construct_Mcells_s=" << n / construct_ms / 1e3
                   << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-        failures += check_cells(cells, list.positions, std::cout);
+        failures += check_cells(cells, x, std::cout);
         const auto volume = to_host(cells.volume);
         if (first_volumes.empty()) {
             first_volumes.assign(volume.data(), volume.data() + n);

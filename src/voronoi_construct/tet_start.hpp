@@ -157,8 +157,15 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = grid.n;
     Stats stats;
+    // Snapped positions by particle.
     ep::Points<Memory> point("tet_start_point", n);
-    ep::snap(exec, grid.positions, grid.box, point);
+    const auto positions = grid.positions;
+    const auto order = grid.order;
+    const double box = grid.box;
+    Kokkos::parallel_for(
+        "tet_start::snap", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
+            for (int a = 0; a < 3; ++a) point(order(q), a) = ep::snap(positions(q, a), box);
+        });
     const auto stencil = shell_voronoi::make_stencil(exec);
     Kokkos::View<int*, Memory> marked("tet_start_marked", n), grown("tet_start_grown", n), todo("tet_start_todo", n);
     // Cells the clipping did not finish count as bad from the start.
@@ -180,11 +187,11 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
         if (all || round == 2) break;
         detail::grow(exec, mesh, marked, grown);
         int listed = 0;
-        Kokkos::parallel_scan(
+        Kokkos::parallel_scan(  // the slots of the grown particles
             "tet_start::list", Range(exec, 0, n),
-            KOKKOS_LAMBDA(int i, int& at, bool last) {
-                if (!grown(i)) return;
-                if (last) todo(at) = i;
+            KOKKOS_LAMBDA(int q, int& at, bool last) {
+                if (!grown(order(q))) return;
+                if (last) todo(at) = q;
                 ++at;
             },
             listed);
