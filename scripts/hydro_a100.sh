@@ -42,7 +42,7 @@ nvidia-smi -L
 ours() {
     module purge
     module load gcc/14 cuda/13.0 cmake hdf5-serial
-    "$build/hydro_sedov" "$@" | grep -v "^  "
+    "${HYDRO_BIN:-$build/hydro_sedov}" "$@" | grep -v "^  "
 }
 
 luna() {  # luna <nx> <order> <riemann solver> <run dir> [Config overrides]
@@ -146,6 +146,34 @@ elif [[ "$mode" == static256 || "$mode" == moving256full ]]; then
     fi
     echo "== ours 256^3 jittered $kind, whole run, final snapshot"
     ours 256 jittered $mesh --snapshots=1 --out="$out/voronoi256_$kind"
+elif [[ "$mode" == memory_compare ]]; then
+    # Two builds of hydro_sedov in one job (BEFORE, AFTER: paths), moving
+    # 256^3 per-face, 100 steps, device memory per phase.
+    for variant in BEFORE AFTER; do
+        echo "== $variant ${!variant}: ours n=256^3 jittered moving per-face --steps=100"
+        HYDRO_BIN="${!variant}" ours 256 jittered --moving --update=face --steps=100 --memory
+    done
+elif [[ "$mode" == moving256face ]]; then
+    echo "== ours 256^3 jittered moving per-face, whole run, final snapshot"
+    ours 256 jittered --moving --update=face --snapshots=1 --memory --out="$out/voronoi256_moving_face"
+elif [[ "$mode" == ours128 ]]; then
+    for mesh in --moving ""; do
+        echo "== ours 128^3 jittered ${mesh:-static}, whole run"
+        ours 128 jittered $mesh --out="$out/voronoi128${mesh:+_moving}"
+    done
+elif [[ "$mode" == luna_resolution ]]; then
+    # LUNA's whole Sedov at NX^3 (HLLC, Pallas, FP64), checkpointed every 5.5
+    # minutes of wall time (outputs.py:325-360) so that a run longer than one
+    # job continues with RESTART=1 from the newest checkpoint
+    # (docs/CONFIG.md:672-674); then the analysis of the final snapshot.
+    nx="${NX:?}"
+    dir="$out/luna${nx}_hllc"
+    echo "== LUNA ${nx}^3 ORDER=1 hllc pallas restart=${RESTART:-0}"
+    compgen -G "$dir/snapdir_001/*.hdf5" > /dev/null || luna "$nx" 1 hllc "$dir" n_snaps=1 hydro_kernel=pallas clear_output_dir=0 enable_checkpointing=1 \
+        checkpoint_wall_time_interval=330 max_checkpoints=2 checkpoint_dir="$dir/checkpoints" restart="${RESTART:-0}"
+    if compgen -G "$dir/snapdir_001/*.hdf5" > /dev/null; then
+        "$luna_env/bin/python" "$repo/scripts/hydro_sedov_compare.py" "$dir/sedov.png" "luna${nx}=$dir" | grep -E "final|10000.0"
+    fi
 elif [[ "$mode" == luna256 ]]; then
     echo "== LUNA 256^3 ORDER=1 hllc pallas, whole run, final snapshot"
     luna 256 1 hllc "$out/luna256_hllc" n_snaps=1 hydro_kernel=pallas
