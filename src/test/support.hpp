@@ -1,6 +1,6 @@
 #pragma once
 
-// Inputs, the moving-mesh driver and reference results shared by the tests
+// Inputs, reference results and comparisons shared by the tests
 // and the benchmark. Reference checks that compare against every generator
 // are brute force: test oracles only.
 
@@ -10,6 +10,7 @@
 #include "tet_mesh.hpp"
 #include "tet_repair.hpp"
 #include "tet_start.hpp"
+#include "voronoi_mesh.hpp"
 
 #include <algorithm>
 #include <array>
@@ -197,7 +198,8 @@ inline Positions to_device(const Points& points) {
 
 // A cell list over the box [0, box)^3 whose base grid has about one particle
 // per cell (times width_factor^-3).
-inline neighbor_search::CellList<Exec> cell_list(const Positions& x, double box = 1.0, double width_factor = 1.0) {
+template <class X>
+neighbor_search::CellList<Exec> cell_list(const X& x, double box = 1.0, double width_factor = 1.0) {
     neighbor_search::CellList<Exec> list;
     const int n = static_cast<int>(x.extent(0));
     neighbor_search::configure(list, n, box, width_factor * box * std::cbrt(1.0 / n));
@@ -434,65 +436,67 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
     return sets;
 }
 
-// The persistent mesh of moving particles, stepped as the pipeline does:
-//   repair: pad positions, circumcentres and screening, flips on the device;
-//   finish: the host fallback, only when the device repair left stuck entries;
-//   update_geometry: circumcentres of the touched tetrahedra, face rings,
-//   faces and volumes.
-// Particles are slots of the starting build (positions in slot order).
-struct MovingMesh {
-    Exec exec;
-    int n = 0;
-    double box = 1.0;
-    tet_mesh::Mesh<Memory> mesh;
-    tet_repair::State<Memory> state;
-    tet_mesh::FaceRings<Memory> rings;
-    tet_mesh::Geometry<Memory> geometry;
-    tet_mesh::Points4<Memory> padded;
-    tet_start::Stats start;
+using Mesh = voronoi::Mesh<Exec>;
 
-    // Capacities: 1/8 more than the starting mesh needs (ring pools 1/2
-    // more, room to append between compactions); the repair and the face
-    // rings grow them when a step needs more.
-    explicit MovingMesh(const Positions& x, double box_side = 1.0) : n(static_cast<int>(x.extent(0))), box(box_side) {
-        start = start_mesh(x, mesh, box);
-        const int tets = static_cast<int>(mesh.vertex.extent(0));
-        const int start_faces = static_cast<int>(mesh.owner.extent(0)), start_entries = static_cast<int>(mesh.ring.extent(0));
-        const int faces = start_faces + start_faces / 8;
-        // The first step walks every face, so the starting faces are not kept.
-        mesh.owner = mesh.neighbour = mesh.ring_start = mesh.ring_length = mesh.ring = {};
-        state = tet_repair::prepare(exec, x, box, mesh, tets + tets / 8, n / 4 + 1024);
-        rings = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, start_entries + start_entries / 2);
-        geometry = {Kokkos::View<double* [3], Memory>("face_area", faces),
-                    Kokkos::View<double* [3], Memory>("face_centroid", faces),
-                    Kokkos::View<double*, Memory>("cell_volume", n)};
-        padded = tet_mesh::Points4<Memory>("padded_positions", n);
-    }
-
-    tet_repair::Stats repair(const Positions& x) {
-        tet_mesh::pad(exec, x, padded);
-        tet_repair::move_screened(exec, padded, box, mesh, state);
-        return tet_repair::repair(exec, mesh, state);
-    }
-
-    tet_flips::Stats finish() { return tet_flips::finish(exec, mesh, state); }
-
-    // Returns the number of faces.
-    int update_geometry() {
-        // The tetrahedra flips created, or none listed: circumcentres of all, faces from touched.
-        const Kokkos::View<const int*, Memory> created =
-            state.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
-                                      : Kokkos::subview(state.touched_list, std::make_pair(0, state.touched_entries));
-        tet_mesh::circumcentres(exec, padded, box, mesh, state.count, created);
-        const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, created, rings);
-        if (faces > static_cast<int>(geometry.area.extent(0))) {
-            Kokkos::realloc(Kokkos::WithoutInitializing, geometry.area, faces + faces / 8);
-            Kokkos::realloc(Kokkos::WithoutInitializing, geometry.centroid, faces + faces / 8);
-        }
-        tet_mesh::faces(exec, padded, box, mesh, geometry);
-        Kokkos::deep_copy(exec, state.touched, 0);
-        return faces;
-    }
+// A mesh compared with an exact rebuild by clipping of the same positions
+// (support::clipped): failing triangles and inverted tetrahedra (brute force
+// over all tetrahedra, tet_flips::failing), cells with other Delaunay
+// neighbours, clipping faces the mesh lacks, mesh faces the clipping lacks
+// (and the largest of their areas, in spacings^2; clipping drops faces
+// below rounding level, the mesh keeps every Delaunay edge), the largest
+// relative volume difference and the total volume (box units).
+struct Comparison {
+    long long failing = 0, mismatched = 0, missing = 0, extra = 0, faces = 0, clipped_faces = 0;
+    double extra_area = 0, volume = 0, total = 0;
+    int worst_cell = -1;
+    // Exact: no failing triangle, no missing face, extra faces only below
+    // rounding level, volumes equal to 1e-10.
+    bool pass() const { return failing == 0 && missing == 0 && extra_area < 1e-9 && volume < 1e-10; }
 };
+
+inline Comparison compare_with_rebuild(const Mesh& mesh, const Positions& x) {
+    const int n = mesh.particles();
+    const double box = mesh.box(), spacing = box * std::cbrt(1.0 / n);
+    Comparison c;
+    const tet_flips::Mesh tets = tet_flips::to_host<Exec>(mesh.tetrahedra(), mesh.repair_state());
+    c.failing = tet_flips::failing(tets);
+    const Reference exact = clipped(x, box);
+    const NeighbourSets neighbours = delaunay_neighbours(tets, n);
+    for (int i = 0; i < n; ++i) {
+        c.mismatched += neighbours[i] != exact.neighbours[i];
+        c.clipped_faces += static_cast<long long>(exact.neighbours[i].size());
+        for (int j : exact.neighbours[i])
+            c.missing += i < j && !std::binary_search(neighbours[i].begin(), neighbours[i].end(), j);
+    }
+    c.clipped_faces /= 2;
+    const auto owner = to_host(mesh.owner());
+    const auto neighbour = to_host(mesh.neighbour());
+    const auto area = to_host(mesh.area());
+    c.faces = mesh.faces();
+    for (int f = 0; f < c.faces; ++f) {
+        const int i = owner(f), j = neighbour(f);
+        if (std::binary_search(exact.neighbours[i].begin(), exact.neighbours[i].end(), j)) continue;
+        ++c.extra;
+        c.extra_area = std::max(c.extra_area, std::sqrt(area(f, 0) * area(f, 0) + area(f, 1) * area(f, 1) +
+                                                        area(f, 2) * area(f, 2)) / (spacing * spacing));
+    }
+    const auto volume = to_host(mesh.volume());
+    for (int i = 0; i < n; ++i) {
+        c.total += volume(i) / (box * box * box);
+        const double error = std::abs(volume(i) - exact.volume[i]) / exact.volume[i];
+        if (exact.volume[i] > 0 && error > c.volume) {
+            c.volume = error;
+            c.worst_cell = i;
+        }
+    }
+    return c;
+}
+
+inline std::ostream& operator<<(std::ostream& out, const Comparison& c) {
+    return out << "failing=" << c.failing << " mismatched_cells=" << c.mismatched << " missing_faces=" << c.missing
+               << " extra_faces=" << c.extra << " extra_max_area=" << c.extra_area << " faces=" << c.faces
+               << " clipped_faces=" << c.clipped_faces << " total_volume=" << c.total
+               << " max_relative_volume_difference=" << c.volume;
+}
 
 }  // namespace support

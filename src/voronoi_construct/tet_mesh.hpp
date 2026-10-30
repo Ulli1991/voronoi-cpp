@@ -657,11 +657,13 @@ void circumcentres(const ExecSpace& exec, const X& x, double box,
 }
 
 // 2. Face area vectors (owner to neighbour), centroids (relative to the
-// owner) and cell volumes, one thread per owned face.
+// owner) and, if out.volume is allocated, cell volumes (summed by atomics),
+// one thread per owned face.
 template <class ExecSpace, class X>
 void faces(const ExecSpace& exec, const X& x, double box,
            const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
-    Kokkos::deep_copy(exec, out.volume, 0.0);
+    const bool with_volume = out.volume.extent(0) > 0;
+    if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
     Kokkos::parallel_for(
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f) {
             const int i = mesh.owner(f), j = mesh.neighbour(f);
@@ -694,13 +696,92 @@ void faces(const ExecSpace& exec, const X& x, double box,
             out.centroid(f, 0) = centroid.x;
             out.centroid(f, 1) = centroid.y;
             out.centroid(f, 2) = centroid.z;
+            if (!with_volume) return;
             const double pyramid = Kokkos::sqrt(dot(area, area) * dot(dj, dj)) / 6.0;
             Kokkos::atomic_add(&out.volume(i), pyramid);
             Kokkos::atomic_add(&out.volume(j), pyramid);
         });
 }
 
-// 3. Local Delaunay check, one thread per tetrahedron: the far vertex of each
+// Per-cell face lists (CSR) and cell geometry: cell i's faces are
+// face(start(i)) .. face(start(i + 1) - 1), in increasing order of the other
+// particle's id; volume and centroid (relative to the generator) are summed
+// over them in that order, so they are the same bits run to run.
+template <class MemorySpace>
+struct CellFaces {
+    Kokkos::View<int*, MemorySpace> start, face;
+    Kokkos::View<int*, MemorySpace> cursor;  // fill positions while building
+    Kokkos::View<double*, MemorySpace> volume;
+    Kokkos::View<double* [3], MemorySpace> centroid;
+};
+
+// 3. The cell face lists and cell volumes and centroids from the faces of
+// mesh (owner, neighbour) and their geometry (area, centroid), x the
+// positions the geometry was computed from. Grows out.face when needed.
+template <class ExecSpace, class X>
+void cells(const ExecSpace& exec, const X& x, double box, const Mesh<typename ExecSpace::memory_space>& mesh,
+           const Geometry<typename ExecSpace::memory_space>& geometry, CellFaces<typename ExecSpace::memory_space>& out) {
+    using Range = Kokkos::RangePolicy<ExecSpace>;
+    const int n = static_cast<int>(out.volume.extent(0)), faces = static_cast<int>(mesh.owner.extent(0));
+    const auto owner = mesh.owner, neighbour = mesh.neighbour;
+    if (static_cast<int>(out.face.extent(0)) < 2 * faces)
+        Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 4);
+    const auto start = out.start, cursor = out.cursor, face = out.face;
+    Kokkos::deep_copy(exec, start, 0);
+    Kokkos::parallel_for(
+        "tet_mesh::cell_face_counts", Range(exec, 0, faces), KOKKOS_LAMBDA(int f) {
+            Kokkos::atomic_inc(&start(owner(f)));
+            Kokkos::atomic_inc(&start(neighbour(f)));
+        });
+    Kokkos::parallel_scan(
+        "tet_mesh::cell_face_start", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int i, int& sum, bool final) {
+            const int count = i < n ? start(i) : 0;
+            if (final) {
+                start(i) = sum;
+                if (i < n) cursor(i) = sum;
+            }
+            sum += count;
+        });
+    Kokkos::parallel_for(
+        "tet_mesh::cell_face_fill", Range(exec, 0, faces), KOKKOS_LAMBDA(int f) {
+            face(Kokkos::atomic_fetch_inc(&cursor(owner(f)))) = f;
+            face(Kokkos::atomic_fetch_inc(&cursor(neighbour(f)))) = f;
+        });
+    const auto area = geometry.area, centroid = geometry.centroid;
+    const auto volume = out.volume;
+    const auto cell_centroid = out.centroid;
+    Kokkos::parallel_for(
+        "tet_mesh::cell_geometry", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
+            const int begin = start(i), end = start(i + 1);
+            auto other = [&](int f) { return owner(f) == i ? neighbour(f) : owner(f); };
+            for (int a = begin + 1; a < end; ++a) {  // fixed order: by the other particle
+                const int f = face(a), key = other(f);
+                int b = a;
+                for (; b > begin && other(face(b - 1)) > key; --b) face(b) = face(b - 1);
+                face(b) = f;
+            }
+            // Pyramids from the generator over each face: volume |A| |d| / 6,
+            // centroid at 3/4 of the way to the face centroid.
+            double v = 0;
+            Vec3 moment{0, 0, 0};
+            for (int a = begin; a < end; ++a) {
+                const int f = face(a), j = other(f);
+                const Vec3 d{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box), wrap(x(j, 2) - x(i, 2), box)};
+                const Vec3 A{area(f, 0), area(f, 1), area(f, 2)};
+                Vec3 c{centroid(f, 0), centroid(f, 1), centroid(f, 2)};
+                if (owner(f) != i) c = c + d;  // given relative to the owner j
+                const double pyramid = Kokkos::sqrt(dot(A, A) * dot(d, d)) / 6.0;
+                v += pyramid;
+                moment = moment + c * (0.75 * pyramid);
+            }
+            volume(i) = v;
+            cell_centroid(i, 0) = moment.x / v;
+            cell_centroid(i, 1) = moment.y / v;
+            cell_centroid(i, 2) = moment.z / v;
+        });
+}
+
+// 4. Local Delaunay check, one thread per tetrahedron: the far vertex of each
 // neighbour must not lie inside this circumsphere. Writes 1 per failing
 // tetrahedron into `invalid` and returns how many failed. Rounding-level
 // cases count as valid here; deciding them exactly is the repair's job.
