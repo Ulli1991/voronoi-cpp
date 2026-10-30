@@ -120,3 +120,5 @@ snapshots in LUNA's layout; AREPO-style least-squares gradients for stage 2.
 Decided as well: time integration is MUSCL-Hancock throughout. The GPU state between steps is
 the conserved variables only (5 doubles per cell); primitives are computed where needed and
 not kept in GPU memory, as in LUNA. Snapshots write primitives.
+Reconstruction is always on the primitives (rho, v, P): gradients, limiter, extrapolation to
+the face centroids and the MUSCL-Hancock half step act on W, fluxes and the update on U.
