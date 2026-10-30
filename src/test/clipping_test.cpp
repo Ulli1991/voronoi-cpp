@@ -34,18 +34,17 @@ int main(int argc, char** argv) {
         }
         const Reference reference = by_particle(thread, list.order);
         const Difference d = compare(reference, by_particle(warp, list.order));
-        check.expect(d.neighbours == 0 && d.volume < 1e-12, "warp and thread cells agree (" +
-                                                                std::to_string(d.neighbours) + " neighbour sets, volumes " +
-                                                                sci(d.volume) + ")");
+        auto agree = [](const Difference& x) {
+            return " (" + std::to_string(x.neighbours) + " neighbour sets, volumes " + sci(x.volume) + ")";
+        };
+        check.expect(d.neighbours == 0 && d.volume < 1e-12, "warp and thread cells agree" + agree(d));
 
         // A base grid twice as coarse: other slots, the same cells.
         const auto coarse = cell_list(x, 2.0);
         shell_voronoi::Cells<Memory> cells(n, false);
         shell_voronoi::construct_warp<double>(exec, shell_voronoi::make_grid(coarse), cells);
         const Difference c = compare(reference, by_particle(cells, coarse.order));
-        check.expect(c.neighbours == 0 && c.volume < 1e-12, "coarser base grid gives the same cells (" +
-                                                                std::to_string(c.neighbours) + " neighbour sets, volumes " +
-                                                                sci(c.volume) + ")");
+        check.expect(c.neighbours == 0 && c.volume < 1e-12, "coarser base grid gives the same cells" + agree(c));
 
         // Output for 4 owned faces per cell: widened by the build.
         shell_voronoi::Cells<Memory> narrow(n, false, 4);

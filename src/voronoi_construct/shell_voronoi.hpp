@@ -523,10 +523,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                             const double d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                             if (d2 >= 4.0 * static_cast<double>(cell.radius2)) continue;
                             if (buffered == ring_buffer) flush();
-                            buffer[buffered++] = {static_cast<float>(d2),
-                                                  q,
-                                                  {static_cast<std::int8_t>(shift[0]), static_cast<std::int8_t>(shift[1]),
-                                                   static_cast<std::int8_t>(shift[2])}};
+                            using Image = std::int8_t;
+                            buffer[buffered++] = {static_cast<float>(d2), q,
+                                                  {Image(shift[0]), Image(shift[1]), Image(shift[2])}};
                         }
                     }
                     flush();

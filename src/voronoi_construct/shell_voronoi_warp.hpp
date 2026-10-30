@@ -388,9 +388,9 @@ struct Kernel {
                 ++rings;
                 const int e = first + l;
                 int begin = 0, end = 0, packed = 0;
+                const double reach2 = 4.0 * static_cast<double>(radius2);
                 if (e < entries)
-                    stencil_cell<adaptive>(grid, level, home, finer, stencil.offsets(e), p, 4.0 * static_cast<double>(radius2),
-                                 begin, end, packed);
+                    stencil_cell<adaptive>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end, packed);
                 const int most = warp_max(end - begin);
                 for (int k = 0; k < most && status == ok; ++k) {
                     const int q = begin + k;
