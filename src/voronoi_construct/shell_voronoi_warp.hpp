@@ -317,12 +317,13 @@ struct Kernel {
         auto* base = static_cast<Polyhedron*>(
             member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron)));
         Polyhedron& c = base[member.team_rank()];
+        FaceBlock faces;
         while (true) {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
             const int t = __shfl_sync(all_lanes, taken, 0);
             if (t >= selection.count(grid.n)) return;  // the whole warp
-            build(c, selection.slot(t));
+            build(c, selection.slot(t), faces);
         }
 #else
         (void)member;
@@ -331,7 +332,14 @@ struct Kernel {
 
 #if defined(__CUDA_ARCH__)
     // Build cell t in polyhedron c, with all lanes of the warp.
-    __device__ __forceinline__ void build(Polyhedron& c, int t) const {
+    // Owned faces without rings: the warp claims face_block entries of the
+    // pool at a time (lane 0 holds them), so the pool's counter sees one
+    // atomic per block instead of one per cell.
+    struct FaceBlock {
+        long long at = 0, end = 0;
+    };
+
+    __device__ __forceinline__ void build(Polyhedron& c, int t, FaceBlock& block_of_faces) const {
         const int l = lane();
         const auto& positions = grid.positions;
         const double box = grid.box;
@@ -458,25 +466,6 @@ struct Kernel {
         }
         __syncwarp(all_lanes);
 
-        // Owned faces go to one block per cell that lane 0 claims. Without
-        // rings it is claimed here, for every owned plane (faces below
-        // rounding level are dropped later), so that the atomic's latency
-        // hides behind the face walk.
-        int fits = 1;
-        long long block = 0;
-        if constexpr (!with_rings) {
-            int bound = 0;
-            for (int k = 0; k < per_lane; ++k) {
-                const int plane = l + k * lanes;
-                bound += plane >= box_planes && plane < planes && c.first[plane] != none &&
-                         selection.owns(id, c.neighbour[plane]);
-            }
-            const int total = static_cast<int>(__reduce_add_sync(all_lanes, static_cast<unsigned>(bound)));
-            if (l == 0 && status == ok) {
-                fits = claim_faces(out, id, total);
-                block = out.face_start(id);
-            }
-        }
 
         double volume = 0;
         Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
@@ -542,9 +531,11 @@ struct Kernel {
         int offset = exclusive_scan(owned_here, owned);
         if (status == ok && !(volume > 0)) status = degenerate;
 
-        // With rings each owned face is its neighbour, ring length and ring
-        // (see Cells::rings), sized now; otherwise its neighbour, area and
-        // centroid.
+        // The owned faces go to one block per cell that lane 0 claims: with
+        // rings each face as its neighbour, ring length and ring (see
+        // Cells::rings), otherwise its neighbour, area and centroid.
+        int fits = 1;
+        long long block = 0;
         if constexpr (with_rings) {
             int need = 0;
             for (int m = 0; m < owned_here; ++m) need += 2 + owned_length[m];
@@ -553,6 +544,18 @@ struct Kernel {
             if (l == 0 && status == ok) {
                 fits = claim_rings(out, id, total);
                 block = out.ring_start(id);
+            }
+        } else if (l == 0 && status == ok) {
+            FaceBlock& b = block_of_faces;
+            if (b.at + owned > b.end) {  // a new block for this warp
+                const int size = Kokkos::max(owned, face_block);
+                fits = claim(out.face_used, static_cast<long long>(out.neighbour.extent(0)), 0, size, b.at);
+                b.end = fits ? b.at + size : b.at;
+            }
+            if (fits) {
+                block = b.at;
+                out.face_start(id) = static_cast<int>(b.at);
+                b.at += owned;
             }
         }
         if (__shfl_sync(all_lanes, fits, 0) == 0) status = face_overflow;
@@ -652,7 +655,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             else
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
                                      warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, selection});
-            detail::construct_cells(exec, grid, stencil, out, detail::Pass::failed, selection);
+            detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed, selection);
         });
         return;
     }

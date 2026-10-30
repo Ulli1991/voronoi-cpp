@@ -203,8 +203,9 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
             listed = n;
             Kokkos::deep_copy(exec, cells.ring_used, 0u);  // every block is written again
         }
-        shell_voronoi::detail::construct_cells(exec, grid, stencil, cells, shell_voronoi::detail::Pass::all,
-                                               {Kokkos::subview(todo, std::make_pair(0, listed)), {}});
+        namespace sv = shell_voronoi::detail;
+        sv::construct_cells<sv::ExactCell>(exec, grid, stencil, cells, sv::Pass::all,
+                                           {Kokkos::subview(todo, std::make_pair(0, listed)), {}});
         stats.patched += listed;
         Kokkos::deep_copy(exec, marked, 0);
     }

@@ -1,9 +1,9 @@
 // Full rebuild by clipping: on jittered, uniform random, lattice, clustered
 // and halo points every cell is certified, volumes are positive and fill the
 // box, cells close, faces are consistent between neighbours and lie on the
-// bisectors (support::check_cells). The thread and warp kernels give the same
-// cells, and so does a cell list with a coarser base grid (other slots). A
-// face pool too small grows to what the build needs.
+// bisectors (support::check_cells). The thread, warp and exact kernels give
+// the same cells, and so does a cell list with a coarser base grid (other
+// slots). A face pool too small grows to what the build needs.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -39,6 +39,12 @@ int main(int argc, char** argv) {
         };
         check.expect(d.neighbours == 0 && d.volume < 1e-12, "warp and thread cells agree" + agree(d));
 
+        // The exact per-thread kernel (the start's patch) gives the same cells.
+        shell_voronoi::Cells<Memory> exact(n, false);
+        shell_voronoi::construct(exec, grid, exact, {}, true);
+        const Difference e = compare(reference, by_particle(exact));
+        check.expect(e.neighbours == 0 && e.volume < 1e-12, "exact and thread cells agree" + agree(e));
+
         // A base grid twice as coarse: other slots, the same cells.
         const auto coarse = cell_list(x, 1.0, 2.0);
         shell_voronoi::Cells<Memory> cells(n, false);
@@ -46,8 +52,8 @@ int main(int argc, char** argv) {
         const Difference c = compare(reference, by_particle(cells));
         check.expect(c.neighbours == 0 && c.volume < 1e-12, "coarser base grid gives the same cells" + agree(c));
 
-        // A face pool for one face per cell grows to what the build needs.
-        shell_voronoi::Cells<Memory> small(n, false, 1);
+        // A face pool for one face of one cell grows to what the build needs.
+        shell_voronoi::Cells<Memory> small(n, false, 1, 1);
         shell_voronoi::construct_warp(exec, grid, small);
         const Difference w = compare(reference, by_particle(small));
         check.expect(small.capacity() > n && w.neighbours == 0 && w.volume < 1e-12,

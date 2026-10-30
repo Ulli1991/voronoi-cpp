@@ -1,9 +1,9 @@
 // Timing and debugging of the mesh pipeline (not a test).
 //
-//   voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>]
-//       Full rebuild by clipping, double. Variants thread and warp, selected
-//       by substring. Every variant's cells are checked
-//       (support::check_cells, PASS/FAIL).
+//   voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>] [--no-check]
+//       Full rebuild by clipping. Variants thread, exact and warp, selected
+//       by substring. Every variant's cells are checked (support::check_cells,
+//       PASS/FAIL; brute force on a sample, seconds at 2.1M) unless --no-check.
 //   voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=rebuild]
 //       The persistent mesh (voronoi::Mesh): the start kernels (clipping
 //       with rings, from_rings, tet_start::build) and the mesh's start, then
@@ -110,7 +110,7 @@ std::vector<std::string> positional(int argc, char** argv) {
     return args;
 }
 
-int rebuild(const std::vector<std::string>& args, double width_factor) {
+int rebuild(const std::vector<std::string>& args, double width_factor, bool check) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -127,17 +127,18 @@ int rebuild(const std::vector<std::string>& args, double width_factor) {
               << list.cells_per_side() << "^3 repeats=" << repeats << "\n";
     int failures = 0;
     std::vector<double> first_volumes;
-    for (const std::string variant : {"thread", "warp"}) {
+    for (const std::string variant : {"thread", "exact", "warp"}) {
         if (selection != "all" && variant.find(selection) == std::string::npos) continue;
         shell_voronoi::Cells<Memory> cells(n, true);
         const double construct_ms = median_ms(repeats, [&] {
             if (variant == "thread") shell_voronoi::construct(exec, grid, cells);
+            if (variant == "exact") shell_voronoi::construct(exec, grid, cells, {}, true);
             if (variant == "warp") shell_voronoi::construct_warp(exec, grid, cells);
         });
         std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
                   << " construct_Mcells_s=" << n / construct_ms / 1e3
                   << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-        failures += check_cells(cells, x, std::cout);
+        if (check) failures += check_cells(cells, x, std::cout);
         const auto volume = to_host(cells.volume);
         if (first_volumes.empty()) {
             first_volumes.assign(volume.data(), volume.data() + n);
@@ -277,12 +278,12 @@ int main(int argc, char** argv) {
     if (has_flag(argc, argv, "--memory")) DeviceMemory::start();
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
-        return rebuild(args, flag_value(argc, argv, "--width", 1.0)) != 0;
+        return rebuild(args, flag_value(argc, argv, "--width", 1.0), !has_flag(argc, argv, "--no-check")) != 0;
     if (args.size() >= 4 && args[0] == "step")
         return step(args, has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug"),
                     has_flag(argc, argv, "--fallback=rebuild") ? voronoi::Fallback::rebuild : voronoi::Fallback::host) !=
                0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--memory]\n"
+    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
                  "                          [--fallback=rebuild] [--memory]\n";
     return 2;
