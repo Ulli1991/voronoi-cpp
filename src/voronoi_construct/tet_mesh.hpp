@@ -318,6 +318,8 @@ struct FaceRings {
     using Ints = Kokkos::View<int*, MemorySpace>;
     Ints start[2], ring_start[2], ring_length[2], pool[2];
     Ints owner, neighbour;
+    Ints dirty;                                // faces to walk this step
+    Kokkos::View<int, MemorySpace> listed;     // their number
     int faces = -1;   // -1: none yet, every face is walked
     int current = 0;  // start, ring_start, ring_length [current] are the last step's
     int in_use = 0;   // pool[in_use] holds the rings
@@ -336,21 +338,25 @@ FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
     }
     r.owner = Ints("face_rings_owner", faces);
     r.neighbour = Ints("face_rings_neighbour", faces);
+    r.dirty = Ints(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_rings_dirty")), faces);
+    r.listed = Kokkos::View<int, MemorySpace>("face_rings_listed");
     return r;
 }
 
 // The face of edge i-j (particles of tetrahedron t) in the numbering
-// `start`, found by walking around the edge to its representative; -1 if
-// the walk does not reach it.
+// `start`, and its representative: found by walking around the edge.
+// Returns -1 if the walk does not reach it.
 template <class M, class Start>
-KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, int t, int i, int j) {
+KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, int t, int i, int j, int& representative) {
     for (int current = t, before = -1, steps = 0; steps < 64; ++steps) {
         const int bits = m.edges(current);
         const int a = position(m, current, i), b = position(m, current, j);
         if (a < 0 || b < 0) return -1;
         const int bit = 1 << edge_index(a, b);
-        if (bits & bit)
+        if (bits & bit) {
+            representative = current;
             return start(current) + Kokkos::Experimental::popcount_builtin(static_cast<unsigned>(bits & (bit - 1)));
+        }
         int next = -1;
         for (int c = 0; c < 4 && next < 0; ++c) {
             const int v = m.vertex(current, c);
@@ -366,15 +372,18 @@ KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, int t, int 
 }
 
 // Renumber the faces after a repair and update their rings in place: a face
-// keeps its ring unless a tetrahedron touched by a flip (touched(t) != 0) is
-// on it; then its edge is walked and the new ring appended to the pool.
-// The faces on touched tetrahedra are found from those, so clean rings are
-// never read. Requires that untouched tetrahedra keep their edge bits. When
-// the pool is full, the rings are compacted into the spare one. Sets
+// keeps its ring unless a tetrahedron touched by a flip lies on it; then
+// its edge is walked and the new ring appended to the pool. Those faces are
+// found by walking the edges of the touched tetrahedra, `touched_list` (any
+// order, repeats allowed; an empty handle: all t with touched(t) != 0), so
+// clean rings are never read and only listed faces are walked. Requires
+// that untouched tetrahedra keep their edge bits. When the pool is full,
+// the rings are compacted into the spare one. Sets
 // mesh.owner/neighbour/ring_start/ring_length/ring; returns the number of faces.
 template <class ExecSpace>
 int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_space>& mesh, int count,
                       const Kokkos::View<char*, typename ExecSpace::memory_space>& touched,
+                      const Kokkos::View<const int*, typename ExecSpace::memory_space>& touched_list,
                       FaceRings<typename ExecSpace::memory_space>& rings) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const bool all = rings.faces < 0;
@@ -395,26 +404,42 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     const auto ring_length = Kokkos::subview(rings.ring_length[now], std::make_pair(0, faces));
     const auto old_ring_start = rings.ring_start[rings.current];
     const auto old_ring_length = rings.ring_length[rings.current];
-    // Mark the faces on touched tetrahedra with ring_length -1.
-    Kokkos::deep_copy(exec, ring_length, all ? -1 : 0);
-    if (!all)
-        Kokkos::parallel_for(
-            "tet_mesh::dirty_faces", Range(exec, 0, count), KOKKOS_LAMBDA(int t) {
-                if (!touched(t)) return;
+    const auto dirty = rings.dirty;
+    const auto listed = rings.listed;
+
+    // Dirty faces: ring_length -1, ring_start ~representative, listed in `dirty`.
+    Kokkos::deep_copy(exec, ring_length, 0);
+    Kokkos::deep_copy(exec, listed, 0);
+    int dirty_faces = 0;
+    if (!all) {
+        const bool from_list = touched_list.data() != nullptr;
+        Kokkos::parallel_reduce(
+            "tet_mesh::dirty_faces",
+            Range(exec, 0, from_list ? static_cast<int>(touched_list.extent(0)) : count),
+            KOKKOS_LAMBDA(int s, int& sum) {
+                const int t = from_list ? touched_list(s) : s;
+                if (!from_list && !touched(t)) return;
+                int found[6], n = 0;
                 for (int k = 0; k < 6; ++k) {
-                    int ka, kb;
+                    int ka, kb, representative = -1;
                     edge_ends(k, ka, kb);
-                    const int f = edge_face(mesh, start, t, mesh.vertex(t, ka), mesh.vertex(t, kb));
-                    if (f >= 0) ring_length(f) = -1;
+                    const int f = edge_face(mesh, start, t, mesh.vertex(t, ka), mesh.vertex(t, kb), representative);
+                    if (f < 0 || Kokkos::atomic_exchange(&ring_length(f), -1) != 0) continue;
+                    ring_start(f) = ~representative;
+                    found[n++] = f;
                 }
-            });
-    // Owner and neighbour; a clean face takes its old ring, a dirty one its
-    // walked length and ring_start ~t (t represents it).
+                if (n == 0) return;
+                const int at = Kokkos::atomic_fetch_add(&listed(), n);
+                for (int q = 0; q < n; ++q) dirty(at + q) = found[q];
+                sum += n;
+            },
+            dirty_faces);
+    }
+    // Owner and neighbour; clean faces take their old ring (in the first
+    // call every face is dirty and walked here).
     const auto owner = rings.owner, neighbour = rings.neighbour;
-    int dirty_entries = 0;
-    Kokkos::parallel_reduce(
-        "tet_mesh::face_lengths", Range(exec, 0, count),
-        KOKKOS_LAMBDA(int t, int& sum) {
+    Kokkos::parallel_for(
+        "tet_mesh::face_lengths", Range(exec, 0, count), KOKKOS_LAMBDA(int t) {
             int bits = edges(t);
             for (int f = start(t), rank = 0; bits; ++f, ++rank, bits &= bits - 1) {
                 int ka, kb;
@@ -423,51 +448,73 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                 if (i > j) Kokkos::kokkos_swap(i, j);
                 owner(f) = i;
                 neighbour(f) = j;
-                if (ring_length(f) == 0 && !touched(t)) {
+                if (all) {
+                    ring_start(f) = ~t;
+                    ring_length(f) = walk_edge(mesh, t, i, j);
+                } else if (ring_length(f) == 0) {
                     const int old = old_start(t) + rank;
                     ring_start(f) = old_ring_start(old);
                     ring_length(f) = old_ring_length(old);
-                } else {
-                    ring_start(f) = ~t;
-                    ring_length(f) = walk_edge(mesh, t, i, j);
-                    sum += ring_length(f);
                 }
             }
+        });
+    // The dirty faces' ring lengths.
+    int dirty_entries = 0;
+    Kokkos::parallel_reduce(
+        "tet_mesh::dirty_lengths", Range(exec, 0, dirty_faces),
+        KOKKOS_LAMBDA(int s, int& sum) {
+            const int f = dirty(s);
+            ring_length(f) = walk_edge(mesh, ~ring_start(f), owner(f), neighbour(f));
+            sum += ring_length(f);
         },
         dirty_entries);
-    // Append the dirty rings, or first compact the kept ones into the spare pool.
+
     const int capacity = static_cast<int>(rings.pool[0].extent(0));
-    const bool compact = !all && rings.used + dirty_entries > capacity;
-    const auto from = rings.pool[rings.in_use];
-    if (compact) rings.in_use = 1 - rings.in_use;
-    const auto pool = rings.pool[rings.in_use];
-    const int base = all || compact ? 0 : rings.used;
-    int appended = 0;
-    Kokkos::parallel_scan(
-        "tet_mesh::face_rings", Range(exec, 0, faces),
-        KOKKOS_LAMBDA(int f, int& sum, bool final) {
-            const int begin = ring_start(f), length = ring_length(f);
-            if (begin >= 0 && !compact) return;
-            if (final) {
-                const int at = base + sum;
-                if (at + length > capacity) Kokkos::abort("update_face_rings: ring capacity exceeded");
-                if (begin < 0)
-                    walk_edge(mesh, ~begin, owner(f), neighbour(f), &pool(at));
-                else
-                    for (int r = 0; r < length; ++r) pool(at + r) = from(begin + r);
-                ring_start(f) = at;
-            }
-            sum += length;
-        },
-        appended);
-    rings.used = base + appended;
+    auto store = KOKKOS_LAMBDA(int f, int at, const Kokkos::View<int*, typename ExecSpace::memory_space>& pool) {
+        if (at + ring_length(f) > capacity) Kokkos::abort("update_face_rings: ring capacity exceeded");
+        walk_edge(mesh, ~ring_start(f), owner(f), neighbour(f), &pool(at));
+        ring_start(f) = at;
+    };
+    if (!all && rings.used + dirty_entries <= capacity) {
+        // Append the dirty rings.
+        const auto pool = rings.pool[rings.in_use];
+        const int base = rings.used;
+        Kokkos::parallel_scan(
+            "tet_mesh::append_rings", Range(exec, 0, dirty_faces),
+            KOKKOS_LAMBDA(int s, int& sum, bool final) {
+                const int f = dirty(s), length = ring_length(f);
+                if (final) store(f, base + sum, pool);
+                sum += length;
+            });
+        rings.used += dirty_entries;
+    } else {
+        // Rewrite every ring into the spare pool: copy the clean ones, walk the dirty ones.
+        const auto from = rings.pool[rings.in_use];
+        rings.in_use = 1 - rings.in_use;
+        const auto pool = rings.pool[rings.in_use];
+        int entries = 0;
+        Kokkos::parallel_scan(
+            "tet_mesh::compact_rings", Range(exec, 0, faces),
+            KOKKOS_LAMBDA(int f, int& sum, bool final) {
+                const int begin = ring_start(f), length = ring_length(f);
+                if (final && begin < 0) store(f, sum, pool);
+                if (final && begin >= 0) {
+                    if (sum + length > capacity) Kokkos::abort("update_face_rings: ring capacity exceeded");
+                    for (int r = 0; r < length; ++r) pool(sum + r) = from(begin + r);
+                    ring_start(f) = sum;
+                }
+                sum += length;
+            },
+            entries);
+        rings.used = entries;
+    }
     rings.faces = faces;
     rings.current = now;
     mesh.owner = Kokkos::subview(owner, std::make_pair(0, faces));
     mesh.neighbour = Kokkos::subview(neighbour, std::make_pair(0, faces));
     mesh.ring_start = ring_start;
     mesh.ring_length = ring_length;
-    mesh.ring = pool;
+    mesh.ring = rings.pool[rings.in_use];
     return faces;
 }
 
@@ -507,17 +554,20 @@ KOKKOS_INLINE_FUNCTION Vec3<double> circumcentre(const X& x, double box, const i
     return c;
 }
 
-// 1. Circumcentres, one thread per tetrahedron; with `only`, just those
-// with only(t) != 0 (e.g. the ones a repair touched at unchanged positions).
+// 1. Circumcentres, one thread per tetrahedron: of the first `count` (all
+// if negative), or of those listed in `only` (e.g. the ones a repair
+// touched, at unchanged positions).
 template <class ExecSpace, class X>
 void circumcentres(const ExecSpace& exec, const X& x, double box,
                    const Mesh<typename ExecSpace::memory_space>& mesh, int count = -1,
-                   const Kokkos::View<const char*, typename ExecSpace::memory_space>& only = {}) {
+                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& only = {}) {
+    const bool listed = only.data() != nullptr;
+    if (listed) count = static_cast<int>(only.extent(0));
     Kokkos::parallel_for(
         "tet_mesh::circumcentres",
         Kokkos::RangePolicy<ExecSpace>(exec, 0, count < 0 ? static_cast<int>(mesh.vertex.extent(0)) : count),
-        KOKKOS_LAMBDA(int t) {
-            if (only.data() && !only(t)) return;
+        KOKKOS_LAMBDA(int s) {
+            const int t = listed ? only(s) : s;
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
             Vec3<double> d[3];
             for (int k = 0; k < 3; ++k)

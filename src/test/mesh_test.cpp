@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
 
         auto walked = tet_mesh::make_face_rings<Memory>(count, faces, 8 * faces);  // no rings yet: walk all
         Kokkos::View<char*, Memory> touched("touched", count);
-        check.expect(tet_mesh::update_face_rings(exec, mesh, count, touched, walked) == faces,
+        check.expect(tet_mesh::update_face_rings(exec, mesh, count, touched, {}, walked) == faces,
                      "walking the represented edges finds every face");
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         worst = worst_volume_difference(geometry, cells);

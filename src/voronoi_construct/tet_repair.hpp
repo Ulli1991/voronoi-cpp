@@ -32,6 +32,9 @@ struct State {
     ep::Points<MemorySpace> point;  // snapped positions
     Kokkos::View<char*, MemorySpace> alive;
     Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
+    // The tetrahedra flips created since the last move (repeats possible):
+    // touched_entries of them, -1 if more than fit or the host fallback ran.
+    Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
     // Votes: round in the high 32 bits, plan index + 1 below, so a vote of
@@ -45,11 +48,12 @@ struct State {
     // an inverted tetrahedron, (t, -2) a flip that would not close its cavity.
     Kokkos::View<int* [2], MemorySpace> stuck;
     // Device counters: 0 work, 1 stuck, 2 freed, 3 listed, 4 pops, 5 growth, 6 2->3, 7 3->2,
-    // and their pinned host copy, read once or twice per round.
+    // 8 touched_list, and their pinned host copy, read once or twice per round.
     Kokkos::View<int*, MemorySpace> counters;
     Kokkos::View<int*, Kokkos::SharedHostPinnedSpace> host_counters;
     int count = 0;  // tetrahedra slots in use
     int free_count = 0;
+    int touched_entries = 0;
     unsigned long long round = 0;
 };
 
@@ -241,8 +245,9 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
         Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_repair_plans")), work_capacity);
     s.freed = Kokkos::View<int*, Memory>("tet_repair_freed", work_capacity);
     s.stuck = Kokkos::View<int* [2], Memory>("tet_repair_stuck", work_capacity);
-    s.counters = Kokkos::View<int*, Memory>("tet_repair_counters", 8);
-    s.host_counters = Kokkos::View<int*, Kokkos::SharedHostPinnedSpace>("tet_repair_host_counters", 8);
+    s.touched_list = Kokkos::View<int*, Memory>("tet_repair_touched_list", work_capacity);
+    s.counters = Kokkos::View<int*, Memory>("tet_repair_counters", 9);
+    s.host_counters = Kokkos::View<int*, Kokkos::SharedHostPinnedSpace>("tet_repair_host_counters", 9);
     detail::snap(exec, x, s.point);
     const auto point = s.point;
     const auto alive = s.alive;
@@ -560,8 +565,10 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                     }
                 }
                 for (int r = 0; r < p.olds; ++r) st.touched(p.old[r]) = 1;
+                const int listed_at = Kokkos::atomic_fetch_add(&counters(8), p.freshes);
                 for (int r = 0; r < p.freshes; ++r) {
                     st.touched(slot[r]) = 1;
+                    if (listed_at + r < static_cast<int>(st.touched_list.extent(0))) st.touched_list(listed_at + r) = slot[r];
                     detail::mark(st, slot[r]);
                 }
             });
@@ -582,6 +589,7 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         stats.flips32 += host(7);
     }
     stats.stuck = Kokkos::min(host(1), static_cast<int>(stuck.extent(0)));
+    s.touched_entries = host(8) <= static_cast<int>(s.touched_list.extent(0)) ? host(8) : -1;
     return stats;
 }
 

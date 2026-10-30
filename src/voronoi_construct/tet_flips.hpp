@@ -529,6 +529,7 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     Kokkos::deep_copy(exec, dm.edges, edges);
     exec.fence();
     state.count = m.count;
+    state.touched_entries = -1;  // touched_list misses the host's changes
     return stats;
 }
 

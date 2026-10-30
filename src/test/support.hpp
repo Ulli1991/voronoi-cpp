@@ -387,8 +387,12 @@ struct MovingMesh {
 
     // Returns the number of faces.
     int update_geometry() {
-        tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count, state.touched);
-        const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, rings);
+        // The tetrahedra flips created, or none listed: circumcentres of all, faces from touched.
+        const Kokkos::View<const int*, Memory> created =
+            state.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
+                                      : Kokkos::subview(state.touched_list, std::make_pair(0, state.touched_entries));
+        tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count, created);
+        const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, created, rings);
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         Kokkos::deep_copy(exec, state.touched, 0);
         return faces;
