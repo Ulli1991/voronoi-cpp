@@ -74,58 +74,109 @@ KOKKOS_INLINE_FUNCTION State half_step(const State& W, const Gradient& g, double
     return half;
 }
 
-// A face state after reconstruction, checked against the cell-centre state
-// Wc: LUNA's RAMSES face rule (slopes.py:181-186): a density below smallr
-// or a pressure below smallr smallc^2 takes the cell-centre value, then
-// both are floored.
-KOKKOS_INLINE_FUNCTION State face_guard(State Wf, const State& Wc, const Gas& gas) {
-    const double small_p = gas.smallr * gas.smallc * gas.smallc;
-    double rho = Wf[0] < gas.smallr ? Wc[0] : Wf[0];
-    double p = Wf[4] < small_p ? Wc[4] : Wf[4];
-    rho = Kokkos::fmax(rho, gas.smallr);
-    Wf[0] = rho;
-    Wf[4] = Kokkos::fmax(p, rho * (gas.smallc * gas.smallc / gas.gamma));
-    return Wf;
+// Riemann solvers along the unit normal n of a face moving with velocity w
+// (w = 0 on a static mesh): the states' velocities are taken relative to
+// w, the Riemann problem is solved along n, and the flux returned is the
+// lab-frame flux through the moving face (F(U) - (w.n) U for equal
+// states). Flux per unit area, from L to R. Wave speeds after Davis as
+// LUNA (fluxes.py:146-147, 65-66).
+//
+// LUNA rotates the states into (normal, two tangents), solves, and rotates
+// the flux back (fluxes.py:9-48). Here the vectors stay in box axes: every
+// branch of HLL and HLLC is chosen by scalars (S_L, S_M, S_R) that do not
+// depend on the frame, and within a branch each flux component is the same
+// linear combination of the corresponding components of F, U and U*, so
+// rotating is the identity up to rounding; for HLLC the star momentum is
+// rho* (v_t + S_M n), the tangential velocity v_t = v - (v.n) n carried
+// through, which is LUNA's rho* (S_M, vt1, vt2) in box axes. CTest `hydro`
+// checks both against LUNA's values and under random rotations.
+namespace detail {
+
+struct Side {
+    Vec3 v;              // velocity relative to the face
+    double vn, c, E;     // normal velocity, sound speed (0 if c^2 <= 0), energy
+    State F, U;          // flux along n and conserved state
+};
+
+KOKKOS_INLINE_FUNCTION Side side(const State& W, Vec3 n, Vec3 w, const Gas& gas) {
+    Side s;
+    s.v = Vec3{W[1], W[2], W[3]} - w;
+    s.vn = dot(s.v, n);
+    const double c2 = gas.gamma * W[4] / W[0];
+    s.c = c2 > 0 ? Kokkos::sqrt(c2) : 0.0;
+    s.E = W[4] / (gas.gamma - 1.0) + W[0] * (0.5 * dot(s.v, s.v));
+    const double m = W[0] * s.vn;
+    s.F = {m, m * s.v.x + W[4] * n.x, m * s.v.y + W[4] * n.y, m * s.v.z + W[4] * n.z, (s.E + W[4]) * s.vn};
+    s.U = {W[0], W[0] * s.v.x, W[0] * s.v.y, W[0] * s.v.z, s.E};
+    return s;
 }
 
-// HLL (fluxes.py:135-167, _hll_core), solved directly along the unit
-// normal n, in the frame of a face moving with velocity w: the states' velocities are
-// taken relative to w, and the flux returned is the lab-frame flux through
-// the moving face, F(U) - (w.n) U for equal states. Wave speeds after Davis
-// (fluxes.py:146-147). Flux per unit area, from L to R.
+// From the face frame to the lab frame, as AREPO next generation's
+// flux_convert_to_lab_frame (mesh_fluxes.cc:492-498): energy + w.F_momentum
+// + |w|^2 / 2 F_rho, momentum + w F_rho.
+KOKKOS_INLINE_FUNCTION State to_lab(State F, Vec3 w) {
+    F[4] += w.x * F[1] + w.y * F[2] + w.z * F[3] + 0.5 * dot(w, w) * F[0];
+    F[1] += w.x * F[0];
+    F[2] += w.y * F[0];
+    F[3] += w.z * F[0];
+    return F;
+}
+
+}  // namespace detail
+
+// HLL, LUNA's _hll_core (fluxes.py:135-167).
 struct HLL {
     KOKKOS_INLINE_FUNCTION static State flux(const State& L, const State& R, Vec3 n, Vec3 w, const Gas& gas) {
-        const double inv_gm1 = 1.0 / (gas.gamma - 1.0);
-        const Vec3 vL = Vec3{L[1], L[2], L[3]} - w, vR = Vec3{R[1], R[2], R[3]} - w;
-        const double vnL = dot(vL, n), vnR = dot(vR, n);
+        const detail::Side l = detail::side(L, n, w, gas), r = detail::side(R, n, w, gas);
+        const double SL = Kokkos::fmin(l.vn - l.c, r.vn - r.c);
+        const double SR = Kokkos::fmax(l.vn + l.c, r.vn + r.c);
+        State F;
+        if (SL >= 0.0) {
+            F = l.F;
+        } else if (SR <= 0.0) {
+            F = r.F;
+        } else {
+            const double inv_dS = 1.0 / (SR - SL);
+            for (int v = 0; v < 5; ++v) F[v] = (SR * l.F[v] - SL * r.F[v] + SL * SR * (r.U[v] - l.U[v])) * inv_dS;
+        }
+        return detail::to_lab(F, w);
+    }
+};
+
+// HLLC, LUNA's _hllc_core (fluxes.py:51-106; Toro 2009, ch. 10), with its
+// guards: c^2 < 0 on either side takes F_R (fluxes.py:62, 88-94),
+// divisions are kept off zero by 1e-20 (fluxes.py:71-72).
+struct HLLC {
+    KOKKOS_INLINE_FUNCTION static double nonzero(double d) {
+        constexpr double eps = 1e-20;
+        return Kokkos::fabs(d) < eps ? (d < 0 ? -eps : eps) : d;
+    }
+    KOKKOS_INLINE_FUNCTION static State flux(const State& L, const State& R, Vec3 n, Vec3 w, const Gas& gas) {
+        // Wave speeds and the contact speed from the normal velocities and
+        // sound speeds alone; the flux is then built for one side only.
+        const double vnL = dot(Vec3{L[1], L[2], L[3]} - w, n), vnR = dot(Vec3{R[1], R[2], R[3]} - w, n);
         const double c2L = gas.gamma * L[4] / L[0], c2R = gas.gamma * R[4] / R[0];
+        const bool ok = c2L >= 0 && c2R >= 0;
         const double cL = c2L > 0 ? Kokkos::sqrt(c2L) : 0.0, cR = c2R > 0 ? Kokkos::sqrt(c2R) : 0.0;
         const double SL = Kokkos::fmin(vnL - cL, vnR - cR);
         const double SR = Kokkos::fmax(vnL + cL, vnR + cR);
-        const double EL = L[4] * inv_gm1 + L[0] * (0.5 * dot(vL, vL));
-        const double ER = R[4] * inv_gm1 + R[0] * (0.5 * dot(vR, vR));
-        const double mL = L[0] * vnL, mR = R[0] * vnR;
-        const State FL{mL, mL * vL.x + L[4] * n.x, mL * vL.y + L[4] * n.y, mL * vL.z + L[4] * n.z, (EL + L[4]) * vnL};
-        const State FR{mR, mR * vR.x + R[4] * n.x, mR * vR.y + R[4] * n.y, mR * vR.z + R[4] * n.z, (ER + R[4]) * vnR};
-        const State UL{L[0], L[0] * vL.x, L[0] * vL.y, L[0] * vL.z, EL};
-        const State UR{R[0], R[0] * vR.x, R[0] * vR.y, R[0] * vR.z, ER};
+        const double denomL = L[0] * (SL - vnL), denomR = R[0] * (SR - vnR);
+        const double SM = (R[4] - L[4] + denomL * vnL - denomR * vnR) / nonzero(denomL - denomR);
+        // LUNA's branch order (fluxes.py:88-94): F_L, F*_L, F*_R, F_R.
+        const bool left = ok && (SL >= 0 || SM >= 0);
+        const bool star = ok && SL < 0 && (SM >= 0 || SR > 0);
+        const State& W = left ? L : R;
+        const detail::Side s = detail::side(W, n, w, gas);
+        if (!star) return detail::to_lab(s.F, w);
+        // The star state: rho*, rho* (v_t + S_M n), rho* E*.
+        const double S = left ? SL : SR, denom = left ? denomL : denomR;
+        const double rho_star = denom / nonzero(S - SM);
+        const double E_star = s.E * (1.0 / W[0]) + (SM - s.vn) * (SM + W[4] * (1.0 / nonzero(denom)));
+        const Vec3 v_star = s.v + n * (SM - s.vn);
+        const State U_star{rho_star, rho_star * v_star.x, rho_star * v_star.y, rho_star * v_star.z, rho_star * E_star};
         State F;
-        if (SL >= 0.0) {
-            F = FL;
-        } else if (SR <= 0.0) {
-            F = FR;
-        } else {
-            const double inv_dS = 1.0 / (SR - SL);
-            for (int v = 0; v < 5; ++v) F[v] = (SR * FL[v] - SL * FR[v] + SL * SR * (UR[v] - UL[v])) * inv_dS;
-        }
-        // Back to the lab frame as AREPO's flux_convert_to_lab_frame
-        // (finite_volume_solver.c:3434-3450): momentum + w F_rho, energy +
-        // w.F_momentum + |w|^2 / 2 F_rho.
-        F[4] += w.x * F[1] + w.y * F[2] + w.z * F[3] + 0.5 * dot(w, w) * F[0];
-        F[1] += w.x * F[0];
-        F[2] += w.y * F[0];
-        F[3] += w.z * F[0];
-        return F;
+        for (int v = 0; v < 5; ++v) F[v] = s.F[v] + S * (U_star[v] - s.U[v]);
+        return detail::to_lab(F, w);
     }
 };
 

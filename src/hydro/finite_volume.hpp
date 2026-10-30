@@ -11,7 +11,8 @@
 
 // Finite volumes on a static voronoi::Mesh: MUSCL-Hancock (order 1) or
 // first-order Godunov (order 0), a Riemann solver on every face along its
-// normal (HLL; any type with HLL's static flux() fits), one global time
+// normal (HLLC by default, as LUNA's riemann_solver; HLL; any type with
+// their static flux() fits), one global time
 // step. The state between steps is the conserved U per unit volume only;
 // primitives are computed where they are needed.
 //
@@ -21,8 +22,9 @@
 //   2. order 1: least-squares gradients of W over the face neighbours,
 //      limited at the face centroids (AREPO next generation);
 //   3. per face: each side's W advanced half a step with the primitive
-//      Jacobian, extrapolated from the cell centroid to the face centroid,
-//      guarded; the flux along n = A / |A|, times |A|;
+//      Jacobian and extrapolated from the cell centroid to the face
+//      centroid, or, if that leaves rho or P not positive, the cell's W
+//      (AREPO next generation); the flux along n = A / |A|, times |A|;
 //   4. U += -dt / V sum over the cell's faces of the outgoing flux.
 // Everything a cell sums (gradients, fluxes) is summed over the mesh's
 // per-cell face list in its fixed order, without atomics: the same bits
@@ -41,12 +43,18 @@ namespace hydro {
 
 enum class Update { per_cell, per_face };
 
+// Where the gradient limiter keeps the extrapolated values within the
+// neighbours' range (AREPO next generation, mesh_gradients.cc:84-94): at
+// the face centroids (AREPO's default), at the neighbours' centroids
+// (AREPO's USE_MINMOD_SLOPE_LIMITING), or nowhere (no limiter).
+enum class Limiter { face_centroid, cell_centroid, none };
+
 // Times of the phases of a step, in ms, summed over steps (fenced).
 struct Timings {
     double gradients = 0, fluxes = 0, update = 0;
 };
 
-template <class ExecSpace = Kokkos::DefaultExecutionSpace, class Riemann = HLL>
+template <class ExecSpace = Kokkos::DefaultExecutionSpace, class Riemann = HLLC>
 class FiniteVolume {
 public:
     using Memory = typename ExecSpace::memory_space;
@@ -58,8 +66,10 @@ public:
 
     // mesh: built, with update_cells() done; its geometry must not change
     // while this object is used.
-    FiniteVolume(const ExecSpace& exec, Mesh& mesh, const Gas& gas, int order, Update update)
-        : exec_(exec), mesh_(&mesh), gas_(gas), order_(order), update_(update), n_(mesh.particles()), faces_(mesh.faces()) {
+    FiniteVolume(const ExecSpace& exec, Mesh& mesh, const Gas& gas, int order, Update update,
+                 Limiter limiter = Limiter::face_centroid)
+        : exec_(exec), mesh_(&mesh), gas_(gas), order_(order), update_(update), limiter_(limiter), n_(mesh.particles()),
+          faces_(mesh.faces()) {
         if (order != 0 && order != 1) throw std::invalid_argument("hydro::FiniteVolume: order 0 or 1");
         u_ = Cells("hydro_U", n_);
         if (update == Update::per_cell) next_ = Cells(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("hydro_U_next")), n_);
@@ -73,20 +83,37 @@ public:
     Update update() const { return update_; }
     const Gas& gas() const { return gas_; }
 
-    // The global time step courant * min_i r_i / (c_i + |v_i|), r_i the
-    // radius of a sphere of the cell's volume.
+    // The global time step: the smallest of AREPO next generation's cell
+    // time steps (FORCE_EQUAL_TIMESTEPS, time_integration/timestep.cc:39-63)
+    // without the rounding to a power-of-two time bin. Cell i:
+    // courant * min(r_i / (c_i + |v_i|), min_j (d_ij + r_i) / vsig_ij), r_i
+    // the radius of a sphere of the cell's volume (sph_particle_data.h:280-287,
+    // 305-334), and for every face neighbour j with
+    // vsig_ij = c_i + c_j - (v_j - v_i).d_ij / d_ij > 0, d_ij between the
+    // generators (timestep_treebased.cc:72-91; AREPO walks every particle a
+    // signal can reach, here only the face neighbours).
     double time_step(double courant) const {
         double dt = 0;
         const auto u = u_;
-        const auto volume = geometry_.volume;
+        const Geometry geo = geometry_;
         const Gas gas = gas_;
         Kokkos::parallel_reduce(
             "hydro::time_step", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
             KOKKOS_LAMBDA(int i, double& smallest) {
-                const State W = primitive(load(u, i), gas);
-                const double speed = sound_speed(W, gas) + Kokkos::sqrt(W[1] * W[1] + W[2] * W[2] + W[3] * W[3]);
-                const double r = Kokkos::cbrt(3.0 * volume(i) / (4.0 * M_PI));
-                smallest = Kokkos::fmin(smallest, courant * r / speed);
+                const State Wi = primitive(load(u, i), gas);
+                const double ci = sound_speed(Wi, gas);
+                const double r = Kokkos::cbrt(geo.volume(i) * (3.0 / (4.0 * M_PI)));
+                double step = r / (ci + Kokkos::sqrt(Wi[1] * Wi[1] + Wi[2] * Wi[2] + Wi[3] * Wi[3]));
+                for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
+                    const int j = geo.other(geo.face(k), i);
+                    const State Wj = primitive(load(u, j), gas);
+                    const Vec3 d = geo.separation(i, j);
+                    const double dist = Kokkos::sqrt(dot(d, d));
+                    const Vec3 dv{Wj[1] - Wi[1], Wj[2] - Wi[2], Wj[3] - Wi[3]};
+                    const double vsig = ci + sound_speed(Wj, gas) - dot(dv, d) / dist;
+                    if (vsig > 0) step = Kokkos::fmin(step, (dist + r) / vsig);
+                }
+                smallest = Kokkos::fmin(smallest, courant * step);
             },
             Kokkos::Min<double>(dt));
         return dt;
@@ -104,8 +131,10 @@ public:
             advance<0>(dt, timings);
     }
 
-    // Internals, for tests: the limited gradients of the last step.
-    Gradients gradients_view() const { return gradients_; }
+    // Face sides of the last step whose extrapolated state was not
+    // physical and which took the cell's state instead (per-face loop;
+    // -1 with the per-cell loop, which does not count them).
+    long long fallbacks() const { return fallbacks_; }
 
     // Mesh arrays and the per-face and per-cell operations on them.
     struct Geometry {
@@ -177,6 +206,7 @@ public:
         const auto g = gradients_;
         const Geometry geo = geometry_;
         const Gas gas = gas_;
+        const Limiter limiter = limiter_;
         Kokkos::parallel_for(
             "hydro::gradients", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
                 const State Wi = primitive(load(u, i), gas);
@@ -230,12 +260,16 @@ public:
                     }
                     grad[v] = Vec3{x[1], x[2], x[3]};
                 }
-                // limit_gradient (mesh_gradients.cc:120-148) at each face centroid.
+                // limit_gradient (mesh_gradients.cc:120-148), face by face.
                 for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
+                    if (limiter == Limiter::none) break;
                     const int f = geo.face(k);
                     const Vec3 a = geo.row(geo.area, f);
                     if (Kokkos::sqrt(dot(a, a)) < tiny) continue;
-                    const Vec3 r = geo.face_offset(f, i);
+                    const int j = geo.other(f, i);
+                    const Vec3 r = limiter == Limiter::face_centroid
+                                       ? geo.face_offset(f, i)
+                                       : geo.separation(i, j) + geo.row(geo.centroid, j) - ci;
                     for (int v = 0; v < 5; ++v) {
                         const double dp = dot(grad[v], r);
                         if (dp > 0 && Wi[v] + dp > hi[v])
@@ -252,7 +286,8 @@ public:
             });
     }
 
-    // The flux through face f (times its area), from owner to neighbour.
+    // The flux through face f (times its area), from owner to neighbour;
+    // `fallbacks` counts the sides that took the cell's state.
     template <int Order>
     struct FaceFlux {
         Cells u;
@@ -261,30 +296,36 @@ public:
         Gas gas;
         double dt;
 
-        KOKKOS_INLINE_FUNCTION State side(int i, const Vec3& r) const {
+        // As AREPO's prepare_state (mesh_fluxes.cc:451-479): the time and
+        // space extrapolations are added only if rho and P stay positive;
+        // otherwise the cell's own state is used.
+        KOKKOS_INLINE_FUNCTION State side(int i, const Vec3& r, int& fallbacks) const {
             const State W = primitive(load(u, i), gas);
             if constexpr (Order == 0) {
                 (void)r;
+                (void)fallbacks;
                 return W;
             } else {
                 Gradient grad;
                 for (int v = 0; v < 5; ++v) grad[v] = Vec3{g(i, 3 * v), g(i, 3 * v + 1), g(i, 3 * v + 2)};
                 State Wf = half_step(W, grad, dt, gas);
                 for (int v = 0; v < 5; ++v) Wf[v] += dot(grad[v], r);
-                return face_guard(Wf, W, gas);
+                if (Wf[0] > 0 && Wf[4] > 0) return Wf;
+                ++fallbacks;
+                return W;
             }
         }
-        KOKKOS_INLINE_FUNCTION State operator()(int f) const {
+        KOKKOS_INLINE_FUNCTION State operator()(int f, int& fallbacks) const {
             const int o = geo.owner(f), j = geo.neighbour(f);
             const Vec3 a = geo.row(geo.area, f);
             const double magnitude = Kokkos::sqrt(dot(a, a));
             State L, R;
             if constexpr (Order == 0) {
-                L = side(o, {0, 0, 0});
-                R = side(j, {0, 0, 0});
+                L = side(o, {0, 0, 0}, fallbacks);
+                R = side(j, {0, 0, 0}, fallbacks);
             } else {
-                L = side(o, geo.face_offset(f, o));
-                R = side(j, geo.face_offset(f, j));
+                L = side(o, geo.face_offset(f, o), fallbacks);
+                R = side(j, geo.face_offset(f, j), fallbacks);
             }
             State F = Riemann::flux(L, R, a * (1.0 / magnitude), Vec3{0, 0, 0}, gas);
             for (int v = 0; v < 5; ++v) F[v] *= magnitude;
@@ -298,28 +339,36 @@ public:
         const Geometry geo = geometry_;
         if (update_ == Update::per_cell) {
             const auto u = u_, next = next_;
+            // Not counted here: a reduction makes this kernel 2x slower on an
+            // A100 (job 31699166); fallbacks() is -1.
             Kokkos::parallel_for(
                 "hydro::fluxes_and_update", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
                     State sum{0, 0, 0, 0, 0};
                     for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                         const int f = geo.face(k);
-                        const State F = flux(f);
+                        int fallbacks = 0;
+                        const State F = flux(f, fallbacks);
                         const double sign = geo.owner(f) == i ? 1.0 : -1.0;
                         for (int v = 0; v < 5; ++v) sum[v] += sign * F[v];
                     }
                     const double factor = -dt / geo.volume(i);
                     for (int v = 0; v < 5; ++v) next(i, v) = u(i, v) + factor * sum[v];
                 });
+            fallbacks_ = -1;
             phase_end(timings, &Timings::fluxes);
             std::swap(u_, next_);
             return;
         }
         const auto F = flux_;
-        Kokkos::parallel_for(
-            "hydro::fluxes", Kokkos::RangePolicy<ExecSpace>(exec_, 0, faces_), KOKKOS_LAMBDA(int f) {
-                const State value = flux(f);
+        Kokkos::parallel_reduce(
+            "hydro::fluxes", Kokkos::RangePolicy<ExecSpace>(exec_, 0, faces_),
+            KOKKOS_LAMBDA(int f, long long& count) {
+                int fallbacks = 0;
+                const State value = flux(f, fallbacks);
+                count += fallbacks;
                 for (int v = 0; v < 5; ++v) F(f, v) = value[v];
-            });
+            },
+            fallbacks_);
         phase_end(timings, &Timings::fluxes);
         const auto u = u_;
         Kokkos::parallel_for(
@@ -342,7 +391,9 @@ private:
     Gas gas_;
     int order_;
     Update update_;
+    Limiter limiter_;
     int n_, faces_;
+    long long fallbacks_ = 0;
     Kokkos::Timer timer_;
     Cells u_, next_;
     Gradients gradients_;
