@@ -326,7 +326,8 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
                 Kokkos::kokkos_swap(adjacent(t, 2), adjacent(t, 3));
                 // Edges (0,2)<->(0,3) and (1,2)<->(1,3) trade places.
                 const int b = edges(t);
-                edges(t) = (b & ~0x1e) | (b & 0x2) << 1 | (b & 0x4) >> 1 | (b & 0x8) << 1 | (b & 0x10) >> 1;
+                edges(t) = static_cast<std::uint8_t>((b & ~0x1e) | (b & 0x2) << 1 | (b & 0x4) >> 1 | (b & 0x8) << 1 |
+                                                     (b & 0x10) >> 1);
             }
         });
     return s;
@@ -674,7 +675,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                             if (vertex(slot[r], c) == b) pb = c;
                         }
                         if (pa >= 0 && pb >= 0) {
-                            edges(slot[r]) |= 1 << tet_mesh::edge_index(pa, pb);
+                            edges(slot[r]) |= static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
                             break;
                         }
                     }

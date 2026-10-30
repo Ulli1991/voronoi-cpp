@@ -527,7 +527,7 @@ Stats finish_everywhere(const ExecSpace& exec, const tet_mesh::Mesh<typename Exe
                 const int bit = 1 << tet_mesh::edge_index(pa, pb);
                 const int bits = u == lowest ? edges(u) | bit : edges(u) & ~bit;
                 if (bits != edges(u)) touched(u) = 1;  // its faces are renumbered
-                edges(u) = bits;
+                edges(u) = static_cast<std::uint8_t>(bits);
             }
         }
     }
@@ -776,9 +776,9 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         const int u = ring[r];
                         const int pa = tet_mesh::position(dm, u, a), pb = tet_mesh::position(dm, u, b);
                         if (pa < 0 || pb < 0) continue;
-                        const int bit = 1 << tet_mesh::edge_index(pa, pb);
+                        const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
                         const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
-                                                       : Kokkos::atomic_fetch_and(&edges(u), ~bit);
+                                                       : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
                         if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
                     }
                 }

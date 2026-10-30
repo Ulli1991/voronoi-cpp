@@ -3,6 +3,8 @@
 #include "exact_predicates.hpp"
 #include "shell_voronoi.hpp"
 
+#include <cstdint>
+
 // A persistent Delaunay tetrahedralization and the Voronoi geometry it implies.
 //
 // Each tetrahedron is four particles whose circumsphere holds no other
@@ -40,7 +42,7 @@ struct Mesh {
     // Bit k: this tetrahedron represents its edge k (see edge_ends), i.e. the
     // Voronoi face of that pair of particles. Every edge has exactly one
     // representative, so a scan over the bits numbers the faces.
-    Kokkos::View<int*, MemorySpace> edges;
+    Kokkos::View<std::uint8_t*, MemorySpace> edges;
 };
 
 // Face area vectors (owner to neighbour), centroids (relative to the owner),
@@ -217,7 +219,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
     mesh.vertex = Quads<Memory>("tet_vertex", tets);
     mesh.adjacent = Quads<Memory>("tet_adjacent", tets);
     mesh.centre = Points4<Memory>("tet_centre", tets);
-    mesh.edges = Kokkos::View<int*, Memory>("tet_edges", tets);
+    mesh.edges = Kokkos::View<std::uint8_t*, Memory>("tet_edges", tets);
     mesh.owner = owner;
     mesh.neighbour = neighbour;
     mesh.ring_start = Kokkos::subview(ring_start, std::make_pair(0, faces));
@@ -297,8 +299,9 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
             }
         },
         open);
-    // Each face's first ring tetrahedron represents its edge.
-    const auto edges = mesh.edges;
+    // Each face's first ring tetrahedron represents its edge (bits gathered
+    // with 32-bit atomics, then narrowed to bytes).
+    Kokkos::View<int*, Memory> bits("tet_edge_bits", tets);
     Kokkos::parallel_for(
         "tet_mesh::represent", Range(exec, 0, faces), KOKKOS_LAMBDA(int g) {
             const int e = ring(ring_start(g));
@@ -308,7 +311,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                 if (vertex(e, k) == owner(g)) a = k;
                 if (vertex(e, k) == neighbour(g)) b = k;
             }
-            if (a >= 0 && b >= 0) Kokkos::atomic_or(&edges(e), 1 << edge_index(a, b));
+            if (a >= 0 && b >= 0) Kokkos::atomic_or(&bits(e), 1 << edge_index(a, b));
         });
     // Edges without such a face (the owner's cell dropped a rounding-level
     // face its neighbour kept): the lowest-numbered tetrahedron around the
@@ -326,9 +329,13 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                 const int length = Kokkos::min(walk_edge(mesh, e, a, b, around), 65);
                 int lowest = e;
                 for (int r = 0; r < length; ++r) lowest = Kokkos::min(lowest, around[r]);
-                if (lowest == e) Kokkos::atomic_or(&edges(e), 1 << k);
+                if (lowest == e) Kokkos::atomic_or(&bits(e), 1 << k);
             }
         });
+    const auto edges = mesh.edges;
+    Kokkos::parallel_for(
+        "tet_mesh::edge_bytes", Range(exec, 0, tets),
+        KOKKOS_LAMBDA(int e) { edges(e) = static_cast<std::uint8_t>(bits(e)); });
     return unresolved + open;
 }
 
