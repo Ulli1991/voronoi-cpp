@@ -228,6 +228,7 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     const unsigned below = (1u << l) - 1;
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
+        if (!(removed >> (k * lanes))) continue;  // the whole warp: no removed vertex here
         const int w = l + k * lanes;
         std::uint32_t corner = 0, adjacent = 0;
         if (out[k]) {
