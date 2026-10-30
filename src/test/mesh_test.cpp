@@ -2,8 +2,8 @@
 // tetrahedra as a host construction from the rings, with consistent
 // adjacency and one representative per edge; the Voronoi geometry from
 // their circumcentres (on the stored rings, and on rings walked from the
-// edge representatives) matches the clipped cells, and the local Delaunay
-// check passes. The circumcentre of a sliver is exact.
+// edge representatives) matches the clipped cells, and the exact check
+// (tet_start::check) passes. The circumcentre of a sliver is exact.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -57,14 +57,14 @@ int main(int argc, char** argv) {
         const auto cells = cells_with_rings(x);
         const auto status = to_host(cells.status);
         check.expect(std::count(status.data(), status.data() + n, int(shell_voronoi::ok)) == n, "clipping build ok");
-        {  // a ring pool too small: cells that do not fit overflow, and the build reports the entries needed
+        {  // a ring pool too small grows to what the build needs
             auto small = shell_voronoi::Cells<Memory>::with_rings(n, 1000);
-            shell_voronoi::construct<double>(exec, shell_voronoi::make_grid(cell_list(x)), small);
-            const long long needed = small.ring_entries_needed(), entries = cells.ring_entries_needed();
+            shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(cell_list(x)), small);
+            const long long needed = small.needed(), entries = cells.needed();
             const auto small_status = to_host(small.status);
-            const auto overflowed = std::count(small_status.data(), small_status.data() + n, int(shell_voronoi::face_overflow));
-            check.expect(needed == entries && overflowed > 0 && entries <= 64LL * n,
-                         "a small ring pool reports the entries needed (" + std::to_string(double(entries) / n) +
+            check.expect(needed == entries && small.capacity() >= needed &&
+                             std::count(small_status.data(), small_status.data() + n, int(shell_voronoi::ok)) == n,
+                         "a small ring pool grows to the entries needed (" + std::to_string(double(entries) / n) +
                              " per cell)");
         }
 
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
 
         // Geometry on the stored rings, then on rings walked around the edges.
         tet_mesh::Points4<Memory> padded("padded", n);
-        tet_mesh::pad(exec, x, padded);
+        voronoi::detail::snap_positions(exec, x, 1.0, padded);  // x is on the grid: the same positions
         tet_mesh::circumcentres(exec, padded, 1.0, mesh);
         const int faces = static_cast<int>(owned_faces.size());
         tet_mesh::Geometry<Memory> geometry{Kokkos::View<double* [3], Memory>("area", faces),
@@ -127,8 +127,10 @@ int main(int argc, char** argv) {
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         double worst = worst_volume_difference(geometry, cells);
         check.expect(worst < 1e-12, "volumes from stored rings match clipping (" + sci(worst) + ")");
-        Kokkos::View<int*, Memory> invalid("invalid", count);
-        check.expect(tet_mesh::check(exec, padded, 1.0, mesh, invalid) == 0, "local Delaunay check passes");
+        exact_predicates::Points<Memory> point("point", n);
+        exact_predicates::snap(exec, x, 1.0, point);
+        Kokkos::View<int*, Memory> marked("marked", n);
+        check.expect(tet_start::check(exec, mesh, point, count, marked).ok(), "the exact check passes");
 
         auto walked = tet_mesh::make_face_rings<Memory>(count, faces, 8 * faces);  // no rings yet: walk all
         Kokkos::View<char*, Memory> touched("touched", count);

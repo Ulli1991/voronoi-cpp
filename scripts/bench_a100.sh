@@ -1,6 +1,7 @@
 #!/bin/bash
-# Standard A100 measurements and the CUDA tests. Submit from the repository
-# root with a built CUDA directory; logs must be on a shared file system:
+# The A100 checks of TESTING.md and the standard measurements. Submit from
+# the repository root with a built CUDA directory; logs must be on a shared
+# file system:
 #   sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda
 #SBATCH -J voronoi_bench
 #SBATCH -p gpu1
@@ -15,9 +16,13 @@ module purge
 module load gcc/14 cuda/13.0 cmake
 build="${1:-build-cuda}"
 nvidia-smi -L
-for kind in jittered uniform; do
-    "$build/voronoi_bench" rebuild 2097152 "$kind" warp-double 3
-done
-"$build/voronoi_bench" step 2097152 jittered 0.03 10
-"$build/voronoi_bench" step 262144 jittered 0.3 10 --verify
 ctest --test-dir "$build" --output-on-failure
+for kind in jittered uniform clustered halo lattice wave; do
+    "$build/voronoi_bench" rebuild 2097152 "$kind" warp 3
+done
+for kind in jittered uniform clustered halo lattice wave; do
+    "$build/voronoi_bench" step 262144 "$kind" 0.3 3 --verify | grep -E "^start|verify"
+done
+for d in 0.03 0.1 0.3; do
+    "$build/voronoi_bench" step 2097152 jittered "$d" 10
+done

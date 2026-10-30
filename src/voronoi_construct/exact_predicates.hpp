@@ -3,7 +3,7 @@
 #include <Kokkos_Core.hpp>
 
 // Exact geometric predicates on positions snapped to a grid of 2^30 steps
-// across the unit box, for host and device.
+// across the periodic box, for host and device.
 //
 // Differences are exact integers (wrapped to the nearest periodic image).
 // Each predicate first evaluates its determinant in double together with a
@@ -28,12 +28,17 @@ struct Offset {
     KOKKOS_INLINE_FUNCTION const i64& operator[](int a) const { return v[a]; }
 };
 
-KOKKOS_INLINE_FUNCTION i64 snap(double x) { return static_cast<i64>(Kokkos::floor(x * scale)); }
+constexpr i64 period = i64(1) << 30;  // grid steps across the box
+
+// The grid step of coordinate x in a periodic box of side `box`, in
+// [0, 2^30): the one definition of "on the grid" every caller uses.
+KOKKOS_INLINE_FUNCTION int snap(double x, double box) {
+    return static_cast<int>(static_cast<i64>(Kokkos::floor(x / box * scale)) & (period - 1));
+}
 
 // b - a on the periodic grid, to the nearest image; a and b are snapped
 // coordinates in [0, 2^30), so one shift suffices (no 64-bit modulo).
 KOKKOS_INLINE_FUNCTION i64 delta(i64 a, i64 b) {
-    constexpr i64 period = i64(1) << 30;
     i64 d = b - a;
     if (d >= period / 2) d -= period;
     if (d < -period / 2) d += period;
@@ -87,6 +92,13 @@ KOKKOS_INLINE_FUNCTION int sign(const Wide& w) {
 KOKKOS_INLINE_FUNCTION i128 det3(const Offset& a, const Offset& b, const Offset& c) {
     return i128(a[0]) * (i128(b[1]) * c[2] - i128(b[2]) * c[1]) - i128(a[1]) * (i128(b[0]) * c[2] - i128(b[2]) * c[0]) +
            i128(a[2]) * (i128(b[0]) * c[1] - i128(b[1]) * c[0]);
+}
+
+// r = p x q, exactly.
+KOKKOS_INLINE_FUNCTION void cross(const Offset& p, const Offset& q, i128* r) {
+    r[0] = i128(p[1]) * q[2] - i128(p[2]) * q[1];
+    r[1] = i128(p[2]) * q[0] - i128(p[0]) * q[2];
+    r[2] = i128(p[0]) * q[1] - i128(p[1]) * q[0];
 }
 
 KOKKOS_INLINE_FUNCTION i128 lift(const Offset& a) {
@@ -174,6 +186,15 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
 // bits hold them exactly; padded to 16 bytes (one aligned load per point).
 template <class MemorySpace>
 using Points = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
+
+// point(i) = the snapped x(i) for positions x in a box of side `box`.
+template <class ExecSpace, class X>
+void snap(const ExecSpace& exec, const X& x, double box, const Points<typename ExecSpace::memory_space>& point) {
+    Kokkos::parallel_for(
+        "exact_predicates::snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
+            for (int a = 0; a < 3; ++a) point(i, a) = snap(x(i, a), box);
+        });
+}
 
 // The predicates on particles, by index into snapped positions.
 template <class P>

@@ -27,7 +27,7 @@ voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
 
 include(CTest)
 if(BUILD_TESTING)
-    foreach(test exact_predicates clipping mesh start repair)
+    foreach(test exact_predicates clipping mesh start repair voronoi_mesh)
         voronoi_program(${test}_test src/test/${test}_test.cpp)
         add_test(NAME ${test} COMMAND ${test}_test)
         set_tests_properties(${test} PROPERTIES TIMEOUT 600)
