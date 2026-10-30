@@ -22,6 +22,7 @@
 #include <array>
 #include <cstring>
 #include <random>
+#include <sstream>
 
 namespace {
 
@@ -355,6 +356,21 @@ void moving_tests(Check& check) {
         check.expect(worst < 1e-14 && stats.updates == 10, "moving mesh: mass, momentum, energy conserved over 10 steps (" + sci(worst) +
                                                                ", " + std::to_string(stats.device_flips) + " flips, " +
                                                                std::to_string(stats.rebuilds) + " rebuilds)");
+    }
+    {  // 60 moving steps with the per-face loop (its face fluxes grow the mesh's
+       // spare ring pool, which the ring compaction then meets): the mesh is
+       // still the exact mesh of the points
+        MovingRun run(points, gas, hydro::Motion::moving);
+        set_state(run.fv, run.mesh, rough_state(n, gas));
+        for (int s = 0; s < 60; ++s) run.fv.step(run.fv.time_step(0.3));
+        // The reference is built from the snapped positions the mesh uses.
+        const auto snapped = to_host(run.mesh.positions());
+        Points on_grid(n);
+        for (int i = 0; i < n; ++i) on_grid[i] = {snapped(i, 0), snapped(i, 1), snapped(i, 2)};
+        const Comparison c = compare_with_rebuild(run.mesh, to_device(on_grid));
+        std::ostringstream what;
+        what << c;
+        check.expect(c.pass(), "moving mesh, 60 steps: the mesh equals an exact rebuild (" + what.str() + ")");
     }
     {  // Galilean invariance: a blast at rest and the same blast moving with the box
         const double bulk = 16, dt = std::ldexp(1.0, -12);  // bulk dt = 2^-8 of the box
