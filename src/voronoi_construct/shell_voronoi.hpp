@@ -375,9 +375,13 @@ inline double start_half_width(double box) { return 0.25 * box; }
 // and the face walk of construct_pass. Both keep planes (each with the
 // particle id beyond it; box planes are virtual particles from n on) and
 // vertices, each listing its three planes in the order that walks every
-// face the same way round. Planes and Vertices are capacities: the
-// defaults fit almost every cell; the rare larger ones are built again
-// with big ones.
+// face the same way round and the three vertices across its edges
+// (adjacent[v][k] lies across the edge from corner k to corner k + 1). A cut
+// finds its hole and a face walk its next vertex through those links, and
+// vertices stay in their slots: removed ones are marked and their slots
+// reused (idea from Doug Rennehan's plume). Planes and Vertices are
+// capacities: the defaults fit almost every cell; the rare larger ones are
+// built again with big ones.
 //
 // RoundedCell: planes and vertices in double, relative to the generator; a
 // vertex is cut when it lies beyond the bisector by more than a rounding
@@ -400,8 +404,10 @@ struct RoundedCell {
     double offset[Planes];
     int id[Planes];
     Vec3 vertex[Vertices];
-    std::uint8_t corner[Vertices][3];
-    int planes = 0, vertices = 0;
+    std::uint8_t corner[Vertices][3], adjacent[Vertices][3];
+    std::uint8_t free_slot[Vertices];           // stack of the removed vertices' slots
+    std::uint8_t starts[Planes], ends[Planes];  // a cut's new vertex whose hole edge starts / ends at a plane
+    int planes = 0, vertices = 0, free_count = 0;  // vertices: slots ever used, free_count of them on the stack
     double radius2 = 0;  // largest squared vertex distance from the generator
 
     KOKKOS_INLINE_FUNCTION Vec3 position(int v, double) const { return vertex[v]; }
@@ -422,10 +428,12 @@ struct ExactCell {
     static constexpr bool exact = true;
     ep::Offset offset[Planes];  // generator to the plane's particle
     int id[Planes];
-    std::uint8_t corner[Vertices][3];
+    std::uint8_t corner[Vertices][3], adjacent[Vertices][3];
+    std::uint8_t free_slot[Vertices];
+    std::uint8_t starts[Planes], ends[Planes];
     double w[Vertices][3], o[Vertices];
     double r2[Vertices];  // bound on the squared distance of each vertex
-    int planes = 0, vertices = 0;
+    int planes = 0, vertices = 0, free_count = 0;
     double radius2 = 0;  // bound on the squared distance of every vertex
 
     KOKKOS_INLINE_FUNCTION Vec3 position(int v, double unit) const {
@@ -502,6 +510,13 @@ KOKKOS_INLINE_FUNCTION bool inside(const C& cell, int v, const ep::Offset& e, in
     return ep::in_sphere(p, ids);
 }
 
+// corner[v][0] of a removed vertex (no plane index reaches it).
+constexpr std::uint8_t removed = 255;
+template <class C>
+KOKKOS_INLINE_FUNCTION bool live(const C& cell, int v) {
+    return cell.corner[v][0] != removed;
+}
+
 // The cube of half-width h (box units) around the generator, bounded by six
 // virtual particles at distance 2h (ids n..n+5). Corner order flips at
 // corners of odd parity, so that every face is walked the same way round.
@@ -536,8 +551,15 @@ KOKKOS_INLINE_FUNCTION void start_cube(C& cell, double h, double unit, int n) {
             cell.vertex[c] = {sx ? -h : h, sy ? -h : h, sz ? -h : h};
         }
     }
+    // Across the edge from corner k to k + 1 lies the corner that differs
+    // along the axis of corner k + 2.
+    for (int c = 0; c < 8; ++c)
+        for (int k = 0; k < 3; ++k)
+            cell.adjacent[c][k] = static_cast<std::uint8_t>(c ^ (1 << (cell.corner[c][(k + 2) % 3] / 2)));
+    for (int p = 0; p < C::planes_capacity; ++p) cell.starts[p] = cell.ends[p] = 0;
     if constexpr (!C::exact) cell.radius2 = 3 * h * h;
     cell.vertices = 8;
+    cell.free_count = 0;
 }
 
 // Drop planes no vertex uses any more and renumber the rest (box planes keep
@@ -548,7 +570,8 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
     bool used[capacity];
     for (int p = 0; p < cell.planes; ++p) used[p] = p < box_planes;
     for (int v = 0; v < cell.vertices; ++v)
-        for (int k = 0; k < 3; ++k) used[cell.corner[v][k]] = true;
+        if (live(cell, v))
+            for (int k = 0; k < 3; ++k) used[cell.corner[v][k]] = true;
     std::uint8_t renumber[capacity];
     int planes = 0;
     for (int p = 0; p < cell.planes; ++p) {
@@ -558,7 +581,8 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
         ++planes;
     }
     for (int v = 0; v < cell.vertices; ++v)
-        for (int k = 0; k < 3; ++k) cell.corner[v][k] = renumber[cell.corner[v][k]];
+        if (live(cell, v))
+            for (int k = 0; k < 3; ++k) cell.corner[v][k] = renumber[cell.corner[v][k]];
     const int freed = cell.planes - planes;
     cell.planes = planes;
     return freed;
@@ -572,45 +596,46 @@ template <class C>
 KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int id, int self) {
     constexpr int max_holes = C::vertices_capacity / 2;
     bool cut[C::vertices_capacity];
-    bool any = false;
+    int cuts = 0;
     double offset = 0, tolerance = 0;
     if constexpr (!C::exact) {
         offset = 0.5 * dot(d, d);
         tolerance = 64 * Kokkos::Experimental::epsilon_v<double> * Kokkos::sqrt(dot(d, d) * cell.radius2);
     }
+    // A removed vertex of a rounded cell sits at the generator, which no
+    // bisector cuts off.
     for (int v = 0; v < cell.vertices; ++v) {
         if constexpr (C::exact)
-            cut[v] = inside(cell, v, e, id, self);
+            cut[v] = live(cell, v) && inside(cell, v, e, id, self);
         else
             cut[v] = dot(d, cell.vertex[v]) - offset > tolerance;
-        any |= cut[v];
+        cuts += cut[v];
     }
-    if (!any) return ok;
+    if (cuts == 0) return ok;
     if (cell.planes == C::planes_capacity && compact_planes(cell) == 0) return plane_overflow;
 
-    // The removed vertices' directed edges that are not cancelled by a
-    // reversed twin bound the hole the new face closes.
-    std::uint8_t hole[max_holes][2];
+    // The removed vertices' edges to kept vertices bound the hole the new
+    // face closes: edge (a, b) of a removed vertex, with kept u across it,
+    // whose edge `back` leads back. Slot s will hold its new vertex.
+    struct Hole {
+        std::uint8_t a, b, u, back, s;
+    };
+    Hole hole[max_holes];
     int holes = 0;
-    for (int v = 0; v < cell.vertices; ++v) {
-        if (!cut[v]) continue;
+    for (int w = 0; w < cell.vertices; ++w) {
+        if (!cut[w]) continue;
         for (int k = 0; k < 3; ++k) {
-            const std::uint8_t a = cell.corner[v][k], b = cell.corner[v][(k + 1) % 3];
-            int twin = -1;
-            for (int h = 0; h < holes; ++h)
-                if (hole[h][0] == b && hole[h][1] == a) twin = h;
-            if (twin >= 0) {
-                hole[twin][0] = hole[holes - 1][0];
-                hole[twin][1] = hole[holes - 1][1];
-                --holes;
-            } else {
-                if (holes == max_holes) return vertex_overflow;
-                hole[holes][0] = a;
-                hole[holes][1] = b;
-                ++holes;
-            }
+            const std::uint8_t u = cell.adjacent[w][k];
+            if (cut[u]) continue;
+            if (holes == max_holes) return vertex_overflow;
+            const std::uint8_t* across = cell.adjacent[u];
+            const std::uint8_t back = across[0] == w ? 0 : across[1] == w ? 1 : 2;
+            hole[holes++] = {cell.corner[w][k], cell.corner[w][(k + 1) % 3], u, back, 0};
         }
     }
+    const int kept = cell.vertices - cell.free_count - cuts;
+    if (kept + holes > C::vertices_capacity) return vertex_overflow;
+    if (kept + holes < 4) return degenerate;
     const int plane = cell.planes++;
     cell.id[plane] = id;
     if constexpr (C::exact) {
@@ -619,44 +644,60 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
         cell.normal[plane] = d;
         cell.offset[plane] = offset;
     }
-    int kept = 0;
-    for (int v = 0; v < cell.vertices; ++v) {
-        if (cut[v]) continue;
-        for (int k = 0; k < 3; ++k) cell.corner[kept][k] = cell.corner[v][k];
-        if constexpr (C::exact) {
-            for (int k = 0; k < 3; ++k) cell.w[kept][k] = cell.w[v][k];
-            cell.o[kept] = cell.o[v];
-            cell.r2[kept] = cell.r2[v];
-        } else {
-            cell.vertex[kept] = cell.vertex[v];
-        }
-        ++kept;
-    }
-    if (kept + holes > C::vertices_capacity) return vertex_overflow;
-    if (kept + holes < 4) return degenerate;
+    // r2: the largest squared distance of a kept vertex (removed ones count
+    // 0), then of any.
     double r2 = 0;
-    for (int v = 0; v < kept; ++v) {
+    for (int w = 0; w < cell.vertices; ++w) {
+        if (cut[w]) {
+            cell.corner[w][0] = removed;
+            cell.free_slot[cell.free_count++] = static_cast<std::uint8_t>(w);
+            if constexpr (C::exact)
+                cell.r2[w] = 0;
+            else
+                cell.vertex[w] = {0, 0, 0};
+        }
         if constexpr (C::exact)
-            r2 = Kokkos::max(r2, cell.r2[v]);
+            r2 = Kokkos::max(r2, cell.r2[w]);
         else
-            r2 = Kokkos::max(r2, dot(cell.vertex[v], cell.vertex[v]));
+            r2 = Kokkos::max(r2, dot(cell.vertex[w], cell.vertex[w]));
     }
+
+    // New vertex (a, b, plane) on each hole edge, in a free slot; the edge
+    // back from u now ends at it.
     for (int h = 0; h < holes; ++h) {
+        const int a = hole[h].a, b = hole[h].b, u = hole[h].u;
+        const int s = cell.free_count > 0 ? cell.free_slot[--cell.free_count] : cell.vertices++;
         if constexpr (C::exact) {
-            if (!set_vertex(cell, kept, hole[h][0], hole[h][1], plane)) return degenerate;
-            r2 = Kokkos::max(r2, cell.r2[kept]);
+            if (!set_vertex(cell, s, a, b, plane)) return degenerate;
+            r2 = Kokkos::max(r2, cell.r2[s]);
         } else {
             Vec3 x;
-            if (!intersect(cell, hole[h][0], hole[h][1], plane, x)) return degenerate;
-            cell.vertex[kept] = x;
-            cell.corner[kept][0] = hole[h][0];
-            cell.corner[kept][1] = hole[h][1];
-            cell.corner[kept][2] = static_cast<std::uint8_t>(plane);
+            if (!intersect(cell, a, b, plane, x)) return degenerate;
+            cell.vertex[s] = x;
+            cell.corner[s][0] = static_cast<std::uint8_t>(a);
+            cell.corner[s][1] = static_cast<std::uint8_t>(b);
+            cell.corner[s][2] = static_cast<std::uint8_t>(plane);
             r2 = Kokkos::max(r2, dot(x, x));
         }
-        ++kept;
+        cell.adjacent[u][hole[h].back] = static_cast<std::uint8_t>(s);
+        cell.adjacent[s][0] = static_cast<std::uint8_t>(u);
+        cell.starts[a] = cell.ends[b] = static_cast<std::uint8_t>(s);
+        hole[h].s = static_cast<std::uint8_t>(s);
     }
-    cell.vertices = kept;
+    // Across (b, plane) lies the new vertex whose hole edge starts at b,
+    // across (plane, a) the one whose hole edge ends at a. Rounding can make
+    // a hole touch a face twice; then these are not unique, and the cell is
+    // left degenerate rather than linked wrongly.
+    for (int h = 0; h < holes; ++h) {
+        const int a = hole[h].a, b = hole[h].b, s = hole[h].s;
+        const int next = cell.starts[b], previous = cell.ends[a];
+        if (cell.starts[a] != s || cell.ends[b] != s || !live(cell, next) || cell.corner[next][0] != b ||
+            cell.corner[next][2] != plane || !live(cell, previous) || cell.corner[previous][1] != a ||
+            cell.corner[previous][2] != plane)
+            return degenerate;
+        cell.adjacent[s][1] = static_cast<std::uint8_t>(next);
+        cell.adjacent[s][2] = static_cast<std::uint8_t>(previous);
+    }
     cell.radius2 = r2;
     return ok;
 }
@@ -787,7 +828,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if (status == ok && !certified) status = uncertified;
             for (int v = 0; v < cell.vertices && status == ok; ++v)
                 for (int k = 0; k < 3; ++k)
-                    if (cell.corner[v][k] < box_planes) status = uncertified;
+                    if (live(cell, v) && cell.corner[v][k] < box_planes) status = uncertified;
 
             if (!Cell::exact)
                 for (int plane = box_planes; plane < cell.planes; ++plane) cell.id[plane] = grid.order(cell.id[plane]);
@@ -803,7 +844,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     need += (with_rings ? 2 : 1) * selection.owns(id, cell.id[plane]);
                 if (with_rings)
                     for (int v = 0; v < cell.vertices; ++v)
-                        for (int k = 0; k < 3; ++k) need += selection.owns(id, cell.id[cell.corner[v][k]]);
+                        if (live(cell, v))
+                            for (int k = 0; k < 3; ++k) need += selection.owns(id, cell.id[cell.corner[v][k]]);
                 if (!(with_rings ? claim_rings(out, id, need) : claim_faces(out, id, need))) status = face_overflow;
                 if (with_rings)
                     ring_at = out.ring_start(id);
@@ -817,11 +859,13 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             double volume = 0, area_magnitude = 0;
             Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
             const double sliver = 64 * Kokkos::Experimental::epsilon_v<double> * cell.radius2_in_box(unit);
+            std::int16_t first_vertex[Cell::planes_capacity];  // a vertex on each face, or -1
+            for (int plane = 0; plane < cell.planes; ++plane) first_vertex[plane] = -1;
+            for (int v = 0; v < cell.vertices; ++v)
+                if (live(cell, v))
+                    for (int k = 0; k < 3; ++k) first_vertex[cell.corner[v][k]] = static_cast<std::int16_t>(v);
             for (int plane = box_planes; plane < cell.planes && status == ok; ++plane) {
-                int start = -1;
-                for (int v = 0; v < cell.vertices && start < 0; ++v)
-                    for (int k = 0; k < 3; ++k)
-                        if (cell.corner[v][k] == plane) start = v;
+                const int start = first_vertex[plane];
                 if (start < 0) continue;  // plane later cut away completely
 
                 const Vec3 normal = cell.face_normal(plane);
@@ -833,19 +877,15 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 const bool own = selection.owns(id, neighbour), record = with_rings && own;
                 do {
                     int at = 0;
-                    while (cell.corner[current][at] != plane) ++at;
-                    const std::uint8_t last = cell.corner[current][(at + 2) % 3];
-                    // The plane shared with the next vertex bounds the face there.
-                    if (record) out.rings(ring_at + ring_used + 2 + length) = cell.id[last];
-                    ++length;
-                    int next = -1;
-                    for (int w = 0; w < cell.vertices && next < 0; ++w)
-                        for (int k = 0; k < 3; ++k)
-                            if (cell.corner[w][k] == plane && cell.corner[w][(k + 1) % 3] == last) next = w;
-                    if (next < 0 || length > Cell::vertices_capacity) {
+                    while (at < 3 && cell.corner[current][at] != plane) ++at;
+                    if (at == 3 || length == Cell::vertices_capacity) {
                         status = degenerate;
                         break;
                     }
+                    // The plane shared with the next vertex bounds the face there.
+                    if (record) out.rings(ring_at + ring_used + 2 + length) = cell.id[cell.corner[current][(at + 2) % 3]];
+                    ++length;
+                    const int next = cell.adjacent[current][(at + 2) % 3];
                     const Vec3 x = cell.position(next, unit);
                     const Vec3 twice = cross(previous - first, x - first);
                     area = area + twice * 0.5;

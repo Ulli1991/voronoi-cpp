@@ -485,7 +485,10 @@ struct Kernel {
             const int start = c.first[plane];
             const Vec3 normal{double(c.nx[plane]), double(c.ny[plane]), double(c.nz[plane])};
             const Vec3 first{c.x[start], c.y[start], c.z[start]};
-            Vec3 previous = first, area{0, 0, 0}, face_moment{0, 0, 0};
+            // Fan triangles (first, previous, x): twice the area vector, and
+            // the sum of (previous + x) weighted by the triangles' areas
+            // projected on the normal; divided once per face.
+            Vec3 previous = first, twice_area{0, 0, 0}, weighted{0, 0, 0};
             double weight = 0;
             int vertex = start, steps = 0;
             do {
@@ -498,17 +501,23 @@ struct Kernel {
                 const int next = byte(c.adjacent[vertex], (at + 2) % 3);
                 const Vec3 x{c.x[next], c.y[next], c.z[next]};
                 const Vec3 twice = cross(previous - first, x - first);
-                area = area + twice * 0.5;
+                twice_area = twice_area + twice;
                 const double w = dot(twice, normal);
                 weight += w;
-                face_moment = face_moment + (first + previous + x) * (w / 3.0);
-                const double tetra = dot(first, cross(previous, x)) / 6.0;
-                volume += tetra;
-                moment = moment + (first + previous + x) * (tetra / 4.0);
+                weighted = weighted + (previous + x) * w;
                 previous = x;
                 vertex = next;
             } while (vertex != start);
             if (broken) break;
+            const Vec3 area = twice_area * 0.5;
+            // A sliver face has no meaningful centroid; use a vertex.
+            const Vec3 centroid = weight > 0 ? (first + weighted * (1.0 / weight)) * (1.0 / 3.0) : first;
+            // The pyramid over the face from the generator: volume A.first / 3,
+            // centroid at 3/4 of the face centroid (idea from Doug Rennehan's
+            // plume, commit 6cbb429).
+            const double pyramid = dot(area, first) * (1.0 / 3.0);
+            volume += pyramid;
+            moment = moment + centroid * (0.75 * pyramid);
             area_sum = area_sum + area;
             const double magnitude = Kokkos::sqrt(dot(area, area));
             if (magnitude <= sliver) continue;
@@ -518,7 +527,7 @@ struct Kernel {
                 owned_plane[owned_here] = plane;
                 owned_length[owned_here] = steps;
                 owned_area[owned_here] = area;
-                owned_centroid[owned_here] = weight > 0 ? face_moment * (1.0 / weight) : first;
+                owned_centroid[owned_here] = centroid;
                 ++owned_here;
             }
         }
