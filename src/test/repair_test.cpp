@@ -21,8 +21,8 @@ int main(int argc, char** argv) {
         std::cout << "displacement " << displacement << " spacings per step:\n";
         Points points = in_slot_order(make_points("jittered", n));
         Positions x = to_device(points);
-        MovingMesh moving(x, cells_with_rings(x));
-        check.expect(moving.unresolved == 0, "starting mesh from rings");
+        MovingMesh moving(x);
+        check.expect(moving.start.exact, "exact starting mesh");
         for (int step = 1; step <= steps; ++step) {
             flow.advect(points, displacement * spacing);
             x = to_device(points);

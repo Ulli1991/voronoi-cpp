@@ -5,8 +5,8 @@
 //       selected by substring. Every variant's cells are checked
 //       (support::check_cells, PASS/FAIL).
 //   voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug]
-//       The persistent mesh: tetrahedra from rings and the per-step kernels
-//       on the start mesh, then `steps` steps of the flow, `displacement`
+//       The persistent mesh: the exact start (clipping with rings,
+//       tet_start::build) and the per-step kernels on it, then `steps` steps of the flow, `displacement`
 //       spacings each: device repair (screened), host fallback when stuck,
 //       circumcentres, face rings and faces. --verify compares every step
 //       with an exact rebuild; --debug adds adjacency and stuck details.
@@ -140,11 +140,22 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind
               << " displacement=" << displacement << " steps=" << steps << "\n";
 
-    const auto cells = cells_with_rings(x);
     {
+        // The start: clipping with rings, from_rings, and the exact start
+        // (tet_start::build: check, patch); build rewrites rings, so it is
+        // timed together with a fresh clipping.
+        const auto list = cell_list(x);
+        const auto grid = shell_voronoi::make_grid(list);
+        shell_voronoi::Cells<Memory> cells(n, false);
+        cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
         tet_mesh::Mesh<Memory> mesh;
-        int unresolved = 0;
-        const double from_rings_ms = median_ms(repeats, [&] { unresolved = tet_mesh::from_rings(exec, cells, mesh); });
+        tet_start::Stats start;
+        const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct<double>(exec, grid, cells); });
+        const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
+        const double start_ms = median_ms(repeats, [&] {
+            shell_voronoi::construct<double>(exec, grid, cells);
+            start = tet_start::build(exec, grid, cells, mesh);
+        });
         const int tets = static_cast<int>(mesh.vertex.extent(0));
         const int faces = static_cast<int>(mesh.owner.extent(0));
         tet_mesh::Points4<Memory> padded("padded", n);
@@ -158,14 +169,16 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         const double faces_ms = median_ms(repeats, [&] { tet_mesh::faces(exec, padded, 1.0, mesh, geometry); });
         const double check_ms = median_ms(repeats, [&] { failed = tet_mesh::check(exec, padded, 1.0, mesh, invalid); });
         const double per_step_ms = centres_ms + faces_ms + check_ms;
-        std::cout << "tets_from_rings: tets=" << tets << " per_cell=" << double(tets) / n << " unresolved=" << unresolved
-                  << " from_rings_ms=" << from_rings_ms << " Mcells_s=" << n / from_rings_ms / 1e3 << "\n";
+        std::cout << "start: clip_ms=" << clip_ms << " from_rings_ms=" << from_rings_ms << " start_ms=" << start_ms
+                  << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
+                  << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
+                  << " tets=" << tets << " per_cell=" << double(tets) / n << "\n";
         std::cout << "tets: faces_per_cell=" << double(faces) / n << " centres_ms=" << centres_ms
                   << " faces_ms=" << faces_ms << " check_ms=" << check_ms << " step_Mcells_s=" << n / per_step_ms / 1e3
                   << " invalid=" << failed << "\n";
     }
 
-    MovingMesh moving(x, cells);
+    MovingMesh moving(x);
     const Flow flow;
     int failures = 0;
     for (int s = 1; s <= steps; ++s) {

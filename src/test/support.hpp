@@ -9,6 +9,7 @@
 #include "tet_flips.hpp"
 #include "tet_mesh.hpp"
 #include "tet_repair.hpp"
+#include "tet_start.hpp"
 
 #include <algorithm>
 #include <array>
@@ -288,16 +289,25 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     return failures;
 }
 
-// Clipping build of x (in slot order) that records face rings, for
-// tet_mesh::from_rings.
-inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x) {
-    const int n = static_cast<int>(x.extent(0));
-    const auto list = cell_list(x);
+// Clipping build of the particles of `list` (in slot order) that records
+// face rings, for tet_mesh::from_rings and tet_start::build.
+inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list) {
+    const int n = list.n;
     shell_voronoi::Cells<Memory> cells(n, false);
     cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
     Kokkos::deep_copy(cells.rings, -1);
     shell_voronoi::construct<double>(Exec{}, shell_voronoi::make_grid(list), cells);
     return cells;
+}
+
+inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x) { return cells_with_rings(cell_list(x)); }
+
+// The exact starting tetrahedralization of x (in slot order): clipping with
+// rings, then tet_start::build.
+inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh) {
+    const auto list = cell_list(x);
+    const auto cells = cells_with_rings(list);
+    return tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
 }
 
 // The Voronoi cells of x by clipping, by particle: every particle's natural
@@ -363,10 +373,10 @@ struct MovingMesh {
     int current = 0;  // rings[current] holds the last step's faces
     tet_mesh::Geometry<Memory> geometry;
     tet_mesh::Points4<Memory> padded;
-    int unresolved = 0;  // from_rings could not resolve these
+    tet_start::Stats start;
 
-    MovingMesh(const Positions& x, const shell_voronoi::Cells<Memory>& cells) : n(static_cast<int>(x.extent(0))) {
-        unresolved = tet_mesh::from_rings(exec, cells, mesh);
+    explicit MovingMesh(const Positions& x) : n(static_cast<int>(x.extent(0))) {
+        start = start_mesh(x, mesh);
         const int capacity = 2 * static_cast<int>(mesh.vertex.extent(0));
         state = tet_repair::prepare(exec, x, mesh, capacity);
         const int face_capacity = 10 * n;
