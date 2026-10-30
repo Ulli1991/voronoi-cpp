@@ -699,7 +699,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
             ep::i64 self[3] = {0, 0, 0};
-            if constexpr (Cell::exact)
+            if (Cell::exact)
                 for (int k = 0; k < 3; ++k) self[k] = ep::snap(positions(t, k), box);
 
             Cell cell;
@@ -731,7 +731,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         d = {positions(c.slot, 0) + c.image[0] * box - p.x, positions(c.slot, 1) + c.image[1] * box - p.y,
                              positions(c.slot, 2) + c.image[2] * box - p.z};
                     const int planes_before = cell.planes, vertices_before = cell.vertices;
-                    status = clip(cell, e, d, grid.order(c.slot), id);
+                    // Exact cuts break ties by particle id; rounded cells keep
+                    // the slot until the walk is done (one load fewer per cut).
+                    status = clip(cell, e, d, Cell::exact ? grid.order(c.slot) : c.slot, id);
                     ++clipped;
                     if (cell.planes == planes_before && cell.vertices == vertices_before) continue;
                     ++cuts;
@@ -786,6 +788,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             for (int v = 0; v < cell.vertices && status == ok; ++v)
                 for (int k = 0; k < 3; ++k)
                     if (cell.corner[v][k] < box_planes) status = uncertified;
+
+            if (!Cell::exact)
+                for (int plane = box_planes; plane < cell.planes; ++plane) cell.id[plane] = grid.order(cell.id[plane]);
 
             // A block for the owned faces: one entry per owned plane, or with
             // rings a neighbour, a length and one entry per vertex each.

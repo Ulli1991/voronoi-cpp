@@ -303,7 +303,8 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 // Adaptive: walk each cell at its level (CellList::level); otherwise at the
 // base level only, leaving cells it cannot certify to the thread kernel.
 // with_rings: record face rings (Cells::with_rings) instead of face geometry.
-template <class MemorySpace, bool adaptive, bool with_rings>
+// local: build only the cells of `selection` (otherwise it is unused).
+template <class MemorySpace, bool adaptive, bool with_rings, bool local = false>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -326,8 +327,8 @@ struct Kernel {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
             const int t = __shfl_sync(all_lanes, taken, 0);
-            if (t >= selection.count(grid.n)) return;  // the whole warp
-            build(c, selection.slot(t));
+            if (t >= (local ? selection.count(grid.n) : grid.n)) return;  // the whole warp
+            build(c, local ? selection.slot(t) : t);
         }
 #else
         (void)member;
@@ -513,7 +514,7 @@ struct Kernel {
             if (magnitude <= sliver) continue;
             ++faces;
             area_magnitude += magnitude;
-            if (selection.owns(id, c.neighbour[plane])) {
+            if (local ? selection.owns(id, c.neighbour[plane]) : c.neighbour[plane] > id) {
                 owned_plane[owned_here] = plane;
                 owned_length[owned_here] = steps;
                 owned_area[owned_here] = area;
@@ -548,7 +549,7 @@ struct Kernel {
             }
         } else if (l == 0 && status == ok) {
             if (c.face_at + owned > c.face_end) {  // a new block for this warp
-                const int size = Kokkos::max(owned, face_block);
+                const int size = Kokkos::max(owned, int{face_block});
                 long long at = 0;
                 fits = claim(out.face_used, static_cast<long long>(out.neighbour.extent(0)), 0, size, at);
                 c.face_at = at;
@@ -623,6 +624,10 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     const Selection<typename ExecSpace::memory_space>& selection = {}) {
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
+        if (!selection.all() && out.with_rings()) {  // not needed: the per-thread kernel
+            construct(exec, grid, out, selection);
+            return;
+        }
         if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
             throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
         const bool rings = out.with_rings();
@@ -648,7 +653,11 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
         detail::until_pool_fits(exec, out, [&] {
             Kokkos::deep_copy(exec, next_cell, 0);
-            if (rings)
+            if (!selection.all())
+                Kokkos::parallel_for("shell_voronoi::construct_warp_local", policy,
+                                     warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell,
+                                                                             selection});
+            else if (rings)
                 Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
                                      warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, selection});
             else if (off_base > 0)
