@@ -3,3 +3,5 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
+.claude/
+__pycache__/
