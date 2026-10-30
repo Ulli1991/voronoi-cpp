@@ -18,12 +18,12 @@
 //
 // A shared triangle is locally Delaunay when the far vertex of either
 // tetrahedron lies outside the other's circumsphere. Failing triangles are
-// repaired by a 2->3 flip when the two tetrahedra form a convex pair, or by
-// a 3->2 flip when one edge of the triangle has exactly three tetrahedra
-// around it; otherwise the triangle waits until neighbouring flips change its
-// surroundings, and what still fails is rebuilt locally (Bowyer-Watson on the
-// particles around it). Every decision is an exact sign on the snapped
-// positions shared with the device, so a tie is the same tie everywhere.
+// repaired by the flips the device plans (tet_repair::detail::plan), applied
+// one at a time; a triangle no flip repairs waits until neighbouring flips
+// change its surroundings, and what still fails is rebuilt locally
+// (Bowyer-Watson on the particles around it). Every decision is an exact
+// sign on the snapped positions shared with the device, so a tie is the
+// same tie everywhere.
 namespace tet_flips {
 
 namespace ep = exact_predicates;

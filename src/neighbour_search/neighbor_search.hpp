@@ -52,7 +52,6 @@ struct CellList {
     Kokkos::View<char*, memory_space> sort_scratch;  // radix sort temporary storage (CUDA)
 
     int cells_per_side() const { return 1 << levels; }
-    double cell_width() const { return box / cells_per_side(); }
     int cell_count() const { return 1 << (3 * levels); }
 };
 

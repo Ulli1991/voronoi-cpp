@@ -24,10 +24,9 @@
 // particles are clipped nearest-first from a small private buffer.
 //
 // Output is lean: every cell stores its volume and centroid, and each face is
-// stored once, by the cell with the lower slot index (its owner). A flux
-// computed on that single face and applied with opposite signs conserves
-// exactly. Slots, positions and cell offsets come from a built
-// neighbor_search::CellList.
+// stored once, by the cell with the lower particle id (its owner), as face
+// geometry or as a face ring (Cells). Slots, positions and cell offsets come
+// from a built neighbor_search::CellList.
 namespace shell_voronoi {
 
 enum Status : int {

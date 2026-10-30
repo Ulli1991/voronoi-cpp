@@ -15,9 +15,9 @@
 //      would rewrite and their outer neighbours (largest vote wins), and
 //   4. applies the plans that won all their votes; their new tetrahedra
 //      are dirty for the next round, losing plans retry.
-// Triangles no flip repairs, flips that would not close their cavity, and
+// Triangles no flip repairs (none is valid, or none closes its cavity) and
 // tetrahedra seen inverted are listed as stuck, for the host fallback
-// (tet_flips::finish).
+// (tet_flips::finish) or a rebuild.
 namespace tet_repair {
 
 namespace ep = exact_predicates;
@@ -47,8 +47,8 @@ struct State {
     Kokkos::View<char*, MemorySpace> alive;
     Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
     // The tetrahedra flips created since the last move (each once, but for
-    // the host fallback's repeats):
-    // touched_entries of them, -1 if more than fit or the host fallback ran.
+    // the host fallback's repeats): touched_entries of them, -1 if more
+    // than fit.
     Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
