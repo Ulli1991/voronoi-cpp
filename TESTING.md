@@ -1,6 +1,6 @@
 # Testing voronoi-cpp
 
-Six CTest programs in `src/test/` specify the library; `voronoi_bench`
+Seven CTest programs in `src/test/` specify the library and the hydro; `voronoi_bench`
 (`src/bench/`) adds the large-scale checks that are too slow for CTest.
 Every test prints one `ok` or `FAIL` line per expectation and exits non-zero
 on any failure. All tests run on the default Kokkos execution space, so a
@@ -10,7 +10,7 @@ code.
 ## Running them
 
 ```sh
-ctest --test-dir <build> --output-on-failure            # all six
+ctest --test-dir <build> --output-on-failure            # all seven
 OMP_NUM_THREADS=1 ctest --test-dir <build-omp>          # CPU, one thread
 ```
 
@@ -20,7 +20,7 @@ README) runs the CUDA tests and the A100 checks below in one gpu1 job.
 ## The tests
 
 CPU times: OpenMP build (gcc 15), one thread of a Raven login node
-(Xeon Platinum 8360Y), 2026-10-31. On the A100 all six take about 35 s.
+(Xeon Platinum 8360Y), 2026-10-31. On the A100 all seven take about 35 s.
 
 | Test | n | CPU, 1 thread | What it specifies |
 |---|---|---|---|
@@ -30,6 +30,7 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 | `start` | ~4096 (13 layouts), 32768 | 19 s | the start (`tet_start::build`) is the Delaunay tetrahedralization of the snapped positions for jittered, uniform, clustered, lattice, wave, sc/bcc/fcc, icosahedral shells, planes and pairs, in boxes of side 1, 2 and 3: a brute-force oracle checks that it triangulates the box (every triangle twice with apexes on opposite sides, adjacency, all particles used, exact volume sum) and that every circumsphere is empty (exact, perturbed); every edge has one representative (also wave at 32768, the dropped-face regression); jittered needs no patch; the oracle rejects a mesh with one corner moved |
 | `repair` | ~4096 | 10 s | steps of a smooth flow through `voronoi::Mesh`: jittered (0.03 and 0.3 spacings, 10 steps), lattice and wave (0.03 and 0.3, 4 steps; their starts are decided by the perturbation alone, wave's first step is the step-1 regression), shells@1e-9 (0.03, 2 steps), jittered in a box of side 2 (0.3, 3 steps); after every step no failing triangle (brute force), the same Delaunay neighbours and face count as an exact rebuild by clipping, volumes within 1e-10, total volume the box |
 | `voronoi_mesh` | 4096 | 2 s | the hydro contract of `voronoi::Mesh` on off-grid positions in a box of side 2: the first update builds an exact mesh; faces once with owner < neighbour, closing every cell; volumes fill the box; per-cell face lists name each face twice, in increasing id of the other particle; cell centroids equal clipping's; the same input gives the same volumes and centroids bit for bit; a permuted input gives the permuted faces; a local rebuild returns each face of the listed cells once with the mesh's area; updates repair and stay exact; `Fallback::rebuild` rebuilds a stuck step exactly |
+| `hydro` | 4096 (jittered, uniform) | 2.3 s | the finite-volume hydro (`src/hydro/`): HLL equals LUNA's `hll_flux_primitive` on 12 sample faces (values printed by LUNA, float64; within 1e-14), equal states give the exact flux, also through a moving face (F(U) - (w.n) U), swapping states and normal flips the flux; on jittered and uniform random meshes, first and second order, per-cell and per-face loops: a uniform moving state stays uniform to rounding (3 steps, within 1e-13; measured 4e-16), mass, momentum and energy of a rough state (a blast plus 30 % random perturbations) are conserved over 10 steps within 1e-14 (measured 1e-18, long double sums); two runs give the same bits, and so do the per-cell and per-face loops |
 
 ### Oracles
 
