@@ -138,7 +138,10 @@ elif [[ "$mode" == moving256 ]]; then
 elif [[ "$mode" == static256 || "$mode" == moving256full ]]; then
     mesh="" kind=static
     if [[ "$mode" == moving256full ]]; then
-        mesh=--moving
+        # The per-cell loop: the face flux array of the per-face loop grows
+        # the mesh's spare ring pool, and a later repair then ran out of
+        # memory (job 31701027).
+        mesh="--moving --update=cell"
         kind=moving
     fi
     echo "== ours 256^3 jittered $kind, whole run, final snapshot"
