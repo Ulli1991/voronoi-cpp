@@ -9,6 +9,14 @@ double. It is judged by accuracy per GPU-second against LUNA (fixed grid and AMR
 Kelvin-Helmholtz and a moving blast wave, not by raw cell updates per second: the mesh will
 never match fixed-grid throughput (LUNA: 1.1 G cell updates/s).
 
+## Division of work (**decided**)
+
+voronoi-cpp handles all the mesh work; the hydro code never sees tetrahedra, flips, rings or
+clipping. The mesh gives, per face, owner, neighbour, area vector and centroid; per cell, the
+volume (and later the centroid); and one call that takes new point positions and returns an
+exact face list again (repair or rebuild decided inside). The hydro code owns the cell states,
+gradients, fluxes, the update and the time step, and in stage 3 the point velocities.
+
 ## Stages
 
 1. **Static mesh, first order, HLL** (**decided**). Points do not move. Godunov first order:
@@ -107,7 +115,9 @@ snapshots in LUNA's layout; AREPO-style least-squares gradients for stage 2.
 
 ## Still open
 
-1. Primitive or conserved state as the stored variables (first order: conserved is simpler).
-2. Time integration for stage 2 and the moving mesh: MUSCL-Hancock (AREPO 2010) or
-   Heun / RK2 (Pakmor et al. 2016)?
-3. Mesh regularisation for stage 3 (AREPO's centroid steering, Vogelsberger et al. 2012).
+- Mesh regularisation for stage 3 (AREPO's centroid steering): after the static stages.
+
+Decided as well: time integration is MUSCL-Hancock throughout. The GPU state between steps is
+the conserved variables only (5 doubles per cell); primitives are computed in the flux kernel
+(default, to be confirmed by measurement against also keeping primitives). Snapshots write
+primitives.
