@@ -111,8 +111,10 @@ KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring 
     return steps;
 }
 
-// A coordinate difference in a periodic box, to the nearest image.
-KOKKOS_INLINE_FUNCTION double wrap(double d, double box) { return d - box * Kokkos::nearbyint(d / box); }
+// A coordinate difference in a periodic box, to the nearest image. A
+// multiplication by 1 / box (computed once per kernel) instead of a
+// division: it picks the same image unless d is within an ulp of half a box.
+KOKKOS_INLINE_FUNCTION double wrap(double d, double box) { return d - box * Kokkos::nearbyint(d * (1.0 / box)); }
 
 namespace detail {
 // The point equidistant from the origin and a, b, c.
