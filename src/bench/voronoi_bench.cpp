@@ -212,10 +212,10 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         auto cells = cells_with_rings(list);  // sizes the ring pool
         tet_mesh::Mesh<Memory> mesh;
         tet_start::Stats start;
-        const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct<double>(exec, grid, cells); });
+        const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp<double>(exec, grid, cells); });
         const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
         const double start_ms = median_ms(repeats, [&] {
-            shell_voronoi::construct<double>(exec, grid, cells);
+            shell_voronoi::construct_warp<double>(exec, grid, cells);
             start = tet_start::build(exec, grid, cells, mesh);
         });
         const int tets = static_cast<int>(mesh.vertex.extent(0));
@@ -235,7 +235,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
                   << " tets=" << tets << " per_cell=" << double(tets) / n
-                  << " ring_entries_per_cell=" << double(cells.ring_entries_needed()) / n << "\n";
+                  << " ring_entries_per_cell=" << double(cells.needed()) / n << "\n";
         std::cout << "tets: faces_per_cell=" << double(faces) / n << " centres_ms=" << centres_ms
                   << " faces_ms=" << faces_ms << " check_ms=" << check_ms << " step_Mcells_s=" << n / per_step_ms / 1e3
                   << " invalid=" << failed << "\n";

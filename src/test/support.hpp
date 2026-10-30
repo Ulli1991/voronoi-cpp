@@ -278,6 +278,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     const auto status = to_host(cells.status);
     const auto face_count = to_host(cells.face_count);
     const auto owned_count = to_host(cells.owned_count);
+    const auto start = to_host(cells.face_start);
     const auto neighbour = to_host(cells.neighbour);
     const auto centroid = to_host(cells.face_centroid);
     const auto volume = to_host(cells.volume);
@@ -306,7 +307,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     for (int t = 0; t < n; t += stride)
         for (int f = 0; f < owned_count(t); ++f) {
             Point c;
-            for (int a = 0; a < 3; ++a) c[a] = x(t, a) + centroid(t, f, a);
+            for (int a = 0; a < 3; ++a) c[a] = x(t, a) + centroid(start(t) + f, a);
             auto distance = [&](int k) {
                 double d2 = 0;
                 for (int a = 0; a < 3; ++a) {
@@ -315,7 +316,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
                 }
                 return std::sqrt(d2);
             };
-            const double own = distance(t), other = distance(neighbour(t, f));
+            const double own = distance(t), other = distance(neighbour(start(t) + f));
             double closest = own;
             for (int k = 0; k < n; ++k) closest = std::min(closest, distance(k));
             const double error = std::max(std::abs(own - other), own - closest) / own;
@@ -345,15 +346,8 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
 // face rings, for tet_mesh::from_rings and tet_start::build.
 inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list,
                                                      long long entries = 0) {
-    const int n = list.n;
-    const auto grid = shell_voronoi::make_grid(list);
-    auto cells = shell_voronoi::Cells<Memory>::with_rings(n, entries > 0 ? entries : 64LL * n);
-    shell_voronoi::construct<double>(Exec{}, grid, cells);
-    const long long needed = cells.ring_entries_needed();
-    if (needed > static_cast<long long>(cells.rings.extent(0))) {  // rare: build again with room for all
-        cells = shell_voronoi::Cells<Memory>::with_rings(n, needed);
-        shell_voronoi::construct<double>(Exec{}, grid, cells);
-    }
+    auto cells = shell_voronoi::Cells<Memory>::with_rings(list.n, entries > 0 ? entries : 64LL * list.n);
+    shell_voronoi::construct_warp<double>(Exec{}, shell_voronoi::make_grid(list), cells);
     return cells;
 }
 
@@ -367,8 +361,8 @@ inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& m
     const auto list = cell_list(x, box);
     auto cells = cells_with_rings(list);
     auto stats = tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
-    const long long needed = cells.ring_entries_needed();
-    if (!stats.exact && needed > static_cast<long long>(cells.rings.extent(0))) {  // the patches did not fit
+    const long long needed = cells.needed();
+    if (!stats.exact && needed > cells.capacity()) {  // the patches did not fit
         cells = cells_with_rings(list, needed);
         stats = tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
     }
@@ -387,6 +381,7 @@ struct Reference {
 inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells, const Kokkos::View<int*, Memory>& slot_order) {
     const auto order = to_host(slot_order);
     const auto owned = to_host(cells.owned_count);
+    const auto start = to_host(cells.face_start);
     const auto neighbour = to_host(cells.neighbour);
     const auto volume = to_host(cells.volume);
     const auto status = to_host(cells.status);
@@ -397,7 +392,7 @@ inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells, const Ko
         r.volume[i] = volume(t);
         r.status[i] = status(t);
         for (int f = 0; f < owned(t); ++f) {
-            const int j = order(neighbour(t, f));
+            const int j = order(neighbour(start(t) + f));
             r.neighbours[i].push_back(j);
             r.neighbours[j].push_back(i);
         }

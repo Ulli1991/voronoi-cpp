@@ -3,7 +3,7 @@
 // box, cells close, faces are consistent between neighbours and lie on the
 // bisectors (support::check_cells). The thread and warp kernels give the same
 // cells, and so does a cell list with a coarser base grid (other slots). A
-// face output too narrow for some cell is widened by the build.
+// face pool too small grows to what the build needs.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -46,13 +46,13 @@ int main(int argc, char** argv) {
         const Difference c = compare(reference, by_particle(cells, coarse.order));
         check.expect(c.neighbours == 0 && c.volume < 1e-12, "coarser base grid gives the same cells" + agree(c));
 
-        // Output for 4 owned faces per cell: widened by the build.
-        shell_voronoi::Cells<Memory> narrow(n, false, 4);
-        shell_voronoi::construct_warp<double>(exec, grid, narrow);
-        const Difference w = compare(reference, by_particle(narrow, list.order));
-        check.expect(narrow.owned_capacity() > 4 && w.neighbours == 0 && w.volume < 1e-12,
-                     "a narrow face output is widened to " + std::to_string(narrow.owned_capacity()) +
-                         " owned faces, same cells");
+        // A face pool for one face per cell grows to what the build needs.
+        shell_voronoi::Cells<Memory> small(n, false, 1);
+        shell_voronoi::construct_warp<double>(exec, grid, small);
+        const Difference w = compare(reference, by_particle(small, list.order));
+        check.expect(small.capacity() > n && w.neighbours == 0 && w.volume < 1e-12,
+                     "a small face pool grows to " + std::to_string(double(small.capacity()) / n) +
+                         " faces per cell, same cells");
     }
     return check.failed() != 0;
 }

@@ -482,7 +482,7 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
 // many cells are bad, or the second try still fails, every cell is rebuilt.
 // Rebuilt cells claim new blocks in the ring pool of `cells`
 // (Cells::with_rings); a cell that does not fit is face_overflow, and the
-// result is not exact: build again with a pool of ring_entries_needed().
+// result is not exact: build again with a pool of Cells::needed().
 template <class ExecSpace>
 Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
             const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,

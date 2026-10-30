@@ -57,14 +57,14 @@ int main(int argc, char** argv) {
         const auto cells = cells_with_rings(x);
         const auto status = to_host(cells.status);
         check.expect(std::count(status.data(), status.data() + n, int(shell_voronoi::ok)) == n, "clipping build ok");
-        {  // a ring pool too small: cells that do not fit overflow, and the build reports the entries needed
+        {  // a ring pool too small grows to what the build needs
             auto small = shell_voronoi::Cells<Memory>::with_rings(n, 1000);
-            shell_voronoi::construct<double>(exec, shell_voronoi::make_grid(cell_list(x)), small);
-            const long long needed = small.ring_entries_needed(), entries = cells.ring_entries_needed();
+            shell_voronoi::construct_warp<double>(exec, shell_voronoi::make_grid(cell_list(x)), small);
+            const long long needed = small.needed(), entries = cells.needed();
             const auto small_status = to_host(small.status);
-            const auto overflowed = std::count(small_status.data(), small_status.data() + n, int(shell_voronoi::face_overflow));
-            check.expect(needed == entries && overflowed > 0 && entries <= 64LL * n,
-                         "a small ring pool reports the entries needed (" + std::to_string(double(entries) / n) +
+            check.expect(needed == entries && small.capacity() >= needed &&
+                             std::count(small_status.data(), small_status.data() + n, int(shell_voronoi::ok)) == n,
+                         "a small ring pool grows to the entries needed (" + std::to_string(double(entries) / n) +
                              " per cell)");
         }
 

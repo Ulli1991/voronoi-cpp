@@ -19,8 +19,9 @@
 // ring are tested 32 at a time and clipped nearest-first after a warp sort.
 // Teams of 16 or 8 lanes per cell were 2x and 3.6x slower on an A100.
 //
-// Cells that overflow the warp capacities are rebuilt by the per-thread
-// kernel. On other backends construct_warp simply calls that kernel.
+// Cells that overflow the warp capacities, or that its walk cannot certify,
+// are rebuilt by the per-thread kernel. On other backends construct_warp
+// simply calls that kernel.
 namespace shell_voronoi {
 namespace warp {
 
@@ -300,7 +301,8 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 #if defined(KOKKOS_ENABLE_CUDA)
 // Adaptive: walk each cell at its level (CellList::level); otherwise at the
 // base level only, leaving cells it cannot certify to the thread kernel.
-template <class Real, class MemorySpace, bool adaptive>
+// with_rings: record face rings (Cells::with_rings) instead of face geometry.
+template <class Real, class MemorySpace, bool adaptive, bool with_rings>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -460,7 +462,7 @@ struct Kernel {
         int faces = 0;
         bool broken = false;
         int owned_here = 0;
-        int owned_plane[per_lane];
+        int owned_plane[per_lane], owned_length[per_lane];
         for (int k = 0; k < per_lane; ++k) owned_plane[k] = -1;
         Vec3<double> owned_area[per_lane], owned_centroid[per_lane];
         const double sliver = 64 * Kokkos::Experimental::epsilon_v<Real> * static_cast<double>(radius2);
@@ -501,6 +503,7 @@ struct Kernel {
             area_magnitude += magnitude;
             if (c.neighbour[plane] > t) {
                 owned_plane[owned_here] = plane;
+                owned_length[owned_here] = steps;
                 owned_area[owned_here] = area;
                 owned_centroid[owned_here] = weight > 0 ? face_moment * (1.0 / weight) : first;
                 ++owned_here;
@@ -514,27 +517,56 @@ struct Kernel {
         area_magnitude = warp_sum(area_magnitude);
         faces = warp_sum(faces);
         int owned = 0;
-        const int first_owned = exclusive_scan(owned_here, owned);
-        if (status == ok && owned > out.owned_capacity()) status = face_overflow;
+        exclusive_scan(owned_here, owned);
         if (status == ok && !(volume > 0)) status = degenerate;
 
+        // The owned faces, in one block per cell that lane 0 claims: with
+        // rings each face as its neighbour, ring length and ring (see
+        // Cells::rings), otherwise its neighbour, area and centroid.
+        int need = 0;
+        for (int m = 0; m < owned_here; ++m) need += with_rings ? 2 + owned_length[m] : 1;
+        int total = 0;
+        const int offset = exclusive_scan(need, total);
+        int fits = 1;
+        long long block = 0;
+        if (l == 0 && status == ok) {
+            fits = with_rings ? claim_rings(out, t, total) : claim_faces(out, t, total);
+            block = with_rings ? out.ring_start(t) : out.face_start(t);
+        }
+        if (__shfl_sync(all_lanes, fits, 0) == 0) status = face_overflow;
         if (status == ok) {
+            long long at = __shfl_sync(all_lanes, block, 0) + offset;
             for (int m = 0; m < owned_here; ++m) {
-                const int f = first_owned + m;
-                out.neighbour(t, f) = c.neighbour[owned_plane[m]];
-                out.area(t, f, 0) = owned_area[m].x;
-                out.area(t, f, 1) = owned_area[m].y;
-                out.area(t, f, 2) = owned_area[m].z;
-                out.face_centroid(t, f, 0) = owned_centroid[m].x;
-                out.face_centroid(t, f, 1) = owned_centroid[m].y;
-                out.face_centroid(t, f, 2) = owned_centroid[m].z;
+                const int plane = owned_plane[m];
+                if constexpr (with_rings) {
+                    out.rings(at) = c.neighbour[plane];
+                    out.rings(at + 1) = owned_length[m];
+                    at += 2;
+                    // Walk the face again; the plane shared with the next
+                    // vertex bounds the face there.
+                    for (int vertex = c.first[plane], k = 0; k < owned_length[m]; ++k) {
+                        int corner = 0;
+                        while (byte(c.corner[vertex], corner) != plane) ++corner;
+                        out.rings(at++) = c.neighbour[byte(c.corner[vertex], (corner + 2) % 3)];
+                        vertex = byte(c.adjacent[vertex], (corner + 2) % 3);
+                    }
+                } else {
+                    const int f = static_cast<int>(at++);
+                    out.neighbour(f) = c.neighbour[plane];
+                    out.area(f, 0) = owned_area[m].x;
+                    out.area(f, 1) = owned_area[m].y;
+                    out.area(f, 2) = owned_area[m].z;
+                    out.face_centroid(f, 0) = owned_centroid[m].x;
+                    out.face_centroid(f, 1) = owned_centroid[m].y;
+                    out.face_centroid(f, 2) = owned_centroid[m].z;
+                }
             }
         }
         if (l == 0) {
             const bool good = status == ok;
             out.status(t) = status;
             out.face_count(t) = good ? faces : 0;
-            out.owned_count(t) = good || status == face_overflow ? owned : 0;
+            out.owned_count(t) = good ? owned : 0;
             out.volume(t) = good ? volume : 0.0;
             out.centroid(t, 0) = good ? moment.x / volume : 0.0;
             out.centroid(t, 1) = good ? moment.y / volume : 0.0;
@@ -555,45 +587,51 @@ struct Kernel {
 }  // namespace warp
 
 // Build every cell with one warp per cell, then rebuild cells that overflowed
-// the warp capacities with the per-thread kernel. Other backends, and
-// requests for face rings, use the per-thread kernel throughout.
+// the warp capacities with the per-thread kernel; with face rings if `out`
+// records them (Cells::with_rings). Other backends use the per-thread
+// kernel throughout.
 template <class Real, class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     Cells<typename ExecSpace::memory_space>& out) {
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
-        if (out.rings.extent(0) == 0) {
-            if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
-                throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
-            const Real half_width = detail::start_half_width<Real>(grid.box);
-            using Memory = typename ExecSpace::memory_space;
-            const Stencil<Memory> stencil = make_stencil(exec);
-            Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
-            const int blocks = Kokkos::min((grid.n + warp::cells_per_block - 1) / warp::cells_per_block,
-                                           2 * warp::min_blocks_per_sm * exec.cuda_device_prop().multiProcessorCount);
-            // A block holds cells_per_block warps; each warp is a team's vector range.
-            Kokkos::TeamPolicy<Kokkos::Cuda,
-                               Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
-                policy(exec, blocks, warp::cells_per_block, warp::lanes);
-            policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron<Real>)));
-            // Near-uniform input (every particle at the base level) takes the
-            // kernel without level changes and fine-cell searches: its smaller
-            // code is 4 % faster on uniform random points.
-            int off_base = 0;
-            const auto level = grid.level;
-            const int base = grid.levels;
-            Kokkos::parallel_reduce(
-                "shell_voronoi::off_base_levels", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-                KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
-            if (off_base > 0)
+        if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
+            throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
+        const bool rings = out.with_rings();
+        const Real half_width = detail::start_half_width<Real>(grid.box);
+        using Memory = typename ExecSpace::memory_space;
+        const Stencil<Memory> stencil = make_stencil(exec);
+        Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
+        const int blocks = Kokkos::min((grid.n + warp::cells_per_block - 1) / warp::cells_per_block,
+                                       2 * warp::min_blocks_per_sm * exec.cuda_device_prop().multiProcessorCount);
+        // A block holds cells_per_block warps; each warp is a team's vector range.
+        Kokkos::TeamPolicy<Kokkos::Cuda,
+                           Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
+            policy(exec, blocks, warp::cells_per_block, warp::lanes);
+        policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron<Real>)));
+        // Near-uniform input (every particle at the base level) takes the
+        // kernel without level changes and fine-cell searches: its smaller
+        // code is 4 % faster on uniform random points.
+        int off_base = 0;
+        const auto level = grid.level;
+        const int base = grid.levels;
+        Kokkos::parallel_reduce(
+            "shell_voronoi::off_base_levels", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+            KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
+        detail::until_pool_fits(exec, out, [&] {
+            Kokkos::deep_copy(exec, next_cell, 0);
+            if (rings)
+                Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
+                                     warp::Kernel<Real, Memory, true, true>{grid, out, half_width, stencil, next_cell});
+            else if (off_base > 0)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Real, Memory, true>{grid, out, half_width, stencil, next_cell});
+                                     warp::Kernel<Real, Memory, true, false>{grid, out, half_width, stencil, next_cell});
             else
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Real, Memory, false>{grid, out, half_width, stencil, next_cell});
+                                     warp::Kernel<Real, Memory, false, false>{grid, out, half_width, stencil, next_cell});
             detail::construct_with_overflow<Real>(exec, grid, stencil, out, detail::Pass::failed);
-            return;
-        }
+        });
+        return;
     }
 #endif
     construct<Real>(exec, grid, out);
