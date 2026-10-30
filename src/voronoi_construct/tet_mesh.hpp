@@ -307,10 +307,10 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                 const int e = ring(base + m);
                 adjacent(e, 2) = ring(base + (m + 1) % k);      // opposite p: triangle (i, j, q)
                 adjacent(e, 3) = ring(base + (m + k - 1) % k);  // opposite q: triangle (i, j, p)
-                for (int drop = 0; drop < 2; ++drop) {          // opposite i, then j
-                    int tri[3] = {vertex(e, drop == 0 ? 1 : 0), vertex(e, 2), vertex(e, 3)};
-                    for (int a = 1; a < 3; ++a)
-                        for (int b = a; b > 0 && tri[b - 1] > tri[b]; --b) Kokkos::kokkos_swap(tri[b - 1], tri[b]);
+                const int v[4] = {vertex(e, 0), vertex(e, 1), vertex(e, 2), vertex(e, 3)};
+                for (int drop = 0; drop < 2; ++drop) {  // opposite i, then j
+                    int tri[3];
+                    sorted_face(v, drop, tri);
                     const int h = face_of(tri[0], tri[1]);
                     int other = -1;
                     for (int r = 0; h >= 0 && r < length(h); ++r)
