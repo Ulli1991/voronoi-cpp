@@ -32,6 +32,10 @@ struct State {
     ep::Points<MemorySpace> point;  // snapped positions
     Kokkos::View<char*, MemorySpace> alive;
     Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
+    // The tetrahedra flips created since the last move (each once, but for
+    // the host fallback's repeats):
+    // touched_entries of them, -1 if more than fit or the host fallback ran.
+    Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
     // Votes: round in the high 32 bits, plan index + 1 below, so a vote of
@@ -45,11 +49,12 @@ struct State {
     // an inverted tetrahedron, (t, -2) a flip that would not close its cavity.
     Kokkos::View<int* [2], MemorySpace> stuck;
     // Device counters: 0 work, 1 stuck, 2 freed, 3 listed, 4 pops, 5 growth, 6 2->3, 7 3->2,
-    // and their pinned host copy, read once or twice per round.
+    // 8 touched_list, and their pinned host copy, read once or twice per round.
     Kokkos::View<int*, MemorySpace> counters;
     Kokkos::View<int*, Kokkos::SharedHostPinnedSpace> host_counters;
     int count = 0;  // tetrahedra slots in use
     int free_count = 0;
+    int touched_entries = 0;
     unsigned long long round = 0;
 };
 
@@ -241,8 +246,9 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
         Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_repair_plans")), work_capacity);
     s.freed = Kokkos::View<int*, Memory>("tet_repair_freed", work_capacity);
     s.stuck = Kokkos::View<int* [2], Memory>("tet_repair_stuck", work_capacity);
-    s.counters = Kokkos::View<int*, Memory>("tet_repair_counters", 8);
-    s.host_counters = Kokkos::View<int*, Kokkos::SharedHostPinnedSpace>("tet_repair_host_counters", 8);
+    s.touched_list = Kokkos::View<int*, Memory>("tet_repair_touched_list", work_capacity);
+    s.counters = Kokkos::View<int*, Memory>("tet_repair_counters", 9);
+    s.host_counters = Kokkos::View<int*, Kokkos::SharedHostPinnedSpace>("tet_repair_host_counters", 9);
     detail::snap(exec, x, s.point);
     const auto point = s.point;
     const auto alive = s.alive;
@@ -264,9 +270,10 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
     return s;
 }
 
-// New positions x: snaps them and lists the tetrahedra that may need repair,
-// screened in double precision with their circumcentres (m.centre, computed
-// for x): those with a neighbour's far vertex inside or near the
+// New positions x: snaps them, computes the circumcentres (m.centre) of
+// the live tetrahedra (in the screening kernel, slivers exactly in a second
+// pass), and lists those that may need repair, screened in double precision
+// with these circumcentres: those with a neighbour's far vertex inside or near the
 // circumsphere, and the badly shaped ones (possibly flat or inverted). The
 // margin covers the snapping of positions to the exact grid; what it lists
 // is decided exactly by repair.
@@ -280,6 +287,8 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
     const auto vertex = m.vertex;
     const auto adjacent = m.adjacent;
     const auto centre = m.centre;
+    const auto counters = s.counters;
+    const auto slivers = s.freed;  // free until the repair starts
     const double snap = box / ep::scale * 1.7320508075688772;  // largest move by snapping
     Kokkos::parallel_for(
         "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
@@ -289,26 +298,48 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
                 return Vec3<double>{tet_mesh::wrap(x(v, 0) - cx, box), tet_mesh::wrap(x(v, 1) - cy, box),
                                     tet_mesh::wrap(x(v, 2) - cz, box)};
             };
-            const int v0 = vertex(t, 0);
-            const Vec3<double> d1 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 1)),
-                               d2 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 2)),
-                               d3 = from(x(v0, 0), x(v0, 1), x(v0, 2), vertex(t, 3));
-            const double l1 = dot(d1, d1), l2 = dot(d2, d2), l3 = dot(d3, d3);
-            const double volume6 = dot(d1, cross(d2, d3));
+            const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+            const Vec3<double> d[3] = {from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[1]),
+                                       from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[2]),
+                                       from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[3])};
+            const double volume6 = dot(d[0], cross(d[1], d[2]));
+            const double shape = Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2]));
             // Well shaped and clearly positive, else decide exactly.
-            bool suspect = !(volume6 > 1e-3 * Kokkos::sqrt(l1 * l2 * l3));
-            const double r2 = centre(t, 3);
+            bool suspect = !(volume6 > 1e-3 * shape);
+            // Slivers: suspect anyway; their centres are computed exactly below
+            // (the same test as in tet_mesh::circumcentre).
+            if (!(Kokkos::abs(volume6) > 1e-4 * shape)) {
+                const int at = Kokkos::atomic_fetch_add(&counters(2), 1);
+                if (at < static_cast<int>(slivers.extent(0))) slivers(at) = t;
+                detail::mark(st, t);
+                return;
+            }
+            const Vec3<double> c = tet_mesh::detail::circumcentre(d[0], d[1], d[2]);
+            const double cx = x(v[0], 0) + c.x, cy = x(v[0], 1) + c.y, cz = x(v[0], 2) + c.z, r2 = dot(c, c);
+            centre(t, 0) = cx;
+            centre(t, 1) = cy;
+            centre(t, 2) = cz;
+            centre(t, 3) = r2;
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);
                 if (u < 0) continue;
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
-                const Vec3<double> e = from(centre(t, 0), centre(t, 1), centre(t, 2), far);
+                const Vec3<double> e = from(cx, cy, cz, far);
                 suspect = dot(e, e) < r2 + margin;
             }
             if (suspect) detail::mark(st, t);
         });
+    Kokkos::deep_copy(exec, s.host_counters, counters);
+    exec.fence();
+    const int sliver_count = s.host_counters(2);
+    if (sliver_count > static_cast<int>(slivers.extent(0)))
+        tet_mesh::circumcentres(exec, x, box, m, s.count);
+    else if (sliver_count > 0)
+        tet_mesh::circumcentres(exec, x, box, m, -1,
+                                Kokkos::View<const int*, typename ExecSpace::memory_space>(
+                                    Kokkos::subview(slivers, std::make_pair(0, sliver_count))));
 }
 
 // Flip until no dirty tetrahedron fails or no plan can proceed; what is left
@@ -555,6 +586,15 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                         }
                     }
                 }
+                // List the new tetrahedra: slots from the free list always, reused
+                // ones unless touched (so listed) before this step. A round's flips
+                // share no tetrahedra, so this does not race.
+                int listing[3], listings = 0;
+                for (int r = 0; r < p.freshes; ++r)
+                    if (r >= p.olds || !st.touched(slot[r])) listing[listings++] = slot[r];
+                const int listed_at = Kokkos::atomic_fetch_add(&counters(8), listings);
+                for (int q = 0; q < listings; ++q)
+                    if (listed_at + q < static_cast<int>(st.touched_list.extent(0))) st.touched_list(listed_at + q) = listing[q];
                 for (int r = 0; r < p.olds; ++r) st.touched(p.old[r]) = 1;
                 for (int r = 0; r < p.freshes; ++r) {
                     st.touched(slot[r]) = 1;
@@ -578,6 +618,7 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         stats.flips32 += host(7);
     }
     stats.stuck = Kokkos::min(host(1), static_cast<int>(stuck.extent(0)));
+    s.touched_entries = host(8) <= static_cast<int>(s.touched_list.extent(0)) ? host(8) : -1;
     return stats;
 }
 

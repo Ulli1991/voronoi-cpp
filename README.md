@@ -62,16 +62,19 @@ Voronoi vertex (its circumcentre), and a Voronoi face is the ring of
 circumcentres around a Delaunay edge; every edge has one representative
 tetrahedron (6 bits per tetrahedron). Per step:
 
-1. `tet_mesh::circumcentres` (slivers fall back to exact integer arithmetic);
-2. `tet_repair::move_screened` snaps the new positions and lists the
-   tetrahedra whose local Delaunay test could fail; `tet_repair::repair` flips
-   them on the device (failing triangles planned as 2->3 or 3->2 flips; plans
-   vote on the tetrahedra they rewrite, winners apply, losers retry; a flip is
-   only accepted if it closes its cavity exactly);
-3. if the device repair reports stuck entries, `tet_flips::finish` repairs a
-   host copy (flips, then local rebuilds) and copies it back;
-4. `tet_mesh::circumcentres` again, `tet_mesh::update_face_rings` (a face
-   keeps its ring unless a flip touched it, else its edge is walked) and
+1. `tet_repair::move_screened` snaps the new positions, computes the
+   circumcentres (slivers in a second pass, in exact integer arithmetic) and
+   lists the tetrahedra whose local Delaunay test could fail;
+   `tet_repair::repair` flips them on the device (failing triangles planned
+   as 2->3 or 3->2 flips; plans vote on the tetrahedra they rewrite, winners
+   apply, losers retry; a flip is only accepted if it closes its cavity
+   exactly) and lists the tetrahedra it creates;
+2. if the device repair reports stuck entries, `tet_flips::finish` repairs
+   the region around them on the host (flips, then local rebuilds), writes
+   it back and lets the device repair settle its border;
+3. `tet_mesh::circumcentres` of the created tetrahedra,
+   `tet_mesh::update_face_rings` (in place: only faces with a created
+   tetrahedron on their ring are walked and appended to a ring pool) and
    `tet_mesh::faces` (area vectors, centroids, cell volumes).
 
 Every repair decision uses `exact_predicates.hpp`: positions snapped to a
@@ -98,15 +101,18 @@ A thread-per-cell kernel with the polyhedron in shared memory (the removed
 "lean" kernel) reached 10.4 on jittered input.
 
 Per step at 0.03 spacings of motion (jittered), complete mesh update (repair
-with screening, circumcentres, face rings and faces): about 16.8 ms, i.e.
-~124 M cells/s; ~22 ms at 0.1 spacings and ~35 ms at 0.3.
+with screening, circumcentres, face rings and faces): about 11.8 ms, i.e.
+~178 M cells/s (16.8 ms before `research_notes/speed_2026-10-30.md`). At 0.1
+and 0.3 spacings most steps leave a few stuck triangles; the host fallback
+around them takes 0.14 / 0.35 s per step instead of 5.6 / 6.5 s, on top of
+~20 / ~39 ms on the device (details in the note).
 
 Comparisons on the same A100 (research_notes/arepo_wd_gpu_benchmark.md and
 the status notes):
 
 | Code | Mesh | Full step |
 |---|---|---|
-| this work | 18.7 M cells/s rebuild; ~124 M cells/s persistent step | no hydro yet |
+| this work | 18.7 M cells/s rebuild; ~178 M cells/s persistent step | no hydro yet |
 | PROTEUS | 1.6-6 M cells/s | Sedov, 5 M updates/s |
 | AREPO-WD GPU per-cell builder | 1.4-1.6 M cells/s | Sedov, 0.59 M updates/s |
 | LUNA (fixed grid) | n/a | 1,100 M updates/s |

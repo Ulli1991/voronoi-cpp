@@ -8,6 +8,7 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -485,13 +486,14 @@ Mesh to_host(const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
     return {copy(dm.vertex), copy(dm.adjacent), copy(state.alive), copy(state.point), state.count};
 }
 
-// Finish a device repair that left stuck entries: repair a host copy, copy it
-// back, mark every tetrahedron it changed as touched, and give each edge
-// around them one representative (the lowest-numbered tetrahedron around
-// it). The device free list stays valid: the host only rewrites live
+// Repair the whole mesh on the host (the last resort of finish): repair a
+// host copy, copy it back, mark every tetrahedron it changed as touched, and
+// give each edge around them one representative (the lowest-numbered
+// tetrahedron around it); a tetrahedron whose edge bits change is touched
+// too. The device free list stays valid: the host only rewrites live
 // tetrahedra and appends new ones.
 template <class ExecSpace>
-Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
+Stats finish_everywhere(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state) {
     exec.fence();
     const Mesh before = to_host<ExecSpace>(dm, state);
@@ -523,7 +525,9 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                 const int pa = tet_mesh::position(m, u, a), pb = tet_mesh::position(m, u, b);
                 if (pa < 0 || pb < 0) continue;
                 const int bit = 1 << tet_mesh::edge_index(pa, pb);
-                edges(u) = u == lowest ? edges(u) | bit : edges(u) & ~bit;
+                const int bits = u == lowest ? edges(u) | bit : edges(u) & ~bit;
+                if (bits != edges(u)) touched(u) = 1;  // its faces are renumbered
+                edges(u) = bits;
             }
         }
     }
@@ -534,7 +538,273 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     Kokkos::deep_copy(exec, dm.edges, edges);
     exec.fence();
     state.count = m.count;
+    state.touched_entries = -1;  // touched_list misses the host's changes
     return stats;
+}
+
+namespace detail {
+
+// The live tetrahedra within `hops` adjacency steps of the stuck entries, in
+// state.listed[0, returned); state.dirty is reset for them afterwards.
+template <class ExecSpace>
+int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
+                 tet_repair::State<typename ExecSpace::memory_space>& state, int stuck, int hops) {
+    using Range = Kokkos::RangePolicy<ExecSpace>;
+    const auto& st = state;
+    const auto adjacent = dm.adjacent;
+    auto listed_count = [&] {
+        Kokkos::deep_copy(exec, state.host_counters, state.counters);
+        exec.fence();
+        return state.host_counters(3);
+    };
+    Kokkos::deep_copy(exec, Kokkos::subview(state.counters, 3), 0);
+    Kokkos::parallel_for(
+        "tet_flips::region_seeds", Range(exec, 0, stuck), KOKKOS_LAMBDA(int i) {
+            const int t = st.stuck(i, 0), k = st.stuck(i, 1);
+            if (t < 0 || !st.alive(t)) return;
+            tet_repair::detail::mark(st, t);
+            const int u = k >= 0 ? adjacent(t, k) : -1;
+            if (u >= 0 && st.alive(u)) tet_repair::detail::mark(st, u);
+        });
+    int begin = 0, end = listed_count();
+    for (int h = 0; h < hops && end > begin; ++h) {
+        Kokkos::parallel_for(
+            "tet_flips::region_grow", Range(exec, begin, end), KOKKOS_LAMBDA(int i) {
+                const int t = st.listed(i);
+                for (int k = 0; k < 4; ++k) {
+                    const int u = adjacent(t, k);
+                    if (u >= 0 && st.alive(u)) tet_repair::detail::mark(st, u);
+                }
+            });
+        begin = end;
+        end = listed_count();
+    }
+    Kokkos::parallel_for(
+        "tet_flips::region_unmark", Range(exec, 0, end), KOKKOS_LAMBDA(int i) { st.dirty(st.listed(i)) = 0; });
+    return end;
+}
+
+}  // namespace detail
+
+// Finish a device repair that left stuck entries. The tetrahedra within a
+// few adjacency steps of them are copied to the host as a local mesh (its
+// own particle numbering, in the same order, so every exact decision is the
+// same), repaired there, and the changed and new ones written back; new
+// ones are appended after state.count, so the device free list stays valid.
+// Every tetrahedron the host changed is touched and listed, each edge around
+// them gets one representative (the lowest-numbered tetrahedron around it;
+// a tetrahedron whose edge bits change is touched too), and the device
+// repair runs again from them and the stuck entries, to settle the region's
+// border and to find what the host could not repair. If that still
+// leaves stuck entries the region grows, `attempts` times in all; what is
+// still stuck then is left (stats.stuck): flips and local rebuilds only
+// change their surroundings, so repairing the whole mesh on the host would
+// not fix it either. Only if a local result does not fit its border is the
+// whole mesh repaired on the host.
+template <class ExecSpace>
+Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
+             tet_repair::State<typename ExecSpace::memory_space>& state, int attempts = 2) {
+    using Memory = typename ExecSpace::memory_space;
+    using Range = Kokkos::RangePolicy<ExecSpace>;
+    Stats total;
+    for (int attempt = 0, hops = 8; attempt < attempts; ++attempt, hops *= 2) {
+        exec.fence();
+        const int stuck = Kokkos::min(state.host_counters(1), static_cast<int>(state.stuck.extent(0)));
+        if (stuck == 0) return total;
+        const int size = detail::stuck_region(exec, dm, state, stuck, hops);
+        // The region's rows and particles to the host.
+        Kokkos::View<int* [8], Memory> rows(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("region_rows")),
+                                            size);
+        const auto listed = state.listed;
+        Kokkos::parallel_for(
+            "tet_flips::region_rows", Range(exec, 0, size), KOKKOS_LAMBDA(int i) {
+                const int t = listed(i);
+                for (int k = 0; k < 4; ++k) {
+                    rows(i, k) = dm.vertex(t, k);
+                    rows(i, 4 + k) = dm.adjacent(t, k);
+                }
+            });
+        const auto host_rows = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, rows);
+        const auto host_listed = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, Kokkos::subview(listed, std::make_pair(0, size)));
+        std::vector<int> particle;  // local particle -> global, increasing
+        for (int i = 0; i < size; ++i)
+            for (int k = 0; k < 4; ++k) particle.push_back(host_rows(i, k));
+        std::sort(particle.begin(), particle.end());
+        particle.erase(std::unique(particle.begin(), particle.end()), particle.end());
+        auto local_particle = [&](int v) {
+            return static_cast<int>(std::lower_bound(particle.begin(), particle.end(), v) - particle.begin());
+        };
+        Kokkos::View<int*, Memory> particle_ids("region_particles", particle.size());
+        Kokkos::deep_copy(exec, particle_ids,
+                          Kokkos::View<const int*, Kokkos::HostSpace>(particle.data(), particle.size()));
+        ep::Points<Memory> points("region_points", particle.size());
+        const auto point = state.point;
+        Kokkos::parallel_for(
+            "tet_flips::region_points", Range(exec, 0, static_cast<int>(particle.size())), KOKKOS_LAMBDA(int i) {
+                for (int a = 0; a < 3; ++a) points(i, a) = point(particle_ids(i), a);
+            });
+
+        // The local mesh; faces to tetrahedra outside the region are open (-1).
+        std::unordered_map<int, int> local;
+        for (int i = 0; i < size; ++i) local[host_listed(i)] = i;
+        const int capacity = 2 * size + 1024;
+        Mesh m{tet_mesh::Quads<Kokkos::HostSpace>("region_vertex", capacity),
+               tet_mesh::Quads<Kokkos::HostSpace>("region_adjacent", capacity),
+               Kokkos::View<char*, Kokkos::HostSpace>("region_alive", capacity),
+               Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, points), size};
+        std::map<std::array<int, 3>, int> outside;  // open face (local particles) -> outside tetrahedron
+        for (int i = 0; i < size; ++i) {
+            m.alive(i) = 1;
+            for (int k = 0; k < 4; ++k) m.vertex(i, k) = local_particle(host_rows(i, k));
+            for (int k = 0; k < 4; ++k) {
+                const int u = host_rows(i, 4 + k);
+                const auto it = local.find(u);
+                m.adjacent(i, k) = it == local.end() ? -1 : it->second;
+                if (it == local.end()) outside[detail::face_key(detail::tet(m, i), k)] = u;
+            }
+        }
+        const Stats stats = repair(m);
+        total.checked += stats.checked;
+        total.flips23 += stats.flips23;
+        total.flips32 += stats.flips32;
+        total.rebuilt += stats.rebuilt;
+        total.unrepaired += stats.unrepaired;
+
+        // Changed and new tetrahedra back, with global numbers.
+        const int added = m.count - size;
+        if (state.count + added > static_cast<int>(state.alive.extent(0)))
+            throw std::runtime_error("tet_flips::finish: tetrahedra capacity exceeded");
+        auto global = [&](int l) { return l < size ? host_listed(l) : state.count + l - size; };
+        std::vector<int> changed;  // rows: slot, alive, 4 vertices, 4 neighbours, open-face bits
+        bool closed = true;
+        for (int l = 0; l < m.count; ++l) {
+            bool same = l < size && m.alive(l);
+            for (int k = 0; k < 4 && same; ++k)
+                same = m.vertex(l, k) == local_particle(host_rows(l, k)) &&
+                       (m.adjacent(l, k) >= 0 ? global(m.adjacent(l, k)) == host_rows(l, 4 + k)
+                                              : local.count(host_rows(l, 4 + k)) == 0);
+            if (same) continue;
+            int open = 0, neighbour[4];
+            for (int k = 0; k < 4; ++k) {
+                neighbour[k] = m.adjacent(l, k) >= 0 ? global(m.adjacent(l, k)) : -1;
+                if (m.alive(l) && m.adjacent(l, k) < 0) {
+                    const auto it = outside.find(detail::face_key(detail::tet(m, l), k));
+                    closed &= it != outside.end();
+                    if (it != outside.end()) {
+                        neighbour[k] = it->second;
+                        open |= 1 << k;
+                    }
+                }
+            }
+            changed.insert(changed.end(), {global(l), m.alive(l), particle[m.vertex(l, 0)], particle[m.vertex(l, 1)],
+                                           particle[m.vertex(l, 2)], particle[m.vertex(l, 3)], neighbour[0],
+                                           neighbour[1], neighbour[2], neighbour[3], open});
+        }
+        if (!closed) {  // the local result does not fit its border: repair everything
+            const Stats rest = finish_everywhere(exec, dm, state);
+            total.flips23 += rest.flips23;
+            total.flips32 += rest.flips32;
+            total.rebuilt += rest.rebuilt;
+            total.unrepaired += rest.unrepaired;
+            total.stuck = 0;
+            return total;
+        }
+        const int count = static_cast<int>(changed.size()) / 11;
+        Kokkos::View<int* [11], Kokkos::LayoutRight, Memory> update("region_update", count);
+        Kokkos::deep_copy(exec, update,
+                          Kokkos::View<const int* [11], Kokkos::HostSpace>(changed.data(), count));
+        state.count += added;
+        const auto vertex = dm.vertex, adjacent = dm.adjacent;
+        const auto edges = dm.edges;
+        const auto alive = state.alive, touched = state.touched;
+        // Every tetrahedron touched here is listed in touched_list too
+        // (counters(8) past its capacity: the list is unknown).
+        const auto list = state.touched_list, counters = state.counters;
+        const int list_capacity = static_cast<int>(list.extent(0));
+        Kokkos::deep_copy(exec, Kokkos::subview(counters, 8),
+                          state.touched_entries >= 0 ? state.touched_entries : list_capacity + 1);
+        auto touch = KOKKOS_LAMBDA(int t) {
+            touched(t) = 1;
+            const int at = Kokkos::atomic_fetch_add(&counters(8), 1);
+            if (at < list_capacity) list(at) = t;
+        };
+        Kokkos::parallel_for(
+            "tet_flips::region_write", Range(exec, 0, count), KOKKOS_LAMBDA(int i) {
+                const int t = update(i, 0);
+                alive(t) = static_cast<char>(update(i, 1));
+                touch(t);
+                edges(t) = 0;
+                for (int k = 0; k < 4; ++k) {
+                    vertex(t, k) = update(i, 2 + k);
+                    adjacent(t, k) = update(i, 6 + k);
+                }
+            });
+        // Outside neighbours point back to the new tetrahedra across the open faces.
+        Kokkos::parallel_for(
+            "tet_flips::region_border", Range(exec, 0, count), KOKKOS_LAMBDA(int i) {
+                const int t = update(i, 0), open = update(i, 10);
+                const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+                for (int k = 0; k < 4; ++k) {
+                    if (!(open >> k & 1)) continue;
+                    const int u = adjacent(t, k);
+                    int key[3];
+                    tet_mesh::sorted_face(v, k, key);
+                    const int w[4] = {vertex(u, 0), vertex(u, 1), vertex(u, 2), vertex(u, 3)};
+                    for (int j = 0; j < 4; ++j) {
+                        int other[3];
+                        tet_mesh::sorted_face(w, j, other);
+                        if (other[0] == key[0] && other[1] == key[1] && other[2] == key[2]) adjacent(u, j) = t;
+                    }
+                }
+            });
+        // One representative per edge around the changed tetrahedra.
+        Kokkos::parallel_for(
+            "tet_flips::region_edges", Range(exec, 0, count), KOKKOS_LAMBDA(int i) {
+                const int t = update(i, 0);
+                if (!update(i, 1)) return;
+                for (int k = 0; k < 6; ++k) {
+                    int ka, kb;
+                    tet_mesh::edge_ends(k, ka, kb);
+                    const int a = vertex(t, ka), b = vertex(t, kb);
+                    int ring[65];
+                    const int length = Kokkos::min(tet_mesh::walk_edge(dm, t, a, b, ring), 65);
+                    int lowest = t;
+                    for (int r = 0; r < length; ++r) lowest = Kokkos::min(lowest, ring[r]);
+                    for (int r = 0; r < length; ++r) {
+                        const int u = ring[r];
+                        const int pa = tet_mesh::position(dm, u, a), pb = tet_mesh::position(dm, u, b);
+                        if (pa < 0 || pb < 0) continue;
+                        const int bit = 1 << tet_mesh::edge_index(pa, pb);
+                        const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
+                                                       : Kokkos::atomic_fetch_and(&edges(u), ~bit);
+                        if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
+                    }
+                }
+            });
+        // Repair on the device from the changed ones and the stuck ones (what
+        // the host could not repair is stuck again).
+        Kokkos::deep_copy(exec, Kokkos::subview(counters, 3), 0);
+        const auto& st = state;
+        Kokkos::parallel_for(
+            "tet_flips::region_dirty", Range(exec, 0, count), KOKKOS_LAMBDA(int i) {
+                if (update(i, 1)) tet_repair::detail::mark(st, update(i, 0));
+            });
+        Kokkos::parallel_for(
+            "tet_flips::region_recheck", Range(exec, 0, stuck), KOKKOS_LAMBDA(int i) {
+                const int t = st.stuck(i, 0), k = st.stuck(i, 1);
+                if (t < 0 || !alive(t)) return;
+                tet_repair::detail::mark(st, t);
+                const int u = k >= 0 ? adjacent(t, k) : -1;
+                if (u >= 0 && alive(u)) tet_repair::detail::mark(st, u);
+            });
+        const tet_repair::Stats device = tet_repair::repair(exec, dm, state);
+        total.flips23 += device.flips23;
+        total.flips32 += device.flips32;
+        total.stuck = device.stuck;
+        if (device.stuck == 0) return total;
+    }
+    return total;
 }
 
 }  // namespace tet_flips

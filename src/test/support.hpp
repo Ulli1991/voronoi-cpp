@@ -379,17 +379,17 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
 }
 
 // The persistent mesh of moving particles, stepped as the pipeline does:
-//   repair: pad positions, circumcentres, screen, flip on the device;
+//   repair: pad positions, circumcentres and screening, flips on the device;
 //   finish: the host fallback, only when the device repair left stuck entries;
-//   update_geometry: circumcentres, face rings, faces and volumes.
+//   update_geometry: circumcentres of the touched tetrahedra, face rings,
+//   faces and volumes.
 // Particles are slots of the starting build (positions in slot order).
 struct MovingMesh {
     Exec exec;
     int n = 0;
     tet_mesh::Mesh<Memory> mesh;
     tet_repair::State<Memory> state;
-    tet_mesh::FaceRings<Memory> rings[2];
-    int current = 0;  // rings[current] holds the last step's faces
+    tet_mesh::FaceRings<Memory> rings;
     tet_mesh::Geometry<Memory> geometry;
     tet_mesh::Points4<Memory> padded;
     tet_start::Stats start;
@@ -399,7 +399,7 @@ struct MovingMesh {
         const int capacity = 2 * static_cast<int>(mesh.vertex.extent(0));
         state = tet_repair::prepare(exec, x, mesh, capacity);
         const int face_capacity = 10 * n;
-        for (auto& r : rings) r = tet_mesh::make_face_rings<Memory>(capacity, face_capacity, 8 * face_capacity);
+        rings = tet_mesh::make_face_rings<Memory>(capacity, face_capacity, 8 * face_capacity);
         geometry = {Kokkos::View<double* [3], Memory>("face_area", face_capacity),
                     Kokkos::View<double* [3], Memory>("face_centroid", face_capacity),
                     Kokkos::View<double*, Memory>("cell_volume", n)};
@@ -408,7 +408,6 @@ struct MovingMesh {
 
     tet_repair::Stats repair(const Positions& x) {
         tet_mesh::pad(exec, x, padded);
-        tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count);
         tet_repair::move_screened(exec, padded, 1.0, mesh, state);
         return tet_repair::repair(exec, mesh, state);
     }
@@ -417,10 +416,12 @@ struct MovingMesh {
 
     // Returns the number of faces.
     int update_geometry() {
-        tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count);
-        const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, rings[current],
-                                                      rings[1 - current]);
-        current = 1 - current;
+        // The tetrahedra flips created, or none listed: circumcentres of all, faces from touched.
+        const Kokkos::View<const int*, Memory> created =
+            state.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
+                                      : Kokkos::subview(state.touched_list, std::make_pair(0, state.touched_entries));
+        tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count, created);
+        const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, created, rings);
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         Kokkos::deep_copy(exec, state.touched, 0);
         return faces;
