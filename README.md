@@ -6,7 +6,7 @@ builds run the same code for checks). It is the geometry base of a planned
 moving-mesh finite-volume hydro solver: the solver hands over particle
 positions and gets back faces (owner, neighbour, area vector, centroid),
 cell volumes and centroids, and per-cell face lists. Stage 1 of the hydro
-solver (static mesh, MUSCL-Hancock, HLL) is in `src/hydro/` (see "Hydro").
+solver (static mesh, MUSCL-Hancock, HLLC) is in `src/hydro/` (see "Hydro").
 
 ## Install and build
 
@@ -181,7 +181,7 @@ what PASS means are in [TESTING.md](TESTING.md).
 | `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and boxes of side 1, 2, 3 |
 | `repair` | after every step of a flow the mesh equals an exact rebuild (lattice, wave, shells, jittered, box 2) |
 | `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
-| `hydro` | HLL against reference fluxes; uniform states stay uniform, conservation to rounding, bit-identical runs and update loops on jittered and uniform meshes |
+| `hydro` | HLLC and HLL against reference fluxes and under rotation; uniform states stay uniform, conservation to rounding, bit-identical runs, the two update loops agree to rounding on jittered and uniform meshes |
 
 ```sh
 ctest --test-dir build-cuda --output-on-failure         # A100: ~35 s
@@ -204,32 +204,35 @@ Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 `hydro::FiniteVolume` (`src/hydro/`) runs finite volumes on a static
 `voronoi::Mesh`: conserved state only between steps, least-squares
 gradients of the primitives limited at the face centroids, MUSCL-Hancock
-half step, HLL along each face normal, one global time step
-(0.3 min r / (c + |v|)); order 0 is first-order Godunov. Every cell sums
-over its face list in a fixed order, so runs are bit-reproducible. Two
-update loops: per cell (each face flux computed from both sides) or per
-face (a face flux array, then a per-cell gather; faster at second order).
+half step, HLLC (default) or HLL along each face normal, one global time
+step (Courant factor 0.3 on each cell's radius and signal speeds); order 0
+is first-order Godunov. Every cell sums over its face list in a fixed
+order, so runs are bit-reproducible. Two update loops: per face (a face
+flux array, then a per-cell gather; default at second order) or per cell
+(each face flux computed from both sides; default at first order).
 
 ```text
-hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--out=dir] [--snapshots=10] [--steps=max] [--input-order] [--memory]
-sbatch -o <logs>/hydro-%j.out scripts/hydro_a100.sh build-cuda <out> validate|throughput
+hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--limiter=face|cell|none]
+            [--riemann=hllc|hll] [--out=dir] [--snapshots=10] [--steps=max] [--input-order] [--memory]
+sbatch -o <logs>/hydro-%j.out scripts/hydro_a100.sh build-cuda <out> validate|limiters|throughput|throughput256
 ```
 
 `hydro_sedov` (needs HDF5; on Raven `module load hdf5-serial`) runs a
 Sedov blast (1e51 erg, n = 1 cm^-3, 50 pc box, 1e4 yr) and writes HDF5
-snapshots. Measured on one A100 (job 31698376), double, jittered points in
-Morton order, median of 40 steps:
+snapshots. Measured on one A100 (jobs 31699864, 31699865), double,
+jittered points in Morton order, median of 40 steps:
 
 | | 2,097,152 cells | 16,777,216 cells |
 |---|---|---|
-| MUSCL-Hancock, per-face loop | 15.1 ms (139 M cell updates/s) | 121 ms (139 M/s) |
-| MUSCL-Hancock, per-cell loop | 19.1 ms (110 M/s) | 154 ms (109 M/s) |
-| first order, per-cell loop | 3.5 ms (602 M/s) | 27 ms (617 M/s) |
+| MUSCL-Hancock HLLC, per-face loop | 18.7 ms (112 M cell updates/s) | 160 ms (105 M/s) |
+| MUSCL-Hancock HLL, per-face loop | 18.0 ms (116 M/s) | 147 ms (114 M/s) |
+| first order HLLC, per-cell loop | 7.3 ms (288 M/s) | 58 ms (290 M/s) |
 | device memory, mesh + hydro (per-face, second order) | 2370 B/cell | 2371 B/cell (41.2 GB in use) |
 
-Sedov at 128^3 (job 31698375): shock radius 0.978 of the Sedov-Taylor
-value at 1e4 yr, L1 density error 0.070 rho0 (first order: 0.101); mass
-and energy conserved to 2e-16. Details: research_notes/hydro_stage1_2026-10-31.md.
+Sedov at 128^3 (job 31699863), HLLC: shock radius 0.978 of the
+Sedov-Taylor value at 1e4 yr, L1 density error 0.075 rho0 (first order:
+0.104); mass and energy conserved to 2e-16. Details:
+research_notes/hydro_stage1_2026-10-31.md.
 
 ## Limitations and open items
 
