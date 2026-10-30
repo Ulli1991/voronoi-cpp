@@ -406,14 +406,18 @@ struct Kernel {
             int packed = l < buffered ? c.candidate_image[l] : 0;
             __syncwarp(all_lanes);
             sort_candidates(key, slot, packed);
+            // Lane i loads candidate i at once; the loop broadcasts it.
+            Vec3<double> mine{0, 0, 0};
+            if (l < buffered)
+                mine = {positions(slot, 0) + image(packed, 0) * box - p.x,
+                        positions(slot, 1) + image(packed, 1) * box - p.y,
+                        positions(slot, 2) + image(packed, 2) * box - p.z};
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
                 const int q = __shfl_sync(all_lanes, slot, i);
-                const int im = __shfl_sync(all_lanes, packed, i);
-                const Vec3<double> d{positions(q, 0) + image(im, 0) * box - p.x,
-                                     positions(q, 1) + image(im, 1) * box - p.y,
-                                     positions(q, 2) + image(im, 2) * box - p.z};
+                const Vec3<double> d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
+                                     __shfl_sync(all_lanes, mine.z, i)};
                 const int before = planes;
                 status = clip(c, planes, live, radius2, convert<Real>(d), q);
                 ++clipped;
