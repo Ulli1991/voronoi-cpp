@@ -20,6 +20,7 @@ one job per header:
 | `shell_voronoi_warp.hpp` | full rebuild, warp per cell on CUDA: `construct_warp`, the default |
 | `exact_predicates.hpp` | exact orientation and in-sphere signs on snapped positions |
 | `tet_mesh.hpp` | persistent Delaunay tetrahedra: `from_rings`, `circumcentres`, `faces`, `check`, face rings |
+| `tet_start.hpp` | the exact starting tetrahedralization: exact check of `from_rings`, exact clipping of the cells around errors |
 | `tet_repair.hpp` | per-step repair by flips on the device |
 | `tet_flips.hpp` | host fallback of the repair, including local Bowyer-Watson rebuilds |
 
@@ -40,8 +41,23 @@ stencil of grid cells, are rebuilt by the thread kernel; cells that overflow
 that too get a big-capacity pass. On non-CUDA backends, and when face rings
 are requested, `construct_warp` is the thread kernel.
 
-**Persistent mesh.** After a rebuild with face rings, `tet_mesh::from_rings`
-builds the tetrahedra and their adjacency on the device. Each tetrahedron is a
+**Starting mesh.** After a rebuild with face rings, `tet_start::build`
+assembles the tetrahedra and their adjacency on the device
+(`tet_mesh::from_rings`: each tetrahedron emitted by the face of its two
+smallest particles), then checks them exactly: no flat tetrahedron, mutual
+adjacency, apexes on opposite sides of every shared triangle, local
+Delaunay under the perturbed in-sphere test, every particle used, volumes
+summing to the box. These together certify the unique Delaunay
+tetrahedralization of the snapped positions (ties broken by the symbolic
+perturbation). Where the check fails, the cells around the bad tetrahedra
+are rebuilt by exact clipping (vertices named by particle triples, every
+cut an exact in-sphere sign behind a filter) and the mesh is assembled and
+checked again; if many cells are bad (lattices) or a second check fails,
+every cell is rebuilt exactly. Rounding decides the clipping's near-ties,
+so its rings are wrong on lattices and other cospherical layouts and, at
+2.1M cells, at a few places on jittered and random input too.
+
+**Persistent mesh.** Each tetrahedron is a
 Voronoi vertex (its circumcentre), and a Voronoi face is the ring of
 circumcentres around a Delaunay edge; every edge has one representative
 tetrahedron (6 bits per tetrahedron). Per step:
@@ -75,6 +91,8 @@ variants only within one job; numbers below are best-node values.
 | Full rebuild, warp kernel, uniform random | ~10.4 |
 | Full rebuild, warp kernel, clustered | ~0.9 |
 | Tetrahedra from rings (once after a rebuild) | 40 |
+| Exact start (ring clipping + `tet_start::build`), jittered | 4.5 (ring clipping alone 6.2; the patch of 42 cells costs 70 ms, mostly a second `from_rings`) |
+| Exact start, perfect lattice (every cell clipped exactly) | 7.4 |
 
 A thread-per-cell kernel with the polyhedron in shared memory (the removed
 "lean" kernel) reached 10.4 on jittered input.
@@ -104,14 +122,26 @@ layout: `research_notes/cleanup_2026-10-30.md`.
 - Clustered input is 16-20x slower than jittered: a single cell-list size cannot
   fit clusters and voids (a multi-level cell list is planned).
 - Clipping alone is not watertight on uniform random input in double at 2.1M
-  cells (some face pairs inconsistent); the exact tet repair fixes it.
-- On near-degenerate input (e.g. a lattice jittered by 1e-5 spacings) the
-  clipping drops rounding-level faces, so its rings are no consistent
-  triangulation and `from_rings` cannot use them.
+  cells (some face pairs inconsistent), and its rings are wrong on lattices
+  and cospherical layouts; `tet_start::build` makes the starting mesh exact
+  for all inputs of `support.hpp` except below.
+- A cell can store at most 32 owned faces (`shell_voronoi::max_owned_faces`);
+  a cell with more (pairs 1e-6 spacings apart, one cell in 262k) cannot be
+  patched and `tet_start::Stats::exact` stays false.
+- Particles must sit on the 2^30 snapping grid of the exact predicates: the
+  topology is decided on snapped positions, the geometry computed from the
+  positions. Off the grid, near-degenerate cells differ from clipping by
+  ~1e-9 in volume and particles closer than ~1e3 grid steps can get wrong
+  geometry. The tests and benchmark keep positions on the grid.
+- The first step out of a degenerate start (lattice, wave, sc@1e-6, shells)
+  rearranges most tetrahedra; the device repair leaves 2e3 (lattice) to 1e6
+  (wave, sc@1e-6) triangles stuck at 2.1M cells and the host fallback takes
+  7-80 s. Exact, but a device rebuild (about 1 s) would be the faster guard.
+- Clustered input at 262k cells: after the first step one Delaunay edge has
+  no face (face count one below clipping), a 7e-8 volume error in one tiny
+  cell; edge-representative bookkeeping, open.
 - GPU repair breaks down near one spacing of motion per step; it needs
   substepping or a rebuild guard.
-- Near-degenerate simple-cubic lattice (sc@1e-6): the local rebuild fallback
-  often fails (hundreds to thousands of unrepaired triangles per step).
 - The float variants and degenerate layouts still fail some checks of
   `voronoi_bench rebuild`; the tests cover double precision.
 - Periodic box only. MFV/MFM hydro is not started.
@@ -134,7 +164,7 @@ a Kokkos installation with the desired backend. Build large configurations
 and run GPU jobs through Slurm, not on the login node;
 `scripts/bench_a100.sh` is an example job.
 
-Tests (`ctest --test-dir build-cuda --output-on-failure`, a few seconds on one
+Tests (`ctest --test-dir build-cuda --output-on-failure`, about 75 s on one
 CPU core), each a short specification in `src/test/`:
 
 | Test | Specifies |
@@ -142,7 +172,8 @@ CPU core), each a short specification in `src/test/`:
 | `exact_predicates` | signs equal an independent integer evaluation, near-degenerate and large inputs included; ties consistent; periodic offsets |
 | `clipping` | jittered, uniform, lattice, clustered: every cell certified, volumes fill the box, cells close, faces consistent and on the bisectors; thread and warp kernels and Morton order agree |
 | `mesh` | `from_rings` equals a host construction, adjacency and edge representatives consistent, volumes from stored and walked rings equal clipping, sliver circumcentres exact |
-| `repair` | ten steps of a smooth flow at 0.03 and 0.3 spacings: the repaired mesh equals an exact rebuild (neighbours, volumes) every step |
+| `start` | the starting mesh of random, clustered, lattice and degenerate inputs is a triangulation of the box with every circumsphere empty (brute-force host oracle, exact predicates), i.e. the Delaunay tetrahedralization |
+| `repair` | steps of a smooth flow at 0.03 and 0.3 spacings from jittered, lattice and wave starts (and shells at 0.03): the repaired mesh equals an exact rebuild (neighbours, volumes) every step |
 
 `voronoi_bench` (`src/bench/`) times the pipeline and helps debugging:
 
@@ -154,8 +185,8 @@ voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--de
 Distributions are uniform, jittered, lattice, wave, clustered, or
 `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`. `rebuild`
 times the thread-/warp- kernels in -double/-float (selected by substring)
-and checks every variant's cells. `step` times tetrahedra from rings and the
-per-step kernels, then steps the flow `displacement` spacings at a time;
+and checks every variant's cells. `step` times the exact start (clipping
+with rings, `from_rings`, `tet_start::build`) and the per-step kernels, then steps the flow `displacement` spacings at a time;
 `--verify` compares every step with an exact rebuild, `--debug` adds
 adjacency, stuck and worst-cell details.
 
