@@ -438,6 +438,38 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
 
 using Mesh = voronoi::Mesh<Exec>;
 
+// A host copy of the mesh's tetrahedra.
+inline tet_flips::Mesh host_tetrahedra(const Mesh& mesh) {
+    auto copy = [](const auto& v) {
+        auto h = Kokkos::create_mirror(Kokkos::HostSpace{}, v);  // a copy even on host backends
+        Kokkos::deep_copy(h, v);
+        return h;
+    };
+    const auto& tets = mesh.tetrahedra();
+    const auto& state = mesh.repair_state();
+    return {copy(tets.vertex), copy(tets.adjacent), copy(state.alive), copy(state.point), state.count};
+}
+
+// Inverted tetrahedra plus shared triangles that fail the local Delaunay
+// test (each failing triangle counted from both sides); brute force over
+// every tetrahedron, exact.
+inline long long failing(const tet_flips::Mesh& m) {
+    long long bad = 0;
+    for (int t = 0; t < m.count; ++t) {
+        if (!m.alive(t)) continue;
+        const auto v = tet_flips::detail::tet(m, t);
+        if (exact_predicates::orient(m.point, v.data()) <= 0) {
+            ++bad;
+            continue;
+        }
+        for (int k = 0; k < 4; ++k) {
+            const int u = m.adjacent(t, k);
+            bad += u >= 0 && tet_flips::detail::fails(m, t, u);
+        }
+    }
+    return bad;
+}
+
 // The mesh's face area vectors on the host, rows [0, faces()) (packed on
 // the device first: the face arrays hold more rows).
 inline Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(const Mesh& mesh) {
@@ -452,7 +484,7 @@ inline Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_ar
 
 // A mesh compared with an exact rebuild by clipping of the same positions
 // (support::clipped): failing triangles and inverted tetrahedra (brute force
-// over all tetrahedra, tet_flips::failing), cells with other Delaunay
+// over all tetrahedra, support::failing), cells with other Delaunay
 // neighbours, clipping faces the mesh lacks, mesh faces the clipping lacks
 // (and the largest of their areas, in spacings^2; clipping drops faces
 // below rounding level, the mesh keeps every Delaunay edge), the largest
@@ -470,8 +502,8 @@ inline Comparison compare_with_rebuild(const Mesh& mesh, const Positions& x) {
     const int n = mesh.particles();
     const double box = mesh.box(), spacing = box * std::cbrt(1.0 / n);
     Comparison c;
-    const tet_flips::Mesh tets = tet_flips::to_host<Exec>(mesh.tetrahedra(), mesh.repair_state());
-    c.failing = tet_flips::failing(tets);
+    const tet_flips::Mesh tets = host_tetrahedra(mesh);
+    c.failing = failing(tets);
     const Reference exact = clipped(x, box);
     const NeighbourSets neighbours = delaunay_neighbours(tets, n);
     for (int i = 0; i < n; ++i) {

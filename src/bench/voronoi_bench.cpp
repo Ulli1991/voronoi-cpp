@@ -293,7 +293,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
                   << " cells_ms=" << t.cells << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3 << "\n";
         if (debug) {
             report_stuck(mesh.repair_state());
-            report_adjacency(tet_flips::to_host<Exec>(mesh.tetrahedra(), mesh.repair_state()), "after step");
+            report_adjacency(host_tetrahedra(mesh), "after step");
         }
         if (!verify) continue;
         const Comparison c = compare_with_rebuild(mesh, x);

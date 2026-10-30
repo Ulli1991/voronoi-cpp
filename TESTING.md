@@ -40,7 +40,7 @@ Brute force exists only in tests and the benchmark, never in the library:
 - The start oracle (`start_test.cpp`): every circumsphere against every
   particle, O(tetrahedra x particles), exact in-sphere where a double
   prefilter is unsure; n ~ 4096.
-- `tet_flips::failing`: every shared triangle of the whole mesh, exact.
+- `support::failing`: every shared triangle of the whole mesh, exact.
 - `support::clipped` (the reference of `compare_with_rebuild`): an
   independent build of the same positions by clipping.
 
