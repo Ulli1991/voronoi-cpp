@@ -90,6 +90,19 @@ slower without a measured accuracy gain is dropped. The hydro tool prints them t
 `voronoi_bench` does (median of repeats, one line per phase), so before/after comparisons are
 interleaved within one job.
 
+## Local time steps and active cells (requirement for stages 3-4)
+
+With hierarchical time steps only the active cells are updated in a substep. AREPO's next
+generation (`Arepo2-nextgeneration-SoA`, `run.cc:145`, `voronoi.cc:34-52`, verified
+2026-10-30) rebuilds only cells up to `HighestSynchronizedTimeBin` with its per-cell clipper,
+which keeps its cost proportional to the active cells. Our repair is 26-120x faster than a
+per-cell rebuild per full step (2.1M cells, A100), but today its face, ring and geometry passes
+run over the whole mesh. On a deep hierarchy (5-10 % active) that would cut our lead to about
+10x. Requirement: the mesh update, faces, gradients and fluxes run over the active region
+(active cells, their faces and the tetrahedra touched by moved points) only, with cost
+proportional to it, and inactive cells keep their geometry until they are active again.
+Measure it in cell updates per second per substep against a full step.
+
 ## Validation for stage 1
 
 - Conservation: mass, momentum, energy to rounding every step (periodic box).
