@@ -270,8 +270,9 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
 }
 
 // New positions x: snaps them, computes the circumcentres (m.centre) of
-// the live tetrahedra, and lists those that may need repair, screened in
-// double precision with these circumcentres: those with a neighbour's far vertex inside or near the
+// the live tetrahedra (in the screening kernel, slivers exactly in a second
+// pass), and lists those that may need repair, screened in double precision
+// with these circumcentres: those with a neighbour's far vertex inside or near the
 // circumsphere, and the badly shaped ones (possibly flat or inverted). The
 // margin covers the snapping of positions to the exact grid; what it lists
 // is decided exactly by repair.
@@ -285,6 +286,8 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
     const auto vertex = m.vertex;
     const auto adjacent = m.adjacent;
     const auto centre = m.centre;
+    const auto counters = s.counters;
+    const auto slivers = s.freed;  // free until the repair starts
     const double snap = box / ep::scale * 1.7320508075688772;  // largest move by snapping
     Kokkos::parallel_for(
         "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
@@ -298,15 +301,24 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
             const Vec3<double> d[3] = {from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[1]),
                                        from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[2]),
                                        from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[3])};
-            const Vec3<double> c = tet_mesh::circumcentre(x, box, v, d);
+            const double volume6 = dot(d[0], cross(d[1], d[2]));
+            const double shape = Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2]));
+            // Well shaped and clearly positive, else decide exactly.
+            bool suspect = !(volume6 > 1e-3 * shape);
+            // Slivers: suspect anyway; their centres are computed exactly below
+            // (the same test as in tet_mesh::circumcentre).
+            if (!(Kokkos::abs(volume6) > 1e-4 * shape)) {
+                const int at = Kokkos::atomic_fetch_add(&counters(2), 1);
+                if (at < static_cast<int>(slivers.extent(0))) slivers(at) = t;
+                detail::mark(st, t);
+                return;
+            }
+            const Vec3<double> c = tet_mesh::detail::circumcentre(d[0], d[1], d[2]);
             const double cx = x(v[0], 0) + c.x, cy = x(v[0], 1) + c.y, cz = x(v[0], 2) + c.z, r2 = dot(c, c);
             centre(t, 0) = cx;
             centre(t, 1) = cy;
             centre(t, 2) = cz;
             centre(t, 3) = r2;
-            const double volume6 = dot(d[0], cross(d[1], d[2]));
-            // Well shaped and clearly positive, else decide exactly.
-            bool suspect = !(volume6 > 1e-3 * Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2])));
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);
@@ -318,6 +330,15 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
             }
             if (suspect) detail::mark(st, t);
         });
+    Kokkos::deep_copy(exec, s.host_counters, counters);
+    exec.fence();
+    const int sliver_count = s.host_counters(2);
+    if (sliver_count > static_cast<int>(slivers.extent(0)))
+        tet_mesh::circumcentres(exec, x, box, m, s.count);
+    else if (sliver_count > 0)
+        tet_mesh::circumcentres(exec, x, box, m, -1,
+                                Kokkos::View<const int*, typename ExecSpace::memory_space>(
+                                    Kokkos::subview(slivers, std::make_pair(0, sliver_count))));
 }
 
 // Flip until no dirty tetrahedron fails or no plan can proceed; what is left
