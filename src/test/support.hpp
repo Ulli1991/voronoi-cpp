@@ -336,12 +336,17 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
 
 // Clipping build of the particles of `list` (in slot order) that records
 // face rings, for tet_mesh::from_rings and tet_start::build.
-inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list) {
+inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list,
+                                                     long long entries = 0) {
     const int n = list.n;
-    shell_voronoi::Cells<Memory> cells(n, false);
-    cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
-    Kokkos::deep_copy(cells.rings, -1);
-    shell_voronoi::construct<double>(Exec{}, shell_voronoi::make_grid(list), cells);
+    const auto grid = shell_voronoi::make_grid(list);
+    auto cells = shell_voronoi::Cells<Memory>::with_rings(n, entries > 0 ? entries : 64LL * n);
+    shell_voronoi::construct<double>(Exec{}, grid, cells);
+    const long long needed = cells.ring_entries_needed();
+    if (needed > static_cast<long long>(cells.rings.extent(0))) {  // rare: build again with room for all
+        cells = shell_voronoi::Cells<Memory>::with_rings(n, needed);
+        shell_voronoi::construct<double>(Exec{}, grid, cells);
+    }
     return cells;
 }
 
@@ -351,8 +356,14 @@ inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x) { retur
 // rings, then tet_start::build.
 inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh) {
     const auto list = cell_list(x);
-    const auto cells = cells_with_rings(list);
-    return tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
+    auto cells = cells_with_rings(list);
+    auto stats = tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
+    const long long needed = cells.ring_entries_needed();
+    if (!stats.exact && needed > static_cast<long long>(cells.rings.extent(0))) {  // the patches did not fit
+        cells = cells_with_rings(list, needed);
+        stats = tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
+    }
+    return stats;
 }
 
 // The Voronoi cells of x by clipping, by particle: every particle's natural

@@ -19,18 +19,18 @@ using namespace support;
 // face i-j and ring slot m, as sorted particle quadruples.
 std::set<std::array<int, 4>> tets_from_rings(const shell_voronoi::Cells<Memory>& cells) {
     const auto owned = to_host(cells.owned_count);
-    const auto neighbour = to_host(cells.neighbour);
+    const auto start = to_host(cells.ring_start);
     const auto rings = to_host(cells.rings);
     std::set<std::array<int, 4>> tets;
     for (int i = 0; i < static_cast<int>(owned.extent(0)); ++i)
-        for (int f = 0, at = 0; f < owned(i); ++f) {
-            const int k = rings(i, at);
+        for (long long f = 0, at = start(i); f < owned(i); ++f) {
+            const int j = rings(at), k = rings(at + 1);
             for (int m = 0; m < k; ++m) {
-                std::array<int, 4> key{i, neighbour(i, f), rings(i, at + 1 + m), rings(i, at + 1 + (m + 1) % k)};
+                std::array<int, 4> key{i, j, rings(at + 2 + m), rings(at + 2 + (m + 1) % k)};
                 std::sort(key.begin(), key.end());
                 tets.insert(key);
             }
-            at += 1 + k;
+            at += 2 + k;
         }
     return tets;
 }
@@ -57,6 +57,16 @@ int main(int argc, char** argv) {
         const auto cells = cells_with_rings(x);
         const auto status = to_host(cells.status);
         check.expect(std::count(status.data(), status.data() + n, int(shell_voronoi::ok)) == n, "clipping build ok");
+        {  // a ring pool too small: cells that do not fit overflow, and the build reports the entries needed
+            auto small = shell_voronoi::Cells<Memory>::with_rings(n, 1000);
+            shell_voronoi::construct<double>(exec, shell_voronoi::make_grid(cell_list(x)), small);
+            const long long needed = small.ring_entries_needed(), entries = cells.ring_entries_needed();
+            const auto small_status = to_host(small.status);
+            const auto overflowed = std::count(small_status.data(), small_status.data() + n, int(shell_voronoi::face_overflow));
+            check.expect(needed == entries && overflowed > 0 && entries <= 64LL * n,
+                         "a small ring pool reports the entries needed (" + std::to_string(double(entries) / n) +
+                             " per cell)");
+        }
 
         tet_mesh::Mesh<Memory> mesh;
         check.expect(tet_mesh::from_rings(exec, cells, mesh) == 0, "from_rings resolves every ring slot and neighbour");
@@ -97,9 +107,11 @@ int main(int argc, char** argv) {
                     represented.push_back(std::minmax(vertex(t, a), vertex(t, b)));
                 }
         const auto owned = to_host(cells.owned_count);
-        const auto neighbour = to_host(cells.neighbour);
+        const auto start = to_host(cells.ring_start);
+        const auto rings = to_host(cells.rings);
         for (int i = 0; i < n; ++i)
-            for (int f = 0; f < owned(i); ++f) owned_faces.push_back({i, neighbour(i, f)});
+            for (long long f = 0, at = start(i); f < owned(i); ++f, at += 2 + rings(at + 1))
+                owned_faces.push_back({i, rings(at)});
         std::sort(represented.begin(), represented.end());
         std::sort(owned_faces.begin(), owned_faces.end());
         check.expect(represented == owned_faces, "one edge representative per face");

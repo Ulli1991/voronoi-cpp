@@ -135,7 +135,7 @@ void pad(const ExecSpace& exec, const X& x, const Points4<typename ExecSpace::me
 }
 
 // The tetrahedra and their adjacency from the face rings of a clipping build
-// (cells in slot order, every cell ok), without hashing: tetrahedron
+// (Cells::with_rings, cells in slot order, every cell ok), without hashing: tetrahedron
 // (i, j, q_m, q_m+1) is emitted only by the face of its two smallest
 // particles, and each triangle's two tetrahedra sit next to each other in
 // the ring of its two smallest particles' face. Returns the number of ring
@@ -160,14 +160,16 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
         faces);
     Kokkos::View<int*, Memory> owner("face_owner", faces), neighbour("face_neighbour", faces),
         length("face_length", faces);
+    const auto rings = cells.rings;
     Kokkos::parallel_for(
         "tet_mesh::face_lengths", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
-            for (int f = 0, at = 0; f < cells.owned_count(t); ++f) {
-                const int g = face_start(t) + f, k = cells.rings(t, at);
+            long long at = cells.ring_start(t);
+            for (int f = 0; f < cells.owned_count(t); ++f) {
+                const int g = face_start(t) + f, k = rings(at + 1);
                 owner(g) = t;
-                neighbour(g) = cells.neighbour(t, f);
+                neighbour(g) = rings(at);
                 length(g) = k;
-                at += 1 + k;
+                at += 2 + k;
             }
         });
     auto face_of = KOKKOS_LAMBDA(int a, int b) {  // a < b
@@ -186,15 +188,16 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
             if (last && g == faces - 1) ring_start(faces) = sum;
         },
         slots);
-    // The rings' particles, contiguous per face (the cells' rows are strided).
+    // The rings' particles, contiguous per face in face order.
     Kokkos::View<int*, Memory> particles(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_particles")),
                                          slots);
     Kokkos::parallel_for(
         "tet_mesh::face_particles", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
-            for (int f = 0, at = 0; f < cells.owned_count(t); ++f) {
+            long long at = cells.ring_start(t);
+            for (int f = 0; f < cells.owned_count(t); ++f) {
                 const int g = face_start(t) + f, k = length(g);
-                for (int m = 0; m < k; ++m) particles(ring_start(g) + m) = cells.rings(t, at + 1 + m);
-                at += 1 + k;
+                for (int m = 0; m < k; ++m) particles(ring_start(g) + m) = rings(at + 2 + m);
+                at += 2 + k;
             }
         });
     auto ring_of = KOKKOS_LAMBDA(int g, int m) { return particles(ring_start(g) + m % length(g)); };

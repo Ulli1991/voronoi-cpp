@@ -245,8 +245,6 @@ void exact_cells(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecS
     const auto positions = grid.positions;
     const auto half = static_cast<ep::i64>(shell_voronoi::detail::start_half_width<double>(box) / unit);
     constexpr ep::i64 period = ep::i64(1) << 30;
-    const int ring_capacity = static_cast<int>(out.rings.extent(1));
-    const int owned_capacity = out.owned_capacity();
     const shell_voronoi::Stencil<typename ExecSpace::memory_space> stencil = shell_voronoi::make_stencil(exec);
     Kokkos::parallel_for(
         "tet_start::exact_cells", Kokkos::RangePolicy<ExecSpace>(exec, 0, count), KOKKOS_LAMBDA(int i) {
@@ -326,6 +324,18 @@ void exact_cells(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecS
                 for (int k = 0; k < 3; ++k)
                     if (cell.corner[v][k] < box_planes) status = uncertified;
 
+            // Rings: a new block in the pool, at most a neighbour, a length
+            // and one entry per vertex for each owned face.
+            long long ring_at = 0;
+            if (status == ok) {
+                int need = 0;
+                for (int plane = box_planes; plane < cell.planes; ++plane) need += 2 * (cell.id[plane] > t);
+                for (int v = 0; v < cell.vertices; ++v)
+                    for (int k = 0; k < 3; ++k) need += cell.id[cell.corner[v][k]] > t;
+                if (!claim_rings(out, t, need)) status = face_overflow;
+                ring_at = out.ring_start(t);
+            }
+
             // Faces: every plane with a vertex left, its ring walked in order.
             int faces = 0, owned = 0, used = 0;
             for (int plane = box_planes; plane < cell.planes && status == ok; ++plane) {
@@ -337,16 +347,12 @@ void exact_cells(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecS
                 ++faces;
                 const int neighbour = cell.id[plane];
                 const bool own = neighbour > t;
-                if (own && (owned == owned_capacity || used >= ring_capacity)) {
-                    status = face_overflow;
-                    break;
-                }
                 int current = start, length = 0;
                 do {
                     int at = 0;
                     while (cell.corner[current][at] != plane) ++at;
                     const std::uint8_t last = cell.corner[current][(at + 2) % 3];
-                    if (own && used + 1 + length < ring_capacity) out.rings(t, used + 1 + length) = cell.id[last];
+                    if (own) out.rings(ring_at + used + 2 + length) = cell.id[last];
                     ++length;
                     int next = -1;
                     for (int w = 0; w < cell.vertices && next < 0; ++w)
@@ -359,13 +365,10 @@ void exact_cells(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecS
                     current = next;
                 } while (current != start);
                 if (status != ok || !own) continue;
-                if (used + 1 + length > ring_capacity) {
-                    status = face_overflow;
-                    break;
-                }
-                out.rings(t, used) = length;
-                used += 1 + length;
-                out.neighbour(t, owned++) = neighbour;
+                out.rings(ring_at + used) = neighbour;
+                out.rings(ring_at + used + 1) = length;
+                used += 2 + length;
+                ++owned;
             }
             out.status(t) = status;
             out.face_count(t) = status == ok ? faces : 0;
@@ -486,7 +489,9 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
 // check, and where it fails, rebuild the cells of the bad tetrahedra and
 // their neighbours by exact clipping, then assemble and check again. When
 // many cells are bad, or the second try still fails, every cell is rebuilt.
-// Overwrites the rings of rebuilt cells in `cells`.
+// Rebuilt cells claim new blocks in the ring pool of `cells`
+// (Cells::with_rings); a cell that does not fit is face_overflow, and the
+// result is not exact: build again with a pool of ring_entries_needed().
 template <class ExecSpace>
 Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
             const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
@@ -531,6 +536,7 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
             Kokkos::parallel_for(
                 "tet_start::all", Range(exec, 0, n), KOKKOS_LAMBDA(int i) { todo(i) = i; });
             listed = n;
+            Kokkos::deep_copy(exec, cells.ring_used, 0u);  // every block is written again
         }
         detail::exact_cells<detail::max_planes, detail::max_vertices>(exec, grid, point, todo, listed, cells);
         // Cells that overflowed the usual capacities, once more with big ones.
