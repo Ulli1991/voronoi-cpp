@@ -11,8 +11,8 @@
 //      ties perturbed) among the tetrahedra marked dirty,
 //   2. plans a 2->3 flip (convex pair) or a 3->2 flip (an edge of the
 //      triangle with three tetrahedra around it) for each,
-//   3. lets every plan vote, with its index, on the tetrahedra it would
-//      rewrite and their outer neighbours (largest index wins), and
+//   3. lets every plan vote, with a hash of its index, on the tetrahedra it
+//      would rewrite and their outer neighbours (largest vote wins), and
 //   4. applies the plans that won all their votes; their new tetrahedra
 //      are dirty for the next round, losing plans retry.
 // Triangles no flip repairs, flips that would not close their cavity, and
@@ -52,8 +52,9 @@ struct State {
     Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
-    // Votes: round in the high 32 bits, plan index + 1 below, so a vote of
-    // an earlier round always loses and locks never need resetting.
+    // Votes: round in the high 32 bits, a bijective hash of the plan index
+    // below (detail::priority), so a vote of an earlier round always loses
+    // and locks never need resetting.
     Kokkos::View<unsigned long long*, MemorySpace> lock;
     Kokkos::View<int*, MemorySpace> free_slots;  // popped from the top
     Kokkos::View<int* [2], MemorySpace> work;   // failing triangles of a round
@@ -255,6 +256,18 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
     }
     p.kind = Plan::unflippable;
     return p;
+}
+
+// The vote of plan i: a bijective hash of i, so that the winners of
+// overlapping plans do not follow the order of the work list (listed in
+// space order on one thread, where the largest index winning everywhere
+// let a lattice's first step make almost no progress per round).
+KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
+    unsigned x = static_cast<unsigned>(i) * 0x9e3779b1u;  // odd multiplier: a bijection
+    x ^= x >> 16;
+    x *= 0x85ebca6bu;
+    x ^= x >> 13;
+    return x;
 }
 
 // List t as dirty unless it already is.
@@ -530,6 +543,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         grow(0, host(counter::stuck) + items);  // at most one stuck entry per plan
         Kokkos::parallel_for(
             "tet_repair::plan", Range(exec, 0, items), KOKKOS_LAMBDA(int i) {
+                const unsigned long long vote = token | detail::priority(i);
                 const int t = work(i, 0), k = work(i, 1);
                 detail::Plan p;
                 const int u = adjacent(t, k);
@@ -553,9 +567,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 if (p.kind <= 0) return;
                 for (int r = 0; r < p.olds; ++r) {
                     const int o = p.old[r];
-                    Kokkos::atomic_max(&lock(o), token + i + 1);
+                    Kokkos::atomic_max(&lock(o), vote);
                     for (int j = 0; j < 4; ++j)
-                        if (adjacent(o, j) >= 0) Kokkos::atomic_max(&lock(adjacent(o, j)), token + i + 1);
+                        if (adjacent(o, j) >= 0) Kokkos::atomic_max(&lock(adjacent(o, j)), vote);
                 }
             });
 
@@ -563,14 +577,15 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const int count = s.count;
         Kokkos::parallel_for(
             "tet_repair::apply", Range(exec, 0, items), KOKKOS_LAMBDA(int i) {
+                const unsigned long long vote = token | detail::priority(i);
                 const detail::Plan p = detail::unpack(plans(i));
                 if (p.kind <= 0) return;
                 bool won = true;
                 for (int r = 0; r < p.olds && won; ++r) {
                     const int o = p.old[r];
-                    won = lock(o) == token + i + 1;
+                    won = lock(o) == vote;
                     for (int j = 0; j < 4 && won; ++j)
-                        if (adjacent(o, j) >= 0) won = lock(adjacent(o, j)) == token + i + 1;
+                        if (adjacent(o, j) >= 0) won = lock(adjacent(o, j)) == vote;
                 }
                 // Slots: reuse the old ones, then pop free slots or grow. A
                 // flip that finds no room retries next round, after the
