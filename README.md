@@ -162,6 +162,22 @@ Throughput in million cells per second (cells processed per second of GPU time).
 | `update_cells()` alone (face lists, ordered volumes and centroids) | 326 | 311 |
 | Moving-mesh update + `update_cells()`, 0.03 spacings (bit-reproducible) | **124** | |
 
+Inputs (all in the periodic unit box, `src/test/support.hpp`):
+
+| Name | Points | Tests |
+|---|---|---|
+| jittered | cubic lattice, each point moved randomly by up to ±0.1 lattice spacing per axis | the typical hydro start; nearly regular, ~16 faces per cell |
+| uniform random | independent uniform points | unstructured cells of very different size and shape |
+| clustered | 8 Gaussian blobs (σ = 0.04) with 80 % of the points, 20 % uniform background | density contrast ~1:500 (blob centre to void) |
+| halo | 4 halos with ρ ∝ 1/(r² + c²) to r = 0.2, c = 0.002, 90 % of the points, 10 % background | density contrast ~1:10^4 (core to edge) |
+| lattice | perfect cubic lattice | fully degenerate: 8 points on every circumsphere |
+| wave (moved lattice) | the lattice with every point moved by up to 1e-5 spacing | nearly degenerate: ties broken only by tiny offsets |
+
+Moving-mesh update rates are per step of a smooth flow that moves the
+points by the given number of mean interparticle spacings per step
+(spacing = (box volume / n)^(1/3)): 0.03 spacings is a typical hydro
+step, 0.3 a very large one (more flips per step, lower throughput).
+
 Device memory: plain warp rebuild 701 B/cell (656 at 256^3); peak during
 start and steps, with face lists, 2221 B/cell (2200 at 256^3, 37.9 GB in use).
 
