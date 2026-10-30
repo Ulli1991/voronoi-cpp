@@ -28,8 +28,8 @@ constexpr int lanes = 32;
 constexpr int max_planes = 64;
 constexpr int max_vertices = 64;
 constexpr int per_lane = max_vertices / lanes;  // vertices (and planes) each lane owns
-// Four cells (warps) per block: their polyhedra fill about half of the 48 KB
-// block scratch.
+// Four cells (warps) per block: their polyhedra (4.4 KB each in double) take
+// 18 KB of block scratch.
 constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
 constexpr int min_blocks_per_sm = 5;
@@ -37,39 +37,28 @@ constexpr std::uint8_t none = 255;
 
 // One warp's polyhedron. Corners and adjacency hold three 8-bit indices each:
 // corner k is a plane, adjacency k is the vertex across the edge from corner
-// k to corner k + 1.
+// k to corner k + 1. Vertices stay in their slots: a cut puts its new
+// vertices into free slots and rewires only the edges it crosses. A 64-bit
+// mask (in registers) marks the slots in use.
 template <class Real>
 struct alignas(16) Polyhedron {
-    Real nx[max_planes], ny[max_planes], nz[max_planes], offset[max_planes];
+    // Plane normals only weight the face centroids: a rounded normal scales
+    // every triangle of a face alike, so float is enough.
+    float nx[max_planes], ny[max_planes], nz[max_planes];
     int neighbour[max_planes];
-    // Vertices in two copies: a cut reads one and writes the next, so new and
-    // kept vertices go straight to their final slots, without staging.
-    Real x[2][max_vertices], y[2][max_vertices], z[2][max_vertices];
-    Real side[max_vertices];                 // signed distance to the cutting plane
-    std::uint32_t corner[2][max_vertices];
-    std::uint32_t adjacent[2][max_vertices];
-    std::uint32_t replacement[max_vertices];  // new vertex on each cut edge
-    std::uint8_t starts[max_planes];          // new vertex whose hole edge starts at a plane
-    std::uint8_t ends[max_planes];            // ... and ends at a plane
-    std::uint8_t first[max_planes];           // a vertex on each face, for the face walk
+    Real x[max_vertices], y[max_vertices], z[max_vertices];
+    Real side[max_vertices];  // signed distance to the cutting plane
+    std::uint32_t corner[max_vertices];
+    std::uint32_t adjacent[max_vertices];
+    std::uint8_t free_slots[max_vertices];  // stack of the slots not in use
+    std::uint32_t crossing[max_vertices];   // edges a cut crosses: removed, kept vertex, planes a, b
+    std::uint8_t starts[max_planes];        // new vertex whose hole edge starts at a plane
+    std::uint8_t ends[max_planes];          // ... and ends at a plane
+    std::uint8_t first[max_planes];         // a vertex on each face, for the face walk
     float candidate_distance2[lanes];
     int candidate_slot[lanes];
     int candidate_image[lanes];
 };
-
-// One copy of the vertices.
-template <class Real>
-struct Vertices {
-    Real* x;
-    Real* y;
-    Real* z;
-    std::uint32_t* corner;
-    std::uint32_t* adjacent;
-};
-template <class Real>
-KOKKOS_INLINE_FUNCTION Vertices<Real> copy_of(Polyhedron<Real>& c, int b) {
-    return {c.x[b], c.y[b], c.z[b], c.corner[b], c.adjacent[b]};
-}
 
 KOKKOS_INLINE_FUNCTION int byte(std::uint32_t packed, int k) { return (packed >> (8 * k)) & 255; }
 KOKKOS_INLINE_FUNCTION std::uint32_t pack(int a, int b, int c) {
@@ -97,6 +86,19 @@ __device__ T warp_max(T v) {
     return v;
 }
 
+// Largest of the lanes' non-negative values. Their bit patterns order like
+// unsigned integers, so 32-bit warp reductions find it exactly.
+__device__ inline float warp_max_nonnegative(float v) {
+    return __uint_as_float(__reduce_max_sync(all_lanes, __float_as_uint(v)));
+}
+__device__ inline double warp_max_nonnegative(double v) {
+    const auto bits = static_cast<unsigned long long>(__double_as_longlong(v));
+    const auto high_word = static_cast<unsigned>(bits >> 32), low_word = static_cast<unsigned>(bits);
+    const unsigned high = __reduce_max_sync(all_lanes, high_word);
+    const unsigned low = __reduce_max_sync(all_lanes, high_word == high ? low_word : 0u);
+    return __longlong_as_double(static_cast<long long>(static_cast<unsigned long long>(high) << 32 | low));
+}
+
 template <class T>
 __device__ T warp_sum(T v) {
     for (int o = lanes / 2; o > 0; o >>= 1) v += __shfl_xor_sync(all_lanes, v, o);
@@ -114,67 +116,74 @@ __device__ inline int exclusive_scan(int v, int& total) {
     return inclusive - v;
 }
 
-// Index a kept vertex has after the removed ones are squeezed out.
-__device__ inline int kept_index(int v, std::uint64_t removed) {
-    return v - __popcll(removed & ((std::uint64_t(1) << v) - 1));
+// Stores byte k of a packed word in shared memory; other lanes may store its
+// other bytes at the same time.
+__device__ inline void store_byte(std::uint32_t& packed, int k, int value) {
+    reinterpret_cast<std::uint8_t*>(&packed)[k] = static_cast<std::uint8_t>(value);
 }
 
 template <class Real>
-__device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, int& vertices) {
+__device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, std::uint64_t& live) {
     const int l = lane();
-    const Vertices<Real> v = copy_of(c, 0);
     if (l < box_planes) {
         const int axis = l / 2;
-        const Real sign = l % 2 == 0 ? Real(1) : Real(-1);
-        c.nx[l] = axis == 0 ? sign : Real(0);
-        c.ny[l] = axis == 1 ? sign : Real(0);
-        c.nz[l] = axis == 2 ? sign : Real(0);
-        c.offset[l] = h;
+        const float sign = l % 2 == 0 ? 1.0f : -1.0f;
+        c.nx[l] = axis == 0 ? sign : 0.0f;
+        c.ny[l] = axis == 1 ? sign : 0.0f;
+        c.nz[l] = axis == 2 ? sign : 0.0f;
         c.neighbour[l] = -1;
+    }
+    for (int k = 0; k < per_lane; ++k) {
+        const int slot = l + k * lanes;
+        if (slot < max_vertices - 8) c.free_slots[slot] = max_vertices - 1 - slot;
     }
     if (l < 8) {
         const int sx = l & 1, sy = (l >> 1) & 1, sz = (l >> 2) & 1;
         const bool odd = (sx + sy + sz) % 2 == 1;
         const int px = sx, py = 2 + sy, pz = 4 + sz;
-        v.corner[l] = odd ? pack(px, pz, py) : pack(px, py, pz);
-        v.x[l] = sx ? -h : h;
-        v.y[l] = sy ? -h : h;
-        v.z[l] = sz ? -h : h;
+        c.corner[l] = odd ? pack(px, pz, py) : pack(px, py, pz);
+        c.x[l] = sx ? -h : h;
+        c.y[l] = sy ? -h : h;
+        c.z[l] = sz ? -h : h;
     }
     __syncwarp(all_lanes);
     if (l < 8) {
         // Across edge (a, b) lies the corner that has the edge (b, a).
         std::uint32_t adjacent = 0;
         for (int e = 0; e < 3; ++e) {
-            const int a = byte(v.corner[l], e), b = byte(v.corner[l], (e + 1) % 3);
+            const int a = byte(c.corner[l], e), b = byte(c.corner[l], (e + 1) % 3);
             for (int w = 0; w < 8; ++w)
                 for (int k = 0; k < 3; ++k)
-                    if (byte(v.corner[w], k) == b && byte(v.corner[w], (k + 1) % 3) == a)
+                    if (byte(c.corner[w], k) == b && byte(c.corner[w], (k + 1) % 3) == a)
                         adjacent = with_byte(adjacent, e, w);
         }
-        v.adjacent[l] = adjacent;
+        c.adjacent[l] = adjacent;
     }
     __syncwarp(all_lanes);
     planes = box_planes;
-    vertices = 8;
+    live = 0xff;
 }
 
 // Clip by the bisector with a particle at offset d (all lanes pass the same
 // d). Returns ok when the plane does not cut or after the cut is applied.
 template <class Real>
-__device__ int clip(Polyhedron<Real>& c, Vertices<Real> v, Vertices<Real> next, int& planes, int& vertices,
-                    Real& radius2, Vec3<Real> d, int neighbour) {
+__device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real& radius2, Vec3<Real> d,
+                    int neighbour) {
     const int l = lane();
     const Real offset = Real(0.5) * dot(d, d);
-    const Real tolerance =
-        Real(64) * Kokkos::Experimental::epsilon_v<Real> * Kokkos::sqrt(dot(d, d) * radius2);
+    // A vertex is cut off when side > 64 eps |d| R, compared in squares.
+    const Real scale = Real(64) * Kokkos::Experimental::epsilon_v<Real>;
+    const Real tolerance2 = scale * scale * dot(d, d) * radius2;
     bool out[per_lane] = {};
+    Real radius = 0;  // largest squared distance of a kept vertex, then of any
     for (int k = 0; k < per_lane; ++k) {
         const int w = l + k * lanes;
-        if (w >= vertices) continue;
-        const Real s = d.x * v.x[w] + d.y * v.y[w] + d.z * v.z[w] - offset;
-        c.side[w] = s;
-        out[k] = s > tolerance;
+        if (!(live >> w & 1)) continue;
+        const Real x = c.x[w], y = c.y[w], z = c.z[w];
+        const Real side = d.x * x + d.y * y + d.z * z - offset;
+        c.side[w] = side;
+        out[k] = side > 0 && side * side > tolerance2;
+        if (!out[k]) radius = Kokkos::max(radius, x * x + y * y + z * z);
     }
     const std::uint64_t removed = vertex_ballot(out);
     if (removed == 0) return ok;
@@ -182,95 +191,86 @@ __device__ int clip(Polyhedron<Real>& c, Vertices<Real> v, Vertices<Real> next, 
     __syncwarp(all_lanes);
 
     // Each edge from a removed vertex to a kept one crosses the plane and
-    // becomes a new vertex. Count them per lane, then number them.
-    int crossings = 0;
-    for (int k = 0; k < per_lane; ++k) {
-        const int w = l + k * lanes;
-        if (!out[k]) continue;
-        for (int e = 0; e < 3; ++e)
-            if (!(removed >> byte(v.adjacent[w], e) & 1)) ++crossings;
-    }
+    // becomes a new vertex. One ballot per edge numbers them; lane j builds
+    // new vertices j and j + 32.
+    const unsigned below = (1u << l) - 1;
     int created = 0;
-    const int first_new = exclusive_scan(crossings, created);
-    const int kept = vertices - __popcll(removed);
-    if (kept + created > max_vertices) return vertex_overflow;
+    for (int k = 0; k < per_lane; ++k) {
+        if (!(removed >> (k * lanes))) continue;  // the whole warp: no removed vertex here
+        const int w = l + k * lanes;
+        std::uint32_t corner = 0, adjacent = 0;
+        if (out[k]) {
+            corner = c.corner[w];
+            adjacent = c.adjacent[w];
+        }
+        for (int e = 0; e < 3; ++e) {
+            const int u = byte(adjacent, e);
+            const bool crossing = out[k] && !(removed >> u & 1);
+            const unsigned crossings = __ballot_sync(all_lanes, crossing);
+            const int number = created + __popc(crossings & below);
+            if (crossing && number < max_vertices)
+                c.crossing[number] = pack(w, u, byte(corner, e)) | std::uint32_t(byte(corner, (e + 1) % 3)) << 24;
+            created += __popc(crossings);
+        }
+    }
+    const int in_use = __popcll(live);
+    const int kept = in_use - __popcll(removed);
+    // New vertices take slots that were free before the cut.
+    if (in_use + created > max_vertices) return vertex_overflow;
     if (kept + created < 4) return degenerate;
     const int plane = planes;
+    const int free = max_vertices - in_use;
+    __syncwarp(all_lanes);
 
-    // New vertices, straight into the next copy: positions, planes, and
-    // the tables that link them.
-    Real radius = 0;
-    int made = 0;
+    // New vertex j lies on the edge from removed w to kept u, between planes
+    // a and b. It takes a free slot; u's edge back now ends at it.
+    int slot[per_lane], kept_end[per_lane], a[per_lane], b[per_lane];
+    std::uint64_t made = 0;  // slots this lane filled
+    for (int k = 0; k < per_lane; ++k) {
+        const int j = l + k * lanes;
+        if (j >= created) continue;
+        const std::uint32_t edge = c.crossing[j];
+        const int w = byte(edge, 0), u = byte(edge, 1);
+        const int s = c.free_slots[free - 1 - j];
+        const Real t = c.side[w] / (c.side[w] - c.side[u]);
+        const Real px = c.x[w] + (c.x[u] - c.x[w]) * t, py = c.y[w] + (c.y[u] - c.y[w]) * t,
+                   pz = c.z[w] + (c.z[u] - c.z[w]) * t;
+        c.x[s] = px;
+        c.y[s] = py;
+        c.z[s] = pz;
+        radius = Kokkos::max(radius, px * px + py * py + pz * pz);
+        a[k] = byte(edge, 2);
+        b[k] = byte(edge, 3);
+        c.corner[s] = pack(a[k], b[k], plane);
+        const std::uint32_t back = c.adjacent[u];
+        store_byte(c.adjacent[u], byte(back, 0) == w ? 0 : byte(back, 1) == w ? 1 : 2, s);
+        c.starts[a[k]] = s;
+        c.ends[b[k]] = s;
+        slot[k] = s;
+        kept_end[k] = u;
+        made |= std::uint64_t(1) << s;
+    }
+    const unsigned made_low = __reduce_or_sync(all_lanes, static_cast<unsigned>(made));
+    const unsigned made_high = __reduce_or_sync(all_lanes, static_cast<unsigned>(made >> 32));
+    __syncwarp(all_lanes);
+    // Across (a, b) is u, across (b, plane) the new vertex whose hole edge
+    // starts at b, across (plane, a) the one whose hole edge ends at a.
+    for (int k = 0; k < per_lane; ++k)
+        if (l + k * lanes < created) c.adjacent[slot[k]] = pack(kept_end[k], c.starts[b[k]], c.ends[a[k]]);
+    // Removed slots go back on the stack.
     for (int k = 0; k < per_lane; ++k) {
         const int w = l + k * lanes;
-        if (!out[k]) continue;
-        std::uint32_t replacement = 0;
-        for (int e = 0; e < 3; ++e) {
-            const int u = byte(v.adjacent[w], e);
-            if (removed >> u & 1) continue;
-            const int index = kept + first_new + made;
-            const Real t = c.side[w] / (c.side[w] - c.side[u]);
-            const Real px = v.x[w] + (v.x[u] - v.x[w]) * t, py = v.y[w] + (v.y[u] - v.y[w]) * t,
-                       pz = v.z[w] + (v.z[u] - v.z[w]) * t;
-            next.x[index] = px;
-            next.y[index] = py;
-            next.z[index] = pz;
-            radius = Kokkos::max(radius, px * px + py * py + pz * pz);
-            const int a = byte(v.corner[w], e), b = byte(v.corner[w], (e + 1) % 3);
-            next.corner[index] = pack(a, b, plane);
-            next.adjacent[index] = kept_index(u, removed);  // across (a, b)
-            c.starts[a] = index;
-            c.ends[b] = index;
-            replacement = with_byte(replacement, e, index);
-            ++made;
-        }
-        c.replacement[w] = replacement;
+        if (out[k]) c.free_slots[free - created + __popcll(removed & ((std::uint64_t(1) << w) - 1))] = w;
     }
-    __syncwarp(all_lanes);
-    // Across (b, plane) is the new vertex whose hole edge starts at b, across
-    // (plane, a) the one whose hole edge ends at a.
-    for (int m = 0; m < made; ++m) {
-        const int index = kept + first_new + m;
-        const int a = byte(next.corner[index], 0), b = byte(next.corner[index], 1);
-        next.adjacent[index] |= std::uint32_t(c.starts[b]) << 8 | std::uint32_t(c.ends[a]) << 16;
-    }
-    // Kept vertices, renumbered (a removed neighbour is replaced by the new
-    // vertex on that edge), into the next copy.
-    for (int k = 0; k < per_lane; ++k) {
-        const int u = l + k * lanes;
-        if (u >= vertices || out[k]) continue;
-        const int i = kept_index(u, removed);
-        next.x[i] = v.x[u];
-        next.y[i] = v.y[u];
-        next.z[i] = v.z[u];
-        next.corner[i] = v.corner[u];
-        radius = Kokkos::max(radius, v.x[u] * v.x[u] + v.y[u] * v.y[u] + v.z[u] * v.z[u]);
-        std::uint32_t adjacent = 0;
-        for (int e = 0; e < 3; ++e) {
-            const int w = byte(v.adjacent[u], e);
-            int index;
-            if (removed >> w & 1) {
-                int back = 0;
-                while (back < 2 && byte(v.adjacent[w], back) != u) ++back;
-                index = byte(c.replacement[w], back);
-            } else {
-                index = kept_index(w, removed);
-            }
-            adjacent = with_byte(adjacent, e, index);
-        }
-        next.adjacent[i] = adjacent;
-    }
+    live = (live & ~removed) | made_low | std::uint64_t(made_high) << 32;
     if (l == 0) {
-        c.nx[plane] = d.x;
-        c.ny[plane] = d.y;
-        c.nz[plane] = d.z;
-        c.offset[plane] = offset;
+        c.nx[plane] = static_cast<float>(d.x);
+        c.ny[plane] = static_cast<float>(d.y);
+        c.nz[plane] = static_cast<float>(d.z);
         c.neighbour[plane] = neighbour;
     }
     planes = plane + 1;
-    vertices = kept + created;
-    radius2 = warp_max(radius);
-    __syncwarp(all_lanes);
+    radius2 = warp_max_nonnegative(radius);
     return ok;
 }
 
@@ -337,10 +337,10 @@ struct Kernel {
         const double box = grid.box;
         const Vec3<double> p{positions(t, 0), positions(t, 1), positions(t, 2)};
 
-        int planes = 0, vertices = 0;
+        int planes = 0;
+        std::uint64_t live = 0;  // slots holding vertices
         Real radius2 = 3 * half_width * half_width;
-        start_cube(c, half_width, planes, vertices);
-        int current = 0;  // which copy of the vertices is the polyhedron
+        start_cube(c, half_width, planes, live);
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
 
@@ -352,18 +352,20 @@ struct Kernel {
             int packed = l < buffered ? c.candidate_image[l] : 0;
             __syncwarp(all_lanes);
             sort_candidates(key, slot, packed);
+            // Lane i loads candidate i at once; the loop broadcasts it.
+            Vec3<double> mine{0, 0, 0};
+            if (l < buffered)
+                mine = {positions(slot, 0) + image(packed, 0) * box - p.x,
+                        positions(slot, 1) + image(packed, 1) * box - p.y,
+                        positions(slot, 2) + image(packed, 2) * box - p.z};
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
                 const int q = __shfl_sync(all_lanes, slot, i);
-                const int im = __shfl_sync(all_lanes, packed, i);
-                const Vec3<double> d{positions(q, 0) + image(im, 0) * box - p.x,
-                                     positions(q, 1) + image(im, 1) * box - p.y,
-                                     positions(q, 2) + image(im, 2) * box - p.z};
+                const Vec3<double> d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
+                                     __shfl_sync(all_lanes, mine.z, i)};
                 const int before = planes;
-                status = clip(c, copy_of(c, current), copy_of(c, 1 - current), planes, vertices, radius2,
-                              convert<Real>(d), q);
-                if (planes > before) current = 1 - current;
+                status = clip(c, planes, live, radius2, convert<Real>(d), q);
                 ++clipped;
                 cuts += planes > before;
             }
@@ -430,14 +432,13 @@ struct Kernel {
         }
         if (status == ok && !certified) status = uncertified;
 
-        const Vertices<Real> cv = copy_of(c, current);
         // Certification: no vertex may still touch the starting cube.
         if (status == ok) {
             bool touches = false;
             for (int k = 0; k < per_lane; ++k) {
                 const int v = l + k * lanes;
-                if (v < vertices)
-                    for (int e = 0; e < 3; ++e) touches |= byte(cv.corner[v], e) < box_planes;
+                if (live >> v & 1)
+                    for (int e = 0; e < 3; ++e) touches |= byte(c.corner[v], e) < box_planes;
             }
             if (__any_sync(all_lanes, touches)) status = uncertified;
         }
@@ -448,8 +449,8 @@ struct Kernel {
         __syncwarp(all_lanes);
         for (int k = 0; k < per_lane; ++k) {
             const int v = l + k * lanes;
-            if (v < vertices)
-                for (int e = 0; e < 3; ++e) c.first[byte(cv.corner[v], e)] = v;
+            if (live >> v & 1)
+                for (int e = 0; e < 3; ++e) c.first[byte(c.corner[v], e)] = v;
         }
         __syncwarp(all_lanes);
 
@@ -468,19 +469,19 @@ struct Kernel {
             if (plane < box_planes || plane >= planes || c.first[plane] == none) continue;
             const int start = c.first[plane];
             const Vec3<double> normal{double(c.nx[plane]), double(c.ny[plane]), double(c.nz[plane])};
-            const Vec3<double> first{double(cv.x[start]), double(cv.y[start]), double(cv.z[start])};
+            const Vec3<double> first{double(c.x[start]), double(c.y[start]), double(c.z[start])};
             Vec3<double> previous = first, area{0, 0, 0}, face_moment{0, 0, 0};
             double weight = 0;
             int vertex = start, steps = 0;
             do {
                 int at = 0;
-                while (at < 3 && byte(cv.corner[vertex], at) != plane) ++at;
+                while (at < 3 && byte(c.corner[vertex], at) != plane) ++at;
                 if (at == 3 || ++steps > max_vertices) {
                     broken = true;
                     break;
                 }
-                const int next = byte(cv.adjacent[vertex], (at + 2) % 3);
-                const Vec3<double> x{double(cv.x[next]), double(cv.y[next]), double(cv.z[next])};
+                const int next = byte(c.adjacent[vertex], (at + 2) % 3);
+                const Vec3<double> x{double(c.x[next]), double(c.y[next]), double(c.z[next])};
                 const Vec3<double> twice = cross(previous - first, x - first);
                 area = area + twice * 0.5;
                 const double w = dot(twice, normal);
