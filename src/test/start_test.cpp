@@ -35,7 +35,7 @@ Verdict oracle(const Positions& x, const tet_mesh::Mesh<Memory>& mesh) {
     const int n = static_cast<int>(hx.extent(0)), count = static_cast<int>(vertex.extent(0));
     ep::Points<Kokkos::HostSpace> point("point", n);
     for (int i = 0; i < n; ++i)
-        for (int a = 0; a < 3; ++a) point(i, a) = ep::snap(hx(i, a));
+        for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(ep::snap(hx(i, a)));
     Verdict verdict;
     std::map<std::array<int, 3>, std::vector<std::pair<int, int>>> triangles;  // -> (tetrahedron, apex corner)
     std::vector<char> used(n, 0);

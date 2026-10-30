@@ -11,18 +11,81 @@
 //       circumcentres, face rings and faces. --verify compares every step
 //       with an exact rebuild (faces the clipping lacks must have area below
 //       1e-9 spacings^2); --debug adds adjacency and stuck details.
+//   --memory (both modes): device memory per phase (Kokkos allocations:
+//       current, peak, and the live allocations at the peak by label).
 //
 // Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 // <sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>.
 
 #include "support.hpp"
 
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <map>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#ifdef KOKKOS_ENABLE_CUDA
+#include <cuda_runtime_api.h>
+#endif
 
 namespace {
 
 using namespace support;
+
+// Device memory accounting through the Kokkos Tools allocation callbacks:
+// bytes in the default memory space now and at the peak of the current
+// phase, and the live allocations (summed by label) at that peak.
+struct DeviceMemory {
+    static inline bool on = false;
+    static inline std::unordered_map<const void*, std::pair<std::string, std::uint64_t>> live;
+    static inline std::uint64_t current = 0, peak = 0;
+    static inline std::map<std::string, std::uint64_t> at_peak;
+
+    static bool device(const Kokkos_Profiling_SpaceHandle& h) { return std::strcmp(h.name, Memory::name()) == 0; }
+    static void allocate(Kokkos_Profiling_SpaceHandle h, const char* label, const void* ptr, std::uint64_t size) {
+        if (!device(h)) return;
+        live[ptr] = {label, size};
+        current += size;
+        if (current <= peak) return;
+        peak = current;
+        at_peak.clear();
+        for (const auto& [p, entry] : live) at_peak[entry.first] += entry.second;
+    }
+    static void deallocate(Kokkos_Profiling_SpaceHandle h, const char*, const void* ptr, std::uint64_t) {
+        if (!device(h)) return;
+        const auto it = live.find(ptr);
+        if (it == live.end()) return;
+        current -= it->second.second;
+        live.erase(it);
+    }
+    static void start() {
+        on = true;
+        Kokkos::Tools::Experimental::set_allocate_data_callback(allocate);
+        Kokkos::Tools::Experimental::set_deallocate_data_callback(deallocate);
+    }
+    // Report the phase that ends here (per cell for n cells), then start the next.
+    static void phase(const std::string& name, int n, bool details = true) {
+        if (!on) return;
+        Kokkos::fence();
+        std::cout << "memory: phase=" << name << " current_MB=" << current / 1e6 << " peak_MB=" << peak / 1e6
+                  << " peak_bytes_per_cell=" << double(peak) / n;
+#ifdef KOKKOS_ENABLE_CUDA
+        // Everything the GPU holds: Kokkos views, CUDA context, kernel local memory.
+        std::size_t free = 0, total = 0;
+        cudaMemGetInfo(&free, &total);
+        std::cout << " gpu_used_MB=" << (total - free) / 1e6;
+#endif
+        std::cout << "\n";
+        if (details)
+            for (const auto& [label, bytes] : at_peak)
+                std::cout << "  " << label << " " << bytes / 1e6 << " MB " << double(bytes) / n << " B/cell\n";
+        peak = current;
+        at_peak.clear();
+        for (const auto& [p, entry] : live) at_peak[entry.first] += entry.second;
+    }
+};
 
 bool has_flag(int argc, char** argv, const std::string& flag) {
     for (int i = 1; i < argc; ++i)
@@ -58,6 +121,7 @@ int rebuild(const std::vector<std::string>& args, double width_factor) {
     neighbor_search::configure(list, n, 1.0, width_factor * std::cbrt(1.0 / n));
     const double build_ms = median_ms(repeats, [&] { neighbor_search::build(exec, list, x); });
     const auto grid = shell_voronoi::make_grid(list);
+    DeviceMemory::phase("positions_and_cell_list", n);
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " grid="
               << list.cells_per_side() << "^3 repeats=" << repeats << "\n";
     int failures = 0;
@@ -81,6 +145,7 @@ int rebuild(const std::vector<std::string>& args, double width_factor) {
             for (int t = 0; t < n; ++t) worst = std::max(worst, std::abs(volume(t) - first_volumes[t]) / first_volumes[t]);
             std::cout << "  max_relative_volume_difference_to_first_variant=" << worst << "\n";
         }
+        DeviceMemory::phase(variant, n);
     }
     return failures;
 }
@@ -144,8 +209,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         // timed together with a fresh clipping.
         const auto list = cell_list(x);
         const auto grid = shell_voronoi::make_grid(list);
-        shell_voronoi::Cells<Memory> cells(n, false);
-        cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
+        auto cells = cells_with_rings(list);  // sizes the ring pool
         tet_mesh::Mesh<Memory> mesh;
         tet_start::Stats start;
         const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct<double>(exec, grid, cells); });
@@ -170,13 +234,16 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         std::cout << "start: clip_ms=" << clip_ms << " from_rings_ms=" << from_rings_ms << " start_ms=" << start_ms
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
-                  << " tets=" << tets << " per_cell=" << double(tets) / n << "\n";
+                  << " tets=" << tets << " per_cell=" << double(tets) / n
+                  << " ring_entries_per_cell=" << double(cells.ring_entries_needed()) / n << "\n";
         std::cout << "tets: faces_per_cell=" << double(faces) / n << " centres_ms=" << centres_ms
                   << " faces_ms=" << faces_ms << " check_ms=" << check_ms << " step_Mcells_s=" << n / per_step_ms / 1e3
                   << " invalid=" << failed << "\n";
     }
 
+    DeviceMemory::phase("positions_and_bench_start_kernels", n, false);
     MovingMesh moving(x);
+    DeviceMemory::phase("start_and_prepare", n);
     const Flow flow;
     int failures = 0;
     for (int s = 1; s <= steps; ++s) {
@@ -257,6 +324,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
                       << " reference_faces=" << exact.neighbours[worst_cell].size()
                       << " mesh_faces=" << neighbours[worst_cell].size() << "\n";
     }
+    DeviceMemory::phase("steps", n);
     return failures;
 }
 
@@ -264,12 +332,13 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
+    if (has_flag(argc, argv, "--memory")) DeviceMemory::start();
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
         return rebuild(args, flag_value(argc, argv, "--width", 1.0)) != 0;
     if (args.size() >= 4 && args[0] == "step")
         return step(args, has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f]\n"
-                 "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n";
+    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--memory]\n"
+                 "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug] [--memory]\n";
     return 2;
 }

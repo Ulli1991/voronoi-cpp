@@ -527,7 +527,7 @@ Stats finish_everywhere(const ExecSpace& exec, const tet_mesh::Mesh<typename Exe
                 const int bit = 1 << tet_mesh::edge_index(pa, pb);
                 const int bits = u == lowest ? edges(u) | bit : edges(u) & ~bit;
                 if (bits != edges(u)) touched(u) = 1;  // its faces are renumbered
-                edges(u) = bits;
+                edges(u) = static_cast<std::uint8_t>(bits);
             }
         }
     }
@@ -600,7 +600,7 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 // if a local result does not fit its border, the whole mesh is repaired on
 // the host.
 template <class ExecSpace>
-Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
+Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state, int attempts = 2) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
@@ -681,7 +681,7 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         // Changed and new tetrahedra back, with global numbers.
         const int added = m.count - size;
         if (state.count + added > static_cast<int>(state.alive.extent(0)))
-            throw std::runtime_error("tet_flips::finish: tetrahedra capacity exceeded");
+            tet_repair::reserve(dm, state, state.count + added + (state.count + added) / 64);
         auto global = [&](int l) { return l < size ? host_listed(l) : state.count + l - size; };
         std::vector<int> changed;  // rows: slot, alive, 4 vertices, 4 neighbours, open-face bits
         bool closed = true;
@@ -776,9 +776,9 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                         const int u = ring[r];
                         const int pa = tet_mesh::position(dm, u, a), pb = tet_mesh::position(dm, u, b);
                         if (pa < 0 || pb < 0) continue;
-                        const int bit = 1 << tet_mesh::edge_index(pa, pb);
+                        const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
                         const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
-                                                       : Kokkos::atomic_fetch_and(&edges(u), ~bit);
+                                                       : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
                         if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
                     }
                 }

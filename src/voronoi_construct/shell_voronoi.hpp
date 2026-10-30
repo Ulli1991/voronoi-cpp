@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -239,16 +240,25 @@ struct Cells {
     Kokkos::View<int*, MemorySpace> status;
     Kokkos::View<int*, MemorySpace> face_count;   // all faces of the cell
     Kokkos::View<int*, MemorySpace> owned_count;  // faces stored below
+    // Size 0 in a build with face rings.
     Kokkos::View<int**, MemorySpace> neighbour;
     Kokkos::View<double** [3], MemorySpace> area;
     Kokkos::View<double** [3], MemorySpace> face_centroid;
     Kokkos::View<double*, MemorySpace> volume;
     Kokkos::View<double* [3], MemorySpace> centroid;
-    // Optional, size 0 = off: for each owned face, in order, its ring length
-    // k followed by the k slots whose bisectors bound it, so that vertex m of
-    // the face is equidistant from the cell, the face neighbour, ring[m] and
-    // ring[m + 1]. Only the thread kernel records rings.
-    Kokkos::View<int**, MemorySpace> rings;
+    // Optional, size 0 = off (thread kernel only): the face rings. Cell t's
+    // owned faces, in order, start at rings(ring_start(t)), each as its
+    // neighbour, its ring length k and the k slots whose bisectors bound it,
+    // so that vertex m of the face is equidistant from the cell, the
+    // neighbour, ring[m] and ring[m + 1]. The pool is split into
+    // ring_used.extent(0) equal chunks; cell t claims its block in chunk
+    // ring_chunk(t) (one counter per chunk: a single counter serializes the
+    // build; hashed so that no chunk collects one side of the lattice).
+    // Cells that did not fit are face_overflow; ring_entries_needed gives a
+    // pool size that fits (see with_rings).
+    Kokkos::View<int*, MemorySpace> rings;
+    Kokkos::View<long long*, MemorySpace> ring_start;
+    Kokkos::View<unsigned*, MemorySpace> ring_used;
     // Optional diagnostics, size 0 = off: |sum of area vectors| / sum of
     // |area|, and work per cell (batches of grid cells walked, candidates
     // clipped, cuts).
@@ -269,7 +279,51 @@ struct Cells {
           work("cell_work", with_diagnostics ? n : 0) {}
 
     KOKKOS_INLINE_FUNCTION int owned_capacity() const { return static_cast<int>(neighbour.extent(1)); }
+
+    // Cells that record face rings, room for `entries` (about 60 per cell),
+    // and no per-face arrays. If ring_entries_needed exceeds that after a
+    // build, build again with that many.
+    static Cells with_rings(int n, long long entries) {
+        Cells c;
+        c.status = Kokkos::View<int*, MemorySpace>("cell_status", n);
+        c.face_count = Kokkos::View<int*, MemorySpace>("cell_face_count", n);
+        c.owned_count = Kokkos::View<int*, MemorySpace>("cell_owned_count", n);
+        c.volume = Kokkos::View<double*, MemorySpace>("cell_volume", n);
+        c.centroid = Kokkos::View<double* [3], MemorySpace>("cell_centroid", n);
+        c.rings = Kokkos::View<int*, MemorySpace>(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_rings")), entries);
+        c.ring_start = Kokkos::View<long long*, MemorySpace>(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_ring_start")), n);
+        c.ring_used = Kokkos::View<unsigned*, MemorySpace>("cell_ring_used", Kokkos::max(1, n / 1024));
+        return c;
+    }
+
+    // Pool entries a build with rings needed: every chunk as large as the fullest.
+    long long ring_entries_needed() const {
+        const auto used = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, ring_used);
+        unsigned most = 0;
+        for (std::size_t c = 0; c < used.extent(0); ++c) most = Kokkos::max(most, used(c));
+        return static_cast<long long>(most) * static_cast<long long>(used.extent(0));
+    }
 };
+
+// The ring-pool chunk of cell t: a multiplicative hash, as slot order is
+// spatial and t % chunks can pick, say, only the cells at one box face.
+KOKKOS_INLINE_FUNCTION unsigned ring_chunk(int t, unsigned chunks) {
+    return static_cast<unsigned>((static_cast<unsigned long long>(static_cast<unsigned>(t) * 2654435761u) * chunks) >> 32);
+}
+
+// Claim `need` ring entries for cell t: sets ring_start(t), returns false
+// if its chunk is full.
+template <class MemorySpace>
+KOKKOS_INLINE_FUNCTION bool claim_rings(const Cells<MemorySpace>& out, int t, int need) {
+    const unsigned chunks = static_cast<unsigned>(out.ring_used.extent(0));
+    const long long chunk = static_cast<long long>(out.rings.extent(0)) / chunks;
+    const unsigned c = ring_chunk(t, chunks);
+    const unsigned at = Kokkos::atomic_fetch_add(&out.ring_used(c), static_cast<unsigned>(need));
+    out.ring_start(t) = c * chunk + at;
+    return static_cast<long long>(at) + need <= chunk;
+}
 
 namespace detail {
 
@@ -546,11 +600,23 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 for (int k = 0; k < 3; ++k)
                     if (cell.corner[v][k] < box_planes) status = uncertified;
 
+            // Rings: claim a block for the owned faces, at most a neighbour,
+            // a length and one entry per vertex each.
+            const bool with_faces = out.neighbour.extent(0) > 0, with_rings = out.rings.extent(0) > 0;
+            long long ring_at = 0;
+            if (with_rings && status == ok) {
+                detail::compact_planes(cell);  // only planes that bound a face
+                int need = 0;
+                for (int plane = box_planes; plane < cell.planes; ++plane) need += 2 * (cell.neighbour[plane] > t);
+                for (int v = 0; v < cell.vertices; ++v)
+                    for (int k = 0; k < 3; ++k) need += cell.neighbour[cell.corner[v][k]] > t;
+                if (!claim_rings(out, t, need)) status = face_overflow;
+                ring_at = out.ring_start(t);
+            }
+
             // Faces: walk each plane's vertices in order, integrating the face
             // area vector and centroid and the cell volume and centroid.
             int faces = 0, owned = 0, ring_used = 0;
-            const bool with_rings = out.rings.extent(0) > 0;
-            const int ring_capacity = with_rings ? static_cast<int>(out.rings.extent(1)) : 0;
             double volume = 0;
             Vec3<double> moment{0, 0, 0}, area_sum{0, 0, 0};
             double area_magnitude = 0;
@@ -566,13 +632,13 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 Vec3<double> previous = first, area{0, 0, 0}, face_moment{0, 0, 0};
                 double weight = 0;
                 int current = start, steps = 0, ring_length = 0;
+                const bool record = with_rings && cell.neighbour[plane] > t;
                 do {
                     int at = 0;
                     while (cell.corner[current][at] != plane) ++at;
                     const std::uint8_t last = cell.corner[current][(at + 2) % 3];
                     // The plane shared with the next vertex bounds the face there.
-                    if (with_rings && ring_used + 1 + ring_length < ring_capacity)
-                        out.rings(t, ring_used + 1 + ring_length) = cell.neighbour[last];
+                    if (record) out.rings(ring_at + ring_used + 2 + ring_length) = cell.neighbour[last];
                     ++ring_length;
                     int next = -1;
                     for (int w = 0; w < cell.vertices && next < 0; ++w)
@@ -607,31 +673,27 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 area_magnitude += Kokkos::sqrt(dot(area, area));
                 const int neighbour = cell.neighbour[plane];
                 if (neighbour > t) {
-                    if (owned >= owned_capacity) {  // only counted, to widen the output
-                        ++owned;
-                        continue;
-                    }
                     if (with_rings) {
-                        if (ring_used + 1 + ring_length > ring_capacity) {
-                            status = face_overflow;
-                            break;
-                        }
-                        out.rings(t, ring_used) = ring_length;
-                        ring_used += 1 + ring_length;
+                        out.rings(ring_at + ring_used) = neighbour;
+                        out.rings(ring_at + ring_used + 1) = ring_length;
+                        ring_used += 2 + ring_length;
                     }
-                    // A sliver face has no meaningful centroid; use a vertex.
-                    const Vec3<double> c = weight > 0 ? face_moment * (1.0 / weight) : first;
-                    out.neighbour(t, owned) = neighbour;
-                    out.area(t, owned, 0) = area.x;
-                    out.area(t, owned, 1) = area.y;
-                    out.area(t, owned, 2) = area.z;
-                    out.face_centroid(t, owned, 0) = c.x;
-                    out.face_centroid(t, owned, 1) = c.y;
-                    out.face_centroid(t, owned, 2) = c.z;
+                    // Beyond the face arrays' capacity only counted, to widen them.
+                    if (with_faces && owned < owned_capacity) {
+                        // A sliver face has no meaningful centroid; use a vertex.
+                        const Vec3<double> c = weight > 0 ? face_moment * (1.0 / weight) : first;
+                        out.neighbour(t, owned) = neighbour;
+                        out.area(t, owned, 0) = area.x;
+                        out.area(t, owned, 1) = area.y;
+                        out.area(t, owned, 2) = area.z;
+                        out.face_centroid(t, owned, 0) = c.x;
+                        out.face_centroid(t, owned, 1) = c.y;
+                        out.face_centroid(t, owned, 2) = c.z;
+                    }
                     ++owned;
                 }
             }
-            if (status == ok && owned > owned_capacity) status = face_overflow;
+            if (status == ok && with_faces && owned > owned_capacity) status = face_overflow;
             if (status == ok && !(volume > 0)) status = degenerate;
 
             out.status(t) = status;
@@ -703,6 +765,7 @@ void construct_with_overflow(const ExecSpace& exec, const Grid<typename ExecSpac
 template <class Real, class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                Cells<typename ExecSpace::memory_space>& out) {
+    if (out.rings.extent(0) > 0) Kokkos::deep_copy(exec, out.ring_used, 0u);
     detail::construct_with_overflow<Real>(exec, grid, make_stencil(exec), out, detail::Pass::all);
 }
 

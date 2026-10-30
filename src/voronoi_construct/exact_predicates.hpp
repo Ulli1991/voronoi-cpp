@@ -170,9 +170,10 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
     return d * o < 0;
 }
 
-// Snapped particle positions, padded to 32 bytes: point(i, a), a < 3.
+// Snapped particle positions, point(i, a) for a < 3, in [0, 2^30) so 32
+// bits hold them exactly; padded to 16 bytes (one aligned load per point).
 template <class MemorySpace>
-using Points = Kokkos::View<i64* [4], Kokkos::LayoutRight, MemorySpace>;
+using Points = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
 
 // The predicates on particles, by index into snapped positions.
 template <class P>
