@@ -66,7 +66,9 @@ int main(int argc, char** argv) {
 
     // Non-finite positions: a particle at NaN and one at infinity are never
     // a candidate (their distances never fall below the reach), so every
-    // other cell is the cell without them, to the last bit. (Test idea from
+    // other cell is the cell without them: the same neighbours, the same
+    // volume (to the last bit unless the two extra particles change the
+    // walk's grid levels nearby, which reorders the cuts). (Test idea from
     // Doug Rennehan, PR #2.)
     {
         Points points = make_points("uniform", n);
@@ -87,7 +89,8 @@ int main(int argc, char** argv) {
             const Reference a = build(clean), b = build(dirty);
             long long differ = 0;
             for (int i = 0; i < n; ++i)
-                differ += a.status[i] != b.status[i] || a.volume[i] != b.volume[i] || a.neighbours[i] != b.neighbours[i];
+                differ += a.status[i] != b.status[i] || a.neighbours[i] != b.neighbours[i] ||
+                          std::abs(a.volume[i] - b.volume[i]) > 1e-12 * a.volume[i];
             check.expect(differ == 0, std::string(warp ? "warp" : "thread") +
                                           " kernel: NaN and infinite particles are never candidates (" +
                                           std::to_string(differ) + " cells differ)");
