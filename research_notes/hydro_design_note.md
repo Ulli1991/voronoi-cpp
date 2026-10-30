@@ -19,8 +19,10 @@ gradients, fluxes, the update and the time step, and in stage 3 the point veloci
 
 ## Stages
 
-1. **Static mesh, first order, HLL** (**decided**). Points do not move. Godunov first order:
-   piecewise-constant states, HLL flux on every face, forward Euler, global time step.
+1. **Static mesh, MUSCL-Hancock, HLL** (**decided**, amended 2026-10-30: MUSCL-Hancock as in LUNA,
+   not forward Euler). Points do not move. AREPO-style least-squares gradients of the primitives
+   with a slope limiter, half-step prediction, HLL flux on every face, global time step; the
+   zero-gradient case (first-order Godunov) is kept as a test path.
    This tests the mesh geometry, the face loop, conservation and the time step, with nothing
    else that can be wrong.
 2. Static mesh, second order: AREPO-style gradients (**decided**: least squares over the face
@@ -131,7 +133,7 @@ with the same parameters make the comparison direct.
 
 ## Decided 2026-10-30
 
-Static first order with HLL first; bit-wise reproducible update; code in `src/hydro/`; HDF5
+Static mesh with MUSCL-Hancock and HLL first (as LUNA; amended from first order); bit-wise reproducible update; code in `src/hydro/`; HDF5
 snapshots in LUNA's layout; AREPO-style least-squares gradients for stage 2.
 
 ## Still open
