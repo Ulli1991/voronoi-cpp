@@ -1,6 +1,6 @@
 """Sedov 3D: Voronoi snapshots (hydro_sedov) and LUNA snapshots against the Sedov-Taylor solution.
 
-    python scripts/hydro_sedov_compare.py <out.png> <label>=<run dir> [<label>=<run dir> ...]
+    python scripts/hydro_sedov_compare.py [--bulk=<km/s>] <out.png> <label>=<run dir> [<label>=<run dir> ...]
 
 A run dir holds snapdir_NNN/ (one .hdf5 each: ours, or a one-GPU LUNA run).
 Needs numpy, h5py, matplotlib and LUNA (luna.hydro.exact_sedov for the analytic
@@ -38,6 +38,7 @@ RHO0 = 1.6726219e-24 / UNIT_RHO
 P0 = 1.380649e-16 * 1e4 / (UNIT_RHO * UNIT_V**2)
 E0 = 1e51 / UNIT_E
 GAMMA = 5.0 / 3.0
+BULK = 0.0  # --bulk: velocity of the whole box along x (km/s); profiles in its frame
 
 
 def load(path):
@@ -61,9 +62,14 @@ def load(path):
             vol = np.full(n**3, dx**3)
             rho, P = rho.ravel(), P.ravel()
             vel = vel.reshape(3, -1)
-    d = pos - 0.5 * L
+    # In the frame moving with the bulk velocity (BULK, along x): the blast
+    # centre at L/2 + BULK t, velocities relative to the bulk flow.
+    t = float(a["time"])
+    centre = np.array([0.5 * L + BULK * t, 0.5 * L, 0.5 * L])[:, None]
+    d = pos - centre
     d -= L * np.round(d / L)
     r = np.sqrt((d**2).sum(axis=0))
+    vel = vel - np.array([BULK, 0.0, 0.0])[:, None]
     vr = (vel * d).sum(axis=0) / np.where(r > 0, r, 1)
     return dict(time=float(a["time"]), L=L, r=r, vol=vol, rho=rho, vr=vr, P=P, n=rho.size)
 
@@ -110,8 +116,11 @@ def analyse(label, root):
 
 
 def main():
-    out = sys.argv[1]
-    runs = [a.split("=", 1) for a in sys.argv[2:]]
+    global BULK
+    args = [a for a in sys.argv[1:] if not a.startswith("--bulk=")]
+    BULK = sum(float(a.split("=", 1)[1]) for a in sys.argv[1:] if a.startswith("--bulk="))
+    out = args[0]
+    runs = [a.split("=", 1) for a in args[1:]]
     fig, ax = plt.subplots(1, 4, figsize=(18, 4.2))
     results = {label: analyse(label, root) for label, root in runs}
     first = next(iter(results.values()))[-1][0]
