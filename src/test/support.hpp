@@ -9,6 +9,7 @@
 #include "tet_flips.hpp"
 #include "tet_mesh.hpp"
 #include "tet_repair.hpp"
+#include "tet_start.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,6 +30,16 @@ using Positions = Kokkos::View<double* [3], Memory>;
 using NeighbourSets = std::vector<std::vector<int>>;
 
 inline double wrap(double x) { return x - std::floor(x); }
+
+// Positions on the grid of the exact predicates (2^30 steps across the box).
+// The mesh's topology is decided on snapped positions and its geometry
+// computed from the positions themselves; off the grid, the two disagree on
+// near-degenerate cells (volumes ~1e-9 apart) and for particles closer than
+// ~1e3 grid steps. Every input and flow step here is kept on the grid.
+inline void to_grid(Points& points) {
+    for (auto& p : points)
+        for (double& x : p) x = std::floor(x * exact_predicates::scale) / exact_predicates::scale;
+}
 inline double nearest_image(double d) { return d - std::nearbyint(d); }
 
 template <class View>
@@ -98,7 +109,7 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
 // Points in the unit box: uniform, jittered (lattice moved by up to 0.1
 // spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, or a
 // degenerate layout. Lattices round n to a cube.
-inline Points make_points(const std::string& kind, int n) {
+inline Points make_points_off_grid(const std::string& kind, int n) {
     if (const auto at = kind.find('@'); at != std::string::npos)
         return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n);
     std::mt19937_64 rng(20261029);
@@ -132,6 +143,13 @@ inline Points make_points(const std::string& kind, int n) {
     } else {
         throw std::invalid_argument("unknown distribution " + kind);
     }
+    return points;
+}
+
+// The same on the grid of the exact predicates (to_grid).
+inline Points make_points(const std::string& kind, int n) {
+    Points points = make_points_off_grid(kind, n);
+    to_grid(points);
     return points;
 }
 
@@ -185,12 +203,14 @@ public:
         return v;
     }
 
-    // Move every point by `distance` times the velocity, wrapped into the box.
+    // Move every point by `distance` times the velocity, wrapped into the box
+    // and kept on the grid.
     void advect(Points& x, double distance) const {
         for (auto& p : x) {
             const Point v = velocity(p);
             for (int a = 0; a < 3; ++a) p[a] = wrap(p[a] + distance * v[a]);
         }
+        to_grid(x);
     }
 
 private:
@@ -288,16 +308,25 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     return failures;
 }
 
-// Clipping build of x (in slot order) that records face rings, for
-// tet_mesh::from_rings.
-inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x) {
-    const int n = static_cast<int>(x.extent(0));
-    const auto list = cell_list(x);
+// Clipping build of the particles of `list` (in slot order) that records
+// face rings, for tet_mesh::from_rings and tet_start::build.
+inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list) {
+    const int n = list.n;
     shell_voronoi::Cells<Memory> cells(n, false);
     cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
     Kokkos::deep_copy(cells.rings, -1);
     shell_voronoi::construct<double>(Exec{}, shell_voronoi::make_grid(list), cells);
     return cells;
+}
+
+inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x) { return cells_with_rings(cell_list(x)); }
+
+// The exact starting tetrahedralization of x (in slot order): clipping with
+// rings, then tet_start::build.
+inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh) {
+    const auto list = cell_list(x);
+    const auto cells = cells_with_rings(list);
+    return tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
 }
 
 // The Voronoi cells of x by clipping, by particle: every particle's natural
@@ -363,10 +392,10 @@ struct MovingMesh {
     int current = 0;  // rings[current] holds the last step's faces
     tet_mesh::Geometry<Memory> geometry;
     tet_mesh::Points4<Memory> padded;
-    int unresolved = 0;  // from_rings could not resolve these
+    tet_start::Stats start;
 
-    MovingMesh(const Positions& x, const shell_voronoi::Cells<Memory>& cells) : n(static_cast<int>(x.extent(0))) {
-        unresolved = tet_mesh::from_rings(exec, cells, mesh);
+    explicit MovingMesh(const Positions& x) : n(static_cast<int>(x.extent(0))) {
+        start = start_mesh(x, mesh);
         const int capacity = 2 * static_cast<int>(mesh.vertex.extent(0));
         state = tet_repair::prepare(exec, x, mesh, capacity);
         const int face_capacity = 10 * n;

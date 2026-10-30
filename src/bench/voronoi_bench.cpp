@@ -5,11 +5,12 @@
 //       selected by substring. Every variant's cells are checked
 //       (support::check_cells, PASS/FAIL).
 //   voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug]
-//       The persistent mesh: tetrahedra from rings and the per-step kernels
-//       on the start mesh, then `steps` steps of the flow, `displacement`
+//       The persistent mesh: the exact start (clipping with rings,
+//       tet_start::build) and the per-step kernels on it, then `steps` steps of the flow, `displacement`
 //       spacings each: device repair (screened), host fallback when stuck,
 //       circumcentres, face rings and faces. --verify compares every step
-//       with an exact rebuild; --debug adds adjacency and stuck details.
+//       with an exact rebuild (faces the clipping lacks must have area below
+//       1e-9 spacings^2); --debug adds adjacency and stuck details.
 //
 // Distributions: uniform, jittered, lattice, wave, clustered, or
 // <sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>.
@@ -140,11 +141,22 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind
               << " displacement=" << displacement << " steps=" << steps << "\n";
 
-    const auto cells = cells_with_rings(x);
     {
+        // The start: clipping with rings, from_rings, and the exact start
+        // (tet_start::build: check, patch); build rewrites rings, so it is
+        // timed together with a fresh clipping.
+        const auto list = cell_list(x);
+        const auto grid = shell_voronoi::make_grid(list);
+        shell_voronoi::Cells<Memory> cells(n, false);
+        cells.rings = Kokkos::View<int**, Memory>("rings", n, 384);
         tet_mesh::Mesh<Memory> mesh;
-        int unresolved = 0;
-        const double from_rings_ms = median_ms(repeats, [&] { unresolved = tet_mesh::from_rings(exec, cells, mesh); });
+        tet_start::Stats start;
+        const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct<double>(exec, grid, cells); });
+        const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
+        const double start_ms = median_ms(repeats, [&] {
+            shell_voronoi::construct<double>(exec, grid, cells);
+            start = tet_start::build(exec, grid, cells, mesh);
+        });
         const int tets = static_cast<int>(mesh.vertex.extent(0));
         const int faces = static_cast<int>(mesh.owner.extent(0));
         tet_mesh::Points4<Memory> padded("padded", n);
@@ -158,14 +170,16 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         const double faces_ms = median_ms(repeats, [&] { tet_mesh::faces(exec, padded, 1.0, mesh, geometry); });
         const double check_ms = median_ms(repeats, [&] { failed = tet_mesh::check(exec, padded, 1.0, mesh, invalid); });
         const double per_step_ms = centres_ms + faces_ms + check_ms;
-        std::cout << "tets_from_rings: tets=" << tets << " per_cell=" << double(tets) / n << " unresolved=" << unresolved
-                  << " from_rings_ms=" << from_rings_ms << " Mcells_s=" << n / from_rings_ms / 1e3 << "\n";
+        std::cout << "start: clip_ms=" << clip_ms << " from_rings_ms=" << from_rings_ms << " start_ms=" << start_ms
+                  << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
+                  << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
+                  << " tets=" << tets << " per_cell=" << double(tets) / n << "\n";
         std::cout << "tets: faces_per_cell=" << double(faces) / n << " centres_ms=" << centres_ms
                   << " faces_ms=" << faces_ms << " check_ms=" << check_ms << " step_Mcells_s=" << n / per_step_ms / 1e3
                   << " invalid=" << failed << "\n";
     }
 
-    MovingMesh moving(x, cells);
+    MovingMesh moving(x);
     const Flow flow;
     int failures = 0;
     for (int s = 1; s <= steps; ++s) {
@@ -200,10 +214,28 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         const long long failing = tet_flips::failing(mesh);
         const Reference exact = clipped(x);
         const NeighbourSets neighbours = delaunay_neighbours(mesh, n);
-        long long mismatched = 0, exact_faces = 0;
+        long long mismatched = 0, exact_faces = 0, missing = 0, extra = 0;
         for (int i = 0; i < n; ++i) {
             mismatched += neighbours[i] != exact.neighbours[i];
             exact_faces += static_cast<long long>(exact.neighbours[i].size());
+        }
+        // Faces the clipping lacks must be rounding-level: clipping drops
+        // faces below 64 eps R^2, the mesh keeps every Delaunay edge.
+        double extra_area = 0;
+        {
+            const auto owner = to_host(moving.mesh.owner);
+            const auto neighbour = to_host(moving.mesh.neighbour);
+            const auto area = to_host(moving.geometry.area);
+            for (int f = 0; f < faces; ++f) {
+                const int i = owner(f), j = neighbour(f);
+                if (std::binary_search(exact.neighbours[i].begin(), exact.neighbours[i].end(), j)) continue;
+                ++extra;
+                extra_area = std::max(extra_area, std::sqrt(area(f, 0) * area(f, 0) + area(f, 1) * area(f, 1) +
+                                                            area(f, 2) * area(f, 2)) / (spacing * spacing));
+            }
+            for (int i = 0; i < n; ++i)
+                for (int j : exact.neighbours[i])
+                    missing += i < j && !std::binary_search(neighbours[i].begin(), neighbours[i].end(), j);
         }
         const auto volume = to_host(moving.geometry.volume);
         double worst = 0, total = 0;
@@ -216,9 +248,10 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
                 worst_cell = i;
             }
         }
-        const bool pass = failing == 0 && mismatched == 0 && worst < 1e-10;
+        const bool pass = failing == 0 && missing == 0 && extra_area < 1e-9 && worst < 1e-10;
         failures += !pass;
         std::cout << "verify: step=" << s << " failing=" << failing << " mismatched_cells=" << mismatched
+                  << " missing_faces=" << missing << " extra_faces=" << extra << " extra_max_area=" << extra_area
                   << " faces=" << faces << " exact_faces=" << exact_faces / 2 << " total_volume=" << total
                   << " max_relative_volume_difference=" << worst << (pass ? "  PASS" : "  FAIL") << "\n";
         if (debug && worst_cell >= 0)

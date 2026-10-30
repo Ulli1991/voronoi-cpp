@@ -244,11 +244,12 @@ inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets)
 // Fallback for a triangle t|u that no flip repairs, or an inverted
 // tetrahedron t (u = -1): replace the stars of their particles by those of a
 // fresh Delaunay tetrahedralization of the particles two rings around, if
-// the new stars fit the old boundary exactly; otherwise widen the stars and
-// retry. Returns the new tetrahedra.
+// the new stars fit the old boundary exactly; otherwise add the particles of
+// the faces that did not fit to the stars and retry. Returns the new
+// tetrahedra, or nothing after eight tries.
 inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     std::vector<int> seeds = vertices_of(m, u < 0 ? std::vector<int>{t} : std::vector<int>{t, u});
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    for (int attempt = 0; attempt < 8; ++attempt) {
         const std::vector<int> old = stars(m, t, seeds);
         const std::vector<int> ring = vertices_of(m, old);
         const std::vector<int> points = vertices_of(m, stars(m, t, ring));
@@ -291,7 +292,14 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
         const bool fits = !fresh.empty() && !reaches_corner &&
                           std::all_of(boundary.begin(), boundary.end(), [](const auto& b) { return b.second == 0; });
         if (fits) return replace(m, old, fresh);
-        seeds = ring;
+        // Widen the stars over the particles of the faces that did not fit
+        // (over the whole ring if that adds none).
+        const std::size_t before = seeds.size();
+        for (const auto& [key, count] : boundary)
+            if (count != 0) seeds.insert(seeds.end(), key.begin(), key.end());
+        std::sort(seeds.begin(), seeds.end());
+        seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
+        if (seeds.size() == before) seeds = ring;
     }
     return {};
 }
