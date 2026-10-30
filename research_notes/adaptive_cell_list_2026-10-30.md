@@ -257,3 +257,24 @@ al. 2026 (best-first order matters most on clustered input); see
   inconsistent face pairs (faces=2*owned NO), like uniform.
 - Face output widening copies all n rows for one big cell. A spill list for
   the few cells above 32 owned faces would be leaner (memory work).
+
+## Integration on main d3efc15 (branch `adaptive-on-main`)
+
+Merged into fa6b61c, then d3efc15. `tet_start`'s exact clipping walks the
+adaptive cell list like the clipping kernels (stencil per level, coarser
+level when the stencil ends, reach widened by the snapping) and takes the
+owned-face capacity from the output. A100 gpu1, d3efc15 against the merge in
+one job (31688793; halo does not exist on d3efc15):
+
+| | d3efc15 | merge |
+|---|---|---|
+| rebuild jittered / uniform / clustered | 18.74 / 10.46 / 0.93 | 21.91 / 10.53 / 8.71 |
+| rebuild halo / lattice / wave | - / 34.3 / 20.9 | 8.29 / 34.8 / 21.3 |
+| start 2.1M jittered (clip / start ms) | 341 / 467 | 251 / 309 |
+| start 2.1M clustered | 4219 / 4438 | 995 / 1146 |
+| start 2.1M halo | - | 1016 / 1204 |
+| step 10 at 0.03 spacings, jittered / clustered / halo (ms) | 11.8 / 9.1 / - | 11.5 / 8.8 / 8.9 |
+
+All rebuild statuses certified, all checks PASS. `step 262144 <kind> 0.3 5
+--verify` PASS every step on the merge for jittered, uniform, clustered, halo,
+lattice and wave (job 31688794); ctest 5/5 on the A100.
