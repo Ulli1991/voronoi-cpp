@@ -350,14 +350,14 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int capacity = static_cast<int>(s.alive.extent(0));
     Stats stats;
-    const auto work = s.work;
-    const auto plans = s.plans;
+    auto work = s.work;
+    auto plans = s.plans;
     const auto counters = s.counters;
-    const auto freed = s.freed;
+    auto freed = s.freed;
     const auto listed = s.listed;
     const auto& st = s;
-    const int work_capacity = static_cast<int>(work.extent(0));
-    const auto stuck = s.stuck;
+    int work_capacity = static_cast<int>(work.extent(0));
+    auto stuck = s.stuck;
     const auto vertex = m.vertex;
     const auto adjacent = m.adjacent;
     const auto point = s.point;
@@ -372,6 +372,23 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         exec.fence();
     };
     auto clear = [&](int k) { Kokkos::deep_copy(exec, Kokkos::subview(counters, k), 0); };
+    // The work and stuck lists never drop entries: before a kernel could
+    // overrun them they grow (the stuck list keeps its entries).
+    auto grow = [&](int work_needed, int stuck_needed) {
+        if (work_needed > work_capacity) {
+            work_capacity = work_needed + work_needed / 2;
+            Kokkos::resize(Kokkos::WithoutInitializing, s.work, work_capacity);
+            Kokkos::resize(Kokkos::WithoutInitializing, s.plans, work_capacity);
+            Kokkos::resize(Kokkos::WithoutInitializing, s.freed, work_capacity);
+            work = s.work;
+            plans = s.plans;
+            freed = s.freed;
+        }
+        if (stuck_needed > static_cast<int>(stuck.extent(0))) {
+            Kokkos::resize(s.stuck, stuck_needed + stuck_needed / 2);
+            stuck = s.stuck;
+        }
+    };
     // The stuck list fills through counters(1) for the whole repair.
     clear(1);
     read();
@@ -381,41 +398,50 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     for (int round = 0; round < 1000; ++round) {
         // 1. Failing triangles among the listed dirty tetrahedra (each triangle
         // once: from the dirty side, or from the lower index when both are).
-        clear(0);
         clear(2);
-        Kokkos::parallel_for(
-            "tet_repair::find", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int i) {
-                const int t = listed(i);
-                if (!alive(t)) return;
-                const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
-                const ep::Offset o[4] = {{0, 0, 0}, ep::offset(point, v[0], v[1]), ep::offset(point, v[0], v[2]),
-                                         ep::offset(point, v[0], v[3])};
-                // Turned inside out: listed for the host, but flips usually untangle it.
-                if (ep::orient(o[1], o[2], o[3]) <= 0) {
-                    const int at = Kokkos::atomic_fetch_add(&counters(1), 1);
-                    if (at < static_cast<int>(stuck.extent(0))) {
-                        stuck(at, 0) = t;
-                        stuck(at, 1) = -1;
+        const int stuck_before = host(1);
+        grow(0, stuck_before + dirty_count);  // find lists at most one inverted entry per tetrahedron
+        for (bool again = true; again;) {  // until the work list holds every failing triangle
+            clear(0);
+            Kokkos::parallel_for(
+                "tet_repair::find", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int i) {
+                    const int t = listed(i);
+                    if (!alive(t)) return;
+                    const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+                    const ep::Offset o[4] = {{0, 0, 0}, ep::offset(point, v[0], v[1]), ep::offset(point, v[0], v[2]),
+                                             ep::offset(point, v[0], v[3])};
+                    // Turned inside out: listed for the host, but flips usually untangle it.
+                    if (ep::orient(o[1], o[2], o[3]) <= 0) {
+                        const int at = Kokkos::atomic_fetch_add(&counters(1), 1);
+                        if (at < static_cast<int>(stuck.extent(0))) {
+                            stuck(at, 0) = t;
+                            stuck(at, 1) = -1;
+                        }
                     }
-                }
-                for (int k = 0; k < 4; ++k) {
-                    const int u = adjacent(t, k);
-                    if (u < 0 || (dirty(u) && u < t)) continue;
-                    const int far = tet_mesh::far_vertex(m, t, u);
-                    if (far < 0 || !ep::in_sphere(point, v, o, far)) continue;
-                    const int at = Kokkos::atomic_fetch_add(&counters(0), 1);
-                    if (at < work_capacity) {
-                        work(at, 0) = t;
-                        work(at, 1) = k;
+                    for (int k = 0; k < 4; ++k) {
+                        const int u = adjacent(t, k);
+                        if (u < 0 || (dirty(u) && u < t)) continue;
+                        const int far = tet_mesh::far_vertex(m, t, u);
+                        if (far < 0 || !ep::in_sphere(point, v, o, far)) continue;
+                        const int at = Kokkos::atomic_fetch_add(&counters(0), 1);
+                        if (at < work_capacity) {
+                            work(at, 0) = t;
+                            work(at, 1) = k;
+                        }
                     }
-                }
-            });
+                });
+            read();
+            again = host(0) > work_capacity;
+            if (again) {
+                grow(host(0), 0);
+                Kokkos::deep_copy(exec, Kokkos::subview(counters, 1), stuck_before);
+            }
+        }
         // Unlist them; the apply step lists the next round's.
         Kokkos::parallel_for(
             "tet_repair::unlist", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int i) { dirty(listed(i)) = 0; });
         Kokkos::deep_copy(exec, Kokkos::subview(counters, std::make_pair(3, 8)), 0);
-        read();
-        const int items = Kokkos::min(host(0), work_capacity);
+        const int items = host(0);
         stats.checked += items;
         if (items == 0) {
             // A triangle stuck earlier may have become flippable since: look
@@ -438,6 +464,7 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         const unsigned long long token = ++s.round << 32;
 
         // 2-4. Plan, vote, apply; losers stay dirty for the next round.
+        grow(0, host(1) + items);  // at most one stuck entry per plan
         Kokkos::parallel_for(
             "tet_repair::plan", Range(exec, 0, items), KOKKOS_LAMBDA(int i) {
                 const int t = work(i, 0), k = work(i, 1);
