@@ -211,17 +211,18 @@ public:
 
     int particles() const { return n_; }
     double box() const { return box_; }
+    // Faces f < faces(); the face arrays may hold more rows (capacity).
     int faces() const { return static_cast<int>(tets_.owner.extent(0)); }
     View<const int*> owner() const { return tets_.owner; }
     View<const int*> neighbour() const { return tets_.neighbour; }
-    auto area() const { return Kokkos::subview(geometry_.area, std::make_pair(0, faces()), Kokkos::ALL); }
-    auto face_centroid() const {
-        return Kokkos::subview(geometry_.centroid, std::make_pair(0, faces()), Kokkos::ALL);
-    }
+    View<const double* [3]> area() const { return geometry_.area; }
+    View<const double* [3]> face_centroid() const { return geometry_.centroid; }
+    // Cells: volume, centroid (relative to the generator), and the faces of
+    // cell i, cell_face(cell_face_start(i)) .. cell_face(cell_face_start(i + 1) - 1).
     View<const double*> volume() const { return cells_.volume; }
-    View<const double* [3]> centroid() const { return cells_.centroid; }  // relative to the generator
-    View<const int*> cell_face_start() const { return cells_.start; }   // n + 1 entries
-    auto cell_face() const { return Kokkos::subview(cells_.face, std::make_pair(0, 2 * faces())); }
+    View<const double* [3]> centroid() const { return cells_.centroid; }
+    View<const int*> cell_face_start() const { return cells_.start; }
+    View<const int*> cell_face() const { return cells_.face; }
     // The snapped positions the geometry is computed from (padded to 32 bytes).
     tet_mesh::Points4<Memory> positions() const { return positions_; }
 
