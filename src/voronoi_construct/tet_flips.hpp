@@ -480,8 +480,9 @@ Mesh to_host(const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
 // Finish a device repair that left stuck entries: repair a host copy, copy it
 // back, mark every tetrahedron it changed as touched, and give each edge
 // around them one representative (the lowest-numbered tetrahedron around
-// it). The device free list stays valid: the host only rewrites live
-// tetrahedra and appends new ones.
+// it); a tetrahedron whose edge bits change is touched too. The device free
+// list stays valid: the host only rewrites live tetrahedra and appends new
+// ones.
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state) {
@@ -515,7 +516,9 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                 const int pa = tet_mesh::position(m, u, a), pb = tet_mesh::position(m, u, b);
                 if (pa < 0 || pb < 0) continue;
                 const int bit = 1 << tet_mesh::edge_index(pa, pb);
-                edges(u) = u == lowest ? edges(u) | bit : edges(u) & ~bit;
+                const int bits = u == lowest ? edges(u) | bit : edges(u) & ~bit;
+                if (bits != edges(u)) touched(u) = 1;  // its faces are renumbered
+                edges(u) = bits;
             }
         }
     }

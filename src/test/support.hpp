@@ -360,8 +360,7 @@ struct MovingMesh {
     int n = 0;
     tet_mesh::Mesh<Memory> mesh;
     tet_repair::State<Memory> state;
-    tet_mesh::FaceRings<Memory> rings[2];
-    int current = 0;  // rings[current] holds the last step's faces
+    tet_mesh::FaceRings<Memory> rings;
     tet_mesh::Geometry<Memory> geometry;
     tet_mesh::Points4<Memory> padded;
     int unresolved = 0;  // from_rings could not resolve these
@@ -371,7 +370,7 @@ struct MovingMesh {
         const int capacity = 2 * static_cast<int>(mesh.vertex.extent(0));
         state = tet_repair::prepare(exec, x, mesh, capacity);
         const int face_capacity = 10 * n;
-        for (auto& r : rings) r = tet_mesh::make_face_rings<Memory>(capacity, face_capacity, 8 * face_capacity);
+        rings = tet_mesh::make_face_rings<Memory>(capacity, face_capacity, 8 * face_capacity);
         geometry = {Kokkos::View<double* [3], Memory>("face_area", face_capacity),
                     Kokkos::View<double* [3], Memory>("face_centroid", face_capacity),
                     Kokkos::View<double*, Memory>("cell_volume", n)};
@@ -390,9 +389,7 @@ struct MovingMesh {
     // Returns the number of faces.
     int update_geometry() {
         tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count, state.touched);
-        const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, rings[current],
-                                                      rings[1 - current]);
-        current = 1 - current;
+        const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, rings);
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         Kokkos::deep_copy(exec, state.touched, 0);
         return faces;
