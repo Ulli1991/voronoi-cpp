@@ -710,6 +710,7 @@ struct CellFaces {
 // 3. The cell face lists and cell volumes and centroids from the faces of
 // mesh (owner, neighbour) and their geometry (area, centroid), x the
 // positions the geometry was computed from. Grows out.face when needed.
+// Volumes are the same sums as those of faces(), in fixed order.
 template <class ExecSpace, class X>
 void cells(const ExecSpace& exec, const X& x, double box, const Mesh<typename ExecSpace::memory_space>& mesh,
            const Geometry<typename ExecSpace::memory_space>& geometry, CellFaces<typename ExecSpace::memory_space>& out) {
@@ -745,23 +746,41 @@ void cells(const ExecSpace& exec, const X& x, double box, const Mesh<typename Ex
     Kokkos::parallel_for(
         "tet_mesh::cell_geometry", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
             const int begin = start(i), end = start(i + 1);
+            // Fixed order: by the other particle, sorted in registers (cells
+            // with more than `local` faces sort in place).
+            constexpr int local = 48;
             auto other = [&](int f) { return owner(f) == i ? neighbour(f) : owner(f); };
-            for (int a = begin + 1; a < end; ++a) {  // fixed order: by the other particle
-                const int f = face(a), key = other(f);
-                int b = a;
-                for (; b > begin && other(face(b - 1)) > key; --b) face(b) = face(b - 1);
-                face(b) = f;
+            if (end - begin <= local) {
+                int key[local], value[local];
+                for (int a = 0; a < end - begin; ++a) {
+                    const int f = face(begin + a), k = other(f);
+                    int b = a;
+                    for (; b > 0 && key[b - 1] > k; --b) {
+                        key[b] = key[b - 1];
+                        value[b] = value[b - 1];
+                    }
+                    key[b] = k;
+                    value[b] = f;
+                }
+                for (int a = 0; a < end - begin; ++a) face(begin + a) = value[a];
+            } else {
+                for (int a = begin + 1; a < end; ++a) {
+                    const int f = face(a), k = other(f);
+                    int b = a;
+                    for (; b > begin && other(face(b - 1)) > k; --b) face(b) = face(b - 1);
+                    face(b) = f;
+                }
             }
             // Pyramids from the generator over each face: volume |A| |d| / 6,
             // centroid at 3/4 of the way to the face centroid.
             double v = 0;
             Vec3 moment{0, 0, 0};
             for (int a = begin; a < end; ++a) {
-                const int f = face(a), j = other(f);
+                const int f = face(a), o = owner(f), j = o == i ? neighbour(f) : o;
                 const Vec3 d{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box), wrap(x(j, 2) - x(i, 2), box)};
                 const Vec3 A{area(f, 0), area(f, 1), area(f, 2)};
                 Vec3 c{centroid(f, 0), centroid(f, 1), centroid(f, 2)};
-                if (owner(f) != i) c = c + d;  // given relative to the owner j
+                if (o != i) c = c + d;  // given relative to the owner j
                 const double pyramid = Kokkos::sqrt(dot(A, A) * dot(d, d)) / 6.0;
                 v += pyramid;
                 moment = moment + c * (0.75 * pyramid);

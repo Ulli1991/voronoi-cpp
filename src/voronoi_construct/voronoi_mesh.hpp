@@ -24,9 +24,11 @@
 //
 // Faces are stored once, by the particle with the lower id (the owner),
 // with the area vector pointing from owner to neighbour and the centroid
-// relative to the owner. The per-cell face lists name each cell's faces in
-// a fixed order (increasing id of the other particle); cell volumes and
-// centroids are summed in that order, so they are reproducible bit for bit.
+// relative to the owner. update() gives faces and cell volumes (summed with
+// atomics: the last bits may differ run to run). update_cells() adds the
+// per-cell face lists, each cell's faces in a fixed order (increasing id of
+// the other particle), and sums volumes and centroids in that order, so
+// they are reproducible bit for bit.
 // Faces are numbered by the tetrahedra that represent them, which follow
 // the particles' order at the start: faces then come nearly sorted by owner
 // when the caller's particle order is spatial (Morton, say).
@@ -68,7 +70,7 @@ struct Report {
 // Phase times of an update, in ms, for the benchmark: given to update(),
 // the phases are fenced and timed.
 struct Timings {
-    double repair = 0, fallback = 0, geometry = 0, cells = 0, build = 0;
+    double repair = 0, fallback = 0, geometry = 0, build = 0, cells = 0;
 };
 
 // What update() does when the device repair leaves triangles it cannot
@@ -158,9 +160,10 @@ public:
         tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};  // walked again below
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
         rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
-        geometry_ = {View<double* [3]>("face_area", faces), View<double* [3]>("face_centroid", faces), {}};
-        cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 2 * faces), View<int*>("cell_face_cursor", n_),
-                  View<double*>("cell_volume", n_), View<double* [3]>("cell_centroid", n_)};
+        geometry_ = {View<double* [3]>("face_area", faces), View<double* [3]>("face_centroid", faces),
+                     View<double*>("cell_volume", n_)};
+        cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
+                  geometry_.volume, View<double* [3]>("cell_centroid", n_)};
         if (timings) {
             exec_.fence();
             timings->build += timer.seconds() * 1e3;
@@ -207,6 +210,20 @@ public:
         return Scratch(reinterpret_cast<char*>(spare.data()), bytes);
     }
 
+    // The per-cell face lists, and volumes and centroids summed over them in
+    // fixed order (bit-reproducible), for the faces of the last update; does
+    // nothing if they are current.
+    void update_cells(Timings* timings = nullptr) {
+        if (cells_current_) return;
+        Kokkos::Timer timer;
+        tet_mesh::cells(exec_, positions_, box_, tets_, geometry_, cells_);
+        cells_current_ = true;
+        if (timings) {
+            exec_.fence();
+            timings->cells += timer.seconds() * 1e3;
+        }
+    }
+
     void set_fallback(Fallback f) { fallback_ = f; }
 
     int particles() const { return n_; }
@@ -217,9 +234,10 @@ public:
     View<const int*> neighbour() const { return tets_.neighbour; }
     View<const double* [3]> area() const { return geometry_.area; }
     View<const double* [3]> face_centroid() const { return geometry_.centroid; }
-    // Cells: volume, centroid (relative to the generator), and the faces of
-    // cell i, cell_face(cell_face_start(i)) .. cell_face(cell_face_start(i + 1) - 1).
-    View<const double*> volume() const { return cells_.volume; }
+    // Cell volumes (see update_cells); after update_cells() also the
+    // centroids (relative to the generator) and the faces of cell i,
+    // cell_face(cell_face_start(i)) .. cell_face(cell_face_start(i + 1) - 1).
+    View<const double*> volume() const { return geometry_.volume; }
     View<const double* [3]> centroid() const { return cells_.centroid; }
     View<const int*> cell_face_start() const { return cells_.start; }
     View<const int*> cell_face() const { return cells_.face; }
@@ -265,15 +283,10 @@ private:
         }
         tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
+        cells_current_ = false;
         if (timings) {
             exec_.fence();
             timings->geometry += timer.seconds() * 1e3;
-            timer.reset();
-        }
-        tet_mesh::cells(exec_, positions_, box_, tets_, geometry_, cells_);
-        if (timings) {
-            exec_.fence();
-            timings->cells += timer.seconds() * 1e3;
         }
         return faces;
     }
@@ -283,6 +296,7 @@ private:
     int n_ = 0;
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::host;
+    bool cells_current_ = false;
     double unused_ = 0;
     tet_mesh::Points4<Memory> positions_;
     neighbor_search::CellList<ExecSpace> list_;

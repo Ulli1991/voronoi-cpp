@@ -238,8 +238,9 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
     {
         voronoi::Timings t;
         const voronoi::Report r = mesh.update(x, {}, &t);
+        mesh.update_cells(&t);
         std::cout << "mesh: build_ms=" << t.build << " geometry_ms=" << t.geometry << " cells_ms=" << t.cells
-                  << " total_ms=" << t.build + t.geometry + t.cells << " faces=" << r.faces
+                  << " total_ms=" << t.build + t.geometry << " faces=" << r.faces
                   << " faces_per_cell=" << double(r.faces) / n << "\n";
     }
     DeviceMemory::phase("start_and_prepare", n);
@@ -251,8 +252,10 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
         exec.fence();
         voronoi::Timings t;
         const voronoi::Report r = mesh.update(x, {}, &t);
-        // step_ms: the device step (repair, geometry, cells) without a fallback.
-        const double step_ms = t.repair + t.geometry + t.cells;
+        mesh.update_cells(&t);
+        // step_ms: the device step (repair, geometry) without a fallback;
+        // cells_ms (face lists, ordered volumes and centroids) comes on top.
+        const double step_ms = t.repair + t.geometry;
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
                   << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
                   << " host_rebuilt=" << r.host_rebuilds << " rebuilt=" << r.rebuilt << " rebuild_ms=" << t.build

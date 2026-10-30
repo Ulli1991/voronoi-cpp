@@ -6,8 +6,8 @@
 //     rebuilds and is exact too;
 //   - faces are stored once, owner < neighbour, and close every cell;
 //     volumes fill the box; cell centroids equal those of clipping;
-//   - the per-cell face lists name each cell's faces once, in increasing
-//     id of the other particle;
+//   - the per-cell face lists (update_cells) name each cell's faces once,
+//     in increasing id of the other particle;
 //   - particle ids are the caller's: a permuted input gives the permuted
 //     mesh; the same input gives the same bits;
 //   - a local rebuild by clipping returns each face of the listed cells
@@ -65,6 +65,7 @@ int main(int argc, char** argv) {
 
     Mesh mesh(Exec{}, box);
     const voronoi::Report first = mesh.update(x);
+    mesh.update_cells();
     check.expect(first.rebuilt && first.start.exact, "the first update builds an exact mesh");
 
     {  // faces once, owner < neighbour, closing every cell; volumes fill the box
@@ -131,6 +132,7 @@ int main(int argc, char** argv) {
     {  // the same input gives the same bits; a permuted input the permuted mesh
         Mesh again(Exec{}, box);
         again.update(x);
+        again.update_cells();
         const auto v1 = to_host(mesh.volume()), v2 = to_host(again.volume());
         const auto c1 = to_host(mesh.centroid()), c2 = to_host(again.centroid());
         bool same = true;
