@@ -409,14 +409,17 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     return faces;
 }
 
-// 1. Circumcentres, one thread per tetrahedron.
+// 1. Circumcentres, one thread per tetrahedron; with `only`, just those
+// with only(t) != 0 (e.g. the ones a repair touched at unchanged positions).
 template <class ExecSpace, class X>
-void circumcentres(const ExecSpace& exec, const X& x,
-                   double box, const Mesh<typename ExecSpace::memory_space>& mesh, int count = -1) {
+void circumcentres(const ExecSpace& exec, const X& x, double box,
+                   const Mesh<typename ExecSpace::memory_space>& mesh, int count = -1,
+                   const Kokkos::View<const char*, typename ExecSpace::memory_space>& only = {}) {
     Kokkos::parallel_for(
         "tet_mesh::circumcentres",
         Kokkos::RangePolicy<ExecSpace>(exec, 0, count < 0 ? static_cast<int>(mesh.vertex.extent(0)) : count),
         KOKKOS_LAMBDA(int t) {
+            if (only.data() && !only(t)) return;
             const int v0 = mesh.vertex(t, 0);
             Vec3<double> d[3];
             for (int k = 0; k < 3; ++k) {
