@@ -3,11 +3,14 @@
 // box, cells close, faces are consistent between neighbours and lie on the
 // bisectors (support::check_cells). The thread, warp and exact kernels give
 // the same cells, and so does a cell list with a coarser base grid (other
-// slots). A face pool too small grows to what the build needs.
+// slots). A face pool too small grows to what the build needs. Particles
+// at NaN or infinity never cut another cell.
 
 #include "check.hpp"
 #include "support.hpp"
 
+#include <cmath>
+#include <limits>
 #include <sstream>
 
 int main(int argc, char** argv) {
@@ -59,6 +62,36 @@ int main(int argc, char** argv) {
         check.expect(small.capacity() > n && w.neighbours == 0 && w.volume < 1e-12,
                      "a small face pool grows to " + std::to_string(double(small.capacity()) / n) +
                          " faces per cell, same cells");
+    }
+
+    // Non-finite positions: a particle at NaN and one at infinity are never
+    // a candidate (their distances never fall below the reach), so every
+    // other cell is the cell without them, to the last bit. (Test idea from
+    // Doug Rennehan, PR #2.)
+    {
+        Points points = make_points("uniform", n);
+        const Positions clean = to_device(points);
+        points.push_back({std::nan(""), 0.5, 0.5});
+        points.push_back({std::numeric_limits<double>::infinity(), 0.5, 0.5});
+        const Positions dirty = to_device(points);
+        for (const bool warp : {false, true}) {
+            auto build = [&](const Positions& x) {
+                shell_voronoi::Cells<Memory> cells(static_cast<int>(x.extent(0)), false);
+                const auto list = cell_list(x);
+                if (warp)
+                    shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(list), cells);
+                else
+                    shell_voronoi::construct(exec, shell_voronoi::make_grid(list), cells);
+                return by_particle(cells);
+            };
+            const Reference a = build(clean), b = build(dirty);
+            long long differ = 0;
+            for (int i = 0; i < n; ++i)
+                differ += a.status[i] != b.status[i] || a.volume[i] != b.volume[i] || a.neighbours[i] != b.neighbours[i];
+            check.expect(differ == 0, std::string(warp ? "warp" : "thread") +
+                                          " kernel: NaN and infinite particles are never candidates (" +
+                                          std::to_string(differ) + " cells differ)");
+        }
     }
     return check.failed() != 0;
 }
