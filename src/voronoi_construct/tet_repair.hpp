@@ -32,7 +32,8 @@ struct State {
     ep::Points<MemorySpace> point;  // snapped positions
     Kokkos::View<char*, MemorySpace> alive;
     Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
-    // The tetrahedra flips created since the last move (repeats possible):
+    // The tetrahedra flips created since the last move (each once, but for
+    // the host fallback's repeats):
     // touched_entries of them, -1 if more than fit or the host fallback ran.
     Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
@@ -585,11 +586,18 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                         }
                     }
                 }
+                // List the new tetrahedra: slots from the free list always, reused
+                // ones unless touched (so listed) before this step. A round's flips
+                // share no tetrahedra, so this does not race.
+                int listing[3], listings = 0;
+                for (int r = 0; r < p.freshes; ++r)
+                    if (r >= p.olds || !st.touched(slot[r])) listing[listings++] = slot[r];
+                const int listed_at = Kokkos::atomic_fetch_add(&counters(8), listings);
+                for (int q = 0; q < listings; ++q)
+                    if (listed_at + q < static_cast<int>(st.touched_list.extent(0))) st.touched_list(listed_at + q) = listing[q];
                 for (int r = 0; r < p.olds; ++r) st.touched(p.old[r]) = 1;
-                const int listed_at = Kokkos::atomic_fetch_add(&counters(8), p.freshes);
                 for (int r = 0; r < p.freshes; ++r) {
                     st.touched(slot[r]) = 1;
-                    if (listed_at + r < static_cast<int>(st.touched_list.extent(0))) st.touched_list(listed_at + r) = slot[r];
                     detail::mark(st, slot[r]);
                 }
             });

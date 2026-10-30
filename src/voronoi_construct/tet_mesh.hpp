@@ -347,9 +347,11 @@ FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
 
 // The face of edge i-j (particles of tetrahedron t) in the numbering
 // `start`, and its representative: found by walking around the edge.
-// Returns -1 if the walk does not reach it.
-template <class M, class Start>
-KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, int t, int i, int j, int& representative) {
+// Returns -1 if the walk does not reach it, or if it first meets a touched
+// tetrahedron numbered below t (touched(u) != 0), which finds the face itself.
+template <class M, class Start, class Touched>
+KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, const Touched& touched, int t, int i, int j,
+                                     int& representative) {
     for (int current = t, before = -1, steps = 0; steps < 64; ++steps) {
         const int bits = m.edges(current);
         const int a = position(m, current, i), b = position(m, current, j);
@@ -359,6 +361,7 @@ KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, int t, int 
             representative = current;
             return start(current) + Kokkos::Experimental::popcount_builtin(static_cast<unsigned>(bits & (bit - 1)));
         }
+        if (current < t && touched(current)) return -1;
         int next = -1;
         for (int c = 0; c < 4 && next < 0; ++c) {
             const int v = m.vertex(current, c);
@@ -454,7 +457,8 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                 for (int k = 0; k < 6; ++k) {
                     int ka, kb, representative = -1;
                     edge_ends(k, ka, kb);
-                    const int f = edge_face(mesh, start, t, mesh.vertex(t, ka), mesh.vertex(t, kb), representative);
+                    const int f =
+                        edge_face(mesh, start, touched, t, mesh.vertex(t, ka), mesh.vertex(t, kb), representative);
                     if (f >= 0 && Kokkos::atomic_exchange(&ring_start(f), ~representative) >= 0) found[n++] = f;
                 }
                 if (n == 0) return;
