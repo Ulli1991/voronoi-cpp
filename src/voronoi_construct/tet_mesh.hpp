@@ -682,20 +682,29 @@ void faces(const ExecSpace& exec, const X& x, double box,
             const Vec3 p = row(x, i);
             auto vertex = [&](int m) { return wrap(row(mesh.centre, mesh.ring(m)) - p, box); };
             const Vec3 dj = wrap(row(x, j) - p, box);
+            // Fan triangles (first, previous, v): twice the area vector, and
+            // (previous + v) weighted by the triangle's area projected on dj
+            // (the face is perpendicular to dj up to rounding), divided once
+            // per face (idea from Doug Rennehan's plume, commit 6cbb429).
             const Vec3 first = vertex(begin);
-            Vec3 previous = vertex(begin + 1), area{0, 0, 0}, moment{0, 0, 0};
+            Vec3 previous = vertex(begin + 1), twice_area{0, 0, 0}, weighted{0, 0, 0};
             double weight = 0;
             for (int m = begin + 2; m < end; ++m) {
                 const Vec3 v = vertex(m);
                 const Vec3 twice = cross(previous - first, v - first);
-                area = area + twice * 0.5;
-                const double w = Kokkos::sqrt(dot(twice, twice));
+                twice_area = twice_area + twice;
+                const double w = Kokkos::abs(dot(twice, dj));
                 weight += w;
-                moment = moment + (first + previous + v) * (w / 3.0);
+                weighted = weighted + (previous + v) * w;
                 previous = v;
             }
-            if (dot(area, dj) < 0) area = area * -1.0;
-            const Vec3 centroid = weight > 0 ? moment * (1.0 / weight) : first;
+            Vec3 area = twice_area * 0.5;
+            double projected = dot(area, dj);  // |A| |dj|, A parallel to dj up to rounding
+            if (projected < 0) {
+                area = area * -1.0;
+                projected = -projected;
+            }
+            const Vec3 centroid = weight > 0 ? (first + weighted * (1.0 / weight)) * (1.0 / 3.0) : first;
             out.area(f, 0) = area.x;
             out.area(f, 1) = area.y;
             out.area(f, 2) = area.z;
@@ -703,7 +712,7 @@ void faces(const ExecSpace& exec, const X& x, double box,
             out.centroid(f, 1) = centroid.y;
             out.centroid(f, 2) = centroid.z;
             if (!with_volume) return;
-            const double pyramid = Kokkos::sqrt(dot(area, area) * dot(dj, dj)) / 6.0;
+            const double pyramid = projected * (1.0 / 6.0);
             Kokkos::atomic_add(&out.volume(i), pyramid);
             Kokkos::atomic_add(&out.volume(j), pyramid);
         });
@@ -727,9 +736,10 @@ inline std::size_t cells_scratch_bytes(int faces) { return 2 * static_cast<std::
 
 namespace detail {
 
-// Cell i's pyramid over face f (other particle j): volume |A| |d| / 6 and
-// centroid at 3/4 of the way to the face centroid, which is given relative
-// to the owner, the lower id.
+// Cell i's pyramid over face f (other particle j): six times its volume,
+// |A.d| (A is parallel to d up to rounding), and its centroid at 3/4 of the
+// way to the face centroid c, which is given relative to the owner, the
+// lower id.
 template <class X, class Area, class Centroid>
 KOKKOS_INLINE_FUNCTION double pyramid(const X& x, double box, const Area& area, const Centroid& centroid, int i, int j,
                                       int f, Vec3& c) {
@@ -737,7 +747,7 @@ KOKKOS_INLINE_FUNCTION double pyramid(const X& x, double box, const Area& area, 
     const Vec3 A = row(area, f);
     c = row(centroid, f);
     if (j < i) c = c + d;
-    return Kokkos::sqrt(dot(A, A) * dot(d, d)) / 6.0;
+    return Kokkos::abs(dot(A, d));
 }
 
 // Sort cell i's list entries [begin, end) by the other particle (in place)
@@ -762,12 +772,13 @@ KOKKOS_INLINE_FUNCTION void cell_geometry(const X& x, double box, const Area& ar
         Vec3 c;
         const double p = pyramid(x, box, area, centroid, i, other(a), face(a), c);
         v += p;
-        moment = moment + c * (0.75 * p);
+        moment = moment + c * p;
     }
-    volume(i) = v;
-    cell_centroid(i, 0) = moment.x / v;
-    cell_centroid(i, 1) = moment.y / v;
-    cell_centroid(i, 2) = moment.z / v;
+    volume(i) = v * (1.0 / 6.0);
+    const double scale = 0.75 / v;
+    cell_centroid(i, 0) = moment.x * scale;
+    cell_centroid(i, 1) = moment.y * scale;
+    cell_centroid(i, 2) = moment.z * scale;
 }
 
 #if defined(KOKKOS_ENABLE_CUDA)
@@ -822,13 +833,14 @@ struct CellGeometryWarp {
             const double pr = __shfl_sync(all, p, r);
             const Vec3 cr{__shfl_sync(all, c.x, r), __shfl_sync(all, c.y, r), __shfl_sync(all, c.z, r)};
             v += pr;
-            moment = moment + cr * (0.75 * pr);
+            moment = moment + cr * pr;
         }
         if (l == 0) {
-            volume(i) = v;
-            cell_centroid(i, 0) = moment.x / v;
-            cell_centroid(i, 1) = moment.y / v;
-            cell_centroid(i, 2) = moment.z / v;
+            volume(i) = v * (1.0 / 6.0);
+            const double scale = 0.75 / v;
+            cell_centroid(i, 0) = moment.x * scale;
+            cell_centroid(i, 1) = moment.y * scale;
+            cell_centroid(i, 2) = moment.z * scale;
         }
 #endif
     }
