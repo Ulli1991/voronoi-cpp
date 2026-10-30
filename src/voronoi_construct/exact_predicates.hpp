@@ -118,15 +118,51 @@ KOKKOS_INLINE_FUNCTION double det3_float(const Offset& a, const Offset& b, const
     return ax * m0 - ay * m1 + az * m2;
 }
 
-// Sign of the orientation of (o, a, b, c) given as offsets from o.
-KOKKOS_INLINE_FUNCTION int orient(const Offset& a, const Offset& b, const Offset& c) {
+// What the *_filter predicates return when the double filter is uncertain.
+// A kernel can decide with the filters alone and leave these rare cases to
+// a second kernel with the exact arithmetic, which would otherwise raise
+// every thread's registers (idea from Doug Rennehan's plume).
+constexpr int undecided = 2;
+
+// Sign of the orientation of (o, a, b, c) given as offsets from o, by the
+// double filter alone (or undecided).
+KOKKOS_INLINE_FUNCTION int orient_filter(const Offset& a, const Offset& b, const Offset& c) {
     double permanent;
     const double d = det3_float(a, b, c, permanent);
     const double bound = 8 * epsilon * permanent;
-    if (d > bound) return 1;
-    if (d < -bound) return -1;
+    return d > bound ? 1 : d < -bound ? -1 : undecided;
+}
+
+// Sign of the orientation of (o, a, b, c) given as offsets from o.
+KOKKOS_INLINE_FUNCTION int orient(const Offset& a, const Offset& b, const Offset& c) {
+    const int filtered = orient_filter(a, b, c);
+    if (filtered != undecided) return filtered;
     const i128 exact = det3(a, b, c);
     return exact > 0 ? 1 : exact < 0 ? -1 : 0;
+}
+
+// D = det [1 p_i |p_i|^2] over the five points of in_sphere; e inside means
+// sign(D) = -orientation. Expanded along the lift column; this is its sign
+// by the double filter, 0 when uncertain (a, b, c, e: offsets from p[0]).
+KOKKOS_INLINE_FUNCTION int in_sphere_sign_float(const Offset& a, const Offset& b, const Offset& c, const Offset& e) {
+    auto lift_float = [](const Offset& x) {
+        return double(x[0]) * double(x[0]) + double(x[1]) * double(x[1]) + double(x[2]) * double(x[2]);
+    };
+    double pa, pb, pc, pe;
+    const double ta = det3_float(b, c, e, pa), tb = det3_float(a, c, e, pb), tc = det3_float(a, b, e, pc),
+                 te = det3_float(a, b, c, pe);
+    const double la = lift_float(a), lb = lift_float(b), lc = lift_float(c), le = lift_float(e);
+    const double value = -la * ta + lb * tb - lc * tc + le * te;
+    const double bound = 20 * epsilon * (la * pa + lb * pb + lc * pc + le * pe);
+    return value > bound ? 1 : value < -bound ? -1 : 0;
+}
+
+// in_sphere by the double filters alone: 1 inside, 0 outside, or undecided.
+KOKKOS_INLINE_FUNCTION int in_sphere_filter(const Offset* p) {
+    const Offset a = minus(p[1], p[0]), b = minus(p[2], p[0]), c = minus(p[3], p[0]), e = minus(p[4], p[0]);
+    const int o = orient_filter(a, b, c);
+    const int d = o == undecided ? 0 : in_sphere_sign_float(a, b, c, e);
+    return d == 0 ? undecided : d * o < 0;
 }
 
 // Whether p[4] lies inside the circumsphere of the tetrahedron p[0..3] (any
@@ -135,24 +171,9 @@ KOKKOS_INLINE_FUNCTION int orient(const Offset& a, const Offset& b, const Offset
 // grows by eps^(its id), lower ids dominating. The perturbed test is never a
 // tie, because the term of p[4] is the tetrahedron's own orientation.
 KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
-    // D = det [1 p_i |p_i|^2] over the five points; e inside means
-    // sign(D) = -orientation. Expanded along the lift column.
     const Offset a = minus(p[1], p[0]), b = minus(p[2], p[0]), c = minus(p[3], p[0]), e = minus(p[4], p[0]);
     const int o = orient(a, b, c);
-    int d = 0;
-    {
-        auto lift_float = [](const Offset& x) {
-            return double(x[0]) * double(x[0]) + double(x[1]) * double(x[1]) + double(x[2]) * double(x[2]);
-        };
-        double pa, pb, pc, pe;
-        const double ta = det3_float(b, c, e, pa), tb = det3_float(a, c, e, pb), tc = det3_float(a, b, e, pc),
-                     te = det3_float(a, b, c, pe);
-        const double la = lift_float(a), lb = lift_float(b), lc = lift_float(c), le = lift_float(e);
-        const double value = -la * ta + lb * tb - lc * tc + le * te;
-        const double bound = 20 * epsilon * (la * pa + lb * pb + lc * pc + le * pe);
-        if (value > bound) d = 1;
-        if (value < -bound) d = -1;
-    }
+    int d = in_sphere_sign_float(a, b, c, e);
     if (d == 0) {
         Wide w;
         add_product(w, det3(b, c, e), -lift(a));
@@ -222,6 +243,17 @@ template <class P>
 KOKKOS_INLINE_FUNCTION bool in_sphere(const P& point, const int* v, int e) {
     const Offset o[4] = {{0, 0, 0}, offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3])};
     return in_sphere(point, v, o, e);
+}
+
+// The same by the double filters alone (see undecided).
+template <class P>
+KOKKOS_INLINE_FUNCTION int orient_filter(const P& point, const int* v) {
+    return orient_filter(offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3]));
+}
+template <class P>
+KOKKOS_INLINE_FUNCTION int in_sphere_filter(const P& point, const int* v, const Offset* o, int e) {
+    const Offset p[5] = {o[0], o[1], o[2], o[3], offset(point, v[0], e)};
+    return in_sphere_filter(p);
 }
 
 }  // namespace exact_predicates
