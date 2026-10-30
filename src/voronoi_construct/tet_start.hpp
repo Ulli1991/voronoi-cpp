@@ -398,7 +398,7 @@ template <class ExecSpace, class X>
 void snap(const ExecSpace& exec, const X& x, double box, const ep::Points<typename ExecSpace::memory_space>& point) {
     Kokkos::parallel_for(
         "tet_start::snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) point(i, a) = ep::snap(x(i, a) / box);
+            for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(ep::snap(x(i, a) / box));
         });
 }
 

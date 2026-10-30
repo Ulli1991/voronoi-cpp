@@ -153,7 +153,7 @@ int main(int argc, char** argv) {
         const double x[5][3] = {{0.999, 0.5, 0.5}, {0.001, 0.5, 0.5}, {0.999, 0.502, 0.5}, {0.999, 0.5, 0.502},
                                 {0.0005, 0.501, 0.501}};
         for (int i = 0; i < 5; ++i)
-            for (int a = 0; a < 3; ++a) point(i, a) = ep::snap(x[i][a]);
+            for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(ep::snap(x[i][a]));
         const int tet[4] = {0, 1, 2, 3}, flipped[4] = {0, 1, 3, 2};
         check.expect(ep::orient(point, tet) == 1 && ep::orient(point, flipped) == -1,
                      "orient on particles across the periodic boundary");
