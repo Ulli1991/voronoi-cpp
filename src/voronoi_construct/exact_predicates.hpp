@@ -94,6 +94,13 @@ KOKKOS_INLINE_FUNCTION i128 det3(const Offset& a, const Offset& b, const Offset&
            i128(a[2]) * (i128(b[0]) * c[1] - i128(b[1]) * c[0]);
 }
 
+// r = p x q, exactly.
+KOKKOS_INLINE_FUNCTION void cross(const Offset& p, const Offset& q, i128* r) {
+    r[0] = i128(p[1]) * q[2] - i128(p[2]) * q[1];
+    r[1] = i128(p[2]) * q[0] - i128(p[0]) * q[2];
+    r[2] = i128(p[0]) * q[1] - i128(p[1]) * q[0];
+}
+
 KOKKOS_INLINE_FUNCTION i128 lift(const Offset& a) {
     return i128(a[0]) * a[0] + i128(a[1]) * a[1] + i128(a[2]) * a[2];
 }

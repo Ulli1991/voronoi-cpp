@@ -29,7 +29,7 @@ constexpr int lanes = 32;
 constexpr int max_planes = 64;
 constexpr int max_vertices = 64;
 constexpr int per_lane = max_vertices / lanes;  // vertices (and planes) each lane owns
-// Four cells (warps) per block: their polyhedra (4.4 KB each in double) take
+// Four cells (warps) per block: their polyhedra (4.4 KB each) take
 // 18 KB of block scratch.
 constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
@@ -41,14 +41,13 @@ constexpr std::uint8_t none = 255;
 // k to corner k + 1. Vertices stay in their slots: a cut puts its new
 // vertices into free slots and rewires only the edges it crosses. A 64-bit
 // mask (in registers) marks the slots in use.
-template <class Real>
 struct alignas(16) Polyhedron {
     // Plane normals only weight the face centroids: a rounded normal scales
     // every triangle of a face alike, so float is enough.
     float nx[max_planes], ny[max_planes], nz[max_planes];
     int neighbour[max_planes];
-    Real x[max_vertices], y[max_vertices], z[max_vertices];
-    Real side[max_vertices];  // signed distance to the cutting plane
+    double x[max_vertices], y[max_vertices], z[max_vertices];
+    double side[max_vertices];  // signed distance to the cutting plane
     std::uint32_t corner[max_vertices];
     std::uint32_t adjacent[max_vertices];
     std::uint8_t free_slots[max_vertices];  // stack of the slots not in use
@@ -123,8 +122,7 @@ __device__ inline void store_byte(std::uint32_t& packed, int k, int value) {
     reinterpret_cast<std::uint8_t*>(&packed)[k] = static_cast<std::uint8_t>(value);
 }
 
-template <class Real>
-__device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, std::uint64_t& live) {
+__device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uint64_t& live) {
     const int l = lane();
     if (l < box_planes) {
         const int axis = l / 2;
@@ -167,21 +165,20 @@ __device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, std::uint64
 
 // Clip by the bisector with a particle at offset d (all lanes pass the same
 // d). Returns ok when the plane does not cut or after the cut is applied.
-template <class Real>
-__device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real& radius2, Vec3<Real> d,
+__device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, double& radius2, Vec3 d,
                     int neighbour) {
     const int l = lane();
-    const Real offset = Real(0.5) * dot(d, d);
+    const double offset = 0.5 * dot(d, d);
     // A vertex is cut off when side > 64 eps |d| R, compared in squares.
-    const Real scale = Real(64) * Kokkos::Experimental::epsilon_v<Real>;
-    const Real tolerance2 = scale * scale * dot(d, d) * radius2;
+    const double scale = 64 * Kokkos::Experimental::epsilon_v<double>;
+    const double tolerance2 = scale * scale * dot(d, d) * radius2;
     bool out[per_lane] = {};
-    Real radius = 0;  // largest squared distance of a kept vertex, then of any
+    double radius = 0;  // largest squared distance of a kept vertex, then of any
     for (int k = 0; k < per_lane; ++k) {
         const int w = l + k * lanes;
         if (!(live >> w & 1)) continue;
-        const Real x = c.x[w], y = c.y[w], z = c.z[w];
-        const Real side = d.x * x + d.y * y + d.z * z - offset;
+        const double x = c.x[w], y = c.y[w], z = c.z[w];
+        const double side = d.x * x + d.y * y + d.z * z - offset;
         c.side[w] = side;
         out[k] = side > 0 && side * side > tolerance2;
         if (!out[k]) radius = Kokkos::max(radius, x * x + y * y + z * z);
@@ -233,8 +230,8 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
         const std::uint32_t edge = c.crossing[j];
         const int w = byte(edge, 0), u = byte(edge, 1);
         const int s = c.free_slots[free - 1 - j];
-        const Real t = c.side[w] / (c.side[w] - c.side[u]);
-        const Real px = c.x[w] + (c.x[u] - c.x[w]) * t, py = c.y[w] + (c.y[u] - c.y[w]) * t,
+        const double t = c.side[w] / (c.side[w] - c.side[u]);
+        const double px = c.x[w] + (c.x[u] - c.x[w]) * t, py = c.y[w] + (c.y[u] - c.y[w]) * t,
                    pz = c.z[w] + (c.z[u] - c.z[w]) * t;
         c.x[s] = px;
         c.y[s] = py;
@@ -302,12 +299,12 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 // Adaptive: walk each cell at its level (CellList::level); otherwise at the
 // base level only, leaving cells it cannot certify to the thread kernel.
 // with_rings: record face rings (Cells::with_rings) instead of face geometry.
-template <class Real, class MemorySpace, bool adaptive, bool with_rings>
+template <class MemorySpace, bool adaptive, bool with_rings>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
     Cells<MemorySpace> out;
-    Real half_width;
+    double half_width;
     Stencil<MemorySpace> stencil;
     // Persistent warps (about two waves of resident blocks) take cells from
     // this counter until none are left, so a slow cell holds up only its own
@@ -316,9 +313,9 @@ struct Kernel {
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
-        auto* base = static_cast<Polyhedron<Real>*>(
-            member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron<Real>)));
-        Polyhedron<Real>& c = base[member.team_rank()];
+        auto* base = static_cast<Polyhedron*>(
+            member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron)));
+        Polyhedron& c = base[member.team_rank()];
         while (true) {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
@@ -333,15 +330,15 @@ struct Kernel {
 
 #if defined(__CUDA_ARCH__)
     // Build cell t in polyhedron c, with all lanes of the warp.
-    __device__ __forceinline__ void build(Polyhedron<Real>& c, int t) const {
+    __device__ __forceinline__ void build(Polyhedron& c, int t) const {
         const int l = lane();
         const auto& positions = grid.positions;
         const double box = grid.box;
-        const Vec3<double> p{positions(t, 0), positions(t, 1), positions(t, 2)};
+        const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
 
         int planes = 0;
         std::uint64_t live = 0;  // slots holding vertices
-        Real radius2 = 3 * half_width * half_width;
+        double radius2 = 3 * half_width * half_width;
         start_cube(c, half_width, planes, live);
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
@@ -355,7 +352,7 @@ struct Kernel {
             __syncwarp(all_lanes);
             sort_candidates(key, slot, packed);
             // Lane i loads candidate i at once; the loop broadcasts it.
-            Vec3<double> mine{0, 0, 0};
+            Vec3 mine{0, 0, 0};
             if (l < buffered)
                 mine = {positions(slot, 0) + image(packed, 0) * box - p.x,
                         positions(slot, 1) + image(packed, 1) * box - p.y,
@@ -364,10 +361,10 @@ struct Kernel {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
                 const int q = __shfl_sync(all_lanes, slot, i);
-                const Vec3<double> d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
+                const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
                                      __shfl_sync(all_lanes, mine.z, i)};
                 const int before = planes;
-                status = clip(c, planes, live, radius2, convert<Real>(d), q);
+                status = clip(c, planes, live, radius2, d, q);
                 ++clipped;
                 cuts += planes > before;
             }
@@ -385,14 +382,14 @@ struct Kernel {
             const double width = box / (1 << level);
             const int reach = level_reach(level), entries = stencil.ends(reach);
             for (int first = 0; first < entries && status == ok; first += lanes) {
-                if (double(stencil.bound2(first)) * width * width >= 4.0 * static_cast<double>(radius2)) {
+                if (double(stencil.bound2(first)) * width * width >= 4.0 * radius2) {
                     certified = true;
                     break;
                 }
                 ++rings;
                 const int e = first + l;
                 int begin = 0, end = 0, packed = 0;
-                const double reach2 = 4.0 * static_cast<double>(radius2);
+                const double reach2 = 4.0 * radius2;
                 if (e < entries)
                     stencil_cell<adaptive>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end, packed);
                 const int most = warp_max(end - begin);
@@ -405,7 +402,7 @@ struct Kernel {
                         const double ddy = positions(q, 1) + image(packed, 1) * box - p.y;
                         const double ddz = positions(q, 2) + image(packed, 2) * box - p.z;
                         d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                        take = d2 < 4.0 * static_cast<double>(radius2);
+                        take = d2 < 4.0 * radius2;
                     }
                     const unsigned taking = __ballot_sync(all_lanes, take);
                     if (taking == 0) continue;
@@ -423,7 +420,7 @@ struct Kernel {
             }
             if (status != ok || certified) break;
             // Cells outside the stencil are at least `reach` widths away.
-            if (reach * width * reach * width >= 4.0 * static_cast<double>(radius2)) {
+            if (reach * width * reach * width >= 4.0 * radius2) {
                 certified = true;
                 break;
             }
@@ -457,22 +454,22 @@ struct Kernel {
         __syncwarp(all_lanes);
 
         double volume = 0;
-        Vec3<double> moment{0, 0, 0}, area_sum{0, 0, 0};
+        Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
         double area_magnitude = 0;
         int faces = 0;
         bool broken = false;
         int owned_here = 0;
         int owned_plane[per_lane], owned_length[per_lane];
         for (int k = 0; k < per_lane; ++k) owned_plane[k] = -1;
-        Vec3<double> owned_area[per_lane], owned_centroid[per_lane];
-        const double sliver = 64 * Kokkos::Experimental::epsilon_v<Real> * static_cast<double>(radius2);
+        Vec3 owned_area[per_lane], owned_centroid[per_lane];
+        const double sliver = 64 * Kokkos::Experimental::epsilon_v<double> * radius2;
         for (int k = 0; k < per_lane && status == ok; ++k) {
             const int plane = l + k * lanes;
             if (plane < box_planes || plane >= planes || c.first[plane] == none) continue;
             const int start = c.first[plane];
-            const Vec3<double> normal{double(c.nx[plane]), double(c.ny[plane]), double(c.nz[plane])};
-            const Vec3<double> first{double(c.x[start]), double(c.y[start]), double(c.z[start])};
-            Vec3<double> previous = first, area{0, 0, 0}, face_moment{0, 0, 0};
+            const Vec3 normal{double(c.nx[plane]), double(c.ny[plane]), double(c.nz[plane])};
+            const Vec3 first{c.x[start], c.y[start], c.z[start]};
+            Vec3 previous = first, area{0, 0, 0}, face_moment{0, 0, 0};
             double weight = 0;
             int vertex = start, steps = 0;
             do {
@@ -483,8 +480,8 @@ struct Kernel {
                     break;
                 }
                 const int next = byte(c.adjacent[vertex], (at + 2) % 3);
-                const Vec3<double> x{double(c.x[next]), double(c.y[next]), double(c.z[next])};
-                const Vec3<double> twice = cross(previous - first, x - first);
+                const Vec3 x{c.x[next], c.y[next], c.z[next]};
+                const Vec3 twice = cross(previous - first, x - first);
                 area = area + twice * 0.5;
                 const double w = dot(twice, normal);
                 weight += w;
@@ -590,7 +587,7 @@ struct Kernel {
 // the warp capacities with the per-thread kernel; with face rings if `out`
 // records them (Cells::with_rings). Other backends use the per-thread
 // kernel throughout.
-template <class Real, class ExecSpace>
+template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     Cells<typename ExecSpace::memory_space>& out) {
 #if defined(KOKKOS_ENABLE_CUDA)
@@ -598,7 +595,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
             throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
         const bool rings = out.with_rings();
-        const Real half_width = detail::start_half_width<Real>(grid.box);
+        const double half_width = detail::start_half_width(grid.box);
         using Memory = typename ExecSpace::memory_space;
         const Stencil<Memory> stencil = make_stencil(exec);
         Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
@@ -608,7 +605,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         Kokkos::TeamPolicy<Kokkos::Cuda,
                            Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
             policy(exec, blocks, warp::cells_per_block, warp::lanes);
-        policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron<Real>)));
+        policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron)));
         // Near-uniform input (every particle at the base level) takes the
         // kernel without level changes and fine-cell searches: its smaller
         // code is 4 % faster on uniform random points.
@@ -622,19 +619,19 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Kokkos::deep_copy(exec, next_cell, 0);
             if (rings)
                 Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
-                                     warp::Kernel<Real, Memory, true, true>{grid, out, half_width, stencil, next_cell});
+                                     warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell});
             else if (off_base > 0)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Real, Memory, true, false>{grid, out, half_width, stencil, next_cell});
+                                     warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell});
             else
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Real, Memory, false, false>{grid, out, half_width, stencil, next_cell});
-            detail::construct_with_overflow<Real>(exec, grid, stencil, out, detail::Pass::failed);
+                                     warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell});
+            detail::construct_cells(exec, grid, stencil, out, detail::Pass::failed);
         });
         return;
     }
 #endif
-    construct<Real>(exec, grid, out);
+    construct(exec, grid, out);
 }
 
 }  // namespace shell_voronoi

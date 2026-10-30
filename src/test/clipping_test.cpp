@@ -23,11 +23,11 @@ int main(int argc, char** argv) {
         const auto grid = shell_voronoi::make_grid(list);
 
         shell_voronoi::Cells<Memory> thread(n, true), warp(n, true);
-        shell_voronoi::construct<double>(exec, grid, thread);
-        shell_voronoi::construct_warp<double>(exec, grid, warp);
+        shell_voronoi::construct(exec, grid, thread);
+        shell_voronoi::construct_warp(exec, grid, warp);
         for (const auto& [name, cells] : {std::pair{"thread", thread}, std::pair{"warp", warp}}) {
             std::ostringstream summary;
-            const bool valid = check_cells(cells, list.positions, true, summary) == 0;
+            const bool valid = check_cells(cells, list.positions, summary) == 0;
             std::string details = summary.str();
             details.pop_back();  // the newline
             check.expect(valid, std::string(name) + " kernel cells valid\n" + details);
@@ -42,13 +42,13 @@ int main(int argc, char** argv) {
         // A base grid twice as coarse: other slots, the same cells.
         const auto coarse = cell_list(x, 1.0, 2.0);
         shell_voronoi::Cells<Memory> cells(n, false);
-        shell_voronoi::construct_warp<double>(exec, shell_voronoi::make_grid(coarse), cells);
+        shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(coarse), cells);
         const Difference c = compare(reference, by_particle(cells, coarse.order));
         check.expect(c.neighbours == 0 && c.volume < 1e-12, "coarser base grid gives the same cells" + agree(c));
 
         // A face pool for one face per cell grows to what the build needs.
         shell_voronoi::Cells<Memory> small(n, false, 1);
-        shell_voronoi::construct_warp<double>(exec, grid, small);
+        shell_voronoi::construct_warp(exec, grid, small);
         const Difference w = compare(reference, by_particle(small, list.order));
         check.expect(small.capacity() > n && w.neighbours == 0 && w.volume < 1e-12,
                      "a small face pool grows to " + std::to_string(double(small.capacity()) / n) +

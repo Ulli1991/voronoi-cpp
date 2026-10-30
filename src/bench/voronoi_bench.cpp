@@ -126,17 +126,17 @@ int rebuild(const std::vector<std::string>& args, double width_factor) {
               << list.cells_per_side() << "^3 repeats=" << repeats << "\n";
     int failures = 0;
     std::vector<double> first_volumes;
-    for (const std::string variant : {"thread-double", "warp-double"}) {
+    for (const std::string variant : {"thread", "warp"}) {
         if (selection != "all" && variant.find(selection) == std::string::npos) continue;
         shell_voronoi::Cells<Memory> cells(n, true);
         const double construct_ms = median_ms(repeats, [&] {
-            if (variant == "thread-double") shell_voronoi::construct<double>(exec, grid, cells);
-            if (variant == "warp-double") shell_voronoi::construct_warp<double>(exec, grid, cells);
+            if (variant == "thread") shell_voronoi::construct(exec, grid, cells);
+            if (variant == "warp") shell_voronoi::construct_warp(exec, grid, cells);
         });
         std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
                   << " construct_Mcells_s=" << n / construct_ms / 1e3
                   << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-        failures += check_cells(cells, list.positions, true, std::cout);
+        failures += check_cells(cells, list.positions, std::cout);
         const auto volume = to_host(cells.volume);
         if (first_volumes.empty()) {
             first_volumes.assign(volume.data(), volume.data() + n);
@@ -212,10 +212,10 @@ int step(const std::vector<std::string>& args, bool verify, bool debug) {
         auto cells = cells_with_rings(list);  // sizes the ring pool
         tet_mesh::Mesh<Memory> mesh;
         tet_start::Stats start;
-        const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp<double>(exec, grid, cells); });
+        const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
         const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
         const double start_ms = median_ms(repeats, [&] {
-            shell_voronoi::construct_warp<double>(exec, grid, cells);
+            shell_voronoi::construct_warp(exec, grid, cells);
             start = tet_start::build(exec, grid, cells, mesh);
         });
         const int tets = static_cast<int>(mesh.vertex.extent(0));

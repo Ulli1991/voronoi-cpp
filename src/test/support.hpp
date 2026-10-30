@@ -271,10 +271,8 @@ double median_ms(int repeats, const F& f) {
 // owned face centroid equidistant from its two generators with no generator
 // closer (brute force over all generators for a sample of cells). Prints a
 // one-line summary; returns the number of failed checks.
-inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& slot_positions, bool is_double,
-                       std::ostream& out) {
-    const double volume_tolerance = is_double ? 1e-12 : 1e-5, closure_tolerance = is_double ? 1e-12 : 1e-5,
-                 distance_tolerance = is_double ? 1e-9 : 1e-4;
+inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& slot_positions, std::ostream& out) {
+    constexpr double volume_tolerance = 1e-12, closure_tolerance = 1e-12, distance_tolerance = 1e-9;
     const auto status = to_host(cells.status);
     const auto face_count = to_host(cells.face_count);
     const auto owned_count = to_host(cells.owned_count);
@@ -347,7 +345,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
 inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list,
                                                      long long entries = 0) {
     auto cells = shell_voronoi::Cells<Memory>::with_rings(list.n, entries > 0 ? entries : 64LL * list.n);
-    shell_voronoi::construct_warp<double>(Exec{}, shell_voronoi::make_grid(list), cells);
+    shell_voronoi::construct_warp(Exec{}, shell_voronoi::make_grid(list), cells);
     return cells;
 }
 
@@ -405,7 +403,7 @@ inline Reference clipped(const Positions& x, double box = 1.0) {
     const int n = static_cast<int>(x.extent(0));
     const auto list = cell_list(x, box);
     shell_voronoi::Cells<Memory> cells(n, false);
-    shell_voronoi::construct_warp<double>(Exec{}, shell_voronoi::make_grid(list), cells);
+    shell_voronoi::construct_warp(Exec{}, shell_voronoi::make_grid(list), cells);
     return by_particle(cells, list.order);
 }
 

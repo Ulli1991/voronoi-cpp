@@ -156,12 +156,16 @@ int main(int argc, char** argv) {
                                             ", several " + std::to_string(many) + ")");
         // Random input needs no patch: the clipping's rings are already right.
         if (kind == "jittered") check.expect(stats.patched == 0, "jittered: nothing patched");
-        // The oracle is not blind: it rejects the clipping's guess on a lattice.
-        if (kind == "lattice") {
-            tet_mesh::Mesh<Memory> guess;
-            tet_mesh::from_rings(Exec{}, cells_with_rings(x), guess);
-            const Verdict g = oracle(x, 1.0, guess);
-            check.expect(!g.box_volume && g.unpaired > 0, "lattice: the oracle rejects tetrahedra from the clipping's rings");
+        // The oracle is not blind: it rejects the mesh with one corner moved
+        // to another particle.
+        if (kind == "jittered") {
+            tet_mesh::Mesh<Memory> broken = mesh;
+            broken.vertex = tet_mesh::Quads<Memory>("broken", mesh.vertex.extent(0));
+            Kokkos::deep_copy(broken.vertex, mesh.vertex);
+            auto corner = Kokkos::subview(broken.vertex, 0, 0);
+            Kokkos::deep_copy(corner, (to_host(Kokkos::subview(mesh.vertex, 0, 0))() + 1000) % x.extent(0));
+            const Verdict g = oracle(x, 1.0, broken);
+            check.expect(g.unpaired > 0 && g.not_empty > 0, "jittered: the oracle rejects a mesh with one corner moved");
         }
     }
     {  // larger, representatives only (the oracle above is quadratic)

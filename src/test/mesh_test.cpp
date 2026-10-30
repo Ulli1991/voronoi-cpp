@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
         check.expect(std::count(status.data(), status.data() + n, int(shell_voronoi::ok)) == n, "clipping build ok");
         {  // a ring pool too small grows to what the build needs
             auto small = shell_voronoi::Cells<Memory>::with_rings(n, 1000);
-            shell_voronoi::construct_warp<double>(exec, shell_voronoi::make_grid(cell_list(x)), small);
+            shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(cell_list(x)), small);
             const long long needed = small.needed(), entries = cells.needed();
             const auto small_status = to_host(small.status);
             check.expect(needed == entries && small.capacity() >= needed &&

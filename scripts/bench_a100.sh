@@ -16,7 +16,7 @@ module load gcc/14 cuda/13.0 cmake
 build="${1:-build-cuda}"
 nvidia-smi -L
 for kind in jittered uniform; do
-    "$build/voronoi_bench" rebuild 2097152 "$kind" warp-double 3
+    "$build/voronoi_bench" rebuild 2097152 "$kind" warp 3
 done
 "$build/voronoi_bench" step 2097152 jittered 0.03 10
 "$build/voronoi_bench" step 262144 jittered 0.3 10 --verify

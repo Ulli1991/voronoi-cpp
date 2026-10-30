@@ -349,11 +349,11 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
             st.dirty(t) = 0;
             if (!st.alive(t)) return;
             auto from = [&](double cx, double cy, double cz, int v) {
-                return Vec3<double>{tet_mesh::wrap(x(v, 0) - cx, box), tet_mesh::wrap(x(v, 1) - cy, box),
+                return Vec3{tet_mesh::wrap(x(v, 0) - cx, box), tet_mesh::wrap(x(v, 1) - cy, box),
                                     tet_mesh::wrap(x(v, 2) - cz, box)};
             };
             const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
-            const Vec3<double> d[3] = {from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[1]),
+            const Vec3 d[3] = {from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[1]),
                                        from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[2]),
                                        from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[3])};
             const double volume6 = dot(d[0], cross(d[1], d[2]));
@@ -368,7 +368,7 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
                 detail::mark(st, t);
                 return;
             }
-            const Vec3<double> c = tet_mesh::detail::circumcentre(d[0], d[1], d[2]);
+            const Vec3 c = tet_mesh::detail::circumcentre(d[0], d[1], d[2]);
             const double cx = x(v[0], 0) + c.x, cy = x(v[0], 1) + c.y, cz = x(v[0], 2) + c.z, r2 = dot(c, c);
             centre(t, 0) = cx;
             centre(t, 1) = cy;
@@ -380,7 +380,7 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
                 if (u < 0) continue;
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
-                const Vec3<double> e = from(cx, cy, cz, far);
+                const Vec3 e = from(cx, cy, cz, far);
                 suspect = dot(e, e) < r2 + margin;
             }
             if (suspect) detail::mark(st, t);

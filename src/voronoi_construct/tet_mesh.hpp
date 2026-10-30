@@ -120,8 +120,8 @@ KOKKOS_INLINE_FUNCTION double wrap(double d, double box) { return d - box * Kokk
 
 namespace detail {
 // The point equidistant from the origin and a, b, c.
-KOKKOS_INLINE_FUNCTION Vec3<double> circumcentre(Vec3<double> a, Vec3<double> b, Vec3<double> c) {
-    const Vec3<double> bc = cross(b, c), ca = cross(c, a), ab = cross(a, b);
+KOKKOS_INLINE_FUNCTION Vec3 circumcentre(Vec3 a, Vec3 b, Vec3 c) {
+    const Vec3 bc = cross(b, c), ca = cross(c, a), ab = cross(a, b);
     const double scale = 0.5 / dot(a, bc);
     return (bc * dot(a, a) + ca * dot(b, b) + ab * dot(c, c)) * scale;
 }
@@ -602,8 +602,8 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
 // The circumcentre of particles v[0..3] relative to x(v[0]), given the
 // offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images).
 template <class X>
-KOKKOS_INLINE_FUNCTION Vec3<double> circumcentre(const X& x, double box, const int* v, const Vec3<double>* d) {
-    Vec3<double> c = detail::circumcentre(d[0], d[1], d[2]);
+KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, double box, const int* v, const Vec3* d) {
+    Vec3 c = detail::circumcentre(d[0], d[1], d[2]);
     // Nearly flat (sliver) tetrahedra: the double formula divides by a
     // tiny determinant. Redo it on the snapped grid, where numerator
     // and denominator are exact integers, and divide once at the end.
@@ -613,15 +613,10 @@ KOKKOS_INLINE_FUNCTION Vec3<double> circumcentre(const X& x, double box, const i
         ep::Offset g[3];
         for (int k = 0; k < 3; ++k)
             for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(ep::snap(x(v[0], a), box), ep::snap(x(v[k + 1], a), box));
-        auto cross128 = [](const ep::Offset& p, const ep::Offset& q, ep::i128* r) {
-            r[0] = ep::i128(p[1]) * q[2] - ep::i128(p[2]) * q[1];
-            r[1] = ep::i128(p[2]) * q[0] - ep::i128(p[0]) * q[2];
-            r[2] = ep::i128(p[0]) * q[1] - ep::i128(p[1]) * q[0];
-        };
         ep::i128 bc[3], ca[3], ab[3];
-        cross128(g[1], g[2], bc);
-        cross128(g[2], g[0], ca);
-        cross128(g[0], g[1], ab);
+        ep::cross(g[1], g[2], bc);
+        ep::cross(g[2], g[0], ca);
+        ep::cross(g[0], g[1], ab);
         const ep::i128 la = ep::lift(g[0]), lb = ep::lift(g[1]), lc = ep::lift(g[2]);
         const ep::i128 det = ep::det3(g[0], g[1], g[2]);
         if (det != 0) {
@@ -649,11 +644,11 @@ void circumcentres(const ExecSpace& exec, const X& x, double box,
         KOKKOS_LAMBDA(int s) {
             const int t = listed ? only(s) : s;
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
-            Vec3<double> d[3];
+            Vec3 d[3];
             for (int k = 0; k < 3; ++k)
                 d[k] = {wrap(x(v[k + 1], 0) - x(v[0], 0), box), wrap(x(v[k + 1], 1) - x(v[0], 1), box),
                         wrap(x(v[k + 1], 2) - x(v[0], 2), box)};
-            const Vec3<double> c = circumcentre(x, box, v, d);
+            const Vec3 c = circumcentre(x, box, v, d);
             mesh.centre(t, 0) = x(v[0], 0) + c.x;
             mesh.centre(t, 1) = x(v[0], 1) + c.y;
             mesh.centre(t, 2) = x(v[0], 2) + c.z;
@@ -673,18 +668,18 @@ void faces(const ExecSpace& exec, const X& x, double box,
             const int begin = mesh.ring_start(f), end = begin + mesh.ring_length(f);
             auto vertex = [&](int m) {
                 const int t = mesh.ring(m);
-                return Vec3<double>{wrap(mesh.centre(t, 0) - x(i, 0), box),
+                return Vec3{wrap(mesh.centre(t, 0) - x(i, 0), box),
                                     wrap(mesh.centre(t, 1) - x(i, 1), box),
                                     wrap(mesh.centre(t, 2) - x(i, 2), box)};
             };
-            const Vec3<double> dj{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box),
+            const Vec3 dj{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box),
                                   wrap(x(j, 2) - x(i, 2), box)};
-            const Vec3<double> first = vertex(begin);
-            Vec3<double> previous = vertex(begin + 1), area{0, 0, 0}, moment{0, 0, 0};
+            const Vec3 first = vertex(begin);
+            Vec3 previous = vertex(begin + 1), area{0, 0, 0}, moment{0, 0, 0};
             double weight = 0;
             for (int m = begin + 2; m < end; ++m) {
-                const Vec3<double> v = vertex(m);
-                const Vec3<double> twice = cross(previous - first, v - first);
+                const Vec3 v = vertex(m);
+                const Vec3 twice = cross(previous - first, v - first);
                 area = area + twice * 0.5;
                 const double w = Kokkos::sqrt(dot(twice, twice));
                 weight += w;
@@ -692,7 +687,7 @@ void faces(const ExecSpace& exec, const X& x, double box,
                 previous = v;
             }
             if (dot(area, dj) < 0) area = area * -1.0;
-            const Vec3<double> centroid = weight > 0 ? moment * (1.0 / weight) : first;
+            const Vec3 centroid = weight > 0 ? moment * (1.0 / weight) : first;
             out.area(f, 0) = area.x;
             out.area(f, 1) = area.y;
             out.area(f, 2) = area.z;
@@ -717,9 +712,9 @@ int check(const ExecSpace& exec, const X& x, double box,
     Kokkos::parallel_reduce(
         "tet_mesh::check", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.vertex.extent(0)),
         KOKKOS_LAMBDA(int t, int& count) {
-            const Vec3<double> c{mesh.centre(t, 0), mesh.centre(t, 1), mesh.centre(t, 2)};
+            const Vec3 c{mesh.centre(t, 0), mesh.centre(t, 1), mesh.centre(t, 2)};
             auto from_centre = [&](int v) {
-                return Vec3<double>{wrap(x(v, 0) - c.x, box), wrap(x(v, 1) - c.y, box),
+                return Vec3{wrap(x(v, 0) - c.x, box), wrap(x(v, 1) - c.y, box),
                                     wrap(x(v, 2) - c.z, box)};
             };
             const double r2 = mesh.centre(t, 3);
@@ -729,7 +724,7 @@ int check(const ExecSpace& exec, const X& x, double box,
                 if (other < 0) continue;
                 const int far = far_vertex(mesh, t, other);
                 if (far < 0) continue;
-                const Vec3<double> d = from_centre(far);
+                const Vec3 d = from_centre(far);
                 bad = dot(d, d) < r2 * (1.0 - 1e-10);
             }
             invalid(t) = bad;
