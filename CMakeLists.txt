@@ -25,11 +25,17 @@ endfunction()
 
 voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
 
+# The finite-volume hydro on the mesh (header-only).
+add_library(hydro_library INTERFACE)
+target_link_libraries(hydro_library INTERFACE voronoi_library)
+target_include_directories(hydro_library INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/hydro)
+
 include(CTest)
 if(BUILD_TESTING)
-    foreach(test exact_predicates clipping mesh start repair voronoi_mesh)
+    foreach(test exact_predicates clipping mesh start repair voronoi_mesh hydro)
         voronoi_program(${test}_test src/test/${test}_test.cpp)
         add_test(NAME ${test} COMMAND ${test}_test)
         set_tests_properties(${test} PROPERTIES TIMEOUT 600)
     endforeach()
+    target_link_libraries(hydro_test PRIVATE hydro_library)
 endif()
