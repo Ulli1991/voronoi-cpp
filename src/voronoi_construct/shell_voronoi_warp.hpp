@@ -514,7 +514,7 @@ struct Kernel {
         faces = warp_sum(faces);
         int owned = 0;
         const int first_owned = exclusive_scan(owned_here, owned);
-        if (status == ok && owned > max_owned_faces) status = face_overflow;
+        if (status == ok && owned > out.owned_capacity()) status = face_overflow;
         if (status == ok && !(volume > 0)) status = degenerate;
 
         if (status == ok) {
@@ -533,7 +533,7 @@ struct Kernel {
             const bool good = status == ok;
             out.status(t) = status;
             out.face_count(t) = good ? faces : 0;
-            out.owned_count(t) = good ? owned : 0;
+            out.owned_count(t) = good || status == face_overflow ? owned : 0;
             out.volume(t) = good ? volume : 0.0;
             out.centroid(t, 0) = good ? moment.x / volume : 0.0;
             out.centroid(t, 1) = good ? moment.y / volume : 0.0;
@@ -558,7 +558,7 @@ struct Kernel {
 // requests for face rings, use the per-thread kernel throughout.
 template <class Real, class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
-                    const Cells<typename ExecSpace::memory_space>& out) {
+                    Cells<typename ExecSpace::memory_space>& out) {
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         if (out.rings.extent(0) == 0) {

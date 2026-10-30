@@ -33,7 +33,7 @@ enum Status : int {
     uncertified = 1,      // the walk reached the coarsest grid the box allows
     plane_overflow = 2,
     vertex_overflow = 3,
-    face_overflow = 4,    // more owned faces than the output can hold
+    face_overflow = 4,    // more owned faces than the output holds (construct widens it), or rings
     degenerate = 5,
 };
 constexpr int status_count = 6;
@@ -42,7 +42,7 @@ constexpr int max_planes = 48;    // cutting planes, including the 6 box planes
 constexpr int max_vertices = 64;  // one 64-bit mask marks vertices to remove
 constexpr int big_planes = 128, big_vertices = 256;  // for the rare cells that overflow those
 constexpr int ring_buffer = 32;
-constexpr int max_owned_faces = 32;
+constexpr int max_owned_faces = 32;  // owned faces per cell the output holds at first
 constexpr int box_planes = 6;
 
 template <class Real>
@@ -232,6 +232,8 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
 
 // Per-cell results. Face arrays are [cell, owned face]; area vectors point
 // out of the owning cell, centroids are relative to the owner's generator.
+// They hold owned_faces per cell at first; a build that finds a cell with more
+// widens them to that cell's count.
 template <class MemorySpace>
 struct Cells {
     Kokkos::View<int*, MemorySpace> status;
@@ -254,17 +256,19 @@ struct Cells {
     Kokkos::View<int* [3], MemorySpace> work;
 
     Cells() = default;
-    Cells(int n, bool with_diagnostics)
+    Cells(int n, bool with_diagnostics, int owned_faces = max_owned_faces)
         : status("cell_status", n),
           face_count("cell_face_count", n),
           owned_count("cell_owned_count", n),
-          neighbour("face_neighbour", n, max_owned_faces),
-          area("face_area", n, max_owned_faces),
-          face_centroid("face_centroid", n, max_owned_faces),
+          neighbour("face_neighbour", n, owned_faces),
+          area("face_area", n, owned_faces),
+          face_centroid("face_centroid", n, owned_faces),
           volume("cell_volume", n),
           centroid("cell_centroid", n),
           closure("cell_closure", with_diagnostics ? n : 0),
           work("cell_work", with_diagnostics ? n : 0) {}
+
+    KOKKOS_INLINE_FUNCTION int owned_capacity() const { return static_cast<int>(neighbour.extent(1)); }
 };
 
 namespace detail {
@@ -437,7 +441,7 @@ struct Candidate {
 };
 
 // Which cells a pass builds.
-enum class Pass { all, failed, overflowed };
+enum class Pass { all, failed, overflowed, too_many_faces };
 
 template <class Real, int Planes, int Vertices, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
@@ -449,6 +453,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         throw std::invalid_argument("shell_voronoi::construct: invalid grid or output size");
     const auto positions = grid.positions;
     const bool with_closure = out.closure.extent(0) > 0;
+    const int owned_capacity = out.owned_capacity();
     const Real half_width = start_half_width<Real>(box);
 
     Kokkos::parallel_for(
@@ -456,7 +461,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         KOKKOS_LAMBDA(int t) {
             const int before = out.status(t);
             if ((pass == Pass::failed && before == ok) ||
-                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow))
+                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow) ||
+                (pass == Pass::too_many_faces && before != face_overflow))
                 return;
             const Vec3<double> p{positions(t, 0), positions(t, 1), positions(t, 2)};
 
@@ -602,9 +608,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 area_magnitude += Kokkos::sqrt(dot(area, area));
                 const int neighbour = cell.neighbour[plane];
                 if (neighbour > t) {
-                    if (owned == max_owned_faces) {
-                        status = face_overflow;
-                        break;
+                    if (owned >= owned_capacity) {  // only counted, to widen the output
+                        ++owned;
+                        continue;
                     }
                     if (with_rings) {
                         if (ring_used + 1 + ring_length > ring_capacity) {
@@ -626,11 +632,12 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     ++owned;
                 }
             }
+            if (status == ok && owned > owned_capacity) status = face_overflow;
             if (status == ok && !(volume > 0)) status = degenerate;
 
             out.status(t) = status;
             out.face_count(t) = status == ok ? faces : 0;
-            out.owned_count(t) = status == ok ? owned : 0;
+            out.owned_count(t) = status == ok || status == face_overflow ? owned : 0;
             out.volume(t) = status == ok ? volume : 0.0;
             const Vec3<double> c = status == ok ? moment * (1.0 / volume) : Vec3<double>{0, 0, 0};
             out.centroid(t, 0) = c.x;
@@ -645,20 +652,48 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         });
 }
 
+// Face arrays of `capacity` owned faces per cell, the old ones copied in.
+template <class MemorySpace>
+void widen_faces(Cells<MemorySpace>& out, int capacity) {
+    const int n = static_cast<int>(out.status.extent(0)), old = out.owned_capacity();
+    const auto kept = Kokkos::pair<int, int>(0, old);
+    Kokkos::View<int**, MemorySpace> neighbour("face_neighbour", n, capacity);
+    Kokkos::View<double** [3], MemorySpace> area("face_area", n, capacity), centroid("face_centroid", n, capacity);
+    Kokkos::deep_copy(Kokkos::subview(neighbour, Kokkos::ALL, kept), out.neighbour);
+    Kokkos::deep_copy(Kokkos::subview(area, Kokkos::ALL, kept, Kokkos::ALL), out.area);
+    Kokkos::deep_copy(Kokkos::subview(centroid, Kokkos::ALL, kept, Kokkos::ALL), out.face_centroid);
+    out.neighbour = neighbour;
+    out.area = area;
+    out.face_centroid = centroid;
+}
+
 // Build the cells of `pass`, then rebuild those that overflowed the usual
-// capacities once more, in double with big ones.
+// capacities once more, in double with big ones. If a cell owns more faces
+// than the output holds, widen the output to the largest such count and
+// build those cells again.
 template <class Real, class ExecSpace>
 void construct_with_overflow(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                              const Stencil<typename ExecSpace::memory_space>& stencil,
-                             const Cells<typename ExecSpace::memory_space>& out, Pass pass) {
+                             Cells<typename ExecSpace::memory_space>& out, Pass pass) {
     construct_pass<Real, max_planes, max_vertices>(exec, grid, stencil, out, pass);
-    int overflowed = 0;
+    int overflowed = 0, owned = 0;
     const auto status = out.status;
+    const auto owned_count = out.owned_count;
     Kokkos::parallel_reduce(
         "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
         KOKKOS_LAMBDA(int t, int& count) { count += status(t) == vertex_overflow || status(t) == plane_overflow; },
         overflowed);
     if (overflowed > 0) construct_pass<double, big_planes, big_vertices>(exec, grid, stencil, out, Pass::overflowed);
+    Kokkos::parallel_reduce(
+        "shell_voronoi::most_owned_faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+        KOKKOS_LAMBDA(int t, int& most) {
+            if (status(t) == face_overflow) most = Kokkos::max(most, owned_count(t));
+        },
+        Kokkos::Max<int>(owned));
+    if (owned > out.owned_capacity()) {
+        widen_faces(out, owned);
+        construct_pass<double, big_planes, big_vertices>(exec, grid, stencil, out, Pass::too_many_faces);
+    }
 }
 
 }  // namespace detail
@@ -668,7 +703,7 @@ void construct_with_overflow(const ExecSpace& exec, const Grid<typename ExecSpac
 // polyhedron; inputs and outputs are double.
 template <class Real, class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
-               const Cells<typename ExecSpace::memory_space>& out) {
+               Cells<typename ExecSpace::memory_space>& out) {
     detail::construct_with_overflow<Real>(exec, grid, make_stencil(exec), out, detail::Pass::all);
 }
 

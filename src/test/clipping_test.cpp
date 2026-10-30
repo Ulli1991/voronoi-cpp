@@ -2,7 +2,8 @@
 // and halo points every cell is certified, volumes are positive and fill the
 // box, cells close, faces are consistent between neighbours and lie on the
 // bisectors (support::check_cells). The thread and warp kernels give the same
-// cells, and so does a cell list with a coarser base grid (other slots).
+// cells, and so does a cell list with a coarser base grid (other slots). A
+// face output too narrow for some cell is widened by the build.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -46,6 +47,13 @@ int main(int argc, char** argv) {
                                                                 std::to_string(c.neighbours) + " neighbour sets, volumes " +
                                                                 sci(c.volume) + ")");
 
+        // Output for 4 owned faces per cell: widened by the build.
+        shell_voronoi::Cells<Memory> narrow(n, false, 4);
+        shell_voronoi::construct_warp<double>(exec, grid, narrow);
+        const Difference w = compare(reference, by_particle(narrow, list.order));
+        check.expect(narrow.owned_capacity() > 4 && w.neighbours == 0 && w.volume < 1e-12,
+                     "a narrow face output is widened to " + std::to_string(narrow.owned_capacity()) +
+                         " owned faces, same cells");
     }
     return check.failed() != 0;
 }
