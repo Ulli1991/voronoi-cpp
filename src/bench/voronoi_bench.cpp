@@ -1,6 +1,6 @@
 // Timing and debugging of the mesh pipeline (not a test).
 //
-//   voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>] [--morton]
+//   voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>]
 //       Full rebuild by clipping. Variants thread-/warp- with -double/-float,
 //       selected by substring. Every variant's cells are checked
 //       (support::check_cells, PASS/FAIL).
@@ -45,7 +45,7 @@ std::vector<std::string> positional(int argc, char** argv) {
     return args;
 }
 
-int rebuild(const std::vector<std::string>& args, double width_factor, bool morton) {
+int rebuild(const std::vector<std::string>& args, double width_factor) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -54,12 +54,11 @@ int rebuild(const std::vector<std::string>& args, double width_factor, bool mort
     const Positions x = to_device(make_points(kind, requested));
     const int n = static_cast<int>(x.extent(0));
     neighbor_search::CellList<Exec> list;
-    list.morton = morton;
     neighbor_search::configure(list, n, 1.0, width_factor * std::cbrt(1.0 / n));
     const double build_ms = median_ms(repeats, [&] { neighbor_search::build(exec, list, x); });
     const auto grid = shell_voronoi::make_grid(list);
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " grid="
-              << list.cells_per_side << "^3 repeats=" << repeats << (morton ? " morton" : "") << "\n";
+              << list.cells_per_side() << "^3 repeats=" << repeats << "\n";
     int failures = 0;
     std::vector<double> first_volumes;
     for (const std::string variant : {"thread-double", "thread-float", "warp-double", "warp-float"}) {
@@ -236,10 +235,10 @@ int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
-        return rebuild(args, flag_value(argc, argv, "--width", 1.0), has_flag(argc, argv, "--morton")) != 0;
+        return rebuild(args, flag_value(argc, argv, "--width", 1.0)) != 0;
     if (args.size() >= 4 && args[0] == "step")
         return step(args, has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--morton]\n"
+    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f]\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n";
     return 2;
 }

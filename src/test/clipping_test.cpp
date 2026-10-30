@@ -1,8 +1,8 @@
-// Full rebuild by clipping: on jittered, uniform random, lattice and
-// clustered points every cell is certified, volumes are positive and fill
-// the box, cells close, faces are consistent between neighbours and lie on
-// the bisectors (support::check_cells). The thread and warp kernels agree,
-// and Morton-ordered cells give the same cells.
+// Full rebuild by clipping: on jittered, uniform random, lattice, clustered
+// and halo points every cell is certified, volumes are positive and fill the
+// box, cells close, faces are consistent between neighbours and lie on the
+// bisectors (support::check_cells). The thread and warp kernels give the same
+// cells, and so does a cell list with a coarser base grid (other slots).
 
 #include "check.hpp"
 #include "support.hpp"
@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     Check check;
     const Exec exec;
     const int n = 4096;
-    for (const std::string kind : {"jittered", "uniform", "lattice", "clustered"}) {
+    for (const std::string kind : {"jittered", "uniform", "lattice", "clustered", "halo"}) {
         std::cout << kind << ":\n";
         const Positions x = to_device(make_points(kind, n));
         const auto list = cell_list(x);
@@ -31,25 +31,21 @@ int main(int argc, char** argv) {
             details.pop_back();  // the newline
             check.expect(valid, std::string(name) + " kernel cells valid\n" + details);
         }
-        const auto v_thread = to_host(thread.volume);
-        const auto v_warp = to_host(warp.volume);
-        double worst = 0;
-        for (int t = 0; t < n; ++t) worst = std::max(worst, std::abs(v_warp(t) - v_thread(t)) / v_thread(t));
-        check.expect(worst < 1e-12, "warp and thread volumes agree (" + sci(worst) + ")");
+        const Reference reference = by_particle(thread, list.order);
+        const Difference d = compare(reference, by_particle(warp, list.order));
+        check.expect(d.neighbours == 0 && d.volume < 1e-12, "warp and thread cells agree (" +
+                                                                std::to_string(d.neighbours) + " neighbour sets, volumes " +
+                                                                sci(d.volume) + ")");
 
-        // Morton cell order: other slots, the same cells.
-        const auto morton = cell_list(x, 1.0, true);
+        // A base grid twice as coarse: other slots, the same cells.
+        const auto coarse = cell_list(x, 2.0);
         shell_voronoi::Cells<Memory> cells(n, false);
-        shell_voronoi::construct_warp<double>(exec, shell_voronoi::make_grid(morton), cells);
-        const auto order = to_host(list.order);
-        const auto morton_order = to_host(morton.order);
-        const auto v_morton = to_host(cells.volume);
-        std::vector<double> by_particle(n);
-        for (int t = 0; t < n; ++t) by_particle[order(t)] = v_thread(t);
-        worst = 0;
-        for (int t = 0; t < n; ++t)
-            worst = std::max(worst, std::abs(v_morton(t) - by_particle[morton_order(t)]) / v_morton(t));
-        check.expect(worst < 1e-12, "Morton cell order gives the same volumes (" + sci(worst) + ")");
+        shell_voronoi::construct_warp<double>(exec, shell_voronoi::make_grid(coarse), cells);
+        const Difference c = compare(reference, by_particle(cells, coarse.order));
+        check.expect(c.neighbours == 0 && c.volume < 1e-12, "coarser base grid gives the same cells (" +
+                                                                std::to_string(c.neighbours) + " neighbour sets, volumes " +
+                                                                sci(c.volume) + ")");
+
     }
     return check.failed() != 0;
 }

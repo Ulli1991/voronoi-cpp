@@ -78,50 +78,6 @@ KOKKOS_INLINE_FUNCTION std::uint32_t pack(int a, int b, int c) {
 KOKKOS_INLINE_FUNCTION std::uint32_t with_byte(std::uint32_t packed, int k, int value) {
     return (packed & ~(std::uint32_t(255) << (8 * k))) | std::uint32_t(value) << (8 * k);
 }
-KOKKOS_INLINE_FUNCTION int pack_image(int x, int y, int z) { return (x + 1) | (y + 1) << 2 | (z + 1) << 4; }
-KOKKOS_INLINE_FUNCTION int image(int packed, int axis) { return ((packed >> (2 * axis)) & 3) - 1; }
-
-// Grid-cell offsets (4 bits per axis, biased by 8) sorted by the squared
-// smallest distance any point of the home cell can have to them.
-template <class MemorySpace>
-struct Stencil {
-    Kokkos::View<int*, MemorySpace> offsets;
-    Kokkos::View<float*, MemorySpace> bound2;
-    double reach = 0;  // cells outside the stencil are at least this far
-};
-
-// Every grid cell up to `reach` = min(largest ring, 4) cell widths away;
-// a cell that needs more is left uncertified for the per-thread kernel.
-template <class ExecSpace>
-Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec, int cells_per_side, double cell_width) {
-    const int reach = std::min((cells_per_side - 1) / 2, 4);
-    std::vector<std::pair<float, int>> entries;
-    auto beyond = [](int d) { return std::max(std::abs(d) - 1, 0); };
-    for (int dx = -reach; dx <= reach; ++dx)
-        for (int dy = -reach; dy <= reach; ++dy)
-            for (int dz = -reach; dz <= reach; ++dz) {
-                // Only cells up to `reach` widths away: beyond that the cube's
-                // corners alone would claim distances the stencil cannot vouch for.
-                const int gaps = beyond(dx) * beyond(dx) + beyond(dy) * beyond(dy) + beyond(dz) * beyond(dz);
-                if (gaps > reach * reach) continue;
-                const double bound = cell_width * std::sqrt(double(gaps));
-                // Round down so float storage never overstates a distance.
-                entries.push_back({std::nextafter(float(bound * bound), 0.0f), (dx + 8) | (dy + 8) << 4 | (dz + 8) << 8});
-            }
-    std::sort(entries.begin(), entries.end());
-    using Memory = typename ExecSpace::memory_space;
-    Stencil<Memory> s{Kokkos::View<int*, Memory>("shell_stencil", entries.size()),
-                      Kokkos::View<float*, Memory>("shell_stencil_bound2", entries.size()), reach * cell_width};
-    auto offsets = Kokkos::create_mirror_view(s.offsets);
-    auto bound2 = Kokkos::create_mirror_view(s.bound2);
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-        offsets(i) = entries[i].second;
-        bound2(i) = entries[i].first;
-    }
-    Kokkos::deep_copy(exec, s.offsets, offsets);
-    Kokkos::deep_copy(exec, s.bound2, bound2);
-    return s;
-}
 
 #if defined(__CUDA_ARCH__)
 // The warp building a cell is the team's vector range: lane l is threadIdx.x.
@@ -342,7 +298,9 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 #endif  // __CUDA_ARCH__
 
 #if defined(KOKKOS_ENABLE_CUDA)
-template <class Real, class MemorySpace>
+// Adaptive: walk each cell at its level (CellList::level); otherwise at the
+// base level only, leaving cells it cannot certify to the thread kernel.
+template <class Real, class MemorySpace, bool adaptive>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -375,21 +333,9 @@ struct Kernel {
     // Build cell t in polyhedron c, with all lanes of the warp.
     __device__ __forceinline__ void build(Polyhedron<Real>& c, int t) const {
         const int l = lane();
-        const int stencil_size = static_cast<int>(stencil.offsets.extent(0));
         const auto& positions = grid.positions;
-        const auto& offsets = grid.cell_offsets;
-        const int side = grid.cells_per_side;
-        const double width = grid.cell_width, box = grid.box;
-
+        const double box = grid.box;
         const Vec3<double> p{positions(t, 0), positions(t, 1), positions(t, 2)};
-        int home[3];
-        double inside = width;
-        for (int a = 0; a < 3; ++a) {
-            const double x = a == 0 ? p.x : a == 1 ? p.y : p.z;
-            home[a] = Kokkos::clamp(static_cast<int>(x / width), 0, side - 1);
-            const double frac = x - home[a] * width;
-            inside = Kokkos::min(inside, Kokkos::min(frac, width - frac));
-        }
 
         int planes = 0, vertices = 0;
         Real radius2 = 3 * half_width * half_width;
@@ -424,67 +370,64 @@ struct Kernel {
             buffered = 0;
         };
 
-        // Visit neighbouring grid cells in order of their smallest possible
-        // distance, 32 at a time: each lane checks one cell against 2R and
-        // reads its particles, so the memory accesses overlap. The walk is
-        // certified once the next cell's lower bound exceeds 2R.
-        for (int first = 0; first < stencil_size && status == ok; first += lanes) {
-            if (double(stencil.bound2(first)) >= 4.0 * static_cast<double>(radius2)) {
+        // Visit the grid cells of the walk (see shell_voronoi.hpp) in order of
+        // their smallest possible distance, 32 at a time: each lane checks one
+        // cell against 2R and reads its particles, so the memory accesses
+        // overlap. A level is certified once the next cell's lower bound
+        // exceeds 2R.
+        int level = adaptive ? int(grid.level(t)) : grid.levels, home[3], finer = -1;
+        home_cell(p, box, level, home);
+        while (status == ok) {
+            const double width = box / (1 << level);
+            const int reach = level_reach(level), entries = stencil.ends(reach);
+            for (int first = 0; first < entries && status == ok; first += lanes) {
+                if (double(stencil.bound2(first)) * width * width >= 4.0 * static_cast<double>(radius2)) {
+                    certified = true;
+                    break;
+                }
+                ++rings;
+                const int e = first + l;
+                int begin = 0, end = 0, packed = 0;
+                if (e < entries)
+                    stencil_cell<adaptive>(grid, level, home, finer, stencil.offsets(e), p, 4.0 * static_cast<double>(radius2),
+                                 begin, end, packed);
+                const int most = warp_max(end - begin);
+                for (int k = 0; k < most && status == ok; ++k) {
+                    const int q = begin + k;
+                    double d2 = 0;
+                    bool take = false;
+                    if (q < end && q != t) {
+                        const double ddx = positions(q, 0) + image(packed, 0) * box - p.x;
+                        const double ddy = positions(q, 1) + image(packed, 1) * box - p.y;
+                        const double ddz = positions(q, 2) + image(packed, 2) * box - p.z;
+                        d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                        take = d2 < 4.0 * static_cast<double>(radius2);
+                    }
+                    const unsigned taking = __ballot_sync(all_lanes, take);
+                    if (taking == 0) continue;
+                    if (buffered + __popc(taking) > lanes) flush();
+                    if (take) {
+                        const int index = buffered + __popc(taking & ((1u << l) - 1));
+                        c.candidate_distance2[index] = static_cast<float>(d2);
+                        c.candidate_slot[index] = q;
+                        c.candidate_image[index] = packed;
+                    }
+                    buffered += __popc(taking);
+                    __syncwarp(all_lanes);
+                }
+                if (buffered > 0) flush();
+            }
+            if (status != ok || certified) break;
+            // Cells outside the stencil are at least `reach` widths away.
+            if (reach * width * reach * width >= 4.0 * static_cast<double>(radius2)) {
                 certified = true;
                 break;
             }
-            ++rings;
-            const int e = first + l;
-            int begin = 0, end = 0, packed = 0;
-            if (e < stencil_size) {
-                const int code = stencil.offsets(e);
-                const int u[3] = {home[0] + (code & 15) - 8, home[1] + ((code >> 4) & 15) - 8,
-                                  home[2] + ((code >> 8) & 15) - 8};
-                const double q[3] = {p.x, p.y, p.z};
-                double gap2 = 0;
-                int wrapped[3], shift[3];
-                for (int a = 0; a < 3; ++a) {
-                    const double g = Kokkos::max(0.0, Kokkos::max(u[a] * width - q[a], q[a] - (u[a] + 1) * width));
-                    gap2 += g * g;
-                    wrapped[a] = (u[a] + side) % side;
-                    shift[a] = u[a] < 0 ? -1 : u[a] >= side ? 1 : 0;
-                }
-                if (gap2 < 4.0 * static_cast<double>(radius2)) {
-                    const int key = grid.rank((wrapped[0] * side + wrapped[1]) * side + wrapped[2]);
-                    begin = offsets(key);
-                    end = offsets(key + 1);
-                    packed = pack_image(shift[0], shift[1], shift[2]);
-                }
-            }
-            const int most = warp_max(end - begin);
-            for (int k = 0; k < most && status == ok; ++k) {
-                const int q = begin + k;
-                double d2 = 0;
-                bool take = false;
-                if (q < end && q != t) {
-                    const double ddx = positions(q, 0) + image(packed, 0) * box - p.x;
-                    const double ddy = positions(q, 1) + image(packed, 1) * box - p.y;
-                    const double ddz = positions(q, 2) + image(packed, 2) * box - p.z;
-                    d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                    take = d2 < 4.0 * static_cast<double>(radius2);
-                }
-                const unsigned taking = __ballot_sync(all_lanes, take);
-                if (taking == 0) continue;
-                if (buffered + __popc(taking) > lanes) flush();
-                if (take) {
-                    const int at = buffered + __popc(taking & ((1u << l) - 1));
-                    c.candidate_distance2[at] = static_cast<float>(d2);
-                    c.candidate_slot[at] = q;
-                    c.candidate_image[at] = packed;
-                }
-                buffered += __popc(taking);
-                __syncwarp(all_lanes);
-            }
-            if (buffered > 0) flush();
+            if (!adaptive || level == 2) break;  // no coarser grid fits the box
+            finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
+            for (int a = 0; a < 3; ++a) home[a] >>= 1;
+            --level;
         }
-        // Cells outside the stencil are at least stencil_reach away.
-        if (status == ok && !certified && stencil.reach * stencil.reach >= 4.0 * static_cast<double>(radius2))
-            certified = true;
         if (status == ok && !certified) status = uncertified;
 
         const Vertices<Real> cv = copy_of(c, current);
@@ -619,14 +562,11 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         if (out.rings.extent(0) == 0) {
-            const int side = grid.cells_per_side;
-            if (grid.n <= 0 || side < 3 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
+            if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
                 throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
-            const int max_ring = (side - 1) / 2;
-            const Real half_width =
-                static_cast<Real>(Kokkos::min(0.25 * grid.box, (max_ring + 1) * grid.cell_width));
+            const Real half_width = detail::start_half_width<Real>(grid.box);
             using Memory = typename ExecSpace::memory_space;
-            const warp::Stencil<Memory> stencil = warp::make_stencil(exec, side, grid.cell_width);
+            const Stencil<Memory> stencil = make_stencil(exec);
             Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
             const int blocks = Kokkos::min((grid.n + warp::cells_per_block - 1) / warp::cells_per_block,
                                            2 * warp::min_blocks_per_sm * exec.cuda_device_prop().multiProcessorCount);
@@ -635,9 +575,22 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                                Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
                 policy(exec, blocks, warp::cells_per_block, warp::lanes);
             policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron<Real>)));
-            Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                 warp::Kernel<Real, Memory>{grid, out, half_width, stencil, next_cell});
-            detail::construct_with_overflow<Real>(exec, grid, out, detail::Pass::failed);
+            // Near-uniform input (every particle at the base level) takes the
+            // kernel without level changes and fine-cell searches: its smaller
+            // code is 4 % faster on uniform random points.
+            int off_base = 0;
+            const auto level = grid.level;
+            const int base = grid.levels;
+            Kokkos::parallel_reduce(
+                "shell_voronoi::off_base_levels", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+                KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
+            if (off_base > 0)
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Real, Memory, true>{grid, out, half_width, stencil, next_cell});
+            else
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Real, Memory, false>{grid, out, half_width, stencil, next_cell});
+            detail::construct_with_overflow<Real>(exec, grid, stencil, out, detail::Pass::failed);
             return;
         }
     }

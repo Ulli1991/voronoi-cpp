@@ -4,18 +4,22 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 // Fused natural-neighbour Voronoi construction in a periodic box.
 //
-// Each cell is built by walking the cell grid outward in rings of grid cells
-// around its generator and clipping with every particle that can still cut
-// it. A particle at distance d cuts the cell only if d < 2R, where R is the
-// largest distance from the generator to a current vertex; the walk stops at
-// the first ring lying entirely beyond 2R, which certifies the cell. There is
-// no candidate table and no global sort: each ring's particles are clipped
-// nearest-first from a small private buffer.
+// Each cell is built by walking grid cells around its generator, nearest
+// first, and clipping with every particle that can still cut it. A particle
+// at distance d cuts the cell only if d < 2R, where R is the largest distance
+// from the generator to a current vertex; the walk stops at the first grid
+// cell lying entirely beyond 2R, which certifies the cell. The grid level
+// fits the local density (see Stencil). There is no candidate table: the
+// particles are clipped nearest-first from a small private buffer.
 //
 // Output is lean: every cell stores its volume and centroid, and each face is
 // stored once, by the cell with the lower slot index (its owner). A flux
@@ -26,7 +30,7 @@ namespace shell_voronoi {
 
 enum Status : int {
     ok = 0,
-    uncertified = 1,      // the walk reached the largest ring the box allows
+    uncertified = 1,      // the walk reached the coarsest grid the box allows
     plane_overflow = 2,
     vertex_overflow = 3,
     face_overflow = 4,    // more owned faces than the output can hold
@@ -71,25 +75,159 @@ KOKKOS_INLINE_FUNCTION Vec3<To> convert(Vec3<From> a) {
     return {static_cast<To>(a.x), static_cast<To>(a.y), static_cast<To>(a.z)};
 }
 
-// Read-only inputs, all in slot order. Grid cells must be cubes.
+// Read-only inputs, all in slot order, from a built neighbor_search::CellList.
 template <class MemorySpace>
 struct Grid {
     Kokkos::View<double* [3], MemorySpace> positions;
-    Kokkos::View<int*, MemorySpace> cell_offsets;
+    Kokkos::View<int*, MemorySpace> cell_offsets;  // base cells in Morton order
+    Kokkos::View<std::uint32_t*, MemorySpace> fine;
+    Kokkos::View<std::uint8_t*, MemorySpace> level;
     int n = 0;
-    int cells_per_side = 1;
-    double cell_width = 1.0;
+    int levels = 2;  // base grid: 2^levels cells per side
     double box = 1.0;
-    // Cartesian cell key -> its place in cell_offsets when cells are stored
-    // in another order (Morton); size 0 = Cartesian order.
-    Kokkos::View<int*, MemorySpace> cell_rank;
 
-    KOKKOS_INLINE_FUNCTION int rank(int key) const { return cell_rank.extent(0) ? cell_rank(key) : key; }
+    // Place of base cell (x, y, z) in cell_offsets.
+    KOKKOS_INLINE_FUNCTION int cell(int x, int y, int z) const {
+        return static_cast<int>(neighbor_search::morton_short(x, y, z));
+    }
+
+    // The slots [begin, end) of grid cell (x, y, z) at `level` (2^level
+    // cells per side): a block of base cells, or part of one base cell.
+    KOKKOS_INLINE_FUNCTION void range(int level, int x, int y, int z, int& begin, int& end) const {
+        const int below = level - levels;
+        if (below <= 0) {
+            const int span = -3 * below;
+            const int first = cell(x, y, z) << span;
+            begin = cell_offsets(first);
+            end = cell_offsets(first + (1 << span));
+            return;
+        }
+        const int base = cell(x >> below, y >> below, z >> below);
+        begin = cell_offsets(base);
+        end = cell_offsets(base + 1);
+        if (begin == end) return;
+        const int mask = (1 << below) - 1, drop = 3 * (neighbor_search::fine_levels - below);
+        const std::uint32_t key = neighbor_search::morton_short(x & mask, y & mask, z & mask) << drop;
+        begin = neighbor_search::lower_bound(fine, begin, end, key);
+        end = neighbor_search::lower_bound(fine, begin, end, key + (std::uint32_t(1) << drop));
+    }
 };
 
 template <class ExecSpace>
 Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList<ExecSpace>& list) {
-    return {list.positions, list.cell_offsets, list.n, list.cells_per_side, list.cell_width, list.box, list.cell_rank};
+    return {list.positions, list.cell_offsets, list.fine, list.level, list.n, list.levels, list.box};
+}
+
+// The walk around a generator. Each cell is walked on the grid level whose
+// cells hold about one particle near it (CellList::level), grid cell by grid
+// cell in the order of a stencil. When the stencil of that level ends before
+// the cell is certified, the walk goes on one level coarser and skips the
+// grid cells the finer walk covered.
+//
+// Stencil: grid-cell offsets (4 bits per axis, biased by 8) sorted by the
+// squared smallest distance, in cell widths, that any point of the home cell
+// can have to them. The first ends(r) entries are the cells closer than r
+// widths.
+constexpr int max_reach = 4;
+template <class MemorySpace>
+struct Stencil {
+    Kokkos::View<int*, MemorySpace> offsets;
+    Kokkos::View<float*, MemorySpace> bound2;
+    Kokkos::View<int*, MemorySpace> ends;
+};
+
+template <class ExecSpace>
+Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec) {
+    std::vector<std::pair<int, int>> entries;
+    auto beyond = [](int d) { return std::max(std::abs(d) - 1, 0); };
+    for (int dx = -max_reach; dx <= max_reach; ++dx)
+        for (int dy = -max_reach; dy <= max_reach; ++dy)
+            for (int dz = -max_reach; dz <= max_reach; ++dz) {
+                const int gaps = beyond(dx) * beyond(dx) + beyond(dy) * beyond(dy) + beyond(dz) * beyond(dz);
+                if (gaps < max_reach * max_reach) entries.push_back({gaps, (dx + 8) | (dy + 8) << 4 | (dz + 8) << 8});
+            }
+    std::sort(entries.begin(), entries.end());
+    using Memory = typename ExecSpace::memory_space;
+    Stencil<Memory> s{Kokkos::View<int*, Memory>("shell_stencil", entries.size()),
+                      Kokkos::View<float*, Memory>("shell_stencil_bound2", entries.size()),
+                      Kokkos::View<int*, Memory>("shell_stencil_ends", max_reach + 1)};
+    auto offsets = Kokkos::create_mirror_view(s.offsets);
+    auto bound2 = Kokkos::create_mirror_view(s.bound2);
+    auto ends = Kokkos::create_mirror_view(s.ends);
+    Kokkos::deep_copy(ends, 0);
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        offsets(i) = entries[i].second;
+        // Round down so that scaling never overstates a distance.
+        bound2(i) = std::nextafter(float(entries[i].first), 0.0f);
+        for (int r = 0; r <= max_reach; ++r)
+            if (entries[i].first < r * r) ends(r) = static_cast<int>(i) + 1;
+    }
+    Kokkos::deep_copy(exec, s.offsets, offsets);
+    Kokkos::deep_copy(exec, s.bound2, bound2);
+    Kokkos::deep_copy(exec, s.ends, ends);
+    return s;
+}
+
+// Cells closer than this many widths are walked at `level`: max_reach, or
+// less where fewer than 2 reach + 1 cells per side would visit a cell twice.
+KOKKOS_INLINE_FUNCTION int level_reach(int level) { return Kokkos::min(int{max_reach}, ((1 << level) - 1) / 2); }
+
+KOKKOS_INLINE_FUNCTION int beyond2(int d) {
+    const int b = Kokkos::max(Kokkos::abs(d) - 1, 0);
+    return b * b;
+}
+
+// Periodic image (-1, 0, 1 per axis) packed into 6 bits.
+KOKKOS_INLINE_FUNCTION int pack_image(int x, int y, int z) { return (x + 1) | (y + 1) << 2 | (z + 1) << 4; }
+KOKKOS_INLINE_FUNCTION int image(int packed, int axis) { return ((packed >> (2 * axis)) & 3) - 1; }
+
+// The home cell of generator p at `level` (2^level cells per side).
+KOKKOS_INLINE_FUNCTION void home_cell(const Vec3<double>& p, double box, int level, int (&home)[3]) {
+    home[0] = neighbor_search::grid_coordinate(p.x, box, 1 << level);
+    home[1] = neighbor_search::grid_coordinate(p.y, box, 1 << level);
+    home[2] = neighbor_search::grid_coordinate(p.z, box, 1 << level);
+}
+
+// The grid cell at stencil offset `code` of the walk at `level` around
+// generator p in cell `home`: false if it lies beyond 2R (reach2 = 4R^2) or
+// inside the finished walk one level finer, whose home cell is 2 home + bit
+// a of `finer` along axis a (finer < 0: none); else its slots and the
+// periodic image they are seen in.
+template <bool adaptive = true, class MemorySpace>
+KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int level, const int (&home)[3], int finer,
+                                         int code, const Vec3<double>& p, double reach2, int& begin, int& end,
+                                         int& packed) {
+    const int side = 1 << level;
+    const double width = grid.box / side;
+    const int u[3] = {home[0] + (code & 15) - 8, home[1] + ((code >> 4) & 15) - 8, home[2] + ((code >> 8) & 15) - 8};
+    const double q[3] = {p.x, p.y, p.z};
+    double gap2 = 0;
+    for (int a = 0; a < 3; ++a) {
+        const double g = Kokkos::max(0.0, Kokkos::max(u[a] * width - q[a], q[a] - (u[a] + 1) * width));
+        gap2 += g * g;
+    }
+    if (gap2 >= reach2) return false;
+    if (finer >= 0) {
+        // Covered if all 8 children of u are: per axis the farther child,
+        // seen from the finer home cell.
+        int gaps = 0;
+        for (int a = 0; a < 3; ++a) {
+            const int child = 2 * (u[a] - home[a]) - ((finer >> a) & 1);
+            gaps += Kokkos::max(beyond2(child), beyond2(child + 1));
+        }
+        const int covered = level_reach(level + 1);
+        if (gaps < covered * covered) return false;
+    }
+    packed = pack_image(u[0] < 0 ? -1 : u[0] >= side ? 1 : 0, u[1] < 0 ? -1 : u[1] >= side ? 1 : 0,
+                        u[2] < 0 ? -1 : u[2] >= side ? 1 : 0);
+    if constexpr (adaptive) {
+        grid.range(level, u[0] & (side - 1), u[1] & (side - 1), u[2] & (side - 1), begin, end);
+    } else {
+        const int key = grid.cell(u[0] & (side - 1), u[1] & (side - 1), u[2] & (side - 1));
+        begin = grid.cell_offsets(key);
+        end = grid.cell_offsets(key + 1);
+    }
+    return begin < end;
 }
 
 // Per-cell results. Face arrays are [cell, owned face]; area vectors point
@@ -110,7 +248,8 @@ struct Cells {
     // ring[m + 1]. Only the thread kernel records rings.
     Kokkos::View<int**, MemorySpace> rings;
     // Optional diagnostics, size 0 = off: |sum of area vectors| / sum of
-    // |area|, and work per cell (rings walked, candidates clipped, cuts).
+    // |area|, and work per cell (batches of grid cells walked, candidates
+    // clipped, cuts).
     Kokkos::View<double*, MemorySpace> closure;
     Kokkos::View<int* [3], MemorySpace> work;
 
@@ -158,6 +297,13 @@ KOKKOS_INLINE_FUNCTION bool intersect(const Cell& cell, int a, int b, int c,
     if (!(Kokkos::abs(det) > Real(0))) return false;
     x = (bc * cell.offset[a] + ca * cell.offset[b] + ab * cell.offset[c]) * (Real(1) / det);
     return true;
+}
+
+// The starting cube must lie well inside half the box so that every
+// candidate that can cut the cell is unique in the periodic image.
+template <class Real>
+Real start_half_width(double box) {
+    return static_cast<Real>(0.25 * box);
 }
 
 // Cube of half-width h around the generator. Each corner lists its three
@@ -295,19 +441,15 @@ enum class Pass { all, failed, overflowed };
 
 template <class Real, int Planes, int Vertices, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                    const Stencil<typename ExecSpace::memory_space>& stencil,
                     const Cells<typename ExecSpace::memory_space>& out, Pass pass) {
-    const int n = grid.n, side = grid.cells_per_side;
-    const double width = grid.cell_width, box = grid.box;
-    if (n <= 0 || side < 3 || out.status.extent(0) != static_cast<std::size_t>(n))
+    const int n = grid.n;
+    const double box = grid.box;
+    if (n <= 0 || out.status.extent(0) != static_cast<std::size_t>(n))
         throw std::invalid_argument("shell_voronoi::construct: invalid grid or output size");
     const auto positions = grid.positions;
-    const auto offsets = grid.cell_offsets;
     const bool with_closure = out.closure.extent(0) > 0;
-    // Rings beyond this would reach a cell from both sides of the box.
-    const int max_ring = (side - 1) / 2;
-    // The starting cube must lie well inside half the box so that every
-    // candidate that can cut the cell is unique in the periodic image.
-    const Real half_width = static_cast<Real>(Kokkos::min(0.25 * box, (max_ring + 1) * width));
+    const Real half_width = start_half_width<Real>(box);
 
     Kokkos::parallel_for(
         "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, n),
@@ -317,14 +459,6 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow))
                 return;
             const Vec3<double> p{positions(t, 0), positions(t, 1), positions(t, 2)};
-            int home[3];
-            double inside = width;  // distance to the nearest face of the home cell
-            for (int a = 0; a < 3; ++a) {
-                const double x = a == 0 ? p.x : a == 1 ? p.y : p.z;
-                home[a] = Kokkos::clamp(static_cast<int>(x / width), 0, side - 1);
-                const double frac = x - home[a] * width;
-                inside = Kokkos::min(inside, Kokkos::min(frac, width - frac));
-            }
 
             Polyhedron<Real, Planes, Vertices> cell;
             detail::start_cube(cell, half_width);
@@ -357,46 +491,50 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 buffered = 0;
             };
 
-            for (int ring = 0; ring <= max_ring && status == ok; ++ring) {
-                const double gap = ring == 0 ? 0.0 : (ring - 1) * width + inside;
-                if (gap * gap > 4.0 * static_cast<double>(cell.radius2)) {
+            // The walk (see Stencil), ring_buffer grid cells at a time.
+            int level = grid.level(t), home[3], finer = -1;
+            home_cell(p, box, level, home);
+            while (status == ok) {
+                const double width = box / (1 << level);
+                const int reach = level_reach(level), entries = stencil.ends(reach);
+                for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
+                    ++rings;
+                    for (int e = first; e < Kokkos::min(first + ring_buffer, entries) && status == ok; ++e) {
+                        const double reach2 = 4.0 * static_cast<double>(cell.radius2);
+                        if (double(stencil.bound2(e)) * width * width >= reach2) {
+                            certified = true;
+                            break;
+                        }
+                        int begin = 0, end = 0, packed = 0;
+                        if (!stencil_cell(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end, packed))
+                            continue;
+                        const int shift[3] = {image(packed, 0), image(packed, 1), image(packed, 2)};
+                        for (int q = begin; q < end; ++q) {
+                            if (q == t) continue;
+                            const double ddx = positions(q, 0) + shift[0] * box - p.x;
+                            const double ddy = positions(q, 1) + shift[1] * box - p.y;
+                            const double ddz = positions(q, 2) + shift[2] * box - p.z;
+                            const double d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                            if (d2 >= 4.0 * static_cast<double>(cell.radius2)) continue;
+                            if (buffered == ring_buffer) flush();
+                            buffer[buffered++] = {static_cast<float>(d2),
+                                                  q,
+                                                  {static_cast<std::int8_t>(shift[0]), static_cast<std::int8_t>(shift[1]),
+                                                   static_cast<std::int8_t>(shift[2])}};
+                        }
+                    }
+                    flush();
+                }
+                if (status != ok || certified) break;
+                // Cells outside the stencil are at least `reach` widths away.
+                if (reach * width * reach * width >= 4.0 * static_cast<double>(cell.radius2)) {
                     certified = true;
                     break;
                 }
-                ++rings;
-                for (int dx = -ring; dx <= ring && status == ok; ++dx) {
-                    for (int dy = -ring; dy <= ring && status == ok; ++dy) {
-                        const int ux = home[0] + dx, uy = home[1] + dy;
-                        const int x = (ux + side) % side, y = (uy + side) % side;
-                        const std::int8_t image_x = ux < 0 ? -1 : ux >= side ? 1 : 0;
-                        const std::int8_t image_y = uy < 0 ? -1 : uy >= side ? 1 : 0;
-                        // Skip columns that lie entirely beyond 2R in x and y.
-                        const double gx = Kokkos::max(0.0, Kokkos::max(ux * width - p.x, p.x - (ux + 1) * width));
-                        const double gy = Kokkos::max(0.0, Kokkos::max(uy * width - p.y, p.y - (uy + 1) * width));
-                        if (gx * gx + gy * gy >= 4.0 * static_cast<double>(cell.radius2)) continue;
-                        // On the ring's x/y rim the whole z column belongs to
-                        // the ring; inside it only the two end cells do.
-                        const bool rim = dx == -ring || dx == ring || dy == -ring || dy == ring;
-                        const int dz_step = rim ? 1 : 2 * ring;
-                        for (int dz = -ring; dz <= ring && status == ok; dz += Kokkos::max(dz_step, 1)) {
-                            const int uz = home[2] + dz;
-                            const int z = (uz + side) % side;
-                            const std::int8_t image_z = uz < 0 ? -1 : uz >= side ? 1 : 0;
-                            const int key = grid.rank((x * side + y) * side + z);
-                            for (int q = offsets(key); q < offsets(key + 1); ++q) {
-                                if (q == t) continue;
-                                const double ddx = positions(q, 0) + image_x * box - p.x;
-                                const double ddy = positions(q, 1) + image_y * box - p.y;
-                                const double ddz = positions(q, 2) + image_z * box - p.z;
-                                const double d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                                if (d2 >= 4.0 * static_cast<double>(cell.radius2)) continue;
-                                if (buffered == ring_buffer) flush();
-                                buffer[buffered++] = {static_cast<float>(d2), q, {image_x, image_y, image_z}};
-                            }
-                        }
-                    }
-                }
-                flush();
+                if (level == 2) break;  // no coarser grid fits the box
+                finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
+                for (int a = 0; a < 3; ++a) home[a] >>= 1;
+                --level;
             }
             if (status == ok && !certified) status = uncertified;
             for (int v = 0; v < cell.vertices && status == ok; ++v)
@@ -511,15 +649,16 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
 // capacities once more, in double with big ones.
 template <class Real, class ExecSpace>
 void construct_with_overflow(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                             const Stencil<typename ExecSpace::memory_space>& stencil,
                              const Cells<typename ExecSpace::memory_space>& out, Pass pass) {
-    construct_pass<Real, max_planes, max_vertices>(exec, grid, out, pass);
+    construct_pass<Real, max_planes, max_vertices>(exec, grid, stencil, out, pass);
     int overflowed = 0;
     const auto status = out.status;
     Kokkos::parallel_reduce(
         "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
         KOKKOS_LAMBDA(int t, int& count) { count += status(t) == vertex_overflow || status(t) == plane_overflow; },
         overflowed);
-    if (overflowed > 0) construct_pass<double, big_planes, big_vertices>(exec, grid, out, Pass::overflowed);
+    if (overflowed > 0) construct_pass<double, big_planes, big_vertices>(exec, grid, stencil, out, Pass::overflowed);
 }
 
 }  // namespace detail
@@ -530,7 +669,7 @@ void construct_with_overflow(const ExecSpace& exec, const Grid<typename ExecSpac
 template <class Real, class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                const Cells<typename ExecSpace::memory_space>& out) {
-    detail::construct_with_overflow<Real>(exec, grid, out, detail::Pass::all);
+    detail::construct_with_overflow<Real>(exec, grid, make_stencil(exec), out, detail::Pass::all);
 }
 
 }  // namespace shell_voronoi
