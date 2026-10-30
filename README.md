@@ -1,167 +1,27 @@
 # voronoi-cpp
 
-Kokkos C++17 library for exact local 3D Voronoi meshes in a periodic box on GPUs
-(CUDA validated on A100; OpenMP/Serial builds for checks). It is the geometry
-base for a planned moving-mesh finite-volume (MFV/MFM) hydro solver. Each face
-is stored once per particle pair, by the cell with the lower slot index (its
-owner), so a flux computed on that face and applied with opposite signs
-conserves exactly. The hydro solver itself is not started; this repository
-builds and maintains the mesh. Multi-GPU execution is future work.
+Kokkos C++ library for exact 3D Voronoi meshes of moving particles in a
+periodic box on GPUs (CUDA, validated on an A100 40 GB; OpenMP and Serial
+builds run the same code for checks). It is the geometry base of a planned
+moving-mesh finite-volume hydro solver: the solver hands over particle
+positions and gets back faces (owner, neighbour, area vector, centroid),
+cell volumes and centroids, and per-cell face lists. The hydro solver
+itself is not part of this repository.
 
-## How the pieces fit
+## Install and build
 
-The library is header-only (`src/neighbour_search/`, `src/voronoi_construct/`),
-one job per header:
+Dependencies:
 
-| Header | Job |
-|---|---|
-| `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree with a dense base grid; a grid level per particle fitted to the local density |
-| `shell_voronoi.hpp` | full rebuild by clipping, thread per cell: `construct`, the portable kernel, the overflow pass, and the only kernel that records face rings |
-| `shell_voronoi_warp.hpp` | full rebuild, warp per cell on CUDA: `construct_warp`, the default |
-| `exact_predicates.hpp` | exact orientation and in-sphere signs on snapped positions |
-| `tet_mesh.hpp` | persistent Delaunay tetrahedra: `from_rings`, `circumcentres`, `faces`, `check`, face rings |
-| `tet_start.hpp` | the exact starting tetrahedralization: exact check of `from_rings`, exact clipping of the cells around errors |
-| `tet_repair.hpp` | per-step repair by flips on the device |
-| `tet_flips.hpp` | host fallback of the repair, including local Bowyer-Watson rebuilds |
+- CMake 3.16 or later, a C++17 compiler (gcc 14/15 tested).
+- Kokkos 5.0 (5.0.2 in CI, 5.0.99 on Raven) with the backend you want:
+  CUDA (A100: `Kokkos_ARCH_AMPERE80`, compiled through Kokkos'
+  `nvcc_wrapper`; CUDA 13.0 tested), OpenMP or Serial. The CUDA backend
+  needs Kokkos built with `Kokkos_ENABLE_CUDA_LAMBDA` (the default in 5.x).
+- Nothing else: the library is header-only (`src/neighbour_search/`,
+  `src/voronoi_construct/`); CMake exports it as the target
+  `voronoi_library`.
 
-**Full rebuild.** `neighbor_search::build` sorts the particles by Morton
-key, so every octree node, from blocks of base-grid cells (about one particle
-per cell on average, dense offset table) down to 2^-10 of a base cell (binary
-search on stored fine keys), owns a contiguous range of slots. It also gives
-each particle a grid level whose cells hold about one particle there.
-`shell_voronoi::make_grid` hands the list to the kernels; `list.order(slot)`
-is the original particle ID. Each cell is built by walking the grid cells of
-its level around its generator, nearest first, and clipping a polyhedron with
-every particle that can still cut it: a particle at distance d cuts only if
-d < 2R (R is the largest generator-to-vertex distance), and the walk stops at
-the first grid cell entirely beyond 2R, which certifies the cell; if the
-stencil (4 cell widths) ends first, the walk continues one level coarser.
-Output (`Cells`) is lean: volume and centroid per cell, faces stored once by
-their owner (the arrays widen if a cell owns more than 32).
-`construct_warp` builds one cell per warp in shared memory (lane l owns
-vertices and planes l and l + 32; candidates are tested 32 at a time and
-clipped nearest-first after a warp sort) with persistent warps taking cells
-from a counter. Cells that overflow its capacities, or that the coarsest
-grid cannot certify, are rebuilt by the thread kernel; cells that overflow
-that too get a big-capacity pass. On non-CUDA backends, and when face rings
-are requested, `construct_warp` is the thread kernel.
-
-**Starting mesh.** After a rebuild with face rings, `tet_start::build`
-assembles the tetrahedra and their adjacency on the device
-(`tet_mesh::from_rings`: each tetrahedron emitted by the face of its two
-smallest particles), then checks them exactly: no flat tetrahedron, mutual
-adjacency, apexes on opposite sides of every shared triangle, local
-Delaunay under the perturbed in-sphere test, every particle used, volumes
-summing to the box. These together certify the unique Delaunay
-tetrahedralization of the snapped positions (ties broken by the symbolic
-perturbation). Where the check fails, the cells around the bad tetrahedra
-are rebuilt by exact clipping (vertices named by particle triples, every
-cut an exact in-sphere sign behind a filter) and the mesh is assembled and
-checked again; if many cells are bad (lattices) or a second check fails,
-every cell is rebuilt exactly. Rounding decides the clipping's near-ties,
-so its rings are wrong on lattices and other cospherical layouts and, at
-2.1M cells, at a few places on jittered and random input too.
-
-**Persistent mesh.** Each tetrahedron is a
-Voronoi vertex (its circumcentre), and a Voronoi face is the ring of
-circumcentres around a Delaunay edge; every edge has one representative
-tetrahedron (6 bits per tetrahedron). Per step:
-
-1. `tet_repair::move_screened` snaps the new positions, computes the
-   circumcentres (slivers in a second pass, in exact integer arithmetic) and
-   lists the tetrahedra whose local Delaunay test could fail;
-   `tet_repair::repair` flips them on the device (failing triangles planned
-   as 2->3 or 3->2 flips; plans vote on the tetrahedra they rewrite, winners
-   apply, losers retry; a flip is only accepted if it closes its cavity
-   exactly) and lists the tetrahedra it creates;
-2. if the device repair reports stuck entries, `tet_flips::finish` repairs
-   the region around them on the host (flips, then local rebuilds), writes
-   it back and lets the device repair settle its border;
-3. `tet_mesh::circumcentres` of the created tetrahedra,
-   `tet_mesh::update_face_rings` (in place: only faces with a created
-   tetrahedron on their ring are walked and appended to a ring pool) and
-   `tet_mesh::faces` (area vectors, centroids, cell volumes).
-
-Every repair decision uses `exact_predicates.hpp`: positions snapped to a
-2^30 grid, a filtered double evaluation with an error bound, and an exact
-fallback (128-bit orientation, 256-bit in-sphere), with symbolic perturbation
-for ties, so the device and the host agree on one triangulation.
-
-## Measured performance
-
-One A100 40 GB, double precision, 2,097,152 cells (128^3), periodic unit box.
-Rates in million cells per second. The gpudev node shares its GPU, so compare
-variants only within one job; numbers below are best-node values.
-
-| Stage | Rate |
-|---|---|
-| Full rebuild, warp kernel, jittered | 21.9 |
-| Full rebuild, warp kernel, uniform random | 10.5 |
-| Full rebuild, warp kernel, clustered (Gaussian blobs, ~1:500) | 8.7 |
-| Full rebuild, warp kernel, halo (1:10^4 core to edge) | 8.3 |
-| Tetrahedra from rings (once after a rebuild) | 40 |
-| Exact start (ring clipping + `tet_start::build`), jittered | 4.5 (ring clipping alone 6.2; the patch of 42 cells costs 70 ms, mostly a second `from_rings`) |
-| Exact start, perfect lattice (every cell clipped exactly) | 7.4 |
-
-A thread-per-cell kernel with the polyhedron in shared memory (the removed
-"lean" kernel) reached 10.4 on jittered input.
-
-Per step at 0.03 spacings of motion (jittered), complete mesh update (repair
-with screening, circumcentres, face rings and faces): about 11.8 ms, i.e.
-~178 M cells/s (16.8 ms before `research_notes/speed_2026-10-30.md`). At 0.1
-and 0.3 spacings most steps leave a few stuck triangles; the host fallback
-around them takes 0.14 / 0.35 s per step instead of 5.6 / 6.5 s, on top of
-~20 / ~39 ms on the device (details in the note).
-
-Comparisons on the same A100 (research_notes/arepo_wd_gpu_benchmark.md and
-the status notes):
-
-| Code | Mesh | Full step |
-|---|---|---|
-| this work | 18.7 M cells/s rebuild; ~178 M cells/s persistent step | no hydro yet |
-| PROTEUS | 1.6-6 M cells/s | Sedov, 5 M updates/s |
-| AREPO-WD GPU per-cell builder | 1.4-1.6 M cells/s | Sedov, 0.59 M updates/s |
-| LUNA (fixed grid) | n/a | 1,100 M updates/s |
-
-Nsight on the 2.1M jittered case shows the rebuild is divergence-bound, not
-memory-bound (DRAM <1 %, L2 hit 99 %). Morton cell order, coarser cell lists,
-fast-math, octant culling and 16- or 8-lane teams per cell gave no gain.
-Details: `research_notes/status_2026-10-29.md`; the cleanup that produced this
-layout: `research_notes/cleanup_2026-10-30.md`.
-
-## Known limitations and open items
-
-- Clustered input still costs about what uniform random input costs (~19-20
-  cuts per cell against 16 on jittered); the search is no longer the limit.
-- Clipping alone is not watertight on uniform random input in double at 2.1M
-  cells (some face pairs inconsistent), and its rings are wrong on lattices
-  and cospherical layouts; `tet_start::build` makes the starting mesh exact
-  for all inputs of `support.hpp` except below.
-- A cell can store at most 32 owned faces (`shell_voronoi::max_owned_faces`);
-  a cell with more (pairs 1e-6 spacings apart, one cell in 262k) cannot be
-  patched and `tet_start::Stats::exact` stays false.
-- Particles must sit on the 2^30 snapping grid of the exact predicates: the
-  topology is decided on snapped positions, the geometry computed from the
-  positions. Off the grid, near-degenerate cells differ from clipping by
-  ~1e-9 in volume and particles closer than ~1e3 grid steps can get wrong
-  geometry. The tests and benchmark keep positions on the grid.
-- The first step out of a degenerate start (lattice, wave, sc@1e-6, shells)
-  rearranges most tetrahedra; the device repair leaves 2e3 (lattice) to 1e6
-  (wave, sc@1e-6) triangles stuck at 2.1M cells and the host fallback takes
-  7-80 s. Exact, but a device rebuild (about 1 s) would be the faster guard.
-- Clustered input at 262k cells: after the first step one Delaunay edge has
-  no face (face count one below clipping), a 7e-8 volume error in one tiny
-  cell; edge-representative bookkeeping, open.
-- GPU repair breaks down near one spacing of motion per step; it needs
-  substepping or a rebuild guard.
-- Degenerate layouts still fail some checks of the clipping alone
-  (`voronoi_bench rebuild`); the exact start (`tet_start`) repairs them.
-  Double precision only: float clipping left degenerate cells on every input.
-- Periodic box only. MFV/MFM hydro is not started.
-
-## Build, test and run
-
-Raven, CUDA build:
+CUDA (A100), on Raven:
 
 ```sh
 module load gcc/14 cuda/13.0 cmake
@@ -171,72 +31,197 @@ cmake -S . -B build-cuda -DCMAKE_BUILD_TYPE=Release \
 cmake --build build-cuda -j4
 ```
 
-OpenMP build: `module load gcc/15`, Kokkos `/u/uli/kokkos-gcc15`, same cmake
-call with a different build directory. Elsewhere, point `CMAKE_PREFIX_PATH` at
-a Kokkos installation with the desired backend. Build large configurations
-and run GPU jobs through Slurm, not on the login node;
-`scripts/bench_a100.sh` is an example job.
+OpenMP (CPU), on Raven:
 
-Tests (`ctest --test-dir build-cuda --output-on-failure`, about 75 s on one
-CPU core), each a short specification in `src/test/`:
+```sh
+module load gcc/15 cmake
+cmake -S . -B build-omp -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/u/uli/kokkos-gcc15 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build build-omp -j4
+```
+
+Elsewhere, point `CMAKE_PREFIX_PATH` at a Kokkos installation with the
+desired backend. On Raven, build at most with `-j4` on the login node, or
+inside a Slurm job; run GPU work through Slurm (`scripts/bench_a100.sh`).
+
+### Compiler flags in use
+
+- Release: `-O3 -DNDEBUG` (CMake's default), C++17 required (Kokkos sets
+  `-std=c++20`), warnings `-Wall -Wextra -Wpedantic` on the programs.
+- CUDA: `nvcc_wrapper` with `-extended-lambda -arch=sm_80` (from Kokkos'
+  AMPERE80). The warp clipping kernel uses
+  `Kokkos::LaunchBounds<128, 5>` (4 warps per block, 5 blocks per SM),
+  which caps it at 96 registers; 18 KB of shared memory per block.
+- OpenMP: `-fopenmp` from Kokkos; no `-march` is set by the project
+  (`-DCMAKE_CXX_FLAGS=-march=icelake-server` is worth adding on Raven's
+  CPUs).
+- `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (always on in `CMakeLists.txt`)
+  writes the compilation database clang-tidy needs:
+  `bash scripts/lint_cpp.sh build-omp` (Raven: `module load clang/20`).
+- `-DVORONOI_SANITIZERS=ON` adds address and undefined-behaviour
+  sanitizers to a host build.
+
+## Using it: `voronoi::Mesh`
+
+```cpp
+#include "voronoi_mesh.hpp"
+
+voronoi::Mesh<> mesh(Kokkos::DefaultExecutionSpace{}, box);
+mesh.update(x);          // x(i, a): positions in [0, box), particle i = index i
+// ... move the particles ...
+voronoi::Report r = mesh.update(x);   // repairs the mesh; exact on return
+mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
+// Faces f < mesh.faces(): owner()(f) < neighbour()(f), area()(f, a) from
+// owner to neighbour, face_centroid()(f, a) relative to the owner.
+// Cells i: volume()(i), centroid()(i, a) relative to the generator, faces
+// cell_face()(k) for k in [cell_face_start()(i), cell_face_start()(i + 1)).
+```
+
+- Particles are the caller's indices; ties between cospherical particles
+  are broken by them (symbolic perturbation), at the start and in every
+  repair alike. A permuted input gives the permuted mesh.
+- Positions are snapped to the 2^30 grid of the exact predicates inside;
+  topology and geometry both come from the snapped positions.
+- `update()` repairs (the first call, or a change of n, builds); exact on
+  return. When the device repair leaves stuck triangles it finishes on
+  the host or rebuilds on the device, whichever is cheaper
+  (`voronoi::Fallback`).
+- Faces are stored once, by the lower id (the owner rule), so a flux
+  applied with opposite signs conserves exactly. Cell volumes after
+  `update()` are summed with atomics; `update_cells()` sums volumes and
+  centroids over each cell's faces in a fixed order, the same bits every
+  run, and gives the per-cell face lists for gathers.
+- `clip(x, cells)` rebuilds the listed cells by clipping, independent of
+  the persistent mesh, and returns each of their faces once (a local mode
+  for substeps of active cells).
+- `rebuild(x)` builds the exact mesh from scratch on demand.
+- `scratch(bytes)` lends device memory between updates (the spare ring
+  pool).
+
+## How it works
+
+| Header | Job |
+|---|---|
+| `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
+| `exact_predicates.hpp` | snapping (`snap(x, box)`), exact orientation and in-sphere signs (filtered double, then 128/256-bit integers), symbolic perturbation by particle id |
+| `shell_voronoi.hpp` | clipping, thread per cell: the walk, `Cells` output (owned faces or face rings in pools), rounded and exact cells |
+| `shell_voronoi_warp.hpp` | clipping, warp per cell on CUDA (`construct_warp`), with faces or face rings |
+| `tet_mesh.hpp` | persistent tetrahedra: `from_rings`, circumcentres, face rings kept in place, faces, per-cell face lists |
+| `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of the cells around errors |
+| `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
+| `tet_flips.hpp` | host fallback of the repair (flips, local Bowyer-Watson) |
+| `voronoi_mesh.hpp` | `voronoi::Mesh`: the pipeline below behind one interface |
+
+**Clipping.** Each cell is built by walking the grid cells of its level
+around its generator, nearest first, clipping with every particle that
+can still cut it: a particle at distance d cuts only if d < 2R (R the
+largest generator-to-vertex distance); the walk stops at the first grid
+cell beyond 2R, which certifies the cell, and goes one level coarser when
+the stencil ends first. The warp kernel builds one cell per warp in shared
+memory and writes owned faces (neighbour, area, centroid) into a pool, 256
+entries claimed per warp at a time, or face rings. Cells it cannot hold or
+certify are built by the per-thread kernel with rounded cells; its exact
+cells (vertices named by particle triples, every cut an exact perturbed
+in-sphere sign) build the start's patches.
+
+**Exact start.** Face rings from the warp kernel give the tetrahedra and
+their adjacency (`tet_mesh::from_rings`). `tet_start::build` checks them
+exactly (no flat tetrahedron, mutual adjacency, apexes on opposite sides,
+local Delaunay under the perturbed in-sphere test, every particle used,
+volumes summing to the box: together the Delaunay tetrahedralization) and
+rebuilds the cells around anything wrong by exact clipping.
+
+**Persistent mesh.** Per step: snap; screen the tetrahedra whose local
+Delaunay test may fail (double, with a margin) and repair them by flips on
+the device (plans vote by a hash of their index; every flip decided by
+exact predicates and checked to close its cavity); finish stuck triangles
+on the host or rebuild; circumcentres of the created tetrahedra; walk only
+the faces whose ring changed; face geometry.
+
+## Measured performance
+
+One A100 40 GB (Raven gpu1), double precision, periodic unit box, job
+31694457, commit f32c909. Rates in million cells per second.
+
+| | 2,097,152 cells (128^3) | 16,777,216 cells (256^3) |
+|---|---|---|
+| Warp rebuild, jittered | 34.7 (60.4 ms) | 34.8 (482 ms) |
+| Warp rebuild, uniform random | 16.5 | |
+| Warp rebuild, clustered (Gaussian blobs, ~1:500) | 13.0 | |
+| Warp rebuild, halo (1:10^4 core to edge) | 12.1 | |
+| Warp rebuild, lattice / wave | 46.0 / 33.5 | |
+| Exact start (warp with rings + `tet_start::build`), jittered | 120 ms | 1.43 s |
+| `voronoi::Mesh` first update (start, state, all faces) | 146 ms | 2.14 s |
+| Step at 0.03 spacings (repair, centres, rings, faces) | 11.1 ms (189 M/s) | 64 ms (262 M/s) |
+| Step at 0.1 spacings | 18.9 ms | |
+| Step at 0.3 spacings | 37.1 ms | 180 ms |
+| `update_cells()` (face lists, ordered volumes and centroids) | 12.6 ms | 90 ms |
+| Device memory, plain warp rebuild | 701 B/cell | 656 B/cell |
+| Device memory peak, start and steps (with face lists) | 2221 B/cell | 2200 B/cell (37.9 GB in use) |
+
+Steps are medians of steps 2-10 on jittered points moved by a smooth flow;
+the step at 256^3 moves particles by the same number of spacings, but the
+flow varies on the box scale, so neighbours shear half as much per step
+(half the flips per cell). On jittered, uniform and clustered input at
+0.1 and 0.3 spacings no triangle ever sticks; the first step out of a
+degenerate start (wave lattice) leaves 178k stuck at 2.1M, rebuilt in
+0.17 s. The per-cell face lists account for most of the step peak above
+2fd8b50's 2080 B/cell (about 140 B/cell; not measured separately).
+
+## Tests
+
+Six CTest programs specify the library; details, oracles, run times and
+what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
 |---|---|
-| `exact_predicates` | signs equal an independent integer evaluation, near-degenerate and large inputs included; ties consistent; periodic offsets |
-| `clipping` | jittered, uniform, lattice, clustered, halo: every cell certified, volumes fill the box, cells close, faces consistent and on the bisectors; thread and warp kernels and a coarser base grid agree; a narrow face output is widened |
-| `mesh` | `from_rings` equals a host construction, adjacency and edge representatives consistent, volumes from stored and walked rings equal clipping, sliver circumcentres exact |
-| `start` | the starting mesh of random, clustered, lattice and degenerate inputs is a triangulation of the box with every circumsphere empty (brute-force host oracle, exact predicates), i.e. the Delaunay tetrahedralization |
-| `repair` | steps of a smooth flow at 0.03 and 0.3 spacings from jittered, lattice and wave starts (and shells at 0.03): the repaired mesh equals an exact rebuild (neighbours, volumes) every step |
-
-`voronoi_bench` (`src/bench/`) times the pipeline and helps debugging:
-
-```text
-voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>]
-voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug]
-```
-
-Distributions are uniform, jittered, lattice, wave, clustered, halo, or
-`<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`. `rebuild`
-times the thread and warp kernels in double (selected by substring)
-and checks every variant's cells. `step` times the exact start (clipping
-with rings, `from_rings`, `tet_start::build`) and the per-step kernels, then steps the flow `displacement` spacings at a time;
-`--verify` compares every step with an exact rebuild, `--debug` adds
-adjacency, stuck and worst-cell details.
+| `exact_predicates` | signs equal an independent integer evaluation; ties consistent; nearest periodic image; snapping for any box |
+| `clipping` | cells certified, closing, consistent and on the bisectors (brute force); thread, warp and exact kernels agree; pools grow; NaN/infinite particles never cut |
+| `mesh` | `from_rings` against a host construction; adjacency, edge representatives, exact check, volumes from rings; exact sliver centres |
+| `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and boxes of side 1, 2, 3 |
+| `repair` | after every step of a flow the mesh equals an exact rebuild (lattice, wave, shells, jittered, box 2) |
+| `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
 
 ```sh
-# full rebuild, warp kernel, double, 3 repeats
-voronoi_bench rebuild 2097152 jittered warp-double 3
-# persistent mesh: 10 steps of 0.03 spacings
-voronoi_bench step 2097152 jittered 0.03 10
-# the same at 0.3 spacings, checked against an exact rebuild every step
-voronoi_bench step 262144 jittered 0.3 10 --verify
+ctest --test-dir build-cuda --output-on-failure         # A100: ~35 s
+OMP_NUM_THREADS=1 ctest --test-dir build-omp            # one CPU core: ~45 s
+sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A100 checks
 ```
+
+`voronoi_bench` (`src/bench/`) times the pipeline and checks it at scale:
+
+```text
+voronoi_bench rebuild <n> <distribution> [variants=thread,exact,warp] [repeats=5] [--width=f] [--no-check] [--memory]
+voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=host|rebuild] [--memory]
+```
+
+Distributions: uniform, jittered, lattice, wave, clustered, halo, or
+`<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`.
+
+## Limitations and open items
+
+- The warp rebuild is 1.5-4 % slower than on 2fd8b50 (uniform 16.5 vs
+  17.2 M cells/s), the cost of the pooled face output and of particle ids
+  in the clipping output (research_notes/cleanup2_2026-10-31.md).
+- Clipping alone is not watertight on uniform random input at 2.1M cells;
+  the exact start makes the mesh exact.
+- Snapped duplicates (two particles in one grid cell) make every predicate
+  flat; nothing repairs them.
+- The device repair breaks down near one spacing of motion per step
+  (stuck triangles, host or rebuild fallback); substepping helps.
+- Ghost particles (multi-GPU) and repair limited to active regions are not
+  implemented; `update()` takes an `active` list for later.
+- Periodic box only.
 
 ## Repository layout
 
-- `src/neighbour_search/`, `src/voronoi_construct/`: the library (above).
-- `src/test/`: the tests, `support.hpp` (inputs, moving-mesh driver,
-  reference results; shared with the benchmark) and `check.hpp`.
+- `src/neighbour_search/`, `src/voronoi_construct/`: the library.
+- `src/test/`: the tests, `support.hpp` (inputs, references, the
+  comparison with an exact rebuild), `check.hpp`.
 - `src/bench/`: `voronoi_bench`.
 - `scripts/`: `lint_cpp.sh`, `bench_a100.sh`.
-- `research_notes/`, `reports/`: status notes, AREPO/PROTEUS/GIZMO/SPH-EXA
-  surveys, Kokkos CUDA audit, literature reports.
+- `research_notes/`, `reports/`: status notes and surveys.
 
-CMake exposes `voronoi_library` with both include directories. The earlier
-table-based pipeline (`local_voronoi*.hpp`) and its tools are on the branch
-`archive/codex-era`.
-
-## Linting and continuous integration
-
-GitHub Actions (`.github/workflows/checks.yml`) runs clang-tidy and the CPU
-tests in ordinary and address/undefined-behavior sanitizer builds against a
-pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
-
-```sh
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/kokkos -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build build -j 2
-bash scripts/lint_cpp.sh build
-ctest --test-dir build --output-on-failure
-```
-
-Add `-DVORONOI_SANITIZERS=ON` in a separate host build for sanitizers.
+CI (`.github/workflows/checks.yml`) runs clang-tidy and the CPU tests in
+ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2; it does
+not run GPU jobs.
