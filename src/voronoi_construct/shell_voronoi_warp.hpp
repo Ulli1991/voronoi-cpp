@@ -49,7 +49,7 @@ struct alignas(16) Polyhedron {
     std::uint32_t corner[max_vertices];
     std::uint32_t adjacent[max_vertices];
     std::uint8_t free_slots[max_vertices];  // stack of the slots not in use
-    std::uint8_t crossing[max_vertices];    // edges a cut crosses: removed vertex | edge << 6
+    std::uint32_t crossing[max_vertices];   // edges a cut crosses: removed, kept vertex, planes a, b
     std::uint8_t starts[max_planes];        // new vertex whose hole edge starts at a plane
     std::uint8_t ends[max_planes];          // ... and ends at a plane
     std::uint8_t first[max_planes];         // a vertex on each face, for the face walk
@@ -228,12 +228,18 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
         const int w = l + k * lanes;
-        const std::uint32_t adjacent = out[k] ? c.adjacent[w] : 0;
+        std::uint32_t corner = 0, adjacent = 0;
+        if (out[k]) {
+            corner = c.corner[w];
+            adjacent = c.adjacent[w];
+        }
         for (int e = 0; e < 3; ++e) {
-            const bool crossing = out[k] && !(removed >> byte(adjacent, e) & 1);
+            const int u = byte(adjacent, e);
+            const bool crossing = out[k] && !(removed >> u & 1);
             const unsigned crossings = __ballot_sync(all_lanes, crossing);
             const int number = created + __popc(crossings & below);
-            if (crossing && number < max_vertices) c.crossing[number] = w | e << 6;
+            if (crossing && number < max_vertices)
+                c.crossing[number] = pack(w, u, byte(corner, e)) | std::uint32_t(byte(corner, (e + 1) % 3)) << 24;
             created += __popc(crossings);
         }
     }
@@ -253,9 +259,8 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     for (int k = 0; k < per_lane; ++k) {
         const int j = l + k * lanes;
         if (j >= created) continue;
-        const int code = c.crossing[j], w = code & 63, e = code >> 6;
-        const std::uint32_t corner = c.corner[w];
-        const int u = byte(c.adjacent[w], e);
+        const std::uint32_t edge = c.crossing[j];
+        const int w = byte(edge, 0), u = byte(edge, 1);
         const int s = c.free_slots[free - 1 - j];
         const Real t = c.side[w] / (c.side[w] - c.side[u]);
         const Real px = c.x[w] + (c.x[u] - c.x[w]) * t, py = c.y[w] + (c.y[u] - c.y[w]) * t,
@@ -264,8 +269,8 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
         c.y[s] = py;
         c.z[s] = pz;
         radius = Kokkos::max(radius, px * px + py * py + pz * pz);
-        a[k] = byte(corner, e);
-        b[k] = byte(corner, (e + 1) % 3);
+        a[k] = byte(edge, 2);
+        b[k] = byte(edge, 3);
         c.corner[s] = pack(a[k], b[k], plane);
         const std::uint32_t back = c.adjacent[u];
         store_byte(c.adjacent[u], byte(back, 0) == w ? 0 : byte(back, 1) == w ? 1 : 2, s);
