@@ -452,15 +452,10 @@ struct ExactCell {
 // walking order); false if they do not meet in one point.
 template <class C>
 KOKKOS_INLINE_FUNCTION bool set_vertex(C& cell, int v, int a, int b, int c) {
-    const ep::Offset &A = cell.offset[a], &B = cell.offset[b], &D = cell.offset[c];
-    ep::i128 bd[3], ad[3], ab[3];
-    ep::cross(B, D, bd);
-    ep::cross(A, D, ad);
-    ep::cross(A, B, ab);
-    const ep::i128 o = A[0] * bd[0] + A[1] * bd[1] + A[2] * bd[2];
+    ep::i128 n[3];  // the vertex is n / (2 o) = -w / (2 o)
+    const ep::i128 o = ep::circumcentre(cell.offset[a], cell.offset[b], cell.offset[c], n);
     if (o == 0) return false;
-    const ep::i128 la = ep::lift(A), lb = ep::lift(B), ld = ep::lift(D);
-    for (int k = 0; k < 3; ++k) cell.w[v][k] = double(-la * bd[k] + lb * ad[k] - ld * ab[k]);
+    for (int k = 0; k < 3; ++k) cell.w[v][k] = -double(n[k]);
     cell.o[v] = double(o);
     const double* w = cell.w[v];
     cell.r2[v] = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]) / (4 * cell.o[v] * cell.o[v]) * (1 + 1e-12);
