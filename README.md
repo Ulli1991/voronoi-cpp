@@ -146,21 +146,24 @@ in million cells per second. 2.1M column: job 31701509 (commit 2311937's
 code); 256^3 column: job 31694457 (commit f32c909, before the plume-derived
 speedups, so the current code is faster there).
 
-| | 2,097,152 cells (128^3) | 16,777,216 cells (256^3) |
+Throughput in million cells per second (cells processed per second of GPU time).
+
+| Million cells per second | 2,097,152 cells (128^3) | 16,777,216 cells (256^3) |
 |---|---|---|
-| Warp rebuild, jittered | **40.1** (52.3 ms) | 34.8 (482 ms) |
-| Warp rebuild, uniform random | **20.0** | |
-| Warp rebuild, clustered (Gaussian blobs, ~1:500) | **15.6** | |
-| Warp rebuild, halo (1:10^4 core to edge) | **14.3** | |
-| Warp rebuild, lattice / wave | **50.2 / 38.5** | |
-| Exact start (warp with rings + `tet_start::build`), jittered | 118 ms (17.7) | 1.43 s |
-| Step at 0.03 spacings (repair, centres, rings, faces) | 10.45 ms (**201**) | 64 ms (262) |
-| Step at 0.1 spacings | 18.3 ms (115) | |
-| Step at 0.3 spacings | 36.7 ms (57) | 180 ms (93) |
-| `update_cells()` (face lists, ordered volumes and centroids) | 6.43 ms | 54 ms |
-| Step at 0.03 + `update_cells()` (bit-reproducible faces and cells) | 16.9 ms (124) | |
-| Device memory, plain warp rebuild | 701 B/cell | 656 B/cell |
-| Device memory peak, start and steps (with face lists) | 2221 B/cell | 2200 B/cell (37.9 GB in use) |
+| Full rebuild (warp clipping), jittered | **40.1** | 34.8 |
+| Full rebuild, uniform random | **20.0** | |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | **15.6** | |
+| Full rebuild, halo (1:10^4 core to edge) | **14.3** | |
+| Full rebuild, lattice / wave | **50.2 / 38.5** | |
+| Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
+| Moving-mesh update, 0.03 spacings per step | **201** | 262 |
+| Moving-mesh update, 0.1 spacings per step | 115 | |
+| Moving-mesh update, 0.3 spacings per step | 57 | 93 |
+| `update_cells()` alone (face lists, ordered volumes and centroids) | 326 | 311 |
+| Moving-mesh update + `update_cells()`, 0.03 spacings (bit-reproducible) | **124** | |
+
+Device memory: plain warp rebuild 701 B/cell (656 at 256^3); peak during
+start and steps, with face lists, 2221 B/cell (2200 at 256^3, 37.9 GB in use).
 
 Steps are medians of steps 2-10 on jittered points moved by a smooth flow;
 the step at 256^3 moves particles by the same number of spacings, but the
