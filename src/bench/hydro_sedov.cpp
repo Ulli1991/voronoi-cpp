@@ -13,7 +13,8 @@
 // 1e4 yr. --out writes snapshots 0..snapshots at equal times (LUNA's
 // time_bet_snaps = t_end / n_snaps). --steps stops after that many steps
 // (timing runs). Particles are numbered in Morton order of their positions
-// (--input-order: as generated, lattice rows or random). Prints per step
+// (--input-order: as generated, lattice rows or random). --update: the
+// update loop, default face at order 1 and cell at order 0. Prints per step
 // phase medians and cell updates per second; --memory adds device memory
 // (Kokkos allocations) per phase.
 
@@ -178,7 +179,9 @@ int main(int argc, char** argv) {
     const int side = std::stoi(args[0]);
     const std::string kind = args[1];
     const int order = std::stoi(flag(argc, argv, "--order", "1"));
-    const hydro::Update update = flag(argc, argv, "--update", "cell") == "face" ? hydro::Update::per_face : hydro::Update::per_cell;
+    // Default loop: the faster one measured on the A100 (research_notes/hydro_stage1_2026-10-31.md).
+    const std::string loop = flag(argc, argv, "--update", order == 1 ? "face" : "cell");
+    const hydro::Update update = loop == "face" ? hydro::Update::per_face : hydro::Update::per_cell;
     const std::string out = flag(argc, argv, "--out", "");
     const int snapshots = std::stoi(flag(argc, argv, "--snapshots", "10"));
     const long long max_steps = std::stoll(flag(argc, argv, "--steps", "0"));
