@@ -1,8 +1,8 @@
 // Timing and debugging of the mesh pipeline (not a test).
 //
 //   voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>] [--morton]
-//       Full rebuild by clipping. Variants thread-/warp- with -double/-float,
-//       selected by substring. Every variant's cells are checked
+//       Full rebuild by clipping, double. Variants thread and warp, selected
+//       by substring. Every variant's cells are checked
 //       (support::check_cells, PASS/FAIL).
 //   voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug]
 //       The persistent mesh: the exact start (clipping with rings,
@@ -63,19 +63,17 @@ int rebuild(const std::vector<std::string>& args, double width_factor, bool mort
               << list.cells_per_side << "^3 repeats=" << repeats << (morton ? " morton" : "") << "\n";
     int failures = 0;
     std::vector<double> first_volumes;
-    for (const std::string variant : {"thread-double", "thread-float", "warp-double", "warp-float"}) {
+    for (const std::string variant : {"thread-double", "warp-double"}) {
         if (selection != "all" && variant.find(selection) == std::string::npos) continue;
         shell_voronoi::Cells<Memory> cells(n, true);
         const double construct_ms = median_ms(repeats, [&] {
             if (variant == "thread-double") shell_voronoi::construct<double>(exec, grid, cells);
-            if (variant == "thread-float") shell_voronoi::construct<float>(exec, grid, cells);
             if (variant == "warp-double") shell_voronoi::construct_warp<double>(exec, grid, cells);
-            if (variant == "warp-float") shell_voronoi::construct_warp<float>(exec, grid, cells);
         });
         std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
                   << " construct_Mcells_s=" << n / construct_ms / 1e3
                   << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-        failures += check_cells(cells, list.positions, variant.find("double") != std::string::npos, std::cout);
+        failures += check_cells(cells, list.positions, true, std::cout);
         const auto volume = to_host(cells.volume);
         if (first_volumes.empty()) {
             first_volumes.assign(volume.data(), volume.data() + n);

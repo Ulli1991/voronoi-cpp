@@ -148,8 +148,9 @@ layout: `research_notes/cleanup_2026-10-30.md`.
   cell; edge-representative bookkeeping, open.
 - GPU repair breaks down near one spacing of motion per step; it needs
   substepping or a rebuild guard.
-- The float variants and degenerate layouts still fail some checks of
-  `voronoi_bench rebuild`; the tests cover double precision.
+- Degenerate layouts still fail some checks of the clipping alone
+  (`voronoi_bench rebuild`); the exact start (`tet_start`) repairs them.
+  Double precision only: float clipping left degenerate cells on every input.
 - Periodic box only. MFV/MFM hydro is not started.
 
 ## Build, test and run
@@ -190,7 +191,7 @@ voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--de
 
 Distributions are uniform, jittered, lattice, wave, clustered, or
 `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`. `rebuild`
-times the thread-/warp- kernels in -double/-float (selected by substring)
+times the thread and warp kernels in double (selected by substring)
 and checks every variant's cells. `step` times the exact start (clipping
 with rings, `from_rings`, `tet_start::build`) and the per-step kernels, then steps the flow `displacement` spacings at a time;
 `--verify` compares every step with an exact rebuild, `--debug` adds
