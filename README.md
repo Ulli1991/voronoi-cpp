@@ -247,12 +247,12 @@ Sedov blast (1e51 erg, n = 1 cm^-3, 50 pc box, 1e4 yr) and writes HDF5
 snapshots. Measured on one A100 (jobs 31699864, 31699865, 31700852), double,
 jittered points in Morton order, median of 40 steps:
 
-| | 2,097,152 cells | 16,777,216 cells |
+| Million cell updates per second | 2,097,152 cells | 16,777,216 cells |
 |---|---|---|
-| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | 38.3 ms (55 M cell updates/s) | 308 ms (55 M/s; per-cell loop over a whole run, job 31701234: 394 ms) |
-| static mesh, MUSCL-Hancock HLLC, per-face loop | 18.7 ms (112 M/s) | 160 ms (105 M/s) |
-| static mesh, MUSCL-Hancock HLL, per-face loop | 18.0 ms (116 M/s) | 147 ms (114 M/s) |
-| static mesh, first order HLLC, per-cell loop | 7.3 ms (288 M/s) | 58 ms (290 M/s) |
+| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | **55** | 55 (whole run with the per-cell loop, which fits in memory: 43) |
+| static mesh, MUSCL-Hancock HLLC, per-face loop | **112** | 105 |
+| static mesh, MUSCL-Hancock HLL, per-face loop | 116 | 114 |
+| static mesh, first order HLLC, per-cell loop | 288 | 290 |
 | device memory, mesh + hydro (static, per-face, second order) | 2370 B/cell | 2371 B/cell (41.2 GB in use) |
 | device memory, moving mesh + hydro (per-face) | 2418 B/cell | whole run: out of memory (job 31701027); per-cell loop fits |
 
