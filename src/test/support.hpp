@@ -107,8 +107,8 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
 }
 
 // Points in the unit box: uniform, jittered (lattice moved by up to 0.1
-// spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, or a
-// degenerate layout. Lattices round n to a cube.
+// spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, halo,
+// or a degenerate layout. Lattices round n to a cube.
 inline Points make_points_off_grid(const std::string& kind, int n) {
     if (const auto at = kind.find('@'); at != std::string::npos)
         return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n);
@@ -138,6 +138,32 @@ inline Points make_points_off_grid(const std::string& kind, int n) {
                 points.push_back({wrap(c[0] + blob(rng)), wrap(c[1] + blob(rng)), wrap(c[2] + blob(rng))});
             }
         }
+    } else if (kind == "halo") {
+        // Four halos with density 1 / (r^2 + c^2) out to r = 0.2, c = 0.002
+        // (core to edge 1:10^4), over a 10 % uniform background: about
+        // 1:10^5 from the voids to the halo cores.
+        constexpr double edge = 0.2, core = 0.002;
+        std::array<Point, 4> centres;
+        for (auto& c : centres) c = {unit(rng), unit(rng), unit(rng)};
+        // The enclosed mass m(r) = r - c atan(r / c), inverted by bisection.
+        const double total = edge - core * std::atan(edge / core);
+        std::normal_distribution<double> gauss(0.0, 1.0);
+        for (int i = 0; i < n; ++i) {
+            if (i % 10 == 0) {
+                points.push_back({unit(rng), unit(rng), unit(rng)});
+                continue;
+            }
+            const double target = total * unit(rng);
+            double lo = 0, hi = edge;
+            for (int k = 0; k < 60; ++k) {
+                const double mid = 0.5 * (lo + hi);
+                (mid - core * std::atan(mid / core) < target ? lo : hi) = mid;
+            }
+            const Point g{gauss(rng), gauss(rng), gauss(rng)};
+            const double scale = 0.5 * (lo + hi) / std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+            const auto& c = centres[i % 4];
+            points.push_back({wrap(c[0] + scale * g[0]), wrap(c[1] + scale * g[1]), wrap(c[2] + scale * g[2])});
+        }
     } else if (kind == "uniform") {
         for (int i = 0; i < n; ++i) points.push_back({unit(rng), unit(rng), unit(rng)});
     } else {
@@ -162,10 +188,10 @@ inline Positions to_device(const Points& points) {
     return x;
 }
 
-// A cell list over the unit box with about one particle per cell.
-inline neighbor_search::CellList<Exec> cell_list(const Positions& x, double width_factor = 1.0, bool morton = false) {
+// A cell list over the unit box whose base grid has about one particle per
+// cell (times width_factor^-3).
+inline neighbor_search::CellList<Exec> cell_list(const Positions& x, double width_factor = 1.0) {
     neighbor_search::CellList<Exec> list;
-    list.morton = morton;
     const int n = static_cast<int>(x.extent(0));
     neighbor_search::configure(list, n, 1.0, width_factor * std::cbrt(1.0 / n));
     neighbor_search::build(Exec{}, list, x);
@@ -337,16 +363,14 @@ struct Reference {
     std::vector<int> status;
 };
 
-inline Reference clipped(const Positions& x) {
-    const int n = static_cast<int>(x.extent(0));
-    const auto list = cell_list(x);
-    shell_voronoi::Cells<Memory> cells(n, false);
-    shell_voronoi::construct_warp<double>(Exec{}, shell_voronoi::make_grid(list), cells);
-    const auto order = to_host(list.order);
+// The cells of a clipping build, by particle (`order` maps slots to particles).
+inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells, const Kokkos::View<int*, Memory>& slot_order) {
+    const auto order = to_host(slot_order);
     const auto owned = to_host(cells.owned_count);
     const auto neighbour = to_host(cells.neighbour);
     const auto volume = to_host(cells.volume);
     const auto status = to_host(cells.status);
+    const int n = static_cast<int>(order.extent(0));
     Reference r{NeighbourSets(n), std::vector<double>(n), std::vector<int>(n)};
     for (int t = 0; t < n; ++t) {
         const int i = order(t);
@@ -360,6 +384,29 @@ inline Reference clipped(const Positions& x) {
     }
     for (auto& s : r.neighbours) std::sort(s.begin(), s.end());
     return r;
+}
+
+inline Reference clipped(const Positions& x) {
+    const int n = static_cast<int>(x.extent(0));
+    const auto list = cell_list(x);
+    shell_voronoi::Cells<Memory> cells(n, false);
+    shell_voronoi::construct_warp<double>(Exec{}, shell_voronoi::make_grid(list), cells);
+    return by_particle(cells, list.order);
+}
+
+// Cells of two builds that differ: particles with other neighbour sets, and
+// the largest relative volume difference.
+struct Difference {
+    int neighbours = 0;
+    double volume = 0;
+};
+inline Difference compare(const Reference& a, const Reference& b) {
+    Difference d;
+    for (std::size_t i = 0; i < a.volume.size(); ++i) {
+        d.neighbours += a.neighbours[i] != b.neighbours[i];
+        d.volume = std::max(d.volume, std::abs(a.volume[i] - b.volume[i]) / a.volume[i]);
+    }
+    return d;
 }
 
 // Every particle's Delaunay neighbours in a host mesh, including faces of

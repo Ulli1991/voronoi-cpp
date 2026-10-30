@@ -234,33 +234,25 @@ struct Candidate {
 
 // Exact cells for the slots todo[0, count): status, faces and rings (volumes
 // and face geometry are left as they are). Same walk as the clipping
-// kernel, with the reach widened by the snapping.
+// kernels (shell_voronoi::Stencil), with the reach widened by the snapping.
 template <int Planes, int Vertices, class ExecSpace>
 void exact_cells(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
                  const ep::Points<typename ExecSpace::memory_space>& point,
                  const Kokkos::View<int*, typename ExecSpace::memory_space>& todo, int count,
                  const shell_voronoi::Cells<typename ExecSpace::memory_space>& out) {
-    const int n = grid.n, side = grid.cells_per_side;
-    const double width = grid.cell_width, box = grid.box, unit = grid.box / ep::scale;
+    const int n = grid.n;
+    const double box = grid.box, unit = grid.box / ep::scale;
     const auto positions = grid.positions;
-    const auto offsets = grid.cell_offsets;
-    const int max_ring = (side - 1) / 2;
-    const auto half = static_cast<ep::i64>(Kokkos::min(0.25 * box, (max_ring + 1) * width) / unit);
+    const auto half = static_cast<ep::i64>(shell_voronoi::detail::start_half_width<double>(box) / unit);
     constexpr ep::i64 period = ep::i64(1) << 30;
     const int ring_capacity = static_cast<int>(out.rings.extent(1));
+    const int owned_capacity = out.owned_capacity();
+    const shell_voronoi::Stencil<typename ExecSpace::memory_space> stencil = shell_voronoi::make_stencil(exec);
     Kokkos::parallel_for(
         "tet_start::exact_cells", Kokkos::RangePolicy<ExecSpace>(exec, 0, count), KOKKOS_LAMBDA(int i) {
             using namespace shell_voronoi;
             const int t = todo(i);
-            const double px = positions(t, 0), py = positions(t, 1), pz = positions(t, 2);
-            int home[3];
-            double inside_gap = width;  // distance to the nearest face of the home cell
-            for (int a = 0; a < 3; ++a) {
-                const double x = a == 0 ? px : a == 1 ? py : pz;
-                home[a] = Kokkos::clamp(static_cast<int>(x / width), 0, side - 1);
-                const double frac = x - home[a] * width;
-                inside_gap = Kokkos::min(inside_gap, Kokkos::min(frac, width - frac));
-            }
+            const Vec3<double> p{positions(t, 0), positions(t, 1), positions(t, 2)};
             Cell<Planes, Vertices> cell;
             start_cube(cell, half, n);
             // A particle cuts only within twice the largest vertex distance;
@@ -289,41 +281,45 @@ void exact_cells(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecS
                 }
                 buffered = 0;
             };
-            for (int ring = 0; ring <= max_ring && status == ok; ++ring) {
-                const double gap = ring == 0 ? 0.0 : (ring - 1) * width + inside_gap;
-                if (gap * gap > reach2()) {
+            int level = grid.level(t), home[3], finer = -1;
+            home_cell(p, box, level, home);
+            while (status == ok) {
+                const double width = box / (1 << level);
+                const int reach = level_reach(level), entries = stencil.ends(reach);
+                for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
+                    for (int e = first; e < Kokkos::min(first + ring_buffer, entries) && status == ok; ++e) {
+                        if (double(stencil.bound2(e)) * width * width >= reach2()) {
+                            certified = true;
+                            break;
+                        }
+                        int begin = 0, end = 0, packed = 0;
+                        if (!stencil_cell(grid, level, home, finer, stencil.offsets(e), p, reach2(), begin, end, packed))
+                            continue;
+                        const int shift[3] = {image(packed, 0), image(packed, 1), image(packed, 2)};
+                        for (int q = begin; q < end; ++q) {
+                            if (q == t) continue;
+                            const double ddx = positions(q, 0) + shift[0] * box - p.x;
+                            const double ddy = positions(q, 1) + shift[1] * box - p.y;
+                            const double ddz = positions(q, 2) + shift[2] * box - p.z;
+                            const double d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                            if (d2 >= reach2()) continue;
+                            if (buffered == ring_buffer) flush();
+                            using Image = std::int8_t;
+                            buffer[buffered++] = {d2, q, {Image(shift[0]), Image(shift[1]), Image(shift[2])}};
+                        }
+                    }
+                    flush();
+                }
+                if (status != ok || certified) break;
+                // Cells outside the stencil are at least `reach` widths away.
+                if (reach * width * reach * width >= reach2()) {
                     certified = true;
                     break;
                 }
-                for (int dx = -ring; dx <= ring && status == ok; ++dx)
-                    for (int dy = -ring; dy <= ring && status == ok; ++dy) {
-                        const int ux = home[0] + dx, uy = home[1] + dy;
-                        const int x = (ux + side) % side, y = (uy + side) % side;
-                        const std::int8_t image_x = ux < 0 ? -1 : ux >= side ? 1 : 0;
-                        const std::int8_t image_y = uy < 0 ? -1 : uy >= side ? 1 : 0;
-                        const double gx = Kokkos::max(0.0, Kokkos::max(ux * width - px, px - (ux + 1) * width));
-                        const double gy = Kokkos::max(0.0, Kokkos::max(uy * width - py, py - (uy + 1) * width));
-                        if (gx * gx + gy * gy >= reach2()) continue;
-                        const bool rim = dx == -ring || dx == ring || dy == -ring || dy == ring;
-                        const int dz_step = rim ? 1 : 2 * ring;
-                        for (int dz = -ring; dz <= ring && status == ok; dz += Kokkos::max(dz_step, 1)) {
-                            const int uz = home[2] + dz;
-                            const int z = (uz + side) % side;
-                            const std::int8_t image_z = uz < 0 ? -1 : uz >= side ? 1 : 0;
-                            const int key = grid.rank((x * side + y) * side + z);
-                            for (int q = offsets(key); q < offsets(key + 1); ++q) {
-                                if (q == t) continue;
-                                const double ddx = positions(q, 0) + image_x * box - px;
-                                const double ddy = positions(q, 1) + image_y * box - py;
-                                const double ddz = positions(q, 2) + image_z * box - pz;
-                                const double d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                                if (d2 >= reach2()) continue;
-                                if (buffered == ring_buffer) flush();
-                                buffer[buffered++] = {d2, q, {image_x, image_y, image_z}};
-                            }
-                        }
-                    }
-                flush();
+                if (level == 2) break;  // no coarser grid fits the box
+                finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
+                for (int k = 0; k < 3; ++k) home[k] >>= 1;
+                --level;
             }
             if (status == ok && !certified) status = uncertified;
             for (int v = 0; v < cell.vertices && status == ok; ++v)
@@ -341,7 +337,7 @@ void exact_cells(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecS
                 ++faces;
                 const int neighbour = cell.id[plane];
                 const bool own = neighbour > t;
-                if (own && (owned == max_owned_faces || used >= ring_capacity)) {
+                if (own && (owned == owned_capacity || used >= ring_capacity)) {
                     status = face_overflow;
                     break;
                 }

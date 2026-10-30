@@ -15,7 +15,7 @@ one job per header:
 
 | Header | Job |
 |---|---|
-| `neighbor_search.hpp` | `CellList`: counting sort of the particles into cubic grid cells (optionally Morton-ordered) |
+| `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree with a dense base grid; a grid level per particle fitted to the local density |
 | `shell_voronoi.hpp` | full rebuild by clipping, thread per cell: `construct`, the portable kernel, the overflow pass, and the only kernel that records face rings |
 | `shell_voronoi_warp.hpp` | full rebuild, warp per cell on CUDA: `construct_warp`, the default |
 | `exact_predicates.hpp` | exact orientation and in-sphere signs on snapped positions |
@@ -24,20 +24,25 @@ one job per header:
 | `tet_repair.hpp` | per-step repair by flips on the device |
 | `tet_flips.hpp` | host fallback of the repair, including local Bowyer-Watson rebuilds |
 
-**Full rebuild.** `neighbor_search::build` sorts the particles into a cell
-list with about one particle per grid cell; `shell_voronoi::make_grid` hands it
-to the kernels. Slots, positions and cell offsets follow the cell order;
-`list.order(slot)` is the original particle ID. Each cell is built by walking
-grid cells around its generator and clipping a polyhedron with every particle
-that can still cut it: a particle at distance d cuts only if d < 2R (R is the
-largest generator-to-vertex distance), and the walk stops at the first grid
-cell entirely beyond 2R, which certifies the cell. Output (`Cells`) is lean:
-volume and centroid per cell, faces stored once by their owner.
+**Full rebuild.** `neighbor_search::build` sorts the particles by Morton
+key, so every octree node, from blocks of base-grid cells (about one particle
+per cell on average, dense offset table) down to 2^-10 of a base cell (binary
+search on stored fine keys), owns a contiguous range of slots. It also gives
+each particle a grid level whose cells hold about one particle there.
+`shell_voronoi::make_grid` hands the list to the kernels; `list.order(slot)`
+is the original particle ID. Each cell is built by walking the grid cells of
+its level around its generator, nearest first, and clipping a polyhedron with
+every particle that can still cut it: a particle at distance d cuts only if
+d < 2R (R is the largest generator-to-vertex distance), and the walk stops at
+the first grid cell entirely beyond 2R, which certifies the cell; if the
+stencil (4 cell widths) ends first, the walk continues one level coarser.
+Output (`Cells`) is lean: volume and centroid per cell, faces stored once by
+their owner (the arrays widen if a cell owns more than 32).
 `construct_warp` builds one cell per warp in shared memory (lane l owns
-vertices and planes l and l + 32; ring particles are tested 32 at a time and
+vertices and planes l and l + 32; candidates are tested 32 at a time and
 clipped nearest-first after a warp sort) with persistent warps taking cells
-from a counter. Cells that overflow its capacities, or need more than its
-stencil of grid cells, are rebuilt by the thread kernel; cells that overflow
+from a counter. Cells that overflow its capacities, or that the coarsest
+grid cannot certify, are rebuilt by the thread kernel; cells that overflow
 that too get a big-capacity pass. On non-CUDA backends, and when face rings
 are requested, `construct_warp` is the thread kernel.
 
@@ -90,9 +95,10 @@ variants only within one job; numbers below are best-node values.
 
 | Stage | Rate |
 |---|---|
-| Full rebuild, warp kernel, jittered | 18.7 |
-| Full rebuild, warp kernel, uniform random | ~10.4 |
-| Full rebuild, warp kernel, clustered | ~0.9 |
+| Full rebuild, warp kernel, jittered | 21.9 |
+| Full rebuild, warp kernel, uniform random | 10.5 |
+| Full rebuild, warp kernel, clustered (Gaussian blobs, ~1:500) | 8.7 |
+| Full rebuild, warp kernel, halo (1:10^4 core to edge) | 8.3 |
 | Tetrahedra from rings (once after a rebuild) | 40 |
 | Exact start (ring clipping + `tet_start::build`), jittered | 4.5 (ring clipping alone 6.2; the patch of 42 cells costs 70 ms, mostly a second `from_rings`) |
 | Exact start, perfect lattice (every cell clipped exactly) | 7.4 |
@@ -125,8 +131,8 @@ layout: `research_notes/cleanup_2026-10-30.md`.
 
 ## Known limitations and open items
 
-- Clustered input is 16-20x slower than jittered: a single cell-list size cannot
-  fit clusters and voids (a multi-level cell list is planned).
+- Clustered input still costs about what uniform random input costs (~19-20
+  cuts per cell against 16 on jittered); the search is no longer the limit.
 - Clipping alone is not watertight on uniform random input in double at 2.1M
   cells (some face pairs inconsistent), and its rings are wrong on lattices
   and cospherical layouts; `tet_start::build` makes the starting mesh exact
@@ -177,7 +183,7 @@ CPU core), each a short specification in `src/test/`:
 | Test | Specifies |
 |---|---|
 | `exact_predicates` | signs equal an independent integer evaluation, near-degenerate and large inputs included; ties consistent; periodic offsets |
-| `clipping` | jittered, uniform, lattice, clustered: every cell certified, volumes fill the box, cells close, faces consistent and on the bisectors; thread and warp kernels and Morton order agree |
+| `clipping` | jittered, uniform, lattice, clustered, halo: every cell certified, volumes fill the box, cells close, faces consistent and on the bisectors; thread and warp kernels and a coarser base grid agree; a narrow face output is widened |
 | `mesh` | `from_rings` equals a host construction, adjacency and edge representatives consistent, volumes from stored and walked rings equal clipping, sliver circumcentres exact |
 | `start` | the starting mesh of random, clustered, lattice and degenerate inputs is a triangulation of the box with every circumsphere empty (brute-force host oracle, exact predicates), i.e. the Delaunay tetrahedralization |
 | `repair` | steps of a smooth flow at 0.03 and 0.3 spacings from jittered, lattice and wave starts (and shells at 0.03): the repaired mesh equals an exact rebuild (neighbours, volumes) every step |
@@ -185,11 +191,11 @@ CPU core), each a short specification in `src/test/`:
 `voronoi_bench` (`src/bench/`) times the pipeline and helps debugging:
 
 ```text
-voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>] [--morton]
+voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>]
 voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug]
 ```
 
-Distributions are uniform, jittered, lattice, wave, clustered, or
+Distributions are uniform, jittered, lattice, wave, clustered, halo, or
 `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`. `rebuild`
 times the thread and warp kernels in double (selected by substring)
 and checks every variant's cells. `step` times the exact start (clipping
