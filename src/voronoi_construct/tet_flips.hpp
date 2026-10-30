@@ -596,17 +596,24 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 // a tetrahedron whose edge bits change is touched too), and the device
 // repair runs again from them and the stuck entries, to settle the region's
 // border and to find what the host could not repair. If that still
-// leaves stuck entries the region grows, `attempts` times in all; what is
-// still stuck then is left (stats.stuck): flips and local rebuilds only
-// change their surroundings, so repairing the whole mesh on the host would
-// not fix it either. Only if a local result does not fit its border is the
-// whole mesh repaired on the host.
+// leaves stuck entries the region grows, `attempts` times in all; then, or
+// if a local result does not fit its border, the whole mesh is repaired on
+// the host.
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state, int attempts = 2) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     Stats total;
+    auto everywhere = [&] {
+        const Stats rest = finish_everywhere(exec, dm, state);
+        total.flips23 += rest.flips23;
+        total.flips32 += rest.flips32;
+        total.rebuilt += rest.rebuilt;
+        total.unrepaired += rest.unrepaired;
+        total.stuck = 0;
+        return total;
+    };
     for (int attempt = 0, hops = 8; attempt < attempts; ++attempt, hops *= 2) {
         exec.fence();
         const int stuck = Kokkos::min(state.host_counters(1), static_cast<int>(state.stuck.extent(0)));
@@ -702,13 +709,7 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                                            neighbour[1], neighbour[2], neighbour[3], open});
         }
         if (!closed) {  // the local result does not fit its border: repair everything
-            const Stats rest = finish_everywhere(exec, dm, state);
-            total.flips23 += rest.flips23;
-            total.flips32 += rest.flips32;
-            total.rebuilt += rest.rebuilt;
-            total.unrepaired += rest.unrepaired;
-            total.stuck = 0;
-            return total;
+            return everywhere();
         }
         const int count = static_cast<int>(changed.size()) / 11;
         Kokkos::View<int* [11], Kokkos::LayoutRight, Memory> update("region_update", count);
@@ -804,7 +805,7 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         total.stuck = device.stuck;
         if (device.stuck == 0) return total;
     }
-    return total;
+    return everywhere();
 }
 
 }  // namespace tet_flips
