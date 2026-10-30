@@ -80,8 +80,7 @@ KOKKOS_INLINE_FUNCTION int far_vertex(const M& m, int t, int u) {
 }
 
 // The face of tetrahedron v opposite corner k, its particles sorted.
-template <class V>
-KOKKOS_INLINE_FUNCTION void sorted_face(const V& v, int k, int* f) {
+KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
     for (int a = 0, b = 0; a < 4; ++a)
         if (a != k) f[b++] = v[a];
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
@@ -89,13 +88,14 @@ KOKKOS_INLINE_FUNCTION void sorted_face(const V& v, int k, int* f) {
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
 }
 
-// Tetrahedra around edge i-j from t, in order; calls take(u) for each, t
-// first. Returns the number of steps (the ring length when it closes).
-template <class M, class Take>
-KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, Take&& take) {
+// Tetrahedra around edge i-j from t, in order and t first, written to
+// ring[0, 65) unless it is null. Returns the number of steps (the ring
+// length when it closes).
+template <class M>
+KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring = nullptr) {
     int current = t, before = -1, steps = 0;
     do {
-        take(current);
+        if (ring) ring[steps] = current;
         int next = -1;
         for (int c = 0; c < 4 && next < 0; ++c) {
             const int v = m.vertex(current, c);
@@ -373,7 +373,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                 for (int r = clean ? in.ring_start(old) : 0; clean && r < in.ring_start(old + 1); ++r)
                     clean = !touched(in.ring(r));
                 length(f) = clean ? in.ring_start(old + 1) - in.ring_start(old)
-                                  : ~walk_edge(mesh, t, i, j, [](int) {});
+                                  : ~walk_edge(mesh, t, i, j);
             }
         });
     const auto ring_start = out.ring_start;
@@ -397,7 +397,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                     const int old = in.start(t) + rank;
                     for (int r = in.ring_start(old); r < in.ring_start(old + 1); ++r) ring(at++) = in.ring(r);
                 } else {
-                    walk_edge(mesh, t, owner(f), neighbour(f), [&](int u) { ring(at++) = u; });
+                    walk_edge(mesh, t, owner(f), neighbour(f), &ring(at));
                 }
             }
         });

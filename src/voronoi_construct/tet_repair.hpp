@@ -63,8 +63,8 @@ struct Stats {
 // once (outside or by another new one), each outer face used once, and no
 // new tetrahedron duplicating the outer one it attaches to. Near-degenerate
 // configurations can break this.
-template <class M, class Fresh>
-KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const Fresh& fresh, int freshes) {
+template <class M>
+KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const int (*fresh)[4], int freshes) {
     int outer_key[8][3], outer_tet[8], outers = 0;
     for (int r = 0; r < olds; ++r) {
         const int o = old[r];

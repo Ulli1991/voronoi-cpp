@@ -46,7 +46,7 @@ inline Tet tet(const Mesh& m, int t) { return {m.vertex(t, 0), m.vertex(t, 1), m
 
 inline std::array<int, 3> face_key(const Tet& t, int k) {
     std::array<int, 3> f;
-    tet_mesh::sorted_face(t, k, f.data());
+    tet_mesh::sorted_face(t.data(), k, f.data());
     return f;
 }
 
@@ -296,6 +296,15 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     return {};
 }
 
+// tet_repair::closes for host lists of up to three new tetrahedra.
+inline bool closes(const Mesh& m, const std::vector<int>& old, const std::vector<Tet>& fresh) {
+    int tets[3][4];
+    for (std::size_t r = 0; r < fresh.size() && r < 3; ++r)
+        for (int c = 0; c < 4; ++c) tets[r][c] = fresh[r][c];
+    return fresh.size() <= 3 &&
+           tet_repair::closes(m, old.data(), static_cast<int>(old.size()), tets, static_cast<int>(fresh.size()));
+}
+
 // Whether the triangle between neighbours t and u fails the local Delaunay test.
 inline bool fails(const Mesh& m, int t, int u) {
     const int far = tet_mesh::far_vertex(m, t, u);
@@ -341,7 +350,7 @@ inline Stats repair(Mesh& m) {
                 if (far < 0 || !ep::in_sphere(m.point, T.data(), far)) continue;
                 const int a = T[k];  // apex of t opposite the shared face
                 int face[3];
-                tet_mesh::sorted_face(T, k, face);
+                tet_mesh::sorted_face(T.data(), k, face);
                 // 2->3: the segment a-far crosses the shared face exactly when the
                 // three tetrahedra (a, far, edge of the face) share one orientation.
                 std::vector<Tet> three;
@@ -353,8 +362,7 @@ inline Stats repair(Mesh& m) {
                     negative += o < 0;
                     three.push_back(n);
                 }
-                const int pair[2] = {t, u};
-                if ((positive == 3 || negative == 3) && tet_repair::closes(m, pair, 2, three, 3)) {
+                if ((positive == 3 || negative == 3) && detail::closes(m, {t, u}, three)) {
                     for (int s : detail::replace(m, {t, u}, three)) push(s);
                     ++stats.flips23;
                     break;
@@ -403,7 +411,7 @@ inline Stats repair(Mesh& m) {
                     // Valid only if p and q lie on opposite sides of the new triangle.
                     const Tet side_p{others[0], others[1], others[2], p}, side_q{others[0], others[1], others[2], q};
                     if (ep::orient(m.point, side_p.data()) * ep::orient(m.point, side_q.data()) >= 0) continue;
-                    if (!tet_repair::closes(m, ring.data(), 3, two, 2)) continue;
+                    if (!detail::closes(m, ring, two)) continue;
                     for (int s : detail::replace(m, ring, two)) push(s);
                     ++stats.flips32;
                     done = true;
@@ -499,14 +507,16 @@ Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
             int ka, kb;
             tet_mesh::edge_ends(k, ka, kb);
             const int a = m.vertex(t, ka), b = m.vertex(t, kb);
-            int lowest = t;
-            tet_mesh::walk_edge(m, t, a, b, [&](int u) { lowest = std::min(lowest, u); });
-            tet_mesh::walk_edge(m, t, a, b, [&](int u) {
+            int ring[65];
+            const int length = std::min(tet_mesh::walk_edge(m, t, a, b, ring), 65);
+            const int lowest = *std::min_element(ring, ring + std::max(length, 1));
+            for (int r = 0; r < length; ++r) {
+                const int u = ring[r];
                 const int pa = tet_mesh::position(m, u, a), pb = tet_mesh::position(m, u, b);
-                if (pa < 0 || pb < 0) return;
+                if (pa < 0 || pb < 0) continue;
                 const int bit = 1 << tet_mesh::edge_index(pa, pb);
                 edges(u) = u == lowest ? edges(u) | bit : edges(u) & ~bit;
-            });
+            }
         }
     }
     Kokkos::deep_copy(exec, dm.vertex, m.vertex);
