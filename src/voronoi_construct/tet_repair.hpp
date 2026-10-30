@@ -30,11 +30,10 @@ struct Packed;
 // Entries of State::counters: failing triangles found this round, stuck
 // entries, slots freed this round (in move_screened: slivers), dirty
 // tetrahedra listed, free slots popped, new slots, flips of each kind,
-// cases the filters left to the exact kernels, tetrahedra created this step
-// (touched_list).
+// tetrahedra created this step (touched_list).
 namespace counter {
-constexpr int work = 0, stuck = 1, freed = 2, listed = 3, pops = 4, growth = 5, flips23 = 6, flips32 = 7, deferred = 8,
-              created = 9, count = 10;
+constexpr int work = 0, stuck = 1, freed = 2, listed = 3, pops = 4, growth = 5, flips23 = 6, flips32 = 7, created = 8,
+              count = 9;
 }
 
 // A stuck entry (t, k) of State::stuck: the triangle of t opposite corner
@@ -61,9 +60,6 @@ struct State {
     Kokkos::View<int* [2], MemorySpace> work;   // failing triangles of a round
     Kokkos::View<detail::Packed*, MemorySpace> plans;
     Kokkos::View<int*, MemorySpace> freed;
-    // The cases of a round the double filters left undecided: (t, k) of
-    // find, plan indices of plan; decided by the exact kernels.
-    Kokkos::View<int* [2], MemorySpace> deferred;
     // What the last repair left (see inverted, rejected).
     Kokkos::View<int* [2], MemorySpace> stuck;
     // Device counters (see counter), and their pinned host copy, read once
@@ -134,8 +130,7 @@ namespace detail {
 
 // A planned flip: the old tetrahedra and the new ones (vertex lists).
 struct Plan {
-    // deferred: a filter was uncertain; plan again exactly.
-    enum Kind : int { none = 0, flip23 = 2, flip32 = 3, unflippable = -1, deferred = -2 };
+    enum Kind : int { none = 0, flip23 = 2, flip32 = 3, unflippable = -1 };
     int kind = none;
     int old[3] = {-1, -1, -1};
     int fresh[3][4];
@@ -188,45 +183,16 @@ KOKKOS_INLINE_FUNCTION Plan unpack(const Packed& s) {
     return p;
 }
 
-// The predicates exactly, or by the double filters alone (else
-// ep::undecided).
-template <bool exact, class Point>
-KOKKOS_INLINE_FUNCTION int orient(const Point& point, const int* v) {
-    if constexpr (exact)
-        return ep::orient(point, v);
-    else
-        return ep::orient_filter(point, v);
-}
-template <bool exact, class Point>
-KOKKOS_INLINE_FUNCTION int in_sphere(const Point& point, const int* v, const ep::Offset* o, int e) {
-    if constexpr (exact)
-        return ep::in_sphere(point, v, o, e);
-    else
-        return ep::in_sphere_filter(point, v, o, e);
-}
-template <bool exact, class Point>
-KOKKOS_INLINE_FUNCTION int in_sphere(const Point& point, const int* v, int e) {
-    const ep::Offset o[4] = {{0, 0, 0}, ep::offset(point, v[0], v[1]), ep::offset(point, v[0], v[2]),
-                             ep::offset(point, v[0], v[3])};
-    return in_sphere<exact>(point, v, o, e);
-}
-
 // Plan the repair of triangle t|u (t's face opposite corner k): the first
 // valid 2->3 or 3->2 flip, or stuck. Unlike the host, it does not try
-// another flip when this one would not close its cavity. Without `exact`,
-// a plan the double filters cannot decide is deferred.
-template <bool exact, class Mesh, class Point>
+// another flip when this one would not close its cavity.
+template <class Mesh, class Point>
 KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k) {
     Plan p;
-    Plan deferred;
-    deferred.kind = Plan::deferred;
     const int u = m.adjacent(t, k);
     const int T[4] = {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)};
     const int far = tet_mesh::far_vertex(m, t, u);
-    if (far < 0) return p;
-    const int inside = in_sphere<exact>(point, T, far);
-    if (inside == ep::undecided) return deferred;
-    if (!inside) return p;
+    if (far < 0 || !ep::in_sphere(point, T, far)) return p;
     const int a = T[k];
     int f[3];
     tet_mesh::sorted_face(T, k, f);
@@ -234,8 +200,7 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
     int positive = 0, negative = 0;
     for (int e = 0; e < 3; ++e) {
         const int n[4] = {a, far, f[e], f[(e + 1) % 3]};
-        const int o = orient<exact>(point, n);
-        if (o == ep::undecided) return deferred;
+        const int o = ep::orient(point, n);
         positive += o > 0;
         negative += o < 0;
         for (int c = 0; c < 4; ++c) p.fresh[e][c] = n[c];
@@ -276,13 +241,9 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
             }
         if (count != 3) continue;
         const int n1[4] = {pv, others[0], others[1], others[2]}, n2[4] = {qv, others[0], others[1], others[2]};
-        const int o1 = orient<exact>(point, n1), o2 = orient<exact>(point, n2);
-        if (o1 == ep::undecided || o2 == ep::undecided) return deferred;
-        if (o1 == 0 || o2 == 0) continue;
+        if (ep::orient(point, n1) == 0 || ep::orient(point, n2) == 0) continue;
         const int side_p[4] = {others[0], others[1], others[2], pv}, side_q[4] = {others[0], others[1], others[2], qv};
-        const int op = orient<exact>(point, side_p), oq = orient<exact>(point, side_q);
-        if (op == ep::undecided || oq == ep::undecided) return deferred;
-        if (op * oq >= 0) continue;
+        if (ep::orient(point, side_p) * ep::orient(point, side_q) >= 0) continue;
         p.kind = Plan::flip32;
         for (int r = 0; r < 3; ++r) p.old[r] = ring[r];
         p.olds = 3;
@@ -358,8 +319,6 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
     s.plans = Kokkos::View<detail::Packed*, Memory>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_repair_plans")), work_capacity);
     s.freed = Kokkos::View<int*, Memory>("tet_repair_freed", work_capacity);
-    s.deferred = Kokkos::View<int* [2], Memory>(
-        Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_repair_deferred")), work_capacity);
     s.stuck = Kokkos::View<int* [2], Memory>("tet_repair_stuck", work_capacity);
     s.touched_list = Kokkos::View<int*, Memory>("tet_repair_touched_list", capacity / 4 + 1024);
     s.counters = Kokkos::View<int*, Memory>("tet_repair_counters", counter::count);
@@ -469,7 +428,6 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
     auto plans = s.plans;
     const auto counters = s.counters;
     auto freed = s.freed;
-    auto deferred = s.deferred;
     const auto& st = s;
     int work_capacity = static_cast<int>(work.extent(0));
     auto stuck = s.stuck;
@@ -488,22 +446,17 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
             Kokkos::resize(Kokkos::WithoutInitializing, s.work, work_capacity);
             Kokkos::resize(Kokkos::WithoutInitializing, s.plans, work_capacity);
             Kokkos::resize(Kokkos::WithoutInitializing, s.freed, work_capacity);
-            Kokkos::resize(Kokkos::WithoutInitializing, s.deferred, work_capacity);
             work = s.work;
             plans = s.plans;
             freed = s.freed;
-            deferred = s.deferred;
         }
         if (stuck_needed > static_cast<int>(stuck.extent(0))) {
             Kokkos::resize(s.stuck, stuck_needed + stuck_needed / 2);
             stuck = s.stuck;
         }
     };
-    // The stuck list fills for the whole repair. The exact planning takes
-    // the deferred plans with at most exact_threads threads.
+    // The stuck list fills for the whole repair.
     clear(counter::stuck);
-    clear(counter::deferred);
-    constexpr int exact_threads = 1 << 16;
     read();
     int dirty_count = host(counter::listed);
     long long flips_at_last_retry = -1;
@@ -526,23 +479,6 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         grow(0, stuck_before + dirty_count);  // find lists at most one inverted entry per tetrahedron
         for (bool again = true; again;) {  // until the work list holds every failing triangle
             clear(counter::work);
-            auto list_inverted = KOKKOS_LAMBDA(int t) {  // for the host, but flips usually untangle it
-                const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                if (at < static_cast<int>(stuck.extent(0))) {
-                    stuck(at, 0) = t;
-                    stuck(at, 1) = inverted;
-                }
-            };
-            auto list_failing = KOKKOS_LAMBDA(int t, int k) {
-                const int at = Kokkos::atomic_fetch_add(&counters(counter::work), 1);
-                if (at < work_capacity) {
-                    work(at, 0) = t;
-                    work(at, 1) = k;
-                }
-            };
-            // The double filters decide; what they leave undecided (k = -1:
-            // the orientation) is decided exactly after, in its own kernel,
-            // so that no exact arithmetic raises this one's registers.
             Kokkos::parallel_for(
                 "tet_repair::find", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int i) {
                     const int t = listed(i);
@@ -550,53 +486,31 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
                     const ep::Offset o[4] = {{0, 0, 0}, ep::offset(point, v[0], v[1]), ep::offset(point, v[0], v[2]),
                                              ep::offset(point, v[0], v[3])};
-                    auto defer = [&](int k) {
-                        const int at = Kokkos::atomic_fetch_add(&counters(counter::deferred), 1);
-                        if (at < work_capacity) {
-                            deferred(at, 0) = t;
-                            deferred(at, 1) = k;
+                    // Turned inside out: listed for the host, but flips usually untangle it.
+                    if (ep::orient(o[1], o[2], o[3]) <= 0) {
+                        const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
+                        if (at < static_cast<int>(stuck.extent(0))) {
+                            stuck(at, 0) = t;
+                            stuck(at, 1) = inverted;
                         }
-                    };
-                    const int orientation = ep::orient_filter(o[1], o[2], o[3]);
-                    if (orientation == ep::undecided)
-                        defer(-1);
-                    else if (orientation < 0)
-                        list_inverted(t);
+                    }
                     for (int k = 0; k < 4; ++k) {
                         const int u = adjacent(t, k);
                         if (u < 0 || (dirty(u) && u < t)) continue;
                         const int far = tet_mesh::far_vertex(m, t, u);
-                        if (far < 0) continue;
-                        const int inside = detail::in_sphere<false>(point, v, o, far);
-                        if (inside == ep::undecided)
-                            defer(k);
-                        else if (inside)
-                            list_failing(t, k);
+                        if (far < 0 || !ep::in_sphere(point, v, o, far)) continue;
+                        const int at = Kokkos::atomic_fetch_add(&counters(counter::work), 1);
+                        if (at < work_capacity) {
+                            work(at, 0) = t;
+                            work(at, 1) = k;
+                        }
                     }
                 });
             read();
-            // The exact kernel only when the filters left cases undecided.
-            const int deferrals = host(counter::deferred);
-            if (deferrals > 0 && deferrals <= work_capacity) {
-                Kokkos::parallel_for(
-                    "tet_repair::find_exact", Range(exec, 0, deferrals), KOKKOS_LAMBDA(int d) {
-                        const int t = deferred(d, 0), k = deferred(d, 1);
-                        const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
-                        const ep::Offset o[4] = {{0, 0, 0}, ep::offset(point, v[0], v[1]),
-                                                 ep::offset(point, v[0], v[2]), ep::offset(point, v[0], v[3])};
-                        if (k < 0) {
-                            if (ep::orient(o[1], o[2], o[3]) <= 0) list_inverted(t);
-                        } else if (ep::in_sphere(point, v, o, tet_mesh::far_vertex(m, t, adjacent(t, k)))) {
-                            list_failing(t, k);
-                        }
-                    });
-                read();
-            }
-            again = host(counter::work) > work_capacity || host(counter::deferred) > work_capacity;
+            again = host(counter::work) > work_capacity;
             if (again) {
-                grow(Kokkos::max(host(counter::work), host(counter::deferred)), 0);
+                grow(host(counter::work), 0);
                 Kokkos::deep_copy(exec, Kokkos::subview(counters, counter::stuck), stuck_before);
-                clear(counter::deferred);
             }
         }
         // Unlist them; the apply step lists the next round's.
@@ -618,7 +532,6 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     if (t >= 0 && alive(t)) detail::mark(st, t);
                 });
             clear(counter::stuck);
-            clear(counter::deferred);
             read();
             dirty_count = host(counter::listed);
             continue;
@@ -628,53 +541,35 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
 
         // 2-4. Plan, vote, apply; losers stay dirty for the next round.
         grow(0, host(counter::stuck) + items);  // at most one stuck entry per plan
-        // A plan, then its checks and votes; deferred plans (the filters were
-        // uncertain) are made again exactly in a second kernel.
-        auto settle = KOKKOS_LAMBDA(int i, int t, int k, detail::Plan p) {
-            const unsigned long long vote = token | detail::priority(i);
-            if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) {
-                p.kind = detail::Plan::none;  // never votes, so it cannot block other flips
-                const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                if (at < static_cast<int>(stuck.extent(0))) {
-                    stuck(at, 0) = t;
-                    stuck(at, 1) = rejected;
-                }
-            }
-            plans(i) = detail::pack(p);
-            if (p.kind == detail::Plan::unflippable) {
-                const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                if (at < static_cast<int>(stuck.extent(0))) {
-                    stuck(at, 0) = t;
-                    stuck(at, 1) = k;
-                }
-            }
-            if (p.kind <= 0) return;
-            for (int r = 0; r < p.olds; ++r) {
-                const int o = p.old[r];
-                Kokkos::atomic_max(&lock(o), vote);
-                for (int j = 0; j < 4; ++j)
-                    if (adjacent(o, j) >= 0) Kokkos::atomic_max(&lock(adjacent(o, j)), vote);
-            }
-        };
         Kokkos::parallel_for(
             "tet_repair::plan", Range(exec, 0, items), KOKKOS_LAMBDA(int i) {
+                const unsigned long long vote = token | detail::priority(i);
                 const int t = work(i, 0), k = work(i, 1);
                 detail::Plan p;
                 const int u = adjacent(t, k);
-                if (alive(t) && u >= 0 && alive(u)) p = detail::plan<false>(m, point, t, k);
-                if (p.kind == detail::Plan::deferred) {
-                    deferred(Kokkos::atomic_fetch_add(&counters(counter::deferred), 1), 0) = i;  // items fit
-                    return;
+                if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k);
+                if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) {
+                    p.kind = detail::Plan::none;  // never votes, so it cannot block other flips
+                    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
+                    if (at < static_cast<int>(stuck.extent(0))) {
+                        stuck(at, 0) = t;
+                        stuck(at, 1) = rejected;
+                    }
                 }
-                settle(i, t, k, p);
-            });
-        const int spread = Kokkos::min(items, exact_threads);
-        Kokkos::parallel_for(
-            "tet_repair::plan_exact", Range(exec, 0, spread), KOKKOS_LAMBDA(int j) {
-                const int entries = counters(counter::deferred);
-                for (int d = j; d < entries; d += spread) {
-                    const int i = deferred(d, 0), t = work(i, 0), k = work(i, 1);
-                    settle(i, t, k, detail::plan<true>(m, point, t, k));
+                plans(i) = detail::pack(p);
+                if (p.kind == detail::Plan::unflippable) {
+                    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
+                    if (at < static_cast<int>(stuck.extent(0))) {
+                        stuck(at, 0) = t;
+                        stuck(at, 1) = k;
+                    }
+                }
+                if (p.kind <= 0) return;
+                for (int r = 0; r < p.olds; ++r) {
+                    const int o = p.old[r];
+                    Kokkos::atomic_max(&lock(o), vote);
+                    for (int j = 0; j < 4; ++j)
+                        if (adjacent(o, j) >= 0) Kokkos::atomic_max(&lock(adjacent(o, j)), vote);
                 }
             });
 
@@ -682,7 +577,6 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const int count = s.count;
         Kokkos::parallel_for(
             "tet_repair::apply", Range(exec, 0, items), KOKKOS_LAMBDA(int i) {
-                if (i == 0) counters(counter::deferred) = 0;  // for the next round's find
                 const unsigned long long vote = token | detail::priority(i);
                 const detail::Plan p = detail::unpack(plans(i));
                 if (p.kind <= 0) return;
