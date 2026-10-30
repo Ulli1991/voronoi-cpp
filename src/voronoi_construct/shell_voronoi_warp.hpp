@@ -28,8 +28,8 @@ constexpr int lanes = 32;
 constexpr int max_planes = 64;
 constexpr int max_vertices = 64;
 constexpr int per_lane = max_vertices / lanes;  // vertices (and planes) each lane owns
-// Four cells (warps) per block: their polyhedra fill about half of the 48 KB
-// block scratch.
+// Four cells (warps) per block: their polyhedra (4.4 KB each in double) take
+// 18 KB of block scratch.
 constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
 constexpr int min_blocks_per_sm = 5;
@@ -42,7 +42,9 @@ constexpr std::uint8_t none = 255;
 // mask (in registers) marks the slots in use.
 template <class Real>
 struct alignas(16) Polyhedron {
-    Real nx[max_planes], ny[max_planes], nz[max_planes], offset[max_planes];
+    // Plane normals only weight the face centroids: a rounded normal scales
+    // every triangle of a face alike, so float is enough.
+    float nx[max_planes], ny[max_planes], nz[max_planes];
     int neighbour[max_planes];
     Real x[max_vertices], y[max_vertices], z[max_vertices];
     Real side[max_vertices];  // signed distance to the cutting plane
@@ -156,11 +158,10 @@ __device__ void start_cube(Polyhedron<Real>& c, Real h, int& planes, std::uint64
     const int l = lane();
     if (l < box_planes) {
         const int axis = l / 2;
-        const Real sign = l % 2 == 0 ? Real(1) : Real(-1);
-        c.nx[l] = axis == 0 ? sign : Real(0);
-        c.ny[l] = axis == 1 ? sign : Real(0);
-        c.nz[l] = axis == 2 ? sign : Real(0);
-        c.offset[l] = h;
+        const float sign = l % 2 == 0 ? 1.0f : -1.0f;
+        c.nx[l] = axis == 0 ? sign : 0.0f;
+        c.ny[l] = axis == 1 ? sign : 0.0f;
+        c.nz[l] = axis == 2 ? sign : 0.0f;
         c.neighbour[l] = -1;
     }
     for (int k = 0; k < per_lane; ++k) {
@@ -297,10 +298,9 @@ __device__ int clip(Polyhedron<Real>& c, int& planes, std::uint64_t& live, Real&
     }
     live = vertex_ballot(in);
     if (l == 0) {
-        c.nx[plane] = d.x;
-        c.ny[plane] = d.y;
-        c.nz[plane] = d.z;
-        c.offset[plane] = offset;
+        c.nx[plane] = static_cast<float>(d.x);
+        c.ny[plane] = static_cast<float>(d.y);
+        c.nz[plane] = static_cast<float>(d.z);
         c.neighbour[plane] = neighbour;
     }
     planes = plane + 1;
