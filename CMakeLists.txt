@@ -16,16 +16,20 @@ target_include_directories(voronoi_library INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/neighbour_search
     ${CMAKE_CURRENT_SOURCE_DIR}/src/voronoi_construct)
 
-# Fused natural-neighbour construction: validation and timing.
-add_executable(shell_voronoi_check src/test/shell_voronoi_check.cpp)
-target_link_libraries(shell_voronoi_check PRIVATE voronoi_library)
-target_compile_options(shell_voronoi_check PRIVATE -Wall -Wextra -Wpedantic)
+function(voronoi_program name source)
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE voronoi_library)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/test)
+    target_compile_options(${name} PRIVATE -Wall -Wextra -Wpedantic)
+endfunction()
+
+voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
 
 include(CTest)
 if(BUILD_TESTING)
-    # Double-precision kernels only: float and clustered or degenerate inputs
-    # still fail some checks (see the degenerate layouts in the program).
-    foreach(distribution uniform jittered lattice)
-        add_test(NAME shell_${distribution} COMMAND shell_voronoi_check 4096 ${distribution} double 1)
+    foreach(test exact_predicates clipping mesh repair)
+        voronoi_program(${test}_test src/test/${test}_test.cpp)
+        add_test(NAME ${test} COMMAND ${test}_test)
+        set_tests_properties(${test} PROPERTIES TIMEOUT 600)
     endforeach()
 endif()

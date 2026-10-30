@@ -16,8 +16,8 @@
 namespace exact_predicates {
 
 using i64 = long long;
-using i128 = __int128;
-using u128 = unsigned __int128;
+__extension__ typedef __int128 i128;
+__extension__ typedef unsigned __int128 u128;
 
 constexpr double scale = 1073741824.0;  // 2^30
 constexpr double epsilon = 1.1102230246251565e-16;  // 2^-53
@@ -168,6 +168,38 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
         }
     }
     return d * o < 0;
+}
+
+// Snapped particle positions, padded to 32 bytes: point(i, a), a < 3.
+template <class MemorySpace>
+using Points = Kokkos::View<i64* [4], Kokkos::LayoutRight, MemorySpace>;
+
+// The predicates on particles, by index into snapped positions.
+template <class P>
+KOKKOS_INLINE_FUNCTION Offset offset(const P& point, int from, int to) {
+    return {delta(point(from, 0), point(to, 0)), delta(point(from, 1), point(to, 1)),
+            delta(point(from, 2), point(to, 2))};
+}
+
+// Orientation sign of tetrahedron v.
+template <class P>
+KOKKOS_INLINE_FUNCTION int orient(const P& point, const int* v) {
+    return orient(offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3]));
+}
+
+// Whether particle e lies inside the circumsphere of tetrahedron v, whose
+// offsets from v[0] are o (o[0] = 0).
+template <class P>
+KOKKOS_INLINE_FUNCTION bool in_sphere(const P& point, const int* v, const Offset* o, int e) {
+    const Offset p[5] = {o[0], o[1], o[2], o[3], offset(point, v[0], e)};
+    const int id[5] = {v[0], v[1], v[2], v[3], e};
+    return in_sphere(p, id);
+}
+
+template <class P>
+KOKKOS_INLINE_FUNCTION bool in_sphere(const P& point, const int* v, int e) {
+    const Offset o[4] = {{0, 0, 0}, offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3])};
+    return in_sphere(point, v, o, e);
 }
 
 }  // namespace exact_predicates

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "exact_predicates.hpp"
-#include "face_geometry.hpp"
+#include "shell_voronoi.hpp"
 
 // A persistent Delaunay tetrahedralization and the Voronoi geometry it implies.
 //
@@ -38,8 +38,16 @@ struct Mesh {
     Kokkos::View<int*, MemorySpace> owner, neighbour, ring_start, ring;
     // Bit k: this tetrahedron represents its edge k (see edge_ends), i.e. the
     // Voronoi face of that pair of particles. Every edge has exactly one
-    // representative, so faces can be numbered and built without stored rings.
+    // representative, so a scan over the bits numbers the faces.
     Kokkos::View<int*, MemorySpace> edges;
+};
+
+// Face area vectors (owner to neighbour), centroids (relative to the owner),
+// and cell volumes, one per particle.
+template <class MemorySpace>
+struct Geometry {
+    Kokkos::View<double* [3], MemorySpace> area, centroid;
+    Kokkos::View<double*, MemorySpace> volume;
 };
 
 // The corners of local edge k: (0,1) (0,2) (0,3) (1,2) (1,3) (2,3).
@@ -52,10 +60,76 @@ KOKKOS_INLINE_FUNCTION int edge_index(int a, int b) {  // corners a != b
     return a == 0 ? b - 1 : a == 1 ? b + 1 : 5;
 }
 
+// Topology queries shared by the device repair and the host fallback; m is
+// anything with vertex(t, k) and adjacent(t, k).
+
+// Corner of tetrahedron t holding particle v, or -1.
+template <class M>
+KOKKOS_INLINE_FUNCTION int position(const M& m, int t, int v) {
+    for (int k = 0; k < 4; ++k)
+        if (m.vertex(t, k) == v) return k;
+    return -1;
+}
+
+// The particle of u that t lacks, or -1.
+template <class M>
+KOKKOS_INLINE_FUNCTION int far_vertex(const M& m, int t, int u) {
+    for (int k = 0; k < 4; ++k)
+        if (position(m, t, m.vertex(u, k)) < 0) return m.vertex(u, k);
+    return -1;
+}
+
+// The face of tetrahedron v opposite corner k, its particles sorted.
+template <class V>
+KOKKOS_INLINE_FUNCTION void sorted_face(const V& v, int k, int* f) {
+    for (int a = 0, b = 0; a < 4; ++a)
+        if (a != k) f[b++] = v[a];
+    if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
+    if (f[1] > f[2]) Kokkos::kokkos_swap(f[1], f[2]);
+    if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
+}
+
+// Tetrahedra around edge i-j from t, in order; calls take(u) for each, t
+// first. Returns the number of steps (the ring length when it closes).
+template <class M, class Take>
+KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, Take&& take) {
+    int current = t, before = -1, steps = 0;
+    do {
+        take(current);
+        int next = -1;
+        for (int c = 0; c < 4 && next < 0; ++c) {
+            const int v = m.vertex(current, c);
+            if (v == i || v == j) continue;
+            const int w = m.adjacent(current, c);
+            if (w != before) next = w;
+        }
+        if (next < 0 || ++steps > 64) break;
+        before = current;
+        current = next;
+    } while (current != t);
+    return steps;
+}
+
+// A coordinate difference in a periodic box, to the nearest image.
+KOKKOS_INLINE_FUNCTION double wrap(double d, double box) { return d - box * Kokkos::nearbyint(d / box); }
+
 namespace detail {
-using face_geometry::detail::circumcentre;
-using face_geometry::detail::wrap;
+// The point equidistant from the origin and a, b, c.
+KOKKOS_INLINE_FUNCTION Vec3<double> circumcentre(Vec3<double> a, Vec3<double> b, Vec3<double> c) {
+    const Vec3<double> bc = cross(b, c), ca = cross(c, a), ab = cross(a, b);
+    const double scale = 0.5 / dot(a, bc);
+    return (bc * dot(a, a) + ca * dot(b, b) + ab * dot(c, c)) * scale;
+}
 }  // namespace detail
+
+// Positions padded to 32 bytes, the preferred input of the kernels below.
+template <class ExecSpace, class X>
+void pad(const ExecSpace& exec, const X& x, const Points4<typename ExecSpace::memory_space>& padded) {
+    Kokkos::parallel_for(
+        "tet_mesh::pad", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
+            for (int a = 0; a < 3; ++a) padded(i, a) = x(i, a);
+        });
+}
 
 // The tetrahedra and their adjacency from the face rings of a clipping build
 // (cells in slot order, every cell ok), without hashing: tetrahedron
@@ -250,28 +324,6 @@ FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
             Kokkos::View<int*, MemorySpace>("face_rings_ring", entries), -1};
 }
 
-namespace detail {
-// Tetrahedra around edge i-j from t, in order; calls take(u) for each, t first.
-template <class Mesh, class Take>
-KOKKOS_INLINE_FUNCTION int walk_edge(const Mesh& mesh, int t, int i, int j, Take&& take) {
-    int current = t, before = -1, steps = 0;
-    do {
-        take(current);
-        int next = -1;
-        for (int c = 0; c < 4 && next < 0; ++c) {
-            const int v = mesh.vertex(current, c);
-            if (v == i || v == j) continue;
-            const int w = mesh.adjacent(current, c);
-            if (w != before) next = w;
-        }
-        if (next < 0 || ++steps > 64) break;
-        before = current;
-        current = next;
-    } while (current != t);
-    return steps;
-}
-}  // namespace detail
-
 // Rebuild the face rings in `out` from those of the previous step (`in`):
 // a face keeps its ring when neither its representative nor any tetrahedron
 // of its old ring was touched by a flip (touched(t) != 0), else its edge is
@@ -321,7 +373,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                 for (int r = clean ? in.ring_start(old) : 0; clean && r < in.ring_start(old + 1); ++r)
                     clean = !touched(in.ring(r));
                 length(f) = clean ? in.ring_start(old + 1) - in.ring_start(old)
-                                  : ~detail::walk_edge(mesh, t, i, j, [](int) {});
+                                  : ~walk_edge(mesh, t, i, j, [](int) {});
             }
         });
     const auto ring_start = out.ring_start;
@@ -345,7 +397,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                     const int old = in.start(t) + rank;
                     for (int r = in.ring_start(old); r < in.ring_start(old + 1); ++r) ring(at++) = in.ring(r);
                 } else {
-                    detail::walk_edge(mesh, t, owner(f), neighbour(f), [&](int u) { ring(at++) = u; });
+                    walk_edge(mesh, t, owner(f), neighbour(f), [&](int u) { ring(at++) = u; });
                 }
             }
         });
@@ -354,90 +406,6 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     mesh.neighbour = Kokkos::subview(neighbour, std::make_pair(0, faces));
     mesh.ring_start = Kokkos::subview(ring_start, std::make_pair(0, faces + 1));
     mesh.ring = ring;
-    return faces;
-}
-
-// Faces of the current tetrahedralization (first `count` slots, dead ones
-// with no edge bits), one per represented edge: numbered by a scan, then
-// each built by walking around its edge through the adjacency, from the
-// circumcentres. Writes owner < neighbour, area vectors (owner to
-// neighbour), centroids relative to the owner and cell volumes; returns the
-// number of faces. `face_start` needs count + 1 entries.
-template <class ExecSpace, class X>
-int faces_from_edges(const ExecSpace& exec, const X& x, double box, const Mesh<typename ExecSpace::memory_space>& mesh,
-                     int count, const Kokkos::View<int*, typename ExecSpace::memory_space>& face_start,
-                     const Kokkos::View<int* [2], typename ExecSpace::memory_space>& pair,
-                     const face_geometry::Geometry<typename ExecSpace::memory_space>& out) {
-    using Range = Kokkos::RangePolicy<ExecSpace>;
-    const auto edges = mesh.edges;
-    int faces = 0;
-    Kokkos::parallel_scan(
-        "tet_mesh::face_numbers", Range(exec, 0, count),
-        KOKKOS_LAMBDA(int t, int& sum, bool last) {
-            if (last) face_start(t) = sum;
-            sum += Kokkos::Experimental::popcount_builtin(static_cast<unsigned>(edges(t)));
-            if (last && t == count - 1) face_start(count) = sum;
-        },
-        faces);
-    Kokkos::deep_copy(exec, out.volume, 0.0);
-    Kokkos::parallel_for(
-        "tet_mesh::faces_from_edges", Range(exec, 0, count), KOKKOS_LAMBDA(int t) {
-            int bits = edges(t);
-            for (int f = face_start(t); bits; ++f, bits &= bits - 1) {
-                const int k = Kokkos::Experimental::countr_zero_builtin(static_cast<unsigned>(bits));
-                int ka, kb;
-                edge_ends(k, ka, kb);
-                int i = mesh.vertex(t, ka), j = mesh.vertex(t, kb);
-                if (i > j) Kokkos::kokkos_swap(i, j);
-                pair(f, 0) = i;
-                pair(f, 1) = j;
-                auto vertex = [&](int u) {
-                    return Vec3<double>{detail::wrap(mesh.centre(u, 0) - x(i, 0), box),
-                                        detail::wrap(mesh.centre(u, 1) - x(i, 1), box),
-                                        detail::wrap(mesh.centre(u, 2) - x(i, 2), box)};
-                };
-                // Around edge i-j: from each tetrahedron step across the face
-                // opposite one of its two other corners, never back.
-                const Vec3<double> first = vertex(t);
-                Vec3<double> previous{0, 0, 0}, area{0, 0, 0}, moment{0, 0, 0};
-                double weight = 0;
-                int current = t, before = -1, steps = 0;
-                do {
-                    int next = -1;
-                    for (int c = 0; c < 4 && next < 0; ++c) {
-                        const int v = mesh.vertex(current, c);
-                        if (v == i || v == j) continue;
-                        const int w = mesh.adjacent(current, c);
-                        if (w != before) next = w;
-                    }
-                    if (next < 0 || ++steps > 64) break;
-                    const Vec3<double> here = vertex(next);
-                    if (steps >= 2) {
-                        const Vec3<double> twice = cross(previous - first, here - first);
-                        area = area + twice * 0.5;
-                        const double w = Kokkos::sqrt(dot(twice, twice));
-                        weight += w;
-                        moment = moment + (first + previous + here) * (w / 3.0);
-                    }
-                    previous = here;
-                    before = current;
-                    current = next;
-                } while (current != t);
-                const Vec3<double> dj{detail::wrap(x(j, 0) - x(i, 0), box), detail::wrap(x(j, 1) - x(i, 1), box),
-                                      detail::wrap(x(j, 2) - x(i, 2), box)};
-                if (dot(area, dj) < 0) area = area * -1.0;
-                const Vec3<double> centroid = weight > 0 ? moment * (1.0 / weight) : first;
-                out.area(f, 0) = area.x;
-                out.area(f, 1) = area.y;
-                out.area(f, 2) = area.z;
-                out.centroid(f, 0) = centroid.x;
-                out.centroid(f, 1) = centroid.y;
-                out.centroid(f, 2) = centroid.z;
-                const double pyramid = Kokkos::sqrt(dot(area, area) * dot(dj, dj)) / 6.0;
-                Kokkos::atomic_add(&out.volume(i), pyramid);
-                Kokkos::atomic_add(&out.volume(j), pyramid);
-            }
-        });
     return faces;
 }
 
@@ -453,8 +421,8 @@ void circumcentres(const ExecSpace& exec, const X& x,
             Vec3<double> d[3];
             for (int k = 0; k < 3; ++k) {
                 const int v = mesh.vertex(t, k + 1);
-                d[k] = {detail::wrap(x(v, 0) - x(v0, 0), box), detail::wrap(x(v, 1) - x(v0, 1), box),
-                        detail::wrap(x(v, 2) - x(v0, 2), box)};
+                d[k] = {wrap(x(v, 0) - x(v0, 0), box), wrap(x(v, 1) - x(v0, 1), box),
+                        wrap(x(v, 2) - x(v0, 2), box)};
             }
             Vec3<double> c = detail::circumcentre(d[0], d[1], d[2]);
             // Nearly flat (sliver) tetrahedra: the double formula divides by a
@@ -498,8 +466,7 @@ void circumcentres(const ExecSpace& exec, const X& x,
 // owner) and cell volumes, one thread per owned face.
 template <class ExecSpace, class X>
 void faces(const ExecSpace& exec, const X& x, double box,
-           const Mesh<typename ExecSpace::memory_space>& mesh,
-           const face_geometry::Geometry<typename ExecSpace::memory_space>& out) {
+           const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
     Kokkos::deep_copy(exec, out.volume, 0.0);
     Kokkos::parallel_for(
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f) {
@@ -507,12 +474,12 @@ void faces(const ExecSpace& exec, const X& x, double box,
             const int begin = mesh.ring_start(f), end = mesh.ring_start(f + 1);
             auto vertex = [&](int m) {
                 const int t = mesh.ring(m);
-                return Vec3<double>{detail::wrap(mesh.centre(t, 0) - x(i, 0), box),
-                                    detail::wrap(mesh.centre(t, 1) - x(i, 1), box),
-                                    detail::wrap(mesh.centre(t, 2) - x(i, 2), box)};
+                return Vec3<double>{wrap(mesh.centre(t, 0) - x(i, 0), box),
+                                    wrap(mesh.centre(t, 1) - x(i, 1), box),
+                                    wrap(mesh.centre(t, 2) - x(i, 2), box)};
             };
-            const Vec3<double> dj{detail::wrap(x(j, 0) - x(i, 0), box), detail::wrap(x(j, 1) - x(i, 1), box),
-                                  detail::wrap(x(j, 2) - x(i, 2), box)};
+            const Vec3<double> dj{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box),
+                                  wrap(x(j, 2) - x(i, 2), box)};
             const Vec3<double> first = vertex(begin);
             Vec3<double> previous = vertex(begin + 1), area{0, 0, 0}, moment{0, 0, 0};
             double weight = 0;
@@ -553,22 +520,15 @@ int check(const ExecSpace& exec, const X& x, double box,
         KOKKOS_LAMBDA(int t, int& count) {
             const Vec3<double> c{mesh.centre(t, 0), mesh.centre(t, 1), mesh.centre(t, 2)};
             auto from_centre = [&](int v) {
-                return Vec3<double>{detail::wrap(x(v, 0) - c.x, box), detail::wrap(x(v, 1) - c.y, box),
-                                    detail::wrap(x(v, 2) - c.z, box)};
+                return Vec3<double>{wrap(x(v, 0) - c.x, box), wrap(x(v, 1) - c.y, box),
+                                    wrap(x(v, 2) - c.z, box)};
             };
             const double r2 = mesh.centre(t, 3);
             int bad = 0;
             for (int k = 0; k < 4 && !bad; ++k) {
                 const int other = mesh.adjacent(t, k);
                 if (other < 0) continue;
-                // The far vertex of the neighbour is the one this tetrahedron lacks.
-                int far = -1;
-                for (int a = 0; a < 4; ++a) {
-                    const int v = mesh.vertex(other, a);
-                    bool shared = false;
-                    for (int b = 0; b < 4; ++b) shared |= v == mesh.vertex(t, b);
-                    if (!shared) far = v;
-                }
+                const int far = far_vertex(mesh, t, other);
                 if (far < 0) continue;
                 const Vec3<double> d = from_centre(far);
                 bad = dot(d, d) < r2 * (1.0 - 1e-10);
@@ -578,29 +538,6 @@ int check(const ExecSpace& exec, const X& x, double box,
         },
         failed);
     return failed;
-}
-
-// Orientation sign of every tetrahedron (+1, -1, or 0 when flat to
-// rounding). A tetrahedron whose sign differs from the build's has inverted,
-// and the local Delaunay check is only conclusive without inversions.
-template <class ExecSpace, class X>
-void orientations(const ExecSpace& exec, const X& x,
-                  double box, const Mesh<typename ExecSpace::memory_space>& mesh,
-                  const Kokkos::View<int*, typename ExecSpace::memory_space>& sign) {
-    Kokkos::parallel_for(
-        "tet_mesh::orientations", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.vertex.extent(0)),
-        KOKKOS_LAMBDA(int t) {
-            const int v0 = mesh.vertex(t, 0);
-            Vec3<double> d[3];
-            for (int k = 0; k < 3; ++k) {
-                const int v = mesh.vertex(t, k + 1);
-                d[k] = {detail::wrap(x(v, 0) - x(v0, 0), box), detail::wrap(x(v, 1) - x(v0, 1), box),
-                        detail::wrap(x(v, 2) - x(v0, 2), box)};
-            }
-            const double volume6 = dot(d[0], cross(d[1], d[2]));
-            const double scale = Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2]));
-            sign(t) = volume6 > 1e-12 * scale ? 1 : volume6 < -1e-12 * scale ? -1 : 0;
-        });
 }
 
 }  // namespace tet_mesh

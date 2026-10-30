@@ -1,180 +1,70 @@
 #pragma once
 
+#include "tet_repair.hpp"
+
 #include <algorithm>
 #include <array>
-#include <cmath>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <map>
+#include <stdexcept>
 #include <unordered_set>
 #include <vector>
 
-#include "exact_predicates.hpp"
-
-// Host prototype: restore the Delaunay property of a tetrahedralization of
-// periodic particles after they moved, by bistellar flips.
+// Host fallback of tet_repair: restores the Delaunay property where the
+// device repair got stuck.
 //
 // A shared triangle is locally Delaunay when the far vertex of either
 // tetrahedron lies outside the other's circumsphere. Failing triangles are
 // repaired by a 2->3 flip when the two tetrahedra form a convex pair, or by
 // a 3->2 flip when one edge of the triangle has exactly three tetrahedra
 // around it; otherwise the triangle waits until neighbouring flips change its
-// surroundings. New tetrahedra are checked in turn, until none fails.
-//
-// Every decision is an exact sign on snapped positions (see `exact`), so a
-// tie is the same tie wherever it is evaluated.
+// surroundings, and what still fails is rebuilt locally (Bowyer-Watson on the
+// particles around it). Every decision is an exact sign on the snapped
+// positions shared with the device, so a tie is the same tie everywhere.
 namespace tet_flips {
 
-using Point = std::array<double, 3>;
+namespace ep = exact_predicates;
 using Tet = std::array<int, 4>;
 
+// A host copy of the device mesh, edited in place.
 struct Mesh {
-    std::vector<Tet> vertex;    // positively oriented
-    std::vector<Tet> adjacent;  // across the face opposite vertex k, -1 if none
-    std::vector<char> alive;
+    tet_mesh::Quads<Kokkos::HostSpace> vertex, adjacent;  // capacity rows; positively oriented
+    Kokkos::View<char*, Kokkos::HostSpace> alive;
+    ep::Points<Kokkos::HostSpace> point;
+    int count = 0;  // slots in use
 };
 
 struct Stats {
     long long checked = 0, flips23 = 0, flips32 = 0, stuck = 0, rebuilt = 0, unrepaired = 0;
 };
 
-namespace exact = exact_predicates;
-
 namespace detail {
 
-inline double wrap(double d) { return d - std::nearbyint(d); }
-
-// Offset of q from p in the periodic unit box.
-inline Point offset(const Point& p, const Point& q) { return {wrap(q[0] - p[0]), wrap(q[1] - p[1]), wrap(q[2] - p[2])}; }
-
-inline double dot(const Point& a, const Point& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-inline Point cross(const Point& a, const Point& b) {
-    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
-
-// Exact sign of the orientation of tetrahedron t (snapped positions).
-inline int orient_sign(const std::vector<exact::Offset>& g, const Tet& t) {
-    auto d = [&](int v) {
-        return exact::Offset{exact::delta(g[t[0]][0], g[v][0]), exact::delta(g[t[0]][1], g[v][1]),
-                             exact::delta(g[t[0]][2], g[v][2])};
-    };
-    return exact::orient(d(t[1]), d(t[2]), d(t[3]));
-}
-
-// Whether e lies inside the circumsphere of t (exact, ties perturbed).
-inline bool in_sphere(const std::vector<exact::Offset>& g, const Tet& t, int e) {
-    auto d = [&](int v) {
-        return exact::Offset{exact::delta(g[t[0]][0], g[v][0]), exact::delta(g[t[0]][1], g[v][1]),
-                             exact::delta(g[t[0]][2], g[v][2])};
-    };
-    const exact::Offset p[5] = {d(t[0]), d(t[1]), d(t[2]), d(t[3]), d(e)};
-    const int id[5] = {t[0], t[1], t[2], t[3], e};
-    return exact::in_sphere(p, id);
-}
+inline Tet tet(const Mesh& m, int t) { return {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)}; }
 
 inline std::array<int, 3> face_key(const Tet& t, int k) {
     std::array<int, 3> f;
-    for (int a = 0, b = 0; a < 4; ++a)
-        if (a != k) f[b++] = t[a];
-    std::sort(f.begin(), f.end());
+    tet_mesh::sorted_face(t, k, f.data());
     return f;
 }
-
-inline int position(const Tet& t, int v) {
-    for (int k = 0; k < 4; ++k)
-        if (t[k] == v) return k;
-    return -1;
-}
-
-}  // namespace detail
-
-// Orient every tetrahedron positively and connect the faces.
-using Grid = std::vector<exact::Offset>;
-
-// Positions snapped to the exact predicates' grid.
-inline Grid snap(const std::vector<Point>& x) {
-    Grid g(x.size());
-    for (std::size_t i = 0; i < x.size(); ++i)
-        for (int a = 0; a < 3; ++a) g[i][a] = exact::snap(x[i][a]);
-    return g;
-}
-
-inline Mesh make_mesh(const Grid& x, std::vector<Tet> tets) {
-    Mesh m;
-    for (auto& t : tets)
-        if (detail::orient_sign(x, t) < 0) std::swap(t[2], t[3]);
-    m.vertex = std::move(tets);
-    m.adjacent.assign(m.vertex.size(), {-1, -1, -1, -1});
-    m.alive.assign(m.vertex.size(), 1);
-    std::map<std::array<int, 3>, std::pair<int, int>> open;
-    for (int t = 0; t < static_cast<int>(m.vertex.size()); ++t)
-        for (int k = 0; k < 4; ++k) {
-            const auto key = detail::face_key(m.vertex[t], k);
-            auto it = open.find(key);
-            if (it == open.end()) {
-                open.emplace(key, std::make_pair(t, k));
-            } else {
-                m.adjacent[t][k] = it->second.first;
-                m.adjacent[it->second.first][it->second.second] = t;
-                open.erase(it);
-            }
-        }
-    return m;
-}
-
-namespace detail {
 
 // Replace the tetrahedra `old` by `fresh` (vertex sets, any orientation)
 // covering the same region: orient the new ones, reuse the old slots first,
 // and reconnect them to each other and to the outside through the old outer
 // faces. Returns the new tetrahedra.
-// Whether `fresh` (vertex sets) closes the cavity of `old` exactly: six outer
-// faces, each face of a new tetrahedron matched once (outside or by another
-// new one), each outer face used once, and no new tetrahedron duplicating
-// the outer one it attaches to. Near-degenerate configurations can break this.
-inline bool closes(const Mesh& m, const std::vector<int>& old, const std::vector<Tet>& fresh) {
-    std::vector<std::array<int, 3>> outer_key;
-    std::vector<int> outer_tet;
-    for (int t : old)
-        for (int k = 0; k < 4; ++k) {
-            const int o = m.adjacent[t][k];
-            if (std::find(old.begin(), old.end(), o) != old.end()) continue;
-            outer_key.push_back(face_key(m.vertex[t], k));
-            outer_tet.push_back(o);
-        }
-    if (outer_key.size() != 6) return false;
-    std::vector<int> used(6, 0);
-    for (std::size_t r = 0; r < fresh.size(); ++r)
-        for (int c = 0; c < 4; ++c) {
-            const auto key = face_key(fresh[r], c);
-            int matches = 0;
-            for (int q = 0; q < 6; ++q)
-                if (key == outer_key[q]) {
-                    ++matches;
-                    ++used[q];
-                    const int w = outer_tet[q];
-                    if (w >= 0 && position(m.vertex[w], fresh[r][c]) >= 0) return false;
-                }
-            for (std::size_t s2 = 0; s2 < fresh.size(); ++s2)
-                if (s2 != r)
-                    for (int c2 = 0; c2 < 4; ++c2) matches += face_key(fresh[s2], c2) == key;
-            if (matches != 1) return false;
-        }
-    return std::all_of(used.begin(), used.end(), [](int u) { return u == 1; });
-}
-
-inline std::vector<int> replace(Mesh& m, const Grid& x, const std::vector<int>& old,
-                                std::vector<Tet> fresh) {
+inline std::vector<int> replace(Mesh& m, const std::vector<int>& old, std::vector<Tet> fresh) {
     std::map<std::array<int, 3>, std::pair<int, int>> outside;  // outer face -> (outer tet, its face index)
     for (int t : old)
         for (int k = 0; k < 4; ++k) {
-            const int o = m.adjacent[t][k];
+            const int o = m.adjacent(t, k);
             if (std::find(old.begin(), old.end(), o) != old.end()) continue;
             int back = -1;
             if (o >= 0)
                 for (int j = 0; j < 4; ++j)
-                    if (m.adjacent[o][j] == t) back = j;
-            outside[face_key(m.vertex[t], k)] = {o, back};
+                    if (m.adjacent(o, j) == t) back = j;
+            outside[face_key(tet(m, t), k)] = {o, back};
         }
     std::vector<int> slots;
     for (std::size_t i = 0; i < fresh.size(); ++i) {
@@ -182,28 +72,29 @@ inline std::vector<int> replace(Mesh& m, const Grid& x, const std::vector<int>& 
         if (i < old.size()) {
             slot = old[i];
         } else {
-            slot = static_cast<int>(m.vertex.size());
-            m.vertex.push_back({});
-            m.adjacent.push_back({-1, -1, -1, -1});
-            m.alive.push_back(1);
+            if (m.count == static_cast<int>(m.vertex.extent(0)))
+                throw std::runtime_error("tet_flips: tetrahedra capacity exceeded");
+            slot = m.count++;
         }
-        if (orient_sign(x, fresh[i]) < 0) std::swap(fresh[i][2], fresh[i][3]);
-        m.vertex[slot] = fresh[i];
-        m.adjacent[slot] = {-1, -1, -1, -1};
-        m.alive[slot] = 1;
+        if (ep::orient(m.point, fresh[i].data()) < 0) std::swap(fresh[i][2], fresh[i][3]);
+        for (int k = 0; k < 4; ++k) {
+            m.vertex(slot, k) = fresh[i][k];
+            m.adjacent(slot, k) = -1;
+        }
+        m.alive(slot) = 1;
         slots.push_back(slot);
     }
-    for (std::size_t i = fresh.size(); i < old.size(); ++i) m.alive[old[i]] = 0;
+    for (std::size_t i = fresh.size(); i < old.size(); ++i) m.alive(old[i]) = 0;
     std::map<std::array<int, 3>, std::pair<int, int>> inner;
     for (int s : slots)
         for (int k = 0; k < 4; ++k) {
-            const auto key = face_key(m.vertex[s], k);
+            const auto key = face_key(tet(m, s), k);
             if (auto it = outside.find(key); it != outside.end()) {
-                m.adjacent[s][k] = it->second.first;
-                if (it->second.first >= 0) m.adjacent[it->second.first][it->second.second] = s;
+                m.adjacent(s, k) = it->second.first;
+                if (it->second.first >= 0) m.adjacent(it->second.first, it->second.second) = s;
             } else if (auto jt = inner.find(key); jt != inner.end()) {
-                m.adjacent[s][k] = jt->second.first;
-                m.adjacent[jt->second.first][jt->second.second] = s;
+                m.adjacent(s, k) = jt->second.first;
+                m.adjacent(jt->second.first, jt->second.second) = s;
             } else {
                 inner.emplace(key, std::make_pair(s, k));
             }
@@ -211,16 +102,12 @@ inline std::vector<int> replace(Mesh& m, const Grid& x, const std::vector<int>& 
     return slots;
 }
 
-}  // namespace detail
-
-namespace detail {
-
 // Delaunay tetrahedralization of a few points in one local frame by
 // Bowyer-Watson insertion into an enclosing tetrahedron, whose corners are
 // points n..n+3. Insert near-to-far: each point is located by walking from
 // the previous cavity, so the cost stays near linear. Returns the live
 // tetrahedra, or nothing if point location fails.
-inline std::vector<Tet> delaunay(std::vector<exact::Offset> p, std::vector<int> id) {
+inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id) {
     const int n = static_cast<int>(p.size());
     long long extent = 1;
     for (const auto& q : p) extent = std::max({extent, std::abs(q[0]), std::abs(q[1]), std::abs(q[2])});
@@ -231,13 +118,12 @@ inline std::vector<Tet> delaunay(std::vector<exact::Offset> p, std::vector<int> 
     p.push_back({-k, -k, 5 * k});
     for (int c = 0; c < 4; ++c) id.push_back(std::numeric_limits<int>::max() - 3 + c);
     auto orient = [&](const Tet& t) {
-        return exact::orient(exact::minus(p[t[1]], p[t[0]]), exact::minus(p[t[2]], p[t[0]]),
-                             exact::minus(p[t[3]], p[t[0]]));
+        return ep::orient(ep::minus(p[t[1]], p[t[0]]), ep::minus(p[t[2]], p[t[0]]), ep::minus(p[t[3]], p[t[0]]));
     };
     auto inside = [&](const Tet& t, int q) {
-        const exact::Offset five[5] = {p[t[0]], p[t[1]], p[t[2]], p[t[3]], p[q]};
+        const ep::Offset five[5] = {p[t[0]], p[t[1]], p[t[2]], p[t[3]], p[q]};
         const int ids[5] = {id[t[0]], id[t[1]], id[t[2]], id[t[3]], id[q]};
-        return exact::in_sphere(five, ids);
+        return ep::in_sphere(five, ids);
     };
     std::vector<Tet> tet{{n, n + 1, n + 2, n + 3}}, adj{{-1, -1, -1, -1}};
     std::vector<char> alive{1};
@@ -326,8 +212,8 @@ inline std::vector<Tet> delaunay(std::vector<exact::Offset> p, std::vector<int> 
 // adjacency. `seeds` must be sorted.
 inline std::vector<int> stars(const Mesh& m, int t, const std::vector<int>& seeds) {
     auto touches = [&](int s) {
-        for (int v : m.vertex[s])
-            if (std::binary_search(seeds.begin(), seeds.end(), v)) return true;
+        for (int k = 0; k < 4; ++k)
+            if (std::binary_search(seeds.begin(), seeds.end(), m.vertex(s, k))) return true;
         return false;
     };
     std::vector<int> found{t}, stack{t};
@@ -335,18 +221,21 @@ inline std::vector<int> stars(const Mesh& m, int t, const std::vector<int>& seed
     while (!stack.empty()) {
         const int s = stack.back();
         stack.pop_back();
-        for (int o : m.adjacent[s])
+        for (int k = 0; k < 4; ++k) {
+            const int o = m.adjacent(s, k);
             if (o >= 0 && seen.insert(o).second && touches(o)) {
                 found.push_back(o);
                 stack.push_back(o);
             }
+        }
     }
     return found;
 }
 
 inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets) {
     std::vector<int> v;
-    for (int t : tets) v.insert(v.end(), m.vertex[t].begin(), m.vertex[t].end());
+    for (int t : tets)
+        for (int k = 0; k < 4; ++k) v.push_back(m.vertex(t, k));
     std::sort(v.begin(), v.end());
     v.erase(std::unique(v.begin(), v.end()), v.end());
     return v;
@@ -357,24 +246,20 @@ inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets)
 // fresh Delaunay tetrahedralization of the particles two rings around, if
 // the new stars fit the old boundary exactly; otherwise widen the stars and
 // retry. Returns the new tetrahedra.
-inline std::vector<int> rebuild(Mesh& m, const Grid& x, int t, int u) {
+inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     std::vector<int> seeds = vertices_of(m, u < 0 ? std::vector<int>{t} : std::vector<int>{t, u});
     for (int attempt = 0; attempt < 3; ++attempt) {
         const std::vector<int> old = stars(m, t, seeds);
         const std::vector<int> ring = vertices_of(m, old);
         const std::vector<int> points = vertices_of(m, stars(m, t, ring));
         // Local frame centred on the first seed, nearest first.
-        const exact::Offset& o = x[seeds[0]];
-        std::vector<std::pair<exact::i128, int>> order;
-        std::vector<exact::Offset> local;
-        for (int v : points) {
-            const exact::Offset d{exact::delta(o[0], x[v][0]), exact::delta(o[1], x[v][1]), exact::delta(o[2], x[v][2])};
-            order.push_back({exact::lift(d), v});
-        }
+        std::vector<std::pair<ep::i128, int>> order;
+        for (int v : points) order.push_back({ep::lift(ep::offset(m.point, seeds[0], v)), v});
         std::sort(order.begin(), order.end());
+        std::vector<ep::Offset> local;
         std::vector<int> id;
         for (auto [r, v] : order) {
-            local.push_back({exact::delta(o[0], x[v][0]), exact::delta(o[1], x[v][1]), exact::delta(o[2], x[v][2])});
+            local.push_back(ep::offset(m.point, seeds[0], v));
             id.push_back(v);
         }
         std::vector<Tet> fresh;
@@ -397,7 +282,7 @@ inline std::vector<int> rebuild(Mesh& m, const Grid& x, int t, int u) {
         std::map<std::array<int, 3>, int> boundary;
         for (int s : old)
             for (int k = 0; k < 4; ++k)
-                if (std::find(old.begin(), old.end(), m.adjacent[s][k]) == old.end()) ++boundary[face_key(m.vertex[s], k)];
+                if (std::find(old.begin(), old.end(), m.adjacent(s, k)) == old.end()) ++boundary[face_key(tet(m, s), k)];
         for (const Tet& s : fresh)
             for (int k = 0; k < 4; ++k) {
                 const auto key = face_key(s, k);
@@ -405,190 +290,233 @@ inline std::vector<int> rebuild(Mesh& m, const Grid& x, int t, int u) {
             }
         const bool fits = !fresh.empty() && !reaches_corner &&
                           std::all_of(boundary.begin(), boundary.end(), [](const auto& b) { return b.second == 0; });
-        if (fits) return replace(m, x, old, fresh);
+        if (fits) return replace(m, old, fresh);
         seeds = ring;
     }
     return {};
 }
 
+// Whether the triangle between neighbours t and u fails the local Delaunay test.
+inline bool fails(const Mesh& m, int t, int u) {
+    const int far = tet_mesh::far_vertex(m, t, u);
+    return far >= 0 && ep::in_sphere(m.point, detail::tet(m, t).data(), far);
+}
+
 }  // namespace detail
 
-// Restore the Delaunay property everywhere; `x` are the moved positions.
-inline Stats repair(Mesh& m, const Grid& x) {
+// Restore the Delaunay property everywhere: flips first, local rebuilds for
+// what they cannot repair.
+inline Stats repair(Mesh& m) {
     Stats stats;
     std::deque<int> queue;
-    std::vector<char> queued(m.vertex.size(), 0);
-    for (int t = 0; t < static_cast<int>(m.vertex.size()); ++t)
-        if (m.alive[t]) {
+    std::vector<char> queued(m.count, 0);
+    for (int t = 0; t < m.count; ++t)
+        if (m.alive(t)) {
             queue.push_back(t);
             queued[t] = 1;
         }
     auto push = [&](int t) {
-        if (t >= static_cast<int>(queued.size())) queued.resize(m.vertex.size(), 0);
+        if (t >= static_cast<int>(queued.size())) queued.resize(m.count, 0);
         if (!queued[t]) {
             queue.push_back(t);
             queued[t] = 1;
         }
     };
-    long long budget = 50 * static_cast<long long>(m.vertex.size()) + 1000;
+    long long budget = 50 * static_cast<long long>(m.count) + 1000;
     std::vector<std::pair<int, int>> stuck;
     for (int round = 0; round < 8; ++round) {
-    while (!queue.empty() && budget-- > 0) {
-        const int t = queue.front();
-        queue.pop_front();
-        queued[t] = 0;
-        if (!m.alive[t]) continue;
-        // Turned inside out: flips usually untangle it, else rebuild below.
-        if (detail::orient_sign(x, m.vertex[t]) <= 0) stuck.emplace_back(t, -1);
-        for (int k = 0; k < 4; ++k) {
-            const int u = m.adjacent[t][k];
-            if (u < 0) continue;
-            const Tet& T = m.vertex[t];
-            const Tet& U = m.vertex[u];
-            int far = -1;
-            for (int v : U)
-                if (detail::position(T, v) < 0) far = v;
-            ++stats.checked;
-            if (far < 0 || !detail::in_sphere(x, T, far)) continue;
-
-            const int a = T[k];  // apex of t opposite the shared face
-            const auto face = detail::face_key(T, k);
-            // 2->3: the segment a-far crosses the shared face exactly when the
-            // three tetrahedra (a, far, edge of the face) share one orientation.
-            std::vector<Tet> three;
-            int positive = 0, negative = 0;
-            for (int e = 0; e < 3; ++e) {
-                const Tet n{a, far, face[e], face[(e + 1) % 3]};
-                const int o = detail::orient_sign(x, n);
-                positive += o > 0;
-                negative += o < 0;
-                three.push_back(n);
-            }
-            const bool convex = (positive == 3 || negative == 3) && detail::closes(m, {t, u}, three);
-            if (convex) {
-                for (int s : detail::replace(m, x, {t, u}, three)) push(s);
-                ++stats.flips23;
-                break;
-            }
-            // 3->2: an edge of the face with exactly three tetrahedra around it.
-            bool done = false;
-            for (int e = 0; e < 3 && !done; ++e) {
-                const int p = face[e], q = face[(e + 1) % 3];
-                // Walk around edge p-q: from each tetrahedron step across a face
-                // that contains the edge (opposite one of its other vertices),
-                // never back, until the walk closes.
-                std::vector<int> ring{t};
-                bool closed = false;
-                for (int current = t, previous = -1; ring.size() <= 3;) {
-                    int next = -1;
-                    for (int j = 0; j < 4; ++j) {
-                        const int v = m.vertex[current][j];
-                        if (v == p || v == q) continue;
-                        const int w = m.adjacent[current][j];
-                        if (w >= 0 && w != previous) {
-                            next = w;
+        while (!queue.empty() && budget-- > 0) {
+            const int t = queue.front();
+            queue.pop_front();
+            queued[t] = 0;
+            if (!m.alive(t)) continue;
+            const Tet T = detail::tet(m, t);
+            // Turned inside out: flips usually untangle it, else rebuild below.
+            if (ep::orient(m.point, T.data()) <= 0) stuck.emplace_back(t, -1);
+            for (int k = 0; k < 4; ++k) {
+                const int u = m.adjacent(t, k);
+                if (u < 0) continue;
+                const int far = tet_mesh::far_vertex(m, t, u);
+                ++stats.checked;
+                if (far < 0 || !ep::in_sphere(m.point, T.data(), far)) continue;
+                const int a = T[k];  // apex of t opposite the shared face
+                int face[3];
+                tet_mesh::sorted_face(T, k, face);
+                // 2->3: the segment a-far crosses the shared face exactly when the
+                // three tetrahedra (a, far, edge of the face) share one orientation.
+                std::vector<Tet> three;
+                int positive = 0, negative = 0;
+                for (int e = 0; e < 3; ++e) {
+                    const Tet n{a, far, face[e], face[(e + 1) % 3]};
+                    const int o = ep::orient(m.point, n.data());
+                    positive += o > 0;
+                    negative += o < 0;
+                    three.push_back(n);
+                }
+                const int pair[2] = {t, u};
+                if ((positive == 3 || negative == 3) && tet_repair::closes(m, pair, 2, three, 3)) {
+                    for (int s : detail::replace(m, {t, u}, three)) push(s);
+                    ++stats.flips23;
+                    break;
+                }
+                // 3->2: an edge of the face with exactly three tetrahedra around it.
+                bool done = false;
+                for (int e = 0; e < 3 && !done; ++e) {
+                    const int p = face[e], q = face[(e + 1) % 3];
+                    // Walk around edge p-q until the walk closes.
+                    std::vector<int> ring{t};
+                    bool closed = false;
+                    for (int current = t, previous = -1; ring.size() <= 3;) {
+                        int next = -1;
+                        for (int j = 0; j < 4; ++j) {
+                            const int v = m.vertex(current, j);
+                            if (v == p || v == q) continue;
+                            const int w = m.adjacent(current, j);
+                            if (w >= 0 && w != previous) {
+                                next = w;
+                                break;
+                            }
+                        }
+                        if (next < 0) break;
+                        if (next == t) {
+                            closed = true;
                             break;
                         }
+                        ring.push_back(next);
+                        previous = current;
+                        current = next;
                     }
-                    if (next < 0) break;
-                    if (next == t) {
-                        closed = true;
-                        break;
-                    }
-                    ring.push_back(next);
-                    previous = current;
-                    current = next;
+                    if (!closed) continue;
+                    if (ring.size() != 3 || std::find(ring.begin(), ring.end(), u) == ring.end()) continue;
+                    // The three tetrahedra share edge p-q; their other vertices
+                    // form the triangle of the two new tetrahedra.
+                    std::vector<int> others;
+                    for (int r : ring)
+                        for (int j = 0; j < 4; ++j) {
+                            const int v = m.vertex(r, j);
+                            if (v != p && v != q && std::find(others.begin(), others.end(), v) == others.end())
+                                others.push_back(v);
+                        }
+                    if (others.size() != 3) continue;
+                    const std::vector<Tet> two{{p, others[0], others[1], others[2]}, {q, others[0], others[1], others[2]}};
+                    if (ep::orient(m.point, two[0].data()) == 0 || ep::orient(m.point, two[1].data()) == 0) continue;
+                    // Valid only if p and q lie on opposite sides of the new triangle.
+                    const Tet side_p{others[0], others[1], others[2], p}, side_q{others[0], others[1], others[2], q};
+                    if (ep::orient(m.point, side_p.data()) * ep::orient(m.point, side_q.data()) >= 0) continue;
+                    if (!tet_repair::closes(m, ring.data(), 3, two, 2)) continue;
+                    for (int s : detail::replace(m, ring, two)) push(s);
+                    ++stats.flips32;
+                    done = true;
                 }
-                if (!closed) continue;
-                if (ring.size() != 3 || std::find(ring.begin(), ring.end(), u) == ring.end()) continue;
-                // The three tetrahedra share edge p-q; their other vertices
-                // form the triangle of the two new tetrahedra.
-                std::vector<int> others;
-                for (int r : ring)
-                    for (int v : m.vertex[r])
-                        if (v != p && v != q && std::find(others.begin(), others.end(), v) == others.end())
-                            others.push_back(v);
-                if (others.size() != 3) continue;
-                const Tet n1{p, others[0], others[1], others[2]}, n2{q, others[0], others[1], others[2]};
-                if (detail::orient_sign(x, n1) == 0 || detail::orient_sign(x, n2) == 0) continue;
-                // Valid only if p and q lie on opposite sides of the new triangle.
-                const Tet side_p{others[0], others[1], others[2], p}, side_q{others[0], others[1], others[2], q};
-                if (detail::orient_sign(x, side_p) * detail::orient_sign(x, side_q) >= 0) continue;
-                if (!detail::closes(m, ring, {n1, n2})) continue;
-                for (int s : detail::replace(m, x, ring, {n1, n2})) push(s);
-                ++stats.flips32;
-                done = true;
+                if (done) break;
+                ++stats.stuck;
+                stuck.emplace_back(t, u);
             }
-            if (done) break;
-            ++stats.stuck;
-            stuck.emplace_back(t, u);
         }
-    }
-    // Triangles no flip could repair: rebuild their surroundings.
-    bool rebuilt = false;
-    for (auto [t, u] : stuck) {
-        if (!m.alive[t]) continue;
-        if (u < 0) {
-            if (detail::orient_sign(x, m.vertex[t]) > 0) continue;
-        } else {
-            if (!m.alive[u] || std::find(m.adjacent[t].begin(), m.adjacent[t].end(), u) == m.adjacent[t].end())
+        // Triangles no flip could repair: rebuild their surroundings.
+        bool rebuilt = false;
+        for (auto [t, u] : stuck) {
+            if (!m.alive(t)) continue;
+            if (u < 0) {
+                if (ep::orient(m.point, detail::tet(m, t).data()) > 0) continue;
+            } else {
+                bool adjacent = false;
+                for (int k = 0; k < 4; ++k) adjacent |= m.adjacent(t, k) == u;
+                if (!m.alive(u) || !adjacent || !detail::fails(m, t, u)) continue;
+            }
+            const auto fresh = detail::rebuild(m, t, u);
+            if (fresh.empty()) {
+                ++stats.unrepaired;
                 continue;
-            int far = -1;
-            for (int v : m.vertex[u])
-                if (detail::position(m.vertex[t], v) < 0) far = v;
-            if (far < 0 || !detail::in_sphere(x, m.vertex[t], far)) continue;
+            }
+            ++stats.rebuilt;
+            rebuilt = true;
+            for (int s : fresh) push(s);
         }
-        const auto fresh = detail::rebuild(m, x, t, u);
-        if (fresh.empty()) {
-            ++stats.unrepaired;
-            continue;
-        }
-        ++stats.rebuilt;
-        rebuilt = true;
-        for (int s : fresh) push(s);
-    }
-    stuck.clear();
-    if (!rebuilt) break;
+        stuck.clear();
+        if (!rebuilt) break;
     }
     return stats;
 }
 
-// Every particle's Delaunay neighbours (the cells it shares a face with,
-// including faces of zero area).
-inline std::vector<std::vector<int>> neighbours(const Mesh& m, int n) {
-    std::vector<std::vector<int>> sets(n);
-    for (std::size_t t = 0; t < m.vertex.size(); ++t)
-        if (m.alive[t])
-            for (int a = 0; a < 4; ++a)
-                for (int b = 0; b < 4; ++b)
-                    if (a != b) sets[m.vertex[t][a]].push_back(m.vertex[t][b]);
-    for (auto& s : sets) {
-        std::sort(s.begin(), s.end());
-        s.erase(std::unique(s.begin(), s.end()), s.end());
-    }
-    return sets;
-}
-
-// Number of inverted tetrahedra plus shared triangles that still fail the
-// local Delaunay test.
-inline long long failing(const Mesh& m, const Grid& x) {
+// Number of inverted tetrahedra plus shared triangles that fail the local
+// Delaunay test (each failing triangle counted from both sides).
+inline long long failing(const Mesh& m) {
     long long bad = 0;
-    for (std::size_t t = 0; t < m.vertex.size(); ++t) {
-        if (!m.alive[t]) continue;
-        if (detail::orient_sign(x, m.vertex[t]) <= 0) {
+    for (int t = 0; t < m.count; ++t) {
+        if (!m.alive(t)) continue;
+        if (ep::orient(m.point, detail::tet(m, t).data()) <= 0) {
             ++bad;
             continue;
         }
         for (int k = 0; k < 4; ++k) {
-            const int u = m.adjacent[t][k];
-            if (u < 0) continue;
-            int far = -1;
-            for (int v : m.vertex[u])
-                if (detail::position(m.vertex[t], v) < 0) far = v;
-            bad += far >= 0 && detail::in_sphere(x, m.vertex[t], far);
+            const int u = m.adjacent(t, k);
+            bad += u >= 0 && detail::fails(m, t, u);
         }
     }
     return bad;
+}
+
+// A host copy of the device mesh and its repair state.
+template <class ExecSpace>
+Mesh to_host(const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
+             const tet_repair::State<typename ExecSpace::memory_space>& state) {
+    auto copy = [](const auto& v) {
+        auto h = Kokkos::create_mirror(Kokkos::HostSpace{}, v);  // a copy even on host backends
+        Kokkos::deep_copy(h, v);
+        return h;
+    };
+    return {copy(dm.vertex), copy(dm.adjacent), copy(state.alive), copy(state.point), state.count};
+}
+
+// Finish a device repair that left stuck entries: repair a host copy, copy it
+// back, mark every tetrahedron it changed as touched, and give each edge
+// around them one representative (the lowest-numbered tetrahedron around
+// it). The device free list stays valid: the host only rewrites live
+// tetrahedra and appends new ones.
+template <class ExecSpace>
+Stats finish(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
+             tet_repair::State<typename ExecSpace::memory_space>& state) {
+    exec.fence();
+    const Mesh before = to_host<ExecSpace>(dm, state);
+    Mesh m = to_host<ExecSpace>(dm, state);
+    const Stats stats = repair(m);
+    auto touched = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, state.touched);
+    auto edges = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, dm.edges);
+    std::vector<int> changed;
+    for (int t = 0; t < m.count; ++t) {
+        bool same = t < before.count && m.alive(t) == before.alive(t);
+        for (int k = 0; k < 4 && same; ++k)
+            same = m.vertex(t, k) == before.vertex(t, k) && m.adjacent(t, k) == before.adjacent(t, k);
+        if (same) continue;
+        touched(t) = 1;
+        changed.push_back(t);
+        if (!m.alive(t)) edges(t) = 0;
+    }
+    for (int t : changed) {
+        if (!m.alive(t)) continue;
+        for (int k = 0; k < 6; ++k) {
+            int ka, kb;
+            tet_mesh::edge_ends(k, ka, kb);
+            const int a = m.vertex(t, ka), b = m.vertex(t, kb);
+            int lowest = t;
+            tet_mesh::walk_edge(m, t, a, b, [&](int u) { lowest = std::min(lowest, u); });
+            tet_mesh::walk_edge(m, t, a, b, [&](int u) {
+                const int pa = tet_mesh::position(m, u, a), pb = tet_mesh::position(m, u, b);
+                if (pa < 0 || pb < 0) return;
+                const int bit = 1 << tet_mesh::edge_index(pa, pb);
+                edges(u) = u == lowest ? edges(u) | bit : edges(u) & ~bit;
+            });
+        }
+    }
+    Kokkos::deep_copy(exec, dm.vertex, m.vertex);
+    Kokkos::deep_copy(exec, dm.adjacent, m.adjacent);
+    Kokkos::deep_copy(exec, state.alive, m.alive);
+    Kokkos::deep_copy(exec, state.touched, touched);
+    Kokkos::deep_copy(exec, dm.edges, edges);
+    exec.fence();
+    state.count = m.count;
+    return stats;
 }
 
 }  // namespace tet_flips
