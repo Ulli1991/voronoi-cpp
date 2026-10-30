@@ -5,8 +5,8 @@ periodic box on GPUs (CUDA, validated on an A100 40 GB; OpenMP and Serial
 builds run the same code for checks). It is the geometry base of a planned
 moving-mesh finite-volume hydro solver: the solver hands over particle
 positions and gets back faces (owner, neighbour, area vector, centroid),
-cell volumes and centroids, and per-cell face lists. The hydro solver
-itself is not part of this repository.
+cell volumes and centroids, and per-cell face lists. Stage 1 of the hydro
+solver (static mesh, MUSCL-Hancock, HLLC) is in `src/hydro/` (see "Hydro").
 
 ## Install and build
 
@@ -193,7 +193,7 @@ icosahedral shells@1e-9 still leave ~8k of 262k stuck (host or rebuild). The per
 
 ## Tests
 
-Six CTest programs specify the library; details, oracles, run times and
+Seven CTest programs specify the library and the hydro; details, oracles, run times and
 what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
@@ -204,6 +204,7 @@ what PASS means are in [TESTING.md](TESTING.md).
 | `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and boxes of side 1, 2, 3 |
 | `repair` | after every step of a flow the mesh equals an exact rebuild (lattice, wave, shells, jittered, box 2) |
 | `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
+| `hydro` | HLLC and HLL against reference fluxes and under rotation; uniform states stay uniform, conservation to rounding, bit-identical runs, the two update loops agree to rounding on jittered and uniform meshes; moving mesh: uniform state with a bulk velocity, conservation, Galilean invariance of a moving blast |
 
 ```sh
 ctest --test-dir build-cuda --output-on-failure         # A100: ~35 s
@@ -220,6 +221,47 @@ voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--de
 
 Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`.
+
+## Hydro
+
+`hydro::FiniteVolume` (`src/hydro/`) runs finite volumes on a static or
+moving `voronoi::Mesh` (moving: the points follow the flow with a drift
+towards the cell centroids, the mesh is repaired every step, fluxes go
+through the moving faces): extensive conserved state only between steps, least-squares
+gradients of the primitives limited at the face centroids, MUSCL-Hancock
+half step, HLLC (default) or HLL along each face normal, one global time
+step (Courant factor 0.3 on each cell's radius and signal speeds); order 0
+is first-order Godunov. Every cell sums over its face list in a fixed
+order, so runs are bit-reproducible. Two update loops: per face (a face
+flux array, then a per-cell gather; default at second order) or per cell
+(each face flux computed from both sides; default at first order).
+
+```text
+hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--limiter=face|cell|none]
+            [--riemann=hllc|hll] [--moving] [--bulk=km/s] [--out=dir] [--snapshots=10] [--steps=max] [--input-order] [--memory]
+sbatch -o <logs>/hydro-%j.out scripts/hydro_a100.sh build-cuda <out> <mode> (see the script)
+```
+
+`hydro_sedov` (needs HDF5; on Raven `module load hdf5-serial`) runs a
+Sedov blast (1e51 erg, n = 1 cm^-3, 50 pc box, 1e4 yr) and writes HDF5
+snapshots. Measured on one A100 (jobs 31699864, 31699865, 31700852), double,
+jittered points in Morton order, median of 40 steps:
+
+| | 2,097,152 cells | 16,777,216 cells |
+|---|---|---|
+| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | 38.3 ms (55 M cell updates/s) | 308 ms (55 M/s; per-cell loop over a whole run, job 31701234: 394 ms) |
+| static mesh, MUSCL-Hancock HLLC, per-face loop | 18.7 ms (112 M/s) | 160 ms (105 M/s) |
+| static mesh, MUSCL-Hancock HLL, per-face loop | 18.0 ms (116 M/s) | 147 ms (114 M/s) |
+| static mesh, first order HLLC, per-cell loop | 7.3 ms (288 M/s) | 58 ms (290 M/s) |
+| device memory, mesh + hydro (static, per-face, second order) | 2370 B/cell | 2371 B/cell (41.2 GB in use) |
+| device memory, moving mesh + hydro (per-face) | 2418 B/cell | whole run: out of memory (job 31701027); per-cell loop fits |
+
+Sedov at 128^3 (job 31699863), HLLC: shock radius 0.978 of the
+Sedov-Taylor value at 1e4 yr, L1 density error 0.075 rho0 (first order:
+0.104); mass and energy conserved to 2e-16. On the moving mesh (jobs
+31700850-51): 354 steps instead of 1642, L1 density error 0.058 rho0, the
+same numbers with the whole box moving at 500 km/s. Details:
+research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
 ## Limitations and open items
 
@@ -241,8 +283,8 @@ Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests, `support.hpp` (inputs, references, the
   comparison with an exact rebuild), `check.hpp`.
-- `src/bench/`: `voronoi_bench`.
-- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`.
+- `src/hydro/`: the hydro (header-only). `src/bench/`: `voronoi_bench`, `hydro_sedov`.
+- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `hydro_a100.sh`, `hydro_sedov_compare.py`.
 - `research_notes/`, `reports/`: status notes and surveys.
 
 CI (`.github/workflows/checks.yml`) runs clang-tidy and the CPU tests in
