@@ -461,9 +461,12 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                     fine = false;
                     break;
                 }
+                // The geometric tests are symmetric: once per triangle.
+                if (u < t) continue;
                 int s[4] = {v[0], v[1], v[2], v[3]};
                 s[k] = vertex(u, far);
-                fine = ep::orient(point, s) < 0 && !ep::in_sphere(point, v, o, vertex(u, far));
+                fine = ep::orient(point, s) < 0 && !ep::in_sphere(point, v, o, s[k]);
+                if (!fine) marked(s[k]) = 1;
             }
             if (!fine) {
                 ++bad;
