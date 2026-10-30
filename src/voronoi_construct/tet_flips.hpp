@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
-#include <deque>
 #include <limits>
 #include <map>
 #include <unordered_map>
@@ -17,13 +16,12 @@
 // device repair got stuck.
 //
 // A shared triangle is locally Delaunay when the far vertex of either
-// tetrahedron lies outside the other's circumsphere. Failing triangles are
-// repaired by the flips the device plans (tet_repair::detail::plan), applied
-// one at a time; a triangle no flip repairs waits until neighbouring flips
-// change its surroundings, and what still fails is rebuilt locally
-// (Bowyer-Watson on the particles around it). Every decision is an exact
-// sign on the snapped positions shared with the device, so a tie is the
-// same tie everywhere.
+// tetrahedron lies outside the other's circumsphere. The device repair
+// flips failing triangles while a flip is valid and closes its cavity; the
+// host rebuilds the surroundings of those it left (Bowyer-Watson on the
+// particles around them), and the device flips again. Every decision is an
+// exact sign on the snapped positions shared with the device, so a tie is
+// the same tie everywhere.
 namespace tet_flips {
 
 namespace ep = exact_predicates;
@@ -38,7 +36,7 @@ struct Mesh {
 };
 
 struct Stats {
-    long long flips23 = 0, flips32 = 0, rebuilt = 0;  // flips (host and device) and local rebuilds
+    long long flips23 = 0, flips32 = 0, rebuilt = 0;  // device flips and local rebuilds
     int stuck = 0;                                    // entries finish() left
 };
 
@@ -314,71 +312,24 @@ inline bool fails(const Mesh& m, int t, int u) {
 
 }  // namespace detail
 
-// Restore the Delaunay property everywhere: flips first, local rebuilds for
-// what they cannot repair.
+// Rebuild the surroundings of every inverted tetrahedron and failing
+// triangle of m locally, in up to eight passes while rebuilds succeed (the
+// device repair has done every flip it could before, and flips what the
+// rebuilds leave).
 inline Stats repair(Mesh& m) {
     Stats stats;
-    std::deque<int> queue;
-    std::vector<char> queued(m.count, 0);
-    for (int t = 0; t < m.count; ++t)
-        if (m.alive(t)) {
-            queue.push_back(t);
-            queued[t] = 1;
-        }
-    auto push = [&](int t) {
-        if (t >= static_cast<int>(queued.size())) queued.resize(m.count, 0);
-        if (!queued[t]) {
-            queue.push_back(t);
-            queued[t] = 1;
-        }
-    };
-    long long budget = 50 * static_cast<long long>(m.count) + 1000;
-    std::vector<std::pair<int, int>> stuck;
-    for (int round = 0; round < 8; ++round) {
-        while (!queue.empty() && budget-- > 0) {
-            const int t = queue.front();
-            queue.pop_front();
-            queued[t] = 0;
+    for (long long pass = 0, before = -1; pass < 8 && stats.rebuilt > before; ++pass) {
+        before = stats.rebuilt;
+        for (int t = 0; t < m.count; ++t) {
             if (!m.alive(t)) continue;
-            const Tet T = detail::tet(m, t);
-            // Turned inside out: flips usually untangle it, else rebuild below.
-            if (ep::orient(m.point, T.data()) <= 0) stuck.emplace_back(t, -1);
-            for (int k = 0; k < 4; ++k) {
-                const int u = m.adjacent(t, k);
+            int u = -1;  // the failing triangle t|u, or t inverted
+            if (ep::orient(m.point, detail::tet(m, t).data()) > 0) {
+                for (int k = 0; k < 4 && u < 0; ++k)
+                    if (m.adjacent(t, k) >= 0 && detail::fails(m, t, m.adjacent(t, k))) u = m.adjacent(t, k);
                 if (u < 0) continue;
-                const auto p = tet_repair::detail::plan(m, m.point, t, k);
-                if (p.kind == p.none) continue;
-                if (p.kind < 0) {
-                    stuck.emplace_back(t, u);
-                    continue;
-                }
-                const std::vector<int> old(p.old, p.old + p.olds);
-                std::vector<Tet> fresh;
-                for (int r = 0; r < p.freshes; ++r) fresh.push_back({p.fresh[r][0], p.fresh[r][1], p.fresh[r][2], p.fresh[r][3]});
-                for (int s : detail::replace(m, old, fresh)) push(s);
-                ++(p.kind == p.flip23 ? stats.flips23 : stats.flips32);
-                break;
             }
+            stats.rebuilt += !detail::rebuild(m, t, u).empty();  // else stuck: the device lists it again
         }
-        // Triangles no flip could repair: rebuild their surroundings.
-        bool rebuilt = false;
-        for (auto [t, u] : stuck) {
-            if (!m.alive(t)) continue;
-            if (u < 0) {
-                if (ep::orient(m.point, detail::tet(m, t).data()) > 0) continue;
-            } else {
-                bool adjacent = false;
-                for (int k = 0; k < 4; ++k) adjacent |= m.adjacent(t, k) == u;
-                if (!m.alive(u) || !adjacent || !detail::fails(m, t, u)) continue;
-            }
-            const auto fresh = detail::rebuild(m, t, u);
-            if (fresh.empty()) continue;  // stays stuck: the device repair lists it again
-            ++stats.rebuilt;
-            rebuilt = true;
-            for (int s : fresh) push(s);
-        }
-        stuck.clear();
-        if (!rebuilt) break;
     }
     return stats;
 }
@@ -507,10 +458,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 if (it == local.end()) outside[detail::face_key(detail::tet(m, i), k)] = u;
             }
         }
-        const Stats stats = repair(m);
-        total.flips23 += stats.flips23;
-        total.flips32 += stats.flips32;
-        total.rebuilt += stats.rebuilt;
+        total.rebuilt += repair(m).rebuilt;
 
         // Changed and new tetrahedra back, with global numbers.
         const int added = m.count - size;
