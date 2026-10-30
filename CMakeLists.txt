@@ -25,10 +25,17 @@ endfunction()
 
 voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
 
-# The finite-volume hydro on the mesh (header-only).
+# The finite-volume hydro on the mesh (header-only); snapshots need HDF5.
 add_library(hydro_library INTERFACE)
 target_link_libraries(hydro_library INTERFACE voronoi_library)
 target_include_directories(hydro_library INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/hydro)
+find_package(HDF5 COMPONENTS C)
+if(HDF5_FOUND)
+    voronoi_program(hydro_sedov src/bench/hydro_sedov.cpp)
+    target_link_libraries(hydro_sedov PRIVATE hydro_library HDF5::HDF5)
+else()
+    message(STATUS "HDF5 not found: hydro_sedov is not built")
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
