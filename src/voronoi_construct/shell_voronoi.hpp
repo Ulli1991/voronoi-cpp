@@ -763,7 +763,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                             const double dy = positions(q, 1) + shift[1] * box - p.y;
                             const double dz = positions(q, 2) + shift[2] * box - p.z;
                             const double d2 = dx * dx + dy * dy + dz * dz;
-                            if (d2 >= reach2) continue;
+                            if (!(d2 < reach2)) continue;  // never a non-finite distance
                             if (buffered == ring_buffer) flush();
                             using Image = std::int8_t;
                             buffer[buffered++] = {d2, q, {Image(shift[0]), Image(shift[1]), Image(shift[2])}};

@@ -74,9 +74,13 @@ struct Timings {
 };
 
 // What update() does when the device repair leaves triangles it cannot
-// repair: repair the region around them on the host (tet_flips), or build
-// the mesh again from scratch on the device.
-enum class Fallback { host, rebuild };
+// repair: repair the region around them on the host (tet_flips), build the
+// mesh again from scratch on the device, or (cheapest) choose by the
+// number of stuck entries. Measured on an A100 at 2.1M cells: the host
+// takes about 2-5 ms for a handful of stuck triangles and 0.12 ms per
+// stuck entry beyond (20.8 s for the 178k of a wave lattice's first step),
+// a rebuild 0.17-0.25 s; so rebuild when more than n / 1000 are stuck.
+enum class Fallback { cheapest, host, rebuild };
 
 template <class ExecSpace = Kokkos::DefaultExecutionSpace>
 class Mesh {
@@ -112,7 +116,8 @@ public:
         report.stuck = device.stuck;
         phase(timings ? timings->repair : unused_);
         if (device.stuck > 0) {
-            if (fallback_ == Fallback::rebuild) {
+            if (fallback_ == Fallback::rebuild ||
+                (fallback_ == Fallback::cheapest && static_cast<long long>(device.stuck) * 1000 > n_)) {
                 Report rebuilt = rebuild(x, timings);
                 rebuilt.flips = report.flips;
                 rebuilt.rounds = report.rounds;
@@ -295,7 +300,7 @@ private:
     double box_;
     int n_ = 0;
     long long ring_entries_ = 0;  // ring pool size of the last start
-    Fallback fallback_ = Fallback::host;
+    Fallback fallback_ = Fallback::cheapest;
     bool cells_current_ = false;
     double unused_ = 0;
     tet_mesh::Points4<Memory> positions_;

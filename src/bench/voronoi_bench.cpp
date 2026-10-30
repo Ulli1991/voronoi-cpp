@@ -4,11 +4,12 @@
 //       Full rebuild by clipping. Variants thread, exact and warp, selected
 //       by substring. Every variant's cells are checked (support::check_cells,
 //       PASS/FAIL; brute force on a sample, seconds at 2.1M) unless --no-check.
-//   voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=rebuild]
+//   voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=host|rebuild]
 //       The persistent mesh (voronoi::Mesh): the start kernels (clipping
 //       with rings, from_rings, tet_start::build) and the mesh's start, then
 //       `steps` steps of the flow, `displacement` spacings each: device
-//       repair (screened), the fallback when stuck (host, or a rebuild),
+//       repair (screened), the fallback when stuck (host or rebuild,
+//       default: the cheaper one, voronoi::Fallback),
 //       circumcentres, face rings, faces and cells. --verify compares every
 //       step with an exact rebuild (support::compare_with_rebuild); --debug
 //       adds adjacency and stuck details.
@@ -207,7 +208,10 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
     Positions x = to_device(points);
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind
               << " displacement=" << displacement << " steps=" << steps
-              << " fallback=" << (fallback == voronoi::Fallback::host ? "host" : "rebuild") << "\n";
+              << " fallback=" << (fallback == voronoi::Fallback::host      ? "host"
+                                  : fallback == voronoi::Fallback::rebuild ? "rebuild"
+                                                                           : "cheapest")
+              << "\n";
 
     {
         // The start kernels: clipping with rings, from_rings, and the exact
@@ -284,10 +288,11 @@ int main(int argc, char** argv) {
         return rebuild(args, flag_value(argc, argv, "--width", 1.0), !has_flag(argc, argv, "--no-check")) != 0;
     if (args.size() >= 4 && args[0] == "step")
         return step(args, has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug"),
-                    has_flag(argc, argv, "--fallback=rebuild") ? voronoi::Fallback::rebuild : voronoi::Fallback::host) !=
-               0;
+                    has_flag(argc, argv, "--fallback=rebuild") ? voronoi::Fallback::rebuild
+                    : has_flag(argc, argv, "--fallback=host")  ? voronoi::Fallback::host
+                                                               : voronoi::Fallback::cheapest) != 0;
     std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
-                 "                          [--fallback=rebuild] [--memory]\n";
+                 "                          [--fallback=host|rebuild] [--memory]\n";
     return 2;
 }

@@ -2,6 +2,7 @@
 // off the snapping grid in a box of side 2:
 //   - the first update builds the mesh; later ones repair it, and after
 //     each the faces are those of an exact rebuild (neighbours, volumes);
+//     with Fallback::host the host finishes what the device repair cannot;
 //     with Fallback::rebuild a step the device repair cannot finish
 //     rebuilds and is exact too;
 //   - faces are stored once, owner < neighbour, and close every cell;
@@ -210,6 +211,7 @@ int main(int argc, char** argv) {
     }
     {  // the scratch memory between updates, then steps (host fallback) and a rebuild guard
         auto scratch = mesh.scratch(64 * static_cast<std::size_t>(n));
+        mesh.set_fallback(voronoi::Fallback::host);  // never a rebuild here
         Kokkos::deep_copy(scratch, char(7));
         const Flow flow;
         bool exact = true, repaired = true;
