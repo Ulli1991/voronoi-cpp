@@ -219,34 +219,50 @@ KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
 
 }  // namespace detail
 
-// Snapped positions and positive orientation of every tetrahedron; allocates
-// the bookkeeping for up to `capacity` tetrahedra (the mesh views are grown to it).
-template <class ExecSpace, class X>
-State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
-                                                const X& x,
-                                                tet_mesh::Mesh<typename ExecSpace::memory_space>& m, int capacity) {
-    using Memory = typename ExecSpace::memory_space;
-    State<Memory> s;
-    const int n = static_cast<int>(x.extent(0));
-    s.count = static_cast<int>(m.vertex.extent(0));
+// Room for `capacity` tetrahedra in the mesh and the per-tetrahedron state;
+// contents are kept, new slots are zero (not alive, not dirty).
+template <class MemorySpace>
+void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity) {
     Kokkos::resize(m.vertex, capacity);
     Kokkos::resize(m.adjacent, capacity);
     Kokkos::resize(m.centre, capacity);
     Kokkos::resize(m.edges, capacity);
+    Kokkos::resize(s.alive, capacity);
+    Kokkos::resize(s.touched, capacity);
+    Kokkos::resize(s.dirty, capacity);
+    Kokkos::resize(s.listed, capacity);
+    Kokkos::resize(s.lock, capacity);
+    Kokkos::resize(s.free_slots, capacity);
+}
+
+// Snapped positions and positive orientation of every tetrahedron; allocates
+// the bookkeeping for `capacity` tetrahedra (the mesh views are grown to it)
+// and `work_capacity` failing triangles per round and stuck entries. Repair
+// grows all of them when needed, and the list of created tetrahedra (a
+// quarter of the capacity at first) after a step it overflowed.
+template <class ExecSpace, class X>
+State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec,
+                                                const X& x,
+                                                tet_mesh::Mesh<typename ExecSpace::memory_space>& m, int capacity,
+                                                int work_capacity) {
+    using Memory = typename ExecSpace::memory_space;
+    State<Memory> s;
+    const int n = static_cast<int>(x.extent(0));
+    s.count = static_cast<int>(m.vertex.extent(0));
     s.point = ep::Points<Memory>("tet_repair_point", n);
-    s.alive = Kokkos::View<char*, Memory>("tet_repair_alive", capacity);
-    s.touched = Kokkos::View<char*, Memory>("tet_repair_touched", capacity);
-    s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", capacity);
-    s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", capacity);
-    s.lock = Kokkos::View<unsigned long long*, Memory>("tet_repair_lock", capacity);
-    s.free_slots = Kokkos::View<int*, Memory>("tet_repair_free", capacity);
-    const int work_capacity = capacity / 4 + 1024;
+    s.alive = Kokkos::View<char*, Memory>("tet_repair_alive", 0);  // sized by reserve
+    s.touched = Kokkos::View<char*, Memory>("tet_repair_touched", 0);
+    s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", 0);
+    s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", 0);
+    s.lock = Kokkos::View<unsigned long long*, Memory>("tet_repair_lock", 0);
+    s.free_slots = Kokkos::View<int*, Memory>("tet_repair_free", 0);
+    reserve(m, s, capacity);
     s.work = Kokkos::View<int* [2], Memory>("tet_repair_work", work_capacity);
     s.plans = Kokkos::View<detail::Plan*, Memory>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_repair_plans")), work_capacity);
     s.freed = Kokkos::View<int*, Memory>("tet_repair_freed", work_capacity);
     s.stuck = Kokkos::View<int* [2], Memory>("tet_repair_stuck", work_capacity);
-    s.touched_list = Kokkos::View<int*, Memory>("tet_repair_touched_list", work_capacity);
+    s.touched_list = Kokkos::View<int*, Memory>("tet_repair_touched_list", capacity / 4 + 1024);
     s.counters = Kokkos::View<int*, Memory>("tet_repair_counters", 9);
     s.host_counters = Kokkos::View<int*, Kokkos::SharedHostPinnedSpace>("tet_repair_host_counters", 9);
     detail::snap(exec, x, s.point);
@@ -345,27 +361,18 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
 // Flip until no dirty tetrahedron fails or no plan can proceed; what is left
 // is listed in s.stuck (stats.stuck entries).
 template <class ExecSpace>
-Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
+Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
              State<typename ExecSpace::memory_space>& s) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
-    const int capacity = static_cast<int>(s.alive.extent(0));
     Stats stats;
     auto work = s.work;
     auto plans = s.plans;
     const auto counters = s.counters;
     auto freed = s.freed;
-    const auto listed = s.listed;
     const auto& st = s;
     int work_capacity = static_cast<int>(work.extent(0));
     auto stuck = s.stuck;
-    const auto vertex = m.vertex;
-    const auto adjacent = m.adjacent;
     const auto point = s.point;
-    const auto alive = s.alive;
-    const auto dirty = s.dirty;
-    const auto lock = s.lock;
-    const auto free_slots = s.free_slots;
-    const auto edges = m.edges;
     const auto host = s.host_counters;
     auto read = [&] {  // one asynchronous copy into pinned memory, then wait
         Kokkos::deep_copy(exec, host, counters);
@@ -396,6 +403,16 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     long long flips_at_last_retry = -1;
 
     for (int round = 0; round < 1000; ++round) {
+        // The tetrahedra may have grown in the last round (reserve below).
+        const int capacity = static_cast<int>(s.alive.extent(0));
+        const auto listed = s.listed;
+        const auto vertex = m.vertex;
+        const auto adjacent = m.adjacent;
+        const auto alive = s.alive;
+        const auto dirty = s.dirty;
+        const auto lock = s.lock;
+        const auto free_slots = s.free_slots;
+        const auto edges = m.edges;
         // 1. Failing triangles among the listed dirty tetrahedra (each triangle
         // once: from the dirty side, or from the lower index when both are).
         clear(2);
@@ -509,6 +526,20 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                     for (int j = 0; j < 4 && won; ++j)
                         if (adjacent(o, j) >= 0) won = lock(adjacent(o, j)) == token + i + 1;
                 }
+                // Slots: reuse the old ones, then pop free slots or grow. A
+                // flip that finds no room retries next round, after the
+                // capacity has grown.
+                int slot[3];
+                for (int r = 0; r < p.freshes && won; ++r) {
+                    if (r < p.olds) {
+                        slot[r] = p.old[r];
+                    } else {
+                        const int popped = Kokkos::atomic_fetch_add(&counters(4), 1);
+                        slot[r] = popped < free_top ? free_slots(free_top - 1 - popped)
+                                                    : count + Kokkos::atomic_fetch_add(&counters(5), 1);
+                        won = slot[r] < capacity;
+                    }
+                }
                 if (!won) {
                     detail::mark(st, p.old[0]);  // retry next round
                     return;
@@ -551,17 +582,6 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
                     kept_edge[kept_edges][0] = p.fresh[0][0];
                     kept_edge[kept_edges][1] = p.fresh[0][1];
                     ++kept_edges;
-                }
-                // Slots: reuse the old ones, then pop free slots or grow.
-                int slot[3];
-                for (int r = 0; r < p.freshes; ++r) {
-                    if (r < p.olds) {
-                        slot[r] = p.old[r];
-                    } else {
-                        const int popped = Kokkos::atomic_fetch_add(&counters(4), 1);
-                        slot[r] = popped < free_top ? free_slots(free_top - 1 - popped)
-                                                    : count + Kokkos::atomic_fetch_add(&counters(5), 1);
-                    }
                 }
                 for (int r = p.freshes; r < p.olds; ++r) {
                     alive(p.old[r]) = 0;
@@ -633,8 +653,7 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         // Pops used, growth, and the slots freed this round onto the free list.
         const int popped = Kokkos::min(host(4), free_top);
         s.free_count = free_top - popped;
-        s.count = count + host(5);
-        if (s.count > capacity) Kokkos::abort("tet_repair: capacity exceeded");
+        s.count = Kokkos::min(count + host(5), capacity);
         const int freed_count = host(2);
         const int base = s.free_count;
         Kokkos::parallel_for(
@@ -643,9 +662,17 @@ Stats repair(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
         s.free_count += freed_count;
         stats.flips23 += host(6);
         stats.flips32 += host(7);
+        // Flips that found no slot retry next round with 1/8 more room.
+        if (count + host(5) > capacity) reserve(m, s, capacity + Kokkos::max(capacity / 8, count + host(5) - capacity));
     }
-    stats.stuck = Kokkos::min(host(1), static_cast<int>(stuck.extent(0)));
+    stats.stuck = Kokkos::min(host(1), static_cast<int>(s.stuck.extent(0)));
     s.touched_entries = host(8) <= static_cast<int>(s.touched_list.extent(0)) ? host(8) : -1;
+    // The created tetrahedra did not fit their list (this step updates all
+    // faces): room for 1/4 more next time.
+    if (s.touched_entries < 0) Kokkos::resize(s.touched_list, host(8) + host(8) / 4);
+    // Room for the tetrahedra a host fallback may add.
+    const int spare = s.count / 64 + 1024;
+    if (stats.stuck > 0 && s.count + spare > static_cast<int>(s.alive.extent(0))) reserve(m, s, s.count + spare);
     return stats;
 }
 

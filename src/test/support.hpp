@@ -452,14 +452,20 @@ struct MovingMesh {
     tet_mesh::Points4<Memory> padded;
     tet_start::Stats start;
 
+    // Capacities: 1/8 more than the starting mesh needs (ring pools 1/2
+    // more, room to append between compactions); the repair and the face
+    // rings grow them when a step needs more.
     explicit MovingMesh(const Positions& x) : n(static_cast<int>(x.extent(0))) {
         start = start_mesh(x, mesh);
-        const int capacity = 2 * static_cast<int>(mesh.vertex.extent(0));
-        state = tet_repair::prepare(exec, x, mesh, capacity);
-        const int face_capacity = 10 * n;
-        rings = tet_mesh::make_face_rings<Memory>(capacity, face_capacity, 8 * face_capacity);
-        geometry = {Kokkos::View<double* [3], Memory>("face_area", face_capacity),
-                    Kokkos::View<double* [3], Memory>("face_centroid", face_capacity),
+        const int tets = static_cast<int>(mesh.vertex.extent(0));
+        const int start_faces = static_cast<int>(mesh.owner.extent(0)), start_entries = static_cast<int>(mesh.ring.extent(0));
+        const int faces = start_faces + start_faces / 8;
+        // The first step walks every face, so the starting faces are not kept.
+        mesh.owner = mesh.neighbour = mesh.ring_start = mesh.ring_length = mesh.ring = {};
+        state = tet_repair::prepare(exec, x, mesh, tets + tets / 8, n / 4 + 1024);
+        rings = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, start_entries + start_entries / 2);
+        geometry = {Kokkos::View<double* [3], Memory>("face_area", faces),
+                    Kokkos::View<double* [3], Memory>("face_centroid", faces),
                     Kokkos::View<double*, Memory>("cell_volume", n)};
         padded = tet_mesh::Points4<Memory>("padded_positions", n);
     }
@@ -480,6 +486,10 @@ struct MovingMesh {
                                       : Kokkos::subview(state.touched_list, std::make_pair(0, state.touched_entries));
         tet_mesh::circumcentres(exec, padded, 1.0, mesh, state.count, created);
         const int faces = tet_mesh::update_face_rings(exec, mesh, state.count, state.touched, created, rings);
+        if (faces > static_cast<int>(geometry.area.extent(0))) {
+            Kokkos::realloc(Kokkos::WithoutInitializing, geometry.area, faces + faces / 8);
+            Kokkos::realloc(Kokkos::WithoutInitializing, geometry.centroid, faces + faces / 8);
+        }
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         Kokkos::deep_copy(exec, state.touched, 0);
         return faces;
