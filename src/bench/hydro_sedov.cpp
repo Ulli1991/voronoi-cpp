@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
     auto radius = [&](long long i) {
         double r2 = 0;
         for (int a = 0; a < 3; ++a) {
-            const double d = tet_mesh::wrap(positions(i, a) - centre, sedov.box);
+            const double d = tet_mesh::wrap(positions(i, a) - centre, sedov.box, 1.0 / sedov.box);
             r2 += d * d;
         }
         return std::sqrt(r2);
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
                 if (std::abs(W[0] / sedov.rho() - 1) <= 1e-6 && std::abs(W[4] / sedov.pressure() - 1) <= 1e-6) continue;
                 double r2 = 0;
                 for (int a = 0; a < 3; ++a) {
-                    const double d = tet_mesh::wrap(x(i, a) - (a == 0 ? cx : centre), sedov.box);
+                    const double d = tet_mesh::wrap(x(i, a) - (a == 0 ? cx : centre), sedov.box, 1.0 / sedov.box);
                     r2 += d * d;
                 }
                 disturbed = std::max(disturbed, std::sqrt(r2));
