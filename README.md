@@ -226,18 +226,19 @@ jittered points in Morton order, median of 40 steps:
 
 | | 2,097,152 cells | 16,777,216 cells |
 |---|---|---|
-| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | 38.3 ms (55 M cell updates/s) | 308 ms (55 M/s; per-cell loop over a whole run, job 31701234: 394 ms) |
+| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | 38.3 ms (55 M cell updates/s) | 308 ms (55 M/s) |
 | static mesh, MUSCL-Hancock HLLC, per-face loop | 18.7 ms (112 M/s) | 160 ms (105 M/s) |
 | static mesh, MUSCL-Hancock HLL, per-face loop | 18.0 ms (116 M/s) | 147 ms (114 M/s) |
 | static mesh, first order HLLC, per-cell loop | 7.3 ms (288 M/s) | 58 ms (290 M/s) |
 | device memory, mesh + hydro (static, per-face, second order) | 2370 B/cell | 2371 B/cell (41.2 GB in use) |
-| device memory, moving mesh + hydro (per-face) | 2418 B/cell | whole run: out of memory (job 31701027); per-cell loop fits |
+| device memory, moving mesh + hydro (per-face) | 2418 B/cell | 2419 B/cell (42.2 GB in use, whole run, job 31702077) |
 
 Sedov at 128^3 (job 31699863), HLLC: shock radius 0.978 of the
 Sedov-Taylor value at 1e4 yr, L1 density error 0.075 rho0 (first order:
 0.104); mass and energy conserved to 2e-16. On the moving mesh (jobs
 31700850-51): 354 steps instead of 1642, L1 density error 0.058 rho0, the
-same numbers with the whole box moving at 500 km/s. Details:
+same numbers with the whole box moving at 500 km/s; at 256^3 L1 0.034 in
+288 s of GPU time (job 31702077). Details:
 research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
 ## Limitations and open items

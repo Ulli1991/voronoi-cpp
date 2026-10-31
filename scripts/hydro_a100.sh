@@ -42,7 +42,8 @@ nvidia-smi -L
 ours() {
     module purge
     module load gcc/14 cuda/13.0 cmake hdf5-serial
-    "${HYDRO_BIN:-$build/hydro_sedov}" "$@" | grep -v "^  "
+    # Allocations at the memory peaks (lines "  <label> ...") only when DETAILS is set.
+    "${HYDRO_BIN:-$build/hydro_sedov}" "$@" | grep -v "${DETAILS:+^NEVER}${DETAILS:-^  }"
 }
 
 luna() {  # luna <nx> <order> <riemann solver> <run dir> [Config overrides]
@@ -148,10 +149,11 @@ elif [[ "$mode" == static256 || "$mode" == moving256full ]]; then
     ours 256 jittered $mesh --snapshots=1 --out="$out/voronoi256_$kind"
 elif [[ "$mode" == memory_compare ]]; then
     # Two builds of hydro_sedov in one job (BEFORE, AFTER: paths), moving
-    # 256^3 per-face, 100 steps, device memory per phase.
+    # 256^3 per-face, STEPS steps (default 100, 0: the whole run), device
+    # memory per phase.
     for variant in BEFORE AFTER; do
-        echo "== $variant ${!variant}: ours n=256^3 jittered moving per-face --steps=100"
-        HYDRO_BIN="${!variant}" ours 256 jittered --moving --update=face --steps=100 --memory
+        echo "== $variant ${!variant}: ours n=256^3 jittered moving per-face --steps=${STEPS:-100} (0: whole run)"
+        HYDRO_BIN="${!variant}" ours 256 jittered --moving --update=face --steps="${STEPS:-100}" --memory
     done
 elif [[ "$mode" == moving256face ]]; then
     echo "== ours 256^3 jittered moving per-face, whole run, final snapshot"
