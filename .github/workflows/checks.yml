@@ -16,7 +16,7 @@ jobs:
       ASAN_OPTIONS: 'detect_leaks=1'
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y clang-tidy ninja-build
+      - run: sudo apt-get update && sudo apt-get install -y clang-tidy ninja-build libhdf5-dev
       - name: Build host Kokkos
         run: |
           git clone --depth 1 --branch 5.0.2 https://github.com/kokkos/kokkos.git /tmp/kokkos
