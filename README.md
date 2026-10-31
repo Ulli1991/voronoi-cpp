@@ -1,7 +1,7 @@
 # voronoi-cpp
 
 Kokkos C++ library for exact 3D Voronoi meshes of moving particles in a
-periodic box on GPUs (CUDA, validated on an A100 40 GB; OpenMP and Serial
+periodic box (a cube or any three sides) on GPUs (CUDA, validated on an A100 40 GB; OpenMP and Serial
 builds run the same code for checks). It is the geometry base of a planned
 moving-mesh finite-volume hydro solver: the solver hands over particle
 positions and gets back faces (owner, neighbour, area vector, centroid),
@@ -66,8 +66,9 @@ inside a Slurm job; run GPU work through Slurm (`scripts/bench_a100.sh`).
 ```cpp
 #include "voronoi_mesh.hpp"
 
-voronoi::Mesh<> mesh(Kokkos::DefaultExecutionSpace{}, box);
-mesh.update(x);          // x(i, a): positions in [0, box), particle i = index i
+voronoi::Mesh<> mesh(Kokkos::DefaultExecutionSpace{}, box);   // a cube of side box, or
+// voronoi::Mesh<> mesh(exec, exact_predicates::Box(lx, ly, lz)); // any three sides
+mesh.update(x);          // x(i, a): positions in [0, side a), particle i = index i
 // ... move the particles ...
 voronoi::Report r = mesh.update(x);   // repairs the mesh; exact on return
 mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
@@ -80,8 +81,17 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 - Particles are the caller's indices; ties between cospherical particles
   are broken by them (symbolic perturbation), at the start and in every
   repair alike. A permuted input gives the permuted mesh.
-- Positions are snapped to the 2^30 grid of the exact predicates inside;
-  topology and geometry both come from the snapped positions.
+- Positions are snapped to the grid of the exact predicates inside, 2^30
+  steps across the longest side, the same step on every axis (so the
+  integer in-sphere test is the test of the snapped points); topology and
+  geometry both come from the snapped positions. A side that is not a
+  whole number of steps is rounded to one (relative change below 2^-31
+  longest / side; none for sides in power-of-two ratios such as
+  2 x 2 x 1/16); `sides()` gives the box used (`box()` is a cube's side).
+- Every cell must be certified within one periodic image: a cell's radius
+  must stay below about 3/16 of the shortest side (in practice about 8 or
+  more particles across it; a slab of 16 cells is fine). Otherwise
+  `update()` throws, saying so.
 - `update()` repairs (the first call, or a change of n, builds); exact on
   return. When the device repair leaves stuck triangles it finishes on
   the host or rebuilds on the device, whichever is cheaper
@@ -102,8 +112,8 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 
 | Header | Job |
 |---|---|
-| `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
-| `exact_predicates.hpp` | snapping (`snap(x, box)`), exact orientation and in-sphere signs (filtered double, then 128/256-bit integers), symbolic perturbation by particle id |
+| `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid (per tile: the box is cut into near-cubes of its shortest side, numbered row-major above the Morton key), a grid level per particle fitted to the local density |
+| `exact_predicates.hpp` | the periodic `Box` and snapping (`snap(x, box, axis)`), exact orientation and in-sphere signs (filtered double, then 128/256-bit integers), symbolic perturbation by particle id |
 | `shell_voronoi.hpp` | clipping, thread per cell: the walk, `Cells` output (owned faces or face rings in pools), rounded and exact cells |
 | `shell_voronoi_warp.hpp` | clipping, warp per cell on CUDA (`construct_warp`), with faces or face rings |
 | `tet_mesh.hpp` | persistent tetrahedra: `from_rings`, circumcentres, face rings kept in place, faces, per-cell face lists |
@@ -181,6 +191,16 @@ step, 0.3 a very large one (more flips per step, lower throughput).
 Device memory: plain warp rebuild 701 B/cell (656 at 256^3); peak during
 start and steps, with face lists, 2221 B/cell (2200 at 256^3, 37.9 GB in use).
 
+Non-cubic: a Kelvin-Helmholtz-like slab (Lx = Ly = 2, Lz = 16 spacings,
+`--box=2,2,0.0625`, 512 x 512 x 16 = 4.2M, and `--box=2,2,0.03125`,
+1024 x 1024 x 16 = 16.8M; job 31702953) rebuilds at the cube's rate:
+warp rebuild jittered 39.9 / 39.9 M cells/s, uniform 19.9 / 20.0 M
+cells/s; exact start 0.36 / 1.40 s; steps at 0.03 spacings 39.9 / 155 ms
+(the bench flow, stretched with the box, shears across the 16-cell
+thickness: 4x the flips per cell of the cube); peak 2192 B/cell at 16.8M
+(research_notes/box3_2026-10-31.md). The cubic case is bit-identical to
+the cubic-only code and within 0.3-0.7 % of its rebuild speed.
+
 Steps are medians of steps 2-10 on jittered points moved by a smooth flow;
 the step at 256^3 moves particles by the same number of spacings, but the
 flow varies on the box scale, so neighbours shear half as much per step
@@ -201,8 +221,8 @@ what PASS means are in [TESTING.md](TESTING.md).
 | `exact_predicates` | signs equal an independent integer evaluation; ties consistent; nearest periodic image; snapping for any box |
 | `clipping` | cells certified, closing, consistent and on the bisectors (brute force); thread, warp and exact kernels agree; pools grow; NaN/infinite particles never cut |
 | `mesh` | `from_rings` against a host construction; adjacency, edge representatives, exact check, volumes from rings; exact sliver centres |
-| `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and boxes of side 1, 2, 3 |
-| `repair` | after every step of a flow the mesh equals an exact rebuild (lattice, wave, shells, jittered, box 2) |
+| `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and boxes of side 1, 2, 3, a 1:1:0.125 slab and a 1:2:3 box |
+| `repair` | after every step of a flow the mesh equals an exact rebuild (lattice, wave, shells, jittered; box 2, a 1:2:3 box, a 1:1:0.125 slab) |
 | `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
 | `hydro` | HLLC and HLL against reference fluxes and under rotation; uniform states stay uniform, conservation to rounding, bit-identical runs, the two update loops agree to rounding on jittered and uniform meshes; moving mesh: uniform state with a bulk velocity, conservation, Galilean invariance of a moving blast |
 
@@ -215,9 +235,14 @@ sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A
 `voronoi_bench` (`src/bench/`) times the pipeline and checks it at scale:
 
 ```text
-voronoi_bench rebuild <n> <distribution> [variants=thread,exact,warp] [repeats=5] [--width=f] [--no-check] [--memory]
-voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=host|rebuild] [--memory]
+voronoi_bench rebuild <n> <distribution> [variants=thread,exact,warp] [repeats=5] [--width=f] [--no-check] [--memory] [--box=Lx,Ly,Lz]
+voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=host|rebuild] [--memory] [--box=Lx,Ly,Lz]
 ```
+
+`--box` (default 1,1,1) sets the periodic box; lattices get about equal
+spacings along every axis (`--box=2,2,0.0625` with 4194304 jittered
+points is a 512 x 512 x 16 slab), the other distributions stretch with
+the box.
 
 Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`.
@@ -276,7 +301,8 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
   (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU) and repair limited to active regions are not
   implemented; `update()` takes an `active` list for later.
-- Periodic box only.
+- Periodic boxes only (any three sides; see the certification limit
+  above for thin slabs).
 
 ## Repository layout
 

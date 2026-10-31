@@ -2,8 +2,13 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <string>
+
 // Exact geometric predicates on positions snapped to a grid of 2^30 steps
-// across the periodic box, for host and device.
+// across the longest side of the periodic box, for host and device.
 //
 // Differences are exact integers (wrapped to the nearest periodic image).
 // Each predicate first evaluates its determinant in double together with a
@@ -28,20 +33,63 @@ struct Offset {
     KOKKOS_INLINE_FUNCTION const i64& operator[](int a) const { return v[a]; }
 };
 
-constexpr i64 period = i64(1) << 30;  // grid steps across the box
+constexpr i64 period = i64(1) << 30;  // grid steps across the (longest) side
 
-// The grid step of coordinate x in a periodic box of side `box`, in
-// [0, 2^30): the one definition of "on the grid" every caller uses.
+// A periodic box [0, side[0]) x [0, side[1]) x [0, side[2]). One grid step,
+// the longest side / 2^30, serves every axis, and each side is a whole
+// number period[a] of steps: the grid is isotropic, so the integer in-sphere
+// test is the in-sphere test of the snapped points themselves. (Per-axis
+// steps, 2^30 on every side, would stretch the axes differently, and the
+// in-sphere test on the stretched integers would not be the one of the
+// points.) A side that is not a whole number of steps is rounded to one
+// (relative change below 2^-31 longest / side; none for sides in ratios of
+// powers of two, e.g. 2 x 2 x 1/16); side[] holds the rounded sides. A cubic
+// box is 2^30 steps on every axis, as before.
+struct Box {
+    double side[3] = {1, 1, 1};
+    double inverse[3] = {1, 1, 1};  // 1 / side
+    double step = 1 / scale;
+    i64 period[3] = {exact_predicates::period, exact_predicates::period, exact_predicates::period};
+
+    Box() = default;
+    Box(double cube) : Box(cube, cube, cube) {}  // NOLINT: a cube converts implicitly
+    Box(double x, double y, double z) {
+        const double given[3] = {x, y, z}, longest = std::max({x, y, z});
+        if (!(x > 0 && y > 0 && z > 0) || !std::isfinite(longest))
+            throw std::invalid_argument("exact_predicates::Box: sides must be positive and finite");
+        step = longest / scale;
+        for (int a = 0; a < 3; ++a) {
+            period[a] = std::max(std::llround(given[a] / step), 2LL);
+            side[a] = given[a] == longest ? longest : static_cast<double>(period[a]) * step;
+            inverse[a] = 1.0 / side[a];
+        }
+    }
+    bool cubic() const { return side[0] == side[1] && side[1] == side[2]; }
+    double shortest() const { return std::min({side[0], side[1], side[2]}); }
+    double volume() const { return side[0] * side[1] * side[2]; }
+};
+
+// The grid step of coordinate x along `axis` of `box`, in [0, period[axis]):
+// the one definition of "on the grid" every caller uses. In a cube, x / step
+// is x / side * 2^30 to the bit (scaling by 2^30 is exact).
+KOKKOS_INLINE_FUNCTION int snap(double x, const Box& box, int axis) {
+    const i64 s = static_cast<i64>(Kokkos::floor(x / box.step)), steps = box.period[axis];
+    if ((steps & (steps - 1)) == 0) return static_cast<int>(s & (steps - 1));  // a power of two
+    const i64 r = s % steps;
+    return static_cast<int>(r < 0 ? r + steps : r);
+}
+// In a cube of side `box`, in [0, 2^30).
 KOKKOS_INLINE_FUNCTION int snap(double x, double box) {
     return static_cast<int>(static_cast<i64>(Kokkos::floor(x / box * scale)) & (period - 1));
 }
 
-// b - a on the periodic grid, to the nearest image; a and b are snapped
-// coordinates in [0, 2^30), so one shift suffices (no 64-bit modulo).
-KOKKOS_INLINE_FUNCTION i64 delta(i64 a, i64 b) {
+// b - a on the periodic grid of `steps` per side, to the nearest image; a
+// and b are snapped coordinates in [0, steps), so one shift suffices (no
+// 64-bit modulo).
+KOKKOS_INLINE_FUNCTION i64 delta(i64 a, i64 b, i64 steps = period) {
     i64 d = b - a;
-    if (d >= period / 2) d -= period;
-    if (d < -period / 2) d += period;
+    if (d >= steps / 2) d -= steps;
+    if (d < -steps / 2) d += steps;
     return d;
 }
 
@@ -194,25 +242,41 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
     return d * o < 0;
 }
 
-// Snapped particle positions, point(i, a) for a < 3, in [0, 2^30) so 32
-// bits hold them exactly; padded to 16 bytes (one aligned load per point).
+// Snapped particle positions, point(i, a) for a < 3, in [0, period[a]) so
+// 32 bits hold them exactly; padded to 16 bytes (one aligned load per
+// point). The periods are the box's (a unit cube unless given).
 template <class MemorySpace>
-using Points = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
+struct Points {
+    using View = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
+    View view;
+    i64 period[3] = {exact_predicates::period, exact_predicates::period, exact_predicates::period};
 
-// point(i) = the snapped x(i) for positions x in a box of side `box`.
+    Points() = default;
+    Points(const std::string& label, std::size_t n, const Box& box = {}) : view(label, n) { periods(box.period); }
+    Points(const View& v, const i64* steps) : view(v) { periods(steps); }
+    KOKKOS_INLINE_FUNCTION int& operator()(int i, int a) const { return view(i, a); }
+    KOKKOS_INLINE_FUNCTION std::size_t extent(int r) const { return view.extent(r); }
+
+private:
+    void periods(const i64* steps) {
+        for (int a = 0; a < 3; ++a) period[a] = steps[a];
+    }
+};
+
+// point(i) = the snapped x(i) for positions x in `box` (point's box).
 template <class ExecSpace, class X>
-void snap(const ExecSpace& exec, const X& x, double box, const Points<typename ExecSpace::memory_space>& point) {
+void snap(const ExecSpace& exec, const X& x, const Box& box, const Points<typename ExecSpace::memory_space>& point) {
     Kokkos::parallel_for(
         "exact_predicates::snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) point(i, a) = snap(x(i, a), box);
+            for (int a = 0; a < 3; ++a) point(i, a) = snap(x(i, a), box, a);
         });
 }
 
 // The predicates on particles, by index into snapped positions.
 template <class P>
 KOKKOS_INLINE_FUNCTION Offset offset(const P& point, int from, int to) {
-    return {delta(point(from, 0), point(to, 0)), delta(point(from, 1), point(to, 1)),
-            delta(point(from, 2), point(to, 2))};
+    return {delta(point(from, 0), point(to, 0), point.period[0]), delta(point(from, 1), point(to, 1), point.period[1]),
+            delta(point(from, 2), point(to, 2), point.period[2])};
 }
 
 // Orientation sign of tetrahedron v.

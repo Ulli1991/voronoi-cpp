@@ -6,6 +6,7 @@
 #include "exact_predicates.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <string>
 
@@ -62,6 +63,41 @@ int main(int argc, char** argv) {
                  "snap wraps positions on or just outside the box edge");
     check.expect(ep::delta(0, period - 1) == -1 && ep::delta(period - 1, 0) == 1 && ep::delta(5, 9) == 4,
                  "delta takes the nearest periodic image");
+
+    // Boxes of three sides: one step for every axis (the longest side /
+    // 2^30), each side a whole number of steps; a cube is 2^30 per side and
+    // snaps as before.
+    {
+        const ep::Box slab(2, 2, 0.0625), odd(1, 2, 3), cube(3.0);
+        check.expect(slab.period[0] == period && slab.period[2] == period / 32 && slab.side[2] == 0.0625 &&
+                         slab.step == 2 / ep::scale,
+                     "a 2 x 2 x 1/16 slab: 2^30, 2^30, 2^25 steps of one length, sides exact");
+        check.expect(odd.period[0] == 357913941 && odd.period[1] == 715827883 && odd.period[2] == period &&
+                         std::abs(odd.side[0] - 1) < 2e-9 && odd.side[2] == 3 && odd.step == 3 / ep::scale,
+                     "a 1 x 2 x 3 box: sides rounded to whole steps of 3 / 2^30");
+        bool same = cube.cubic() && !odd.cubic();
+        std::uniform_real_distribution<double> in_cube(-0.1, 3.1);
+        for (int i = 0; i < 10000; ++i) {
+            const double x = in_cube(rng);
+            for (int a = 0; a < 3; ++a) same = same && ep::snap(x, cube, a) == ep::snap(x, 3.0);
+        }
+        check.expect(same, "a cubic Box snaps as the cube's snap");
+        bool wraps = true;
+        for (int a = 0; a < 3; ++a) {
+            const ep::i64 p = odd.period[a];
+            wraps = wraps && ep::snap(odd.side[a], odd, a) == 0 && ep::snap(-0.5 * odd.step, odd, a) == p - 1 &&
+                    ep::snap(5.5 * odd.step, odd, a) == 5 && ep::snap(odd.side[a] + 5.5 * odd.step, odd, a) == 5 &&
+                    ep::delta(0, p - 1, p) == -1 && ep::delta(p - 1, 0, p) == 1;
+        }
+        check.expect(wraps, "per axis: snap wraps at the (rounded) side, delta at its period");
+        bool exact = true;
+        for (int i = 0; i < 10000; ++i)
+            for (int a = 0; a < 3; ++a) {
+                const int k = static_cast<int>(rng() % odd.period[a]);
+                exact = exact && ep::snap(k * odd.step, odd, a) == k;
+            }
+        check.expect(exact, "a 1 x 2 x 3 box: grid positions snap to themselves");
+    }
 
     // Orientation equals the exact determinant's sign, also for nearly
     // coplanar points with large coordinates where the double filter cannot
@@ -162,6 +198,23 @@ int main(int argc, char** argv) {
         check.expect(ep::orient(point, tet) == 1 && ep::orient(point, flipped) == -1,
                      "orient on particles across the periodic boundary");
         check.expect(ep::in_sphere(point, tet, 4), "in_sphere on particles across the periodic boundary");
+
+        // The same across the thin side of a slab (z period 2^25 steps): the
+        // points with the axes rolled (y, z, x), x across the boundary as z;
+        // the same signs as the copy shifted by half the slab, inside it.
+        const ep::Box slab(2, 2, 0.0625);
+        ep::Points<Kokkos::HostSpace> thin("thin", 5, slab), inside("inside", 5, slab);
+        for (int i = 0; i < 5; ++i) {
+            const double z = x[i][0] < 0.5 ? x[i][0] : slab.side[2] - (1 - x[i][0]);
+            const double q[3] = {1.0 + x[i][1] - 0.5, 1.0 + x[i][2] - 0.5, z};
+            for (int a = 0; a < 3; ++a) {
+                thin(i, a) = ep::snap(q[a], slab, a);
+                inside(i, a) = ep::snap(a == 2 ? std::fmod(q[a] + 0.5 * slab.side[2], slab.side[2]) : q[a], slab, a);
+            }
+        }
+        check.expect(ep::orient(thin, tet) == 1 && ep::orient(inside, tet) == 1 && ep::in_sphere(thin, tet, 4) &&
+                         ep::in_sphere(inside, tet, 4),
+                     "orient and in_sphere across the thin side of a slab (nearest image per axis)");
     }
     return check.failed() != 0;
 }

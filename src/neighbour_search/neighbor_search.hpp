@@ -1,5 +1,7 @@
 #pragma once
 
+#include "exact_predicates.hpp"
+
 #include <Kokkos_Core.hpp>
 
 #include <algorithm>
@@ -13,12 +15,18 @@
 #include <cub/device/device_radix_sort.cuh>
 #endif
 
-// Particles of the periodic cube [0, box)^3 sorted along a Morton curve: an
-// implicit octree in which every node, from the whole box down to cells
-// 2^-(levels + fine_levels) box wide, owns a contiguous range of slots.
+// Particles of a periodic box sorted along a Morton curve: an implicit
+// octree in which every node, from a tile down to cells 2^-(levels +
+// fine_levels) tiles wide, owns a contiguous range of slots.
+//
+// Tiles: the box is cut into tiles[0] x tiles[1] x tiles[2] near-cubes of
+// about its shortest side (one tile, the box itself, for a cube), numbered
+// in row-major order; each is the root of an octree, and a cell number is
+// the tile's number above the Morton number inside it. So unequal sides
+// need no padding to a cube (a 2 x 2 x 1/16 slab is 32 x 32 x 1 tiles).
 //
 // Slot q holds particle order(q) at positions(q). The base grid (2^levels
-// cells per side, cells numbered in Morton order) has a dense offset table:
+// cells per tile side, cells numbered as above) has a dense offset table:
 // base cell c owns the slots [cell_offsets(c), cell_offsets(c + 1)), and so a
 // block of 8^k base cells at a coarser level owns a contiguous range too.
 // Below the base grid, the slots of a base cell are sorted by fine(q), the
@@ -42,8 +50,9 @@ struct CellList {
     using memory_space = typename ExecSpace::memory_space;
 
     int n = 0;
-    int levels = 2;  // the base grid has 2^levels cells per side
-    double box = 1.0;
+    int levels = 2;  // the base grid has 2^levels cells per tile side
+    exact_predicates::Box box;
+    int tiles[3] = {1, 1, 1};
 
     Kokkos::View<int*, memory_space> order, cell_offsets;
     Kokkos::View<double* [3], memory_space> positions;
@@ -51,8 +60,7 @@ struct CellList {
     Kokkos::View<std::uint8_t*, memory_space> level;
     Kokkos::View<char*, memory_space> sort_scratch;  // radix sort temporary storage (CUDA)
 
-    int cells_per_side() const { return 1 << levels; }
-    int cell_count() const { return 1 << (3 * levels); }
+    int cell_count() const { return tiles[0] * tiles[1] * tiles[2] << (3 * levels); }
 };
 
 // Morton interleaving: bit k of x goes to bit 3k + 2, of y to 3k + 1, of z to 3k.
@@ -81,8 +89,9 @@ KOKKOS_INLINE_FUNCTION std::uint32_t morton_short(std::uint32_t x, std::uint32_t
     return spread3_short(x) << 2 | spread3_short(y) << 1 | spread3_short(z);
 }
 
-// Integer coordinate of x on a grid of `side` cells over [0, box). Every user
-// computes it this way, so a particle's node never depends on who asks.
+// Integer coordinate of x on a grid of `side` cells over [0, box) (one
+// axis). Every user computes it this way, so a particle's node never
+// depends on who asks.
 KOKKOS_INLINE_FUNCTION int grid_coordinate(double x, double box, int side) {
     return Kokkos::clamp(static_cast<int>(x / box * side), 0, side - 1);
 }
@@ -124,14 +133,40 @@ inline SortBuffers sort_buffers(double* storage, int n) {
 
 }  // namespace detail
 
-// Size the base grid (2^levels cells per side, the power of two nearest to
-// box / cell_width) and the buffers. Call again whenever n, the box or the
-// width changes; unchanged buffers are kept.
+// Bits of the numbers 0 .. count - 1.
+inline int bits(long long count) {
+    int b = 0;
+    while ((1LL << b) < count) ++b;
+    return b;
+}
+
+// Bits of a particle's key: its tile, then its Morton key inside the tile.
 template <class ExecSpace>
-void configure(CellList<ExecSpace>& s, int n, double box, double cell_width) {
+int key_bits(const CellList<ExecSpace>& s) {
+    return bits(static_cast<long long>(s.tiles[0]) * s.tiles[1] * s.tiles[2]) + 3 * (s.levels + fine_levels);
+}
+
+// Size the tiles, the base grid (2^levels cells per tile side, the power of
+// two nearest to tile / cell_width) and the buffers. Call again whenever n,
+// the box or the width changes; unchanged buffers are kept. Levels are
+// capped so that keys fit 64 bits and cell numbers an int.
+template <class ExecSpace>
+void configure(CellList<ExecSpace>& s, int n, const exact_predicates::Box& box, double cell_width) {
     s.n = n;
     s.box = box;
-    s.levels = std::clamp(static_cast<int>(std::lround(std::log2(box / cell_width))), 2, max_levels);
+    const double shortest = box.shortest();
+    long long tiles = 1;
+    int most = max_levels;
+    for (int a = 0; a < 3; ++a) {
+        s.tiles[a] = static_cast<int>(std::max(1LL, std::llround(box.side[a] / shortest)));
+        tiles *= s.tiles[a];
+        most = std::min(most, 30 - bits(s.tiles[a]) - fine_levels);  // grid coordinates fit an int
+    }
+    most = std::min({most, (64 - bits(tiles)) / 3 - fine_levels, (30 - bits(tiles)) / 3});
+    if (most < 2)
+        throw std::invalid_argument("neighbor_search::configure: box too elongated (" + std::to_string(tiles) +
+                                    " tiles of its shortest side)");
+    s.levels = std::clamp(static_cast<int>(std::lround(std::log2(shortest / cell_width))), 2, most);
     detail::ensure(s.order, "particle_order", n);
     detail::ensure(s.cell_offsets, "cell_offsets", s.cell_count() + 1);
     detail::ensure(s.positions, "slot_positions", n);
@@ -143,7 +178,7 @@ void configure(CellList<ExecSpace>& s, int n, double box, double cell_width) {
         const auto b = detail::sort_buffers(nullptr, n);
         cub::DoubleBuffer<std::uint64_t> keys(b.keys[0], b.keys[1]);
         cub::DoubleBuffer<int> ids(b.ids[0], b.ids[1]);
-        cub::DeviceRadixSort::SortPairs(nullptr, bytes, keys, ids, n, 0, 3 * (s.levels + fine_levels));
+        cub::DeviceRadixSort::SortPairs(nullptr, bytes, keys, ids, n, 0, key_bits(s));
         detail::ensure(s.sort_scratch, "cell_list_sort_scratch", bytes);
     }
 #endif
@@ -154,7 +189,8 @@ void configure(CellList<ExecSpace>& s, int n, double box, double cell_width) {
 template <class ExecSpace, class InPositions>
 void build(const ExecSpace& exec, const CellList<ExecSpace>& s, const InPositions& in_positions) {
     const int n = s.n, cells = s.cell_count(), base = s.levels, depth = s.levels + fine_levels;
-    const double box = s.box;
+    const exact_predicates::Box box = s.box;
+    const int tx = s.tiles[0], ty = s.tiles[1], tz = s.tiles[2];
     const auto order = s.order;
     const auto cell_offsets = s.cell_offsets;
     const auto positions = s.positions;
@@ -164,9 +200,15 @@ void build(const ExecSpace& exec, const CellList<ExecSpace>& s, const InPosition
     using Range = Kokkos::RangePolicy<ExecSpace>;
 
     Kokkos::parallel_for("cell_list::keys", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
-        int c[3];
-        for (int a = 0; a < 3; ++a) c[a] = grid_coordinate(in_positions(i, a), box, 1 << depth);
-        b.keys[0][i] = morton(c[0], c[1], c[2]);
+        const int tiles[3] = {tx, ty, tz};
+        int c[3], tile[3];
+        for (int a = 0; a < 3; ++a) {
+            const int g = grid_coordinate(in_positions(i, a), box.side[a], tiles[a] << depth);
+            tile[a] = g >> depth;
+            c[a] = g & ((1 << depth) - 1);
+        }
+        const std::uint64_t t = (static_cast<std::uint64_t>(tile[0]) * ty + tile[1]) * tz + tile[2];
+        b.keys[0][i] = t << (3 * depth) | morton(c[0], c[1], c[2]);
         b.ids[0][i] = i;
     });
     // Stable by key, so equal keys keep the particle-ID order.
@@ -176,7 +218,7 @@ void build(const ExecSpace& exec, const CellList<ExecSpace>& s, const InPosition
         cub::DoubleBuffer<std::uint64_t> keys(b.keys[0], b.keys[1]);
         cub::DoubleBuffer<int> ids(b.ids[0], b.ids[1]);
         std::size_t bytes = s.sort_scratch.extent(0);
-        cub::DeviceRadixSort::SortPairs(s.sort_scratch.data(), bytes, keys, ids, n, 0, 3 * depth, exec.cuda_stream());
+        cub::DeviceRadixSort::SortPairs(s.sort_scratch.data(), bytes, keys, ids, n, 0, key_bits(s), exec.cuda_stream());
         sorted = keys.selector;
     } else
 #endif

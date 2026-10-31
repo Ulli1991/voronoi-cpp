@@ -29,6 +29,22 @@ using Point = std::array<double, 3>;
 using Points = std::vector<Point>;
 using Positions = Kokkos::View<double* [3], Memory>;
 using NeighbourSets = std::vector<std::vector<int>>;
+using Box = exact_predicates::Box;
+// Sides relative to the longest, (1, 1, 1) for a cube: lattices get about
+// equal spacings along every axis.
+using Shape = std::array<double, 3>;
+inline Shape shape(const Box& box) {
+    const double longest = std::max({box.side[0], box.side[1], box.side[2]});
+    return {box.side[0] / longest, box.side[1] / longest, box.side[2] / longest};
+}
+// Lattice cells along each axis for about `cells` cells of equal spacing in
+// a box of shape s (at least `fewest` per axis).
+inline std::array<int, 3> lattice_sides(double cells, const Shape& s, int fewest) {
+    const double per_unit = std::cbrt(cells / (s[0] * s[1] * s[2]));
+    return {std::max(fewest, static_cast<int>(std::lround(per_unit * s[0]))),
+            std::max(fewest, static_cast<int>(std::lround(per_unit * s[1]))),
+            std::max(fewest, static_cast<int>(std::lround(per_unit * s[2])))};
+}
 
 inline double wrap(double x) { return x - std::floor(x); }
 
@@ -41,7 +57,14 @@ inline void to_grid(Points& points) {
     for (auto& p : points)
         for (double& x : p) x = std::floor(x * exact_predicates::scale) / exact_predicates::scale;
 }
-inline double nearest_image(double d) { return d - std::nearbyint(d); }
+inline double nearest_image(double d, double side = 1.0) { return d - side * std::nearbyint(d / side); }
+
+// The same on the grid of a box (exact_predicates::snap): what voronoi::Mesh
+// computes from them.
+inline void to_grid(Points& points, const Box& box) {
+    for (auto& p : points)
+        for (int a = 0; a < 3; ++a) p[a] = exact_predicates::snap(p[a], box, a) * box.step;
+}
 
 template <class View>
 auto to_host(const View& v) {
@@ -55,16 +78,17 @@ auto to_host(const View& v) {
 //                 so 12 cells meet at each shell centre
 //   planes        random points on exactly spaced planes
 //   pairs         random points, each with a twin `perturbation` away
-inline Points make_degenerate(const std::string& layout, double perturbation, int n) {
+inline Points make_degenerate(const std::string& layout, double perturbation, int n, const Shape& shape = {1, 1, 1}) {
     std::mt19937_64 rng(20261029);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     Points points;
     auto basis_lattice = [&](const Points& basis) {
-        const int side = std::max(3, static_cast<int>(std::lround(std::cbrt(double(n) / basis.size()))));
-        for (int i = 0; i < side; ++i)
-            for (int j = 0; j < side; ++j)
-                for (int k = 0; k < side; ++k)
-                    for (const auto& b : basis) points.push_back({(i + b[0]) / side, (j + b[1]) / side, (k + b[2]) / side});
+        const auto side = lattice_sides(double(n) / basis.size(), shape, 3);
+        for (int i = 0; i < side[0]; ++i)
+            for (int j = 0; j < side[1]; ++j)
+                for (int k = 0; k < side[2]; ++k)
+                    for (const auto& b : basis)
+                        points.push_back({(i + b[0]) / side[0], (j + b[1]) / side[1], (k + b[2]) / side[2]});
     };
     if (layout == "sc") {
         basis_lattice({{0.5, 0.5, 0.5}});
@@ -83,49 +107,55 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
             }
         basis_lattice(basis);
     } else if (layout == "planes") {
-        const int layers = std::max(3, static_cast<int>(std::lround(std::cbrt(n))));
+        const int layers = lattice_sides(n, shape, 3)[2];
         for (int i = 0; i < n; ++i) points.push_back({unit(rng), unit(rng), (i % layers + 0.5) / layers});
     } else if (layout == "pairs") {
-        const double spacing = std::cbrt(2.0 / n);
+        const double spacing = std::cbrt(2.0 * shape[0] * shape[1] * shape[2] / n);
         std::uniform_real_distribution<double> direction(-1.0, 1.0);
         for (int i = 0; i < n / 2; ++i) {
             const Point a{unit(rng), unit(rng), unit(rng)};
             points.push_back(a);
-            points.push_back({wrap(a[0] + perturbation * spacing * direction(rng)),
-                              wrap(a[1] + perturbation * spacing * direction(rng)),
-                              wrap(a[2] + perturbation * spacing * direction(rng))});
+            points.push_back({wrap(a[0] + perturbation * spacing / shape[0] * direction(rng)),
+                              wrap(a[1] + perturbation * spacing / shape[1] * direction(rng)),
+                              wrap(a[2] + perturbation * spacing / shape[2] * direction(rng))});
         }
         return points;
     } else {
         throw std::invalid_argument("unknown degenerate layout " + layout);
     }
-    const double spacing = std::cbrt(1.0 / points.size());
+    const double spacing = std::cbrt(shape[0] * shape[1] * shape[2] / points.size());
     std::uniform_real_distribution<double> shift(-perturbation * spacing, perturbation * spacing);
     if (perturbation > 0)
         for (auto& p : points)
-            for (double& x : p) x = wrap(x + shift(rng));
+            for (int a = 0; a < 3; ++a) p[a] = wrap(p[a] + shift(rng) / shape[a]);
     return points;
 }
 
 // Points in the unit box: uniform, jittered (lattice moved by up to 0.1
 // spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, halo,
-// or a degenerate layout. Lattices round n to a cube.
-inline Points make_points_off_grid(const std::string& kind, int n) {
+// or a degenerate layout. Lattices round n to a cube, or with `shape` to a
+// lattice of about equal spacings once scaled to a box of that shape.
+inline Points make_points_off_grid(const std::string& kind, int n, const Shape& shape = {1, 1, 1}) {
     if (const auto at = kind.find('@'); at != std::string::npos)
-        return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n);
+        return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n, shape);
     std::mt19937_64 rng(20261029);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     Points points;
     if (kind == "jittered" || kind == "lattice" || kind == "wave") {
-        const int side = static_cast<int>(std::lround(std::cbrt(n)));
-        const double spacing = 1.0 / side;
-        const double jitter = kind == "lattice" ? 0.0 : kind == "wave" ? 1e-5 * spacing : 0.1 * spacing;
-        std::uniform_real_distribution<double> shift(-jitter, jitter);
-        for (int i = 0; i < side; ++i)
-            for (int j = 0; j < side; ++j)
-                for (int k = 0; k < side; ++k)
-                    points.push_back({wrap((i + 0.5) * spacing + shift(rng)), wrap((j + 0.5) * spacing + shift(rng)),
-                                      wrap((k + 0.5) * spacing + shift(rng))});
+        const auto side = lattice_sides(n, shape, 1);
+        const double jitter = kind == "lattice" ? 0.0 : kind == "wave" ? 1e-5 : 0.1;  // spacings
+        std::array<std::uniform_real_distribution<double>, 3> shift;
+        Point spacing;
+        for (int a = 0; a < 3; ++a) {
+            spacing[a] = 1.0 / side[a];
+            shift[a] = std::uniform_real_distribution<double>(-jitter * spacing[a], jitter * spacing[a]);
+        }
+        for (int i = 0; i < side[0]; ++i)
+            for (int j = 0; j < side[1]; ++j)
+                for (int k = 0; k < side[2]; ++k)
+                    points.push_back({wrap((i + 0.5) * spacing[0] + shift[0](rng)),
+                                      wrap((j + 0.5) * spacing[1] + shift[1](rng)),
+                                      wrap((k + 0.5) * spacing[2] + shift[2](rng))});
     } else if (kind == "clustered") {
         // Eight Gaussian blobs over a uniform background: about 1:100 density.
         std::normal_distribution<double> blob(0.0, 0.04);
@@ -180,10 +210,19 @@ inline Points make_points(const std::string& kind, int n) {
     return points;
 }
 
-// The points scaled from the unit box to a box of side `box`.
-inline Points scaled(Points points, double box) {
+// The points scaled from the unit box to `box` (side[a] along axis a).
+inline Points scaled(Points points, const Box& box) {
     for (auto& p : points)
-        for (double& x : p) x *= box;
+        for (int a = 0; a < 3; ++a) p[a] *= box.side[a];
+    return points;
+}
+
+// Points in `box`, on its grid: lattices of about equal spacings along
+// every axis, the other distributions stretched with the box.
+inline Points make_points(const std::string& kind, int n, const Box& box) {
+    if (box.cubic() && box.side[0] == 1.0) return make_points(kind, n);
+    Points points = scaled(make_points_off_grid(kind, n, shape(box)), box);
+    to_grid(points, box);
     return points;
 }
 
@@ -196,21 +235,22 @@ inline Positions to_device(const Points& points) {
     return x;
 }
 
-// A cell list over the box [0, box)^3 whose base grid has about one particle
-// per cell (times width_factor^-3).
+// A cell list over `box` whose base grid has about one particle per cell
+// (times width_factor^-3).
 template <class X>
-neighbor_search::CellList<Exec> cell_list(const X& x, double box = 1.0, double width_factor = 1.0) {
+neighbor_search::CellList<Exec> cell_list(const X& x, const Box& box = {}, double width_factor = 1.0) {
     neighbor_search::CellList<Exec> list;
     const int n = static_cast<int>(x.extent(0));
-    neighbor_search::configure(list, n, box, width_factor * box * std::cbrt(1.0 / n));
+    const double width = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
+    neighbor_search::configure(list, n, box, width_factor * width);
     neighbor_search::build(Exec{}, list, x);
     return list;
 }
 
 // The points renumbered in slot order, so that a cell list built on them has
 // the identity order and slots name particles from then on.
-inline Points in_slot_order(const Points& points) {
-    const auto order = to_host(cell_list(to_device(points)).order);
+inline Points in_slot_order(const Points& points, const Box& box = {}) {
+    const auto order = to_host(cell_list(to_device(points), box).order);
     Points sorted(points.size());
     for (std::size_t t = 0; t < points.size(); ++t) sorted[t] = points[order(t)];
     return sorted;
@@ -239,13 +279,22 @@ public:
     }
 
     // Move every point by `distance` times the velocity, wrapped into the box
-    // and kept on the grid.
+    // and kept on the grid. The field is periodic in the unit box; in another
+    // box it is stretched with it (distances stay in box units).
     void advect(Points& x, double distance) const {
         for (auto& p : x) {
             const Point v = velocity(p);
             for (int a = 0; a < 3; ++a) p[a] = wrap(p[a] + distance * v[a]);
         }
         to_grid(x);
+    }
+    void advect(Points& x, double distance, const Box& box) const {
+        if (box.cubic() && box.side[0] == 1.0) return advect(x, distance);
+        for (auto& p : x) {
+            const Point v = velocity({p[0] / box.side[0], p[1] / box.side[1], p[2] / box.side[2]});
+            for (int a = 0; a < 3; ++a) p[a] = box.side[a] * wrap((p[a] + distance * v[a]) / box.side[a]);
+        }
+        to_grid(x, box);
     }
 
 private:
@@ -273,7 +322,8 @@ double median_ms(int repeats, const F& f) {
 // owned face centroid equidistant from its two generators with no generator
 // closer (brute force over all generators for a sample of cells). Prints a
 // one-line summary; returns the number of failed checks.
-inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& positions, std::ostream& out) {
+inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& positions, std::ostream& out,
+                       const Box& box = {}) {
     constexpr double volume_tolerance = 1e-12, closure_tolerance = 1e-12, distance_tolerance = 1e-9;
     const auto status = to_host(cells.status);
     const auto face_count = to_host(cells.face_count);
@@ -311,7 +361,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
             auto distance = [&](int k) {
                 double d2 = 0;
                 for (int a = 0; a < 3; ++a) {
-                    const double d = nearest_image(x(k, a) - c[a]);
+                    const double d = nearest_image(x(k, a) - c[a], box.side[a]);
                     d2 += d * d;
                 }
                 return std::sqrt(d2);
@@ -324,7 +374,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
             ++checked;
             violations += error > distance_tolerance;
         }
-    const double volume_error = std::abs(total_volume - 1.0);
+    const double volume_error = std::abs(total_volume / box.volume() - 1.0);
     int failures = 0;
     failures += statuses[shell_voronoi::ok] != n;
     failures += volume_error > volume_tolerance;
@@ -351,13 +401,13 @@ inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::Cell
     return cells;
 }
 
-inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x, double box = 1.0) {
+inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x, const Box& box = {}) {
     return cells_with_rings(cell_list(x, box));
 }
 
 // The exact starting tetrahedralization of x: clipping with
 // rings, then tet_start::build.
-inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh, double box = 1.0) {
+inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh, const Box& box = {}) {
     const auto list = cell_list(x, box);
     auto cells = cells_with_rings(list);
     auto stats = tet_start::build(Exec{}, shell_voronoi::make_grid(list), cells, mesh);
@@ -397,7 +447,7 @@ inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells) {
     return r;
 }
 
-inline Reference clipped(const Positions& x, double box = 1.0) {
+inline Reference clipped(const Positions& x, const Box& box = {}) {
     const int n = static_cast<int>(x.extent(0));
     const auto list = cell_list(x, box);
     shell_voronoi::Cells<Memory> cells(n, false);
@@ -447,7 +497,8 @@ inline tet_flips::Mesh host_tetrahedra(const Mesh& mesh) {
     };
     const auto& tets = mesh.tetrahedra();
     const auto& state = mesh.repair_state();
-    return {copy(tets.vertex), copy(tets.adjacent), copy(state.alive), copy(state.point), state.count};
+    return {copy(tets.vertex), copy(tets.adjacent), copy(state.alive), {copy(state.point.view), state.point.period},
+            state.count};
 }
 
 // Inverted tetrahedra plus shared triangles that fail the local Delaunay
@@ -488,7 +539,7 @@ inline Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_ar
 // neighbours, clipping faces the mesh lacks, mesh faces the clipping lacks
 // (and the largest of their areas, in spacings^2; clipping drops faces
 // below rounding level, the mesh keeps every Delaunay edge), the largest
-// relative volume difference and the total volume (box units).
+// relative volume difference and the total volume (box volumes).
 struct Comparison {
     long long failing = 0, mismatched = 0, missing = 0, extra = 0, faces = 0, clipped_faces = 0;
     double extra_area = 0, volume = 0, total = 0;
@@ -500,7 +551,8 @@ struct Comparison {
 
 inline Comparison compare_with_rebuild(const Mesh& mesh, const Positions& x) {
     const int n = mesh.particles();
-    const double box = mesh.box(), spacing = box * std::cbrt(1.0 / n);
+    const Box& box = mesh.sides();
+    const double spacing = std::cbrt(box.volume() / n);
     Comparison c;
     const tet_flips::Mesh tets = host_tetrahedra(mesh);
     c.failing = failing(tets);
@@ -526,7 +578,7 @@ inline Comparison compare_with_rebuild(const Mesh& mesh, const Positions& x) {
     }
     const auto volume = to_host(mesh.volume());
     for (int i = 0; i < n; ++i) {
-        c.total += volume(i) / (box * box * box);
+        c.total += volume(i) / box.volume();
         const double error = std::abs(volume(i) - exact.volume[i]) / exact.volume[i];
         if (exact.volume[i] > 0 && error > c.volume) {
             c.volume = error;

@@ -135,11 +135,18 @@ KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring 
     return steps;
 }
 
+using Box = exact_predicates::Box;
+
 // A coordinate difference in a periodic box, to the nearest image. A
-// multiplication by 1 / box (computed once per kernel) instead of a
-// division: it picks the same image unless d is within an ulp of half a box.
-KOKKOS_INLINE_FUNCTION double wrap(double d, double box) { return d - box * Kokkos::nearbyint(d * (1.0 / box)); }
-KOKKOS_INLINE_FUNCTION Vec3 wrap(Vec3 d, double box) { return {wrap(d.x, box), wrap(d.y, box), wrap(d.z, box)}; }
+// multiplication by 1 / side instead of a division: it picks the same
+// image unless d is within an ulp of half a side.
+KOKKOS_INLINE_FUNCTION double wrap(double d, double side, double inverse) {
+    return d - side * Kokkos::nearbyint(d * inverse);
+}
+KOKKOS_INLINE_FUNCTION Vec3 wrap(Vec3 d, const Box& box) {
+    return {wrap(d.x, box.side[0], box.inverse[0]), wrap(d.y, box.side[1], box.inverse[1]),
+            wrap(d.z, box.side[2], box.inverse[2])};
+}
 
 // Row i of positions or centres x.
 template <class X>
@@ -625,7 +632,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
 // The circumcentre of particles v[0..3] relative to x(v[0]), given the
 // offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images).
 template <class X>
-KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, double box, const int* v, const Vec3* d) {
+KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* v, const Vec3* d) {
     double volume6, shape;
     const Vec3 c = detail::circumcentre(d[0], d[1], d[2]);
     if (!detail::sliver(d, volume6, shape)) return c;
@@ -634,11 +641,12 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, double box, const int* v, c
     namespace ep = exact_predicates;
     ep::Offset g[3];
     for (int k = 0; k < 3; ++k)
-        for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(ep::snap(x(v[0], a), box), ep::snap(x(v[k + 1], a), box));
+        for (int a = 0; a < 3; ++a)
+            g[k][a] = ep::delta(ep::snap(x(v[0], a), box, a), ep::snap(x(v[k + 1], a), box, a), box.period[a]);
     ep::i128 n[3];
     const ep::i128 det = ep::circumcentre(g[0], g[1], g[2], n);
     if (det == 0) return c;
-    const double unit = box / ep::scale / (2 * double(det));
+    const double unit = box.step / (2 * double(det));
     return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
 
@@ -646,7 +654,7 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, double box, const int* v, c
 // if negative), or of those listed in `only` (e.g. the ones a repair
 // touched, at unchanged positions).
 template <class ExecSpace, class X>
-void circumcentres(const ExecSpace& exec, const X& x, double box,
+void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
                    const Mesh<typename ExecSpace::memory_space>& mesh, int count = -1,
                    const Kokkos::View<const int*, typename ExecSpace::memory_space>& only = {}) {
     const bool listed = only.data() != nullptr;
@@ -671,7 +679,7 @@ void circumcentres(const ExecSpace& exec, const X& x, double box,
 // owner) and, if out.volume is allocated, cell volumes (summed by atomics),
 // one thread per owned face.
 template <class ExecSpace, class X>
-void faces(const ExecSpace& exec, const X& x, double box,
+void faces(const ExecSpace& exec, const X& x, const Box& box,
            const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
     const bool with_volume = out.volume.extent(0) > 0;
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
@@ -741,7 +749,7 @@ namespace detail {
 // way to the face centroid c, which is given relative to the owner, the
 // lower id.
 template <class X, class Area, class Centroid>
-KOKKOS_INLINE_FUNCTION double pyramid(const X& x, double box, const Area& area, const Centroid& centroid, int i, int j,
+KOKKOS_INLINE_FUNCTION double pyramid(const X& x, const Box& box, const Area& area, const Centroid& centroid, int i, int j,
                                       int f, Vec3& c) {
     const Vec3 d = wrap(row(x, j) - row(x, i), box);
     const Vec3 A = row(area, f);
@@ -753,7 +761,7 @@ KOKKOS_INLINE_FUNCTION double pyramid(const X& x, double box, const Area& area, 
 // Sort cell i's list entries [begin, end) by the other particle (in place)
 // and sum its pyramids in that order: one thread per cell.
 template <class X, class Area, class Centroid, class Ints, class Others, class Volume, class Centroids>
-KOKKOS_INLINE_FUNCTION void cell_geometry(const X& x, double box, const Area& area, const Centroid& centroid,
+KOKKOS_INLINE_FUNCTION void cell_geometry(const X& x, const Box& box, const Area& area, const Centroid& centroid,
                                           const Ints& face, const Others& other, int i, int begin, int end,
                                           const Volume& volume, const Centroids& cell_centroid) {
     for (int a = begin + 1; a < end; ++a) {
@@ -789,7 +797,7 @@ template <class X, class Areas, class Ints, class Others, class Volume, class Ce
 struct CellGeometryWarp {
     static constexpr int warps = 4;  // cells per block
     X x;
-    double box;
+    Box box;
     Areas area, centroid;
     Ints start, face;
     Others other;
@@ -859,7 +867,7 @@ struct CellGeometryWarp {
 // to both cells' lists; then each cell sorts its list by those ids and sums
 // its pyramids in that order (on CUDA a warp per cell, CellGeometryWarp).
 template <class ExecSpace, class X>
-void cells(const ExecSpace& exec, const X& x, double box, const Mesh<typename ExecSpace::memory_space>& mesh,
+void cells(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
            const Geometry<typename ExecSpace::memory_space>& geometry, CellFaces<typename ExecSpace::memory_space>& out,
            char* scratch) {
     using Memory = typename ExecSpace::memory_space;
