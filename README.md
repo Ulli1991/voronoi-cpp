@@ -170,6 +170,16 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box, job
 | Device memory, plain warp rebuild | 701 B/cell | 656 B/cell |
 | Device memory peak, start and steps (with face lists) | 2221 B/cell | 2200 B/cell (37.9 GB in use) |
 
+Non-cubic: a Kelvin-Helmholtz-like slab (Lx = Ly = 2, Lz = 16 spacings,
+`--box=2,2,0.0625`, 512 x 512 x 16 = 4.2M, and `--box=2,2,0.03125`,
+1024 x 1024 x 16 = 16.8M; job 31702953) rebuilds at the cube's rate:
+warp rebuild jittered 39.9 / 39.9 M cells/s, uniform 19.9 / 20.0 M
+cells/s; exact start 0.36 / 1.40 s; steps at 0.03 spacings 39.9 / 155 ms
+(the bench flow, stretched with the box, shears across the 16-cell
+thickness: 4x the flips per cell of the cube); peak 2192 B/cell at 16.8M
+(research_notes/box3_2026-10-31.md). The cubic case is bit-identical to
+the cubic-only code and within 0.3-0.7 % of its rebuild speed.
+
 Steps are medians of steps 2-10 on jittered points moved by a smooth flow;
 the step at 256^3 moves particles by the same number of spacings, but the
 flow varies on the box scale, so neighbours shear half as much per step
