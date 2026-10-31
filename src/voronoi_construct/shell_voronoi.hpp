@@ -73,9 +73,14 @@ struct Grid {
     double narrowest = 1;  // the smallest width
     int fewest = 1;        // the fewest tiles along an axis
 
+    // One tile, a cube: the walk can take the cube's shorter arithmetic.
+    bool cube() const { return tiles[0] * tiles[1] * tiles[2] == 1 && box.cubic(); }
+
     // The first base cell, in cell_offsets, of grid cell (x, y, z) at
     // `level` <= levels (tiles[a] 2^level cells along axis a).
+    template <bool cubic = false>
     KOKKOS_INLINE_FUNCTION int cell(int level, int x, int y, int z) const {
+        if constexpr (cubic) return static_cast<int>(neighbor_search::morton_short(x, y, z)) << (3 * (levels - level));
         const int mask = (1 << level) - 1;
         const int tile = ((x >> level) * tiles[1] + (y >> level)) * tiles[2] + (z >> level);
         return tile << (3 * levels) |
@@ -84,16 +89,17 @@ struct Grid {
 
     // The slots [begin, end) of grid cell (x, y, z) at `level` (2^level
     // cells per tile side): a block of base cells, or part of one base cell.
+    template <bool cubic = false>
     KOKKOS_INLINE_FUNCTION void range(int level, int x, int y, int z, int& begin, int& end) const {
         const int below = level - levels;
         if (below <= 0) {
             const int span = -3 * below;
-            const int first = cell(level, x, y, z);
+            const int first = cell<cubic>(level, x, y, z);
             begin = cell_offsets(first);
             end = cell_offsets(first + (1 << span));
             return;
         }
-        const int base = cell(levels, x >> below, y >> below, z >> below);
+        const int base = cell<cubic>(levels, x >> below, y >> below, z >> below);
         begin = cell_offsets(base);
         end = cell_offsets(base + 1);
         if (begin == end) return;
@@ -189,11 +195,13 @@ KOKKOS_INLINE_FUNCTION int pack_image(int x, int y, int z) { return (x + 1) | (y
 KOKKOS_INLINE_FUNCTION int image(int packed, int axis) { return ((packed >> (2 * axis)) & 3) - 1; }
 
 // The home cell of generator p at `level` (2^level cells per tile side).
-template <class MemorySpace>
+// cubic (Grid::cube(), known at compile time): one tile, equal sides.
+template <bool cubic = false, class MemorySpace>
 KOKKOS_INLINE_FUNCTION void home_cell(const Vec3& p, const Grid<MemorySpace>& grid, int level, int (&home)[3]) {
-    home[0] = neighbor_search::grid_coordinate(p.x, grid.box.side[0], grid.tiles[0] << level);
-    home[1] = neighbor_search::grid_coordinate(p.y, grid.box.side[1], grid.tiles[1] << level);
-    home[2] = neighbor_search::grid_coordinate(p.z, grid.box.side[2], grid.tiles[2] << level);
+    const double* side = grid.box.side;
+    home[0] = neighbor_search::grid_coordinate(p.x, side[0], cubic ? 1 << level : grid.tiles[0] << level);
+    home[1] = neighbor_search::grid_coordinate(p.y, side[cubic ? 0 : 1], cubic ? 1 << level : grid.tiles[1] << level);
+    home[2] = neighbor_search::grid_coordinate(p.z, side[cubic ? 0 : 2], cubic ? 1 << level : grid.tiles[2] << level);
 }
 
 // The grid cell at stencil offset `code` of the walk at `level` around
@@ -201,7 +209,7 @@ KOKKOS_INLINE_FUNCTION void home_cell(const Vec3& p, const Grid<MemorySpace>& gr
 // inside the finished walk one level finer, whose home cell is 2 home + bit
 // a of `finer` along axis a (finer < 0: none); else its slots and the
 // periodic image they are seen in.
-template <bool adaptive = true, class MemorySpace>
+template <bool adaptive = true, bool cubic = false, class MemorySpace>
 KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int level, const int (&home)[3], int finer,
                                          int code, const Vec3& p, double reach2, int& begin, int& end,
                                          int& packed) {
@@ -210,7 +218,7 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
     const double q[3] = {p.x, p.y, p.z};
     double gap2 = 0;
     for (int a = 0; a < 3; ++a) {
-        const double width = grid.width[a] * fraction;
+        const double width = cubic ? grid.width[0] / (1 << level) : grid.width[a] * fraction;
         const double g = Kokkos::max(0.0, Kokkos::max(u[a] * width - q[a], q[a] - (u[a] + 1) * width));
         gap2 += g * g;
     }
@@ -223,20 +231,20 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
             const int child = 2 * (u[a] - home[a]) - ((finer >> a) & 1);
             gaps += Kokkos::max(beyond2(child), beyond2(child + 1));
         }
-        const int covered = level_reach(level + 1, grid.fewest);
+        const int covered = level_reach(level + 1, cubic ? 1 : grid.fewest);
         if (gaps < covered * covered) return false;
     }
     int shift[3], w[3];  // periodic image and wrapped coordinate
     for (int a = 0; a < 3; ++a) {
-        const int side = grid.tiles[a] << level;
+        const int side = cubic ? 1 << level : grid.tiles[a] << level;
         shift[a] = u[a] < 0 ? -1 : u[a] >= side ? 1 : 0;
-        w[a] = u[a] - shift[a] * side;
+        w[a] = cubic ? u[a] & (side - 1) : u[a] - shift[a] * side;
     }
     packed = pack_image(shift[0], shift[1], shift[2]);
     if constexpr (adaptive) {
-        grid.range(level, w[0], w[1], w[2], begin, end);
+        grid.template range<cubic>(level, w[0], w[1], w[2], begin, end);
     } else {
-        const int key = grid.cell(level, w[0], w[1], w[2]);
+        const int key = grid.template cell<cubic>(level, w[0], w[1], w[2]);
         begin = grid.cell_offsets(key);
         end = grid.cell_offsets(key + 1);
     }
