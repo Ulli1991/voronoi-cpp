@@ -33,7 +33,7 @@ struct Stats {
 
 // Result of check(): tetrahedra that are flat, lack a neighbour, disagree
 // with one, fold over one or fail the local Delaunay test; particles in no
-// tetrahedron; and the total volume (box units).
+// tetrahedron; and the total volume (box volumes).
 struct Report {
     long long bad_tets = 0, unused = 0;
     double volume = 0;
@@ -78,7 +78,7 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     Kokkos::View<int*, Memory> used("tet_start_used", n);
     const auto vertex = mesh.vertex;
     const auto adjacent = mesh.adjacent;
-    constexpr double unit3 = 1.0 / (ep::scale * ep::scale * ep::scale);
+    const double unit3 = 1.0 / (double(point.period[0]) * double(point.period[1]) * double(point.period[2]));
     Report report;
     Kokkos::parallel_reduce(
         "tet_start::check", Range(exec, 0, count),
@@ -158,13 +158,13 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
     const int n = grid.n;
     Stats stats;
     // Snapped positions by particle.
-    ep::Points<Memory> point("tet_start_point", n);
+    ep::Points<Memory> point("tet_start_point", n, grid.box);
     const auto positions = grid.positions;
     const auto order = grid.order;
-    const double box = grid.box;
+    const ep::Box box = grid.box;
     Kokkos::parallel_for(
         "tet_start::snap", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            for (int a = 0; a < 3; ++a) point(order(q), a) = ep::snap(positions(q, a), box);
+            for (int a = 0; a < 3; ++a) point(order(q), a) = ep::snap(positions(q, a), box, a);
         });
     const auto stencil = shell_voronoi::make_stencil(exec);
     Kokkos::View<int*, Memory> marked("tet_start_marked", n), grown("tet_start_grown", n), todo("tet_start_todo", n);

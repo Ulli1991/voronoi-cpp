@@ -13,7 +13,9 @@
 //     mesh; the same input gives the same bits;
 //   - a local rebuild by clipping returns each face of the listed cells
 //     once, equal to the mesh's;
-//   - the scratch memory can be used between updates.
+//   - the scratch memory can be used between updates;
+//   - a box of three sides: volumes fill it, box() refuses it; a slab too
+//     thin for its particles is refused with a clear error.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -244,6 +246,35 @@ int main(int argc, char** argv) {
                              std::to_string(r.host_flips) + ", local rebuilds " + std::to_string(r.host_rebuilds) +
                              ", rebuilt " + std::to_string(r.rebuilt) + ") is exact");
         }
+    }
+    {  // a box of three sides; a slab too thin for its particles
+        const Box slab(2, 2, 0.25);  // 32 x 32 x 4 jittered cells: 2R reaches past what one image certifies
+        const Box box123(1, 2, 3);
+        Mesh odd(Exec{}, box123);
+        const Positions xo = to_device(make_points("jittered", 4096, box123));
+        const voronoi::Report r = odd.update(xo);
+        odd.update_cells();
+        const auto volume = to_host(odd.volume());
+        double total = 0;
+        for (int i = 0; i < odd.particles(); ++i) total += volume(i);
+        bool refused = false;
+        try {
+            (void)odd.box();
+        } catch (const std::logic_error&) {
+            refused = true;
+        }
+        check.expect(r.start.exact && std::abs(total / box123.volume() - 1) < 1e-12 &&
+                         compare_with_rebuild(odd, xo).pass() && refused,
+                     "a 1 x 2 x 3 box: exact, volumes fill it, box() refuses it (use sides())");
+        Mesh thin(Exec{}, slab);
+        std::string error;
+        try {
+            thin.update(to_device(make_points("jittered", 4096, slab)));
+        } catch (const std::runtime_error& e) {
+            error = e.what();
+        }
+        check.expect(error.find("certified") != std::string::npos,
+                     "a slab 4 cells thin is refused with a clear error: " + error);
     }
     return check.failed() != 0;
 }

@@ -8,5 +8,10 @@ if [[ ! -f "$build_dir/compile_commands.json" ]]; then
     exit 1
 fi
 for source in "$repo_root"/src/test/*.cpp "$repo_root"/src/bench/*.cpp; do
+    # Programs not configured in this build (hydro_sedov without HDF5) have no compile command.
+    if ! grep -q "/${source#"$repo_root"/}\"" "$build_dir/compile_commands.json"; then
+        echo "skipped (not in this build): ${source#"$repo_root"/}"
+        continue
+    fi
     clang-tidy -p "$build_dir" "$source"
 done

@@ -328,14 +328,14 @@ void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity
 // grows all of them when needed, and the list of created tetrahedra (a
 // quarter of the capacity at first) after a step it overflowed.
 template <class ExecSpace, class X>
-State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& x, double box,
+State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& x, const ep::Box& box,
                                                 tet_mesh::Mesh<typename ExecSpace::memory_space>& m, int capacity,
                                                 int work_capacity) {
     using Memory = typename ExecSpace::memory_space;
     State<Memory> s;
     const int n = static_cast<int>(x.extent(0));
     s.count = static_cast<int>(m.vertex.extent(0));
-    s.point = ep::Points<Memory>("tet_repair_point", n);
+    s.point = ep::Points<Memory>("tet_repair_point", n, box);
     s.alive = Kokkos::View<char*, Memory>("tet_repair_alive", 0);  // sized by reserve
     s.touched = Kokkos::View<char*, Memory>("tet_repair_touched", 0);
     s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", 0);
@@ -381,7 +381,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
 // margin covers the snapping of positions to the exact grid; what it lists
 // is decided exactly by repair.
 template <class ExecSpace, class X>
-void move_screened(const ExecSpace& exec, const X& x, double box,
+void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
                    const tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
                    State<typename ExecSpace::memory_space>& s) {
     ep::snap(exec, x, box, s.point);
@@ -392,7 +392,7 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
     const auto centre = m.centre;
     const auto counters = s.counters;
     const auto slivers = s.freed;  // free until the repair starts; counter::freed counts them
-    const double snap = box / ep::scale * 1.7320508075688772;  // largest move by snapping
+    const double snap = box.step * 1.7320508075688772;  // largest move by snapping
     Kokkos::parallel_for(
         "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
             st.dirty(t) = 0;

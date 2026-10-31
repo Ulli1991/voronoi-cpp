@@ -201,9 +201,9 @@ public:
         }
         // Nearest image of generator j seen from generator i.
         KOKKOS_INLINE_FUNCTION Vec3 separation(int i, int j) const {
-            return {tet_mesh::wrap(positions(j, 0) - positions(i, 0), box),
-                    tet_mesh::wrap(positions(j, 1) - positions(i, 1), box),
-                    tet_mesh::wrap(positions(j, 2) - positions(i, 2), box)};
+            return {tet_mesh::wrap(positions(j, 0) - positions(i, 0), box, 1.0 / box),
+                    tet_mesh::wrap(positions(j, 1) - positions(i, 1), box, 1.0 / box),
+                    tet_mesh::wrap(positions(j, 2) - positions(i, 2), box, 1.0 / box)};
         }
         KOKKOS_INLINE_FUNCTION int other(int f, int i) const { return owner(f) == i ? neighbour(f) : owner(f); }
         // Face centroid of face f relative to the centroid of cell i (a side of f).

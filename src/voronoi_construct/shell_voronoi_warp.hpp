@@ -304,7 +304,8 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 // base level only, leaving cells it cannot certify to the thread kernel.
 // with_rings: record face rings (Cells::with_rings) instead of face geometry.
 // local: build only the cells of `selection` (otherwise it is unused).
-template <class MemorySpace, bool adaptive, bool with_rings, bool local = false>
+// cubic: the grid is one cube (Grid::cube()): the walk's shorter arithmetic.
+template <class MemorySpace, bool adaptive, bool with_rings, bool local = false, bool cubic = false>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -340,7 +341,8 @@ struct Kernel {
     __device__ __forceinline__ void build(Polyhedron& c, int t) const {
         const int l = lane();
         const auto& positions = grid.positions;
-        const double box = grid.box;
+        const double* box = grid.box.side;
+        const double side[3] = {box[0], box[cubic ? 0 : 1], box[cubic ? 0 : 2]};
         const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
 
         int planes = 0;
@@ -361,9 +363,9 @@ struct Kernel {
             // Lane i loads candidate i at once; the loop broadcasts it.
             Vec3 mine{0, 0, 0};
             if (l < buffered)
-                mine = {positions(slot, 0) + image(packed, 0) * box - p.x,
-                        positions(slot, 1) + image(packed, 1) * box - p.y,
-                        positions(slot, 2) + image(packed, 2) * box - p.z};
+                mine = {positions(slot, 0) + image(packed, 0) * side[0] - p.x,
+                        positions(slot, 1) + image(packed, 1) * side[1] - p.y,
+                        positions(slot, 2) + image(packed, 2) * side[2] - p.z};
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
@@ -384,10 +386,10 @@ struct Kernel {
         // overlap. A level is certified once the next cell's lower bound
         // exceeds 2R.
         int level = adaptive ? int(grid.level(t)) : grid.levels, home[3], finer = -1;
-        home_cell(p, box, level, home);
+        home_cell<cubic>(p, grid, level, home);
         while (status == ok) {
-            const double width = box / (1 << level);
-            const int reach = level_reach(level), entries = stencil.ends(reach);
+            const double width = grid.narrowest / (1 << level);
+            const int reach = level_reach(level, cubic ? 1 : grid.fewest), entries = stencil.ends(reach);
             for (int first = 0; first < entries && status == ok; first += lanes) {
                 if (double(stencil.bound2(first)) * width * width >= 4.0 * radius2) {
                     certified = true;
@@ -398,16 +400,17 @@ struct Kernel {
                 int begin = 0, end = 0, packed = 0;
                 const double reach2 = 4.0 * radius2;
                 if (e < entries)
-                    stencil_cell<adaptive>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end, packed);
+                    stencil_cell<adaptive, cubic>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end,
+                                                  packed);
                 const int most = warp_max(end - begin);
                 for (int k = 0; k < most && status == ok; ++k) {
                     const int q = begin + k;
                     double d2 = 0;
                     bool take = false;
                     if (q < end && q != t) {
-                        const double ddx = positions(q, 0) + image(packed, 0) * box - p.x;
-                        const double ddy = positions(q, 1) + image(packed, 1) * box - p.y;
-                        const double ddz = positions(q, 2) + image(packed, 2) * box - p.z;
+                        const double ddx = positions(q, 0) + image(packed, 0) * side[0] - p.x;
+                        const double ddy = positions(q, 1) + image(packed, 1) * side[1] - p.y;
+                        const double ddz = positions(q, 2) + image(packed, 2) * side[2] - p.z;
                         d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                         take = d2 < 4.0 * radius2;
                     }
@@ -639,7 +642,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         }
         if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
             throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
-        const bool rings = out.with_rings();
+        const bool rings = out.with_rings(), cube = grid.cube();  // cube: the plain kernels' shorter walk
         const double half_width = detail::start_half_width(grid.box);
         using Memory = typename ExecSpace::memory_space;
         const Stencil<Memory> stencil = make_stencil(exec);
@@ -669,9 +672,17 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             else if (rings)
                 Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
                                      warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, selection});
+            else if (off_base > 0 && cube)
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Memory, true, false, false, true>{grid, out, half_width, stencil,
+                                                                                    next_cell, selection});
             else if (off_base > 0)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
                                      warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, selection});
+            else if (cube)
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Memory, false, false, false, true>{grid, out, half_width, stencil,
+                                                                                     next_cell, selection});
             else
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
                                      warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, selection});

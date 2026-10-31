@@ -432,8 +432,8 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         Kokkos::View<int*, Memory> particle_ids("region_particles", particle.size());
         Kokkos::deep_copy(exec, particle_ids,
                           Kokkos::View<const int*, Kokkos::HostSpace>(particle.data(), particle.size()));
-        ep::Points<Memory> points("region_points", particle.size());
         const auto point = state.point;
+        const ep::Points<Memory> points(typename ep::Points<Memory>::View("region_points", particle.size()), point.period);
         Kokkos::parallel_for(
             "tet_flips::region_points", Range(exec, 0, static_cast<int>(particle.size())), KOKKOS_LAMBDA(int i) {
                 for (int a = 0; a < 3; ++a) points(i, a) = point(particle_ids(i), a);
@@ -446,7 +446,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         Mesh m{tet_mesh::Quads<Kokkos::HostSpace>("region_vertex", capacity),
                tet_mesh::Quads<Kokkos::HostSpace>("region_adjacent", capacity),
                Kokkos::View<char*, Kokkos::HostSpace>("region_alive", capacity),
-               Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, points), size};
+               {Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, points.view), points.period}, size};
         std::map<std::array<int, 3>, int> outside;  // open face (local particles) -> outside tetrahedron
         for (int i = 0; i < size; ++i) {
             m.alive(i) = 1;
