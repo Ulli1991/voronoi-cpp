@@ -74,9 +74,9 @@ struct Timings {
 };
 
 // What update() does when the device repair leaves triangles it cannot
-// repair: repair the region around them on the host (tet_flips), build the
-// mesh again from scratch on the device, or (cheapest) choose by the
-// number of stuck entries. Measured on an A100 at 2.1M cells: the host
+// repair: repair the region around them on the host (tet_flips; a rebuild
+// if that does not finish either), build the mesh again from scratch on the
+// device, or (cheapest) choose by the number of stuck entries. Measured on an A100 at 2.1M cells: the host
 // takes about 2-5 ms for a handful of stuck triangles and 0.12 ms per
 // stuck entry beyond (20.8 s for the 178k of a wave lattice's first step),
 // a rebuild 0.17-0.25 s; so rebuild when more than n / 1000 are stuck.
@@ -102,32 +102,30 @@ public:
         if (!built() || static_cast<int>(x.extent(0)) != n_) return rebuild(x, timings);
         Report report;
         Kokkos::Timer timer;
-        auto phase = [&](double& ms) {
-            if (!timings) return;
-            exec_.fence();
-            ms += timer.seconds() * 1e3;
-            timer.reset();
-        };
         snap(x);
         tet_repair::move_screened(exec_, positions_, box_, tets_, state_);
         const tet_repair::Stats device = tet_repair::repair(exec_, tets_, state_);
         report.flips = device.flips23 + device.flips32;
         report.rounds = static_cast<int>(device.rounds);
         report.stuck = device.stuck;
-        phase(timings ? timings->repair : unused_);
-        if (device.stuck > 0) {
-            if (fallback_ == Fallback::rebuild ||
-                (fallback_ == Fallback::cheapest && static_cast<long long>(device.stuck) * 1000 > n_)) {
-                Report rebuilt = rebuild(x, timings);
-                rebuilt.flips = report.flips;
-                rebuilt.rounds = report.rounds;
-                rebuilt.stuck = report.stuck;
-                return rebuilt;
-            }
+        lap(timer, timings, &Timings::repair);
+        bool stuck = device.stuck > 0;
+        if (stuck && fallback_ != Fallback::rebuild &&
+            (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 1000 <= n_)) {
             const tet_flips::Stats host = tet_flips::finish(exec_, tets_, state_);
             report.host_flips = host.flips23 + host.flips32;
             report.host_rebuilds = host.rebuilt;
-            phase(timings ? timings->fallback : unused_);
+            stuck = host.stuck > 0;
+            lap(timer, timings, &Timings::fallback);
+        }
+        if (stuck) {  // a rebuild, also for what the host left
+            Report rebuilt = rebuild(x, timings);
+            rebuilt.flips = report.flips;
+            rebuilt.rounds = report.rounds;
+            rebuilt.stuck = report.stuck;
+            rebuilt.host_flips = report.host_flips;
+            rebuilt.host_rebuilds = report.host_rebuilds;
+            return rebuilt;
         }
         report.faces = geometry(timings);
         return report;
@@ -169,10 +167,7 @@ public:
                      View<double*>("cell_volume", n_)};
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, View<double* [3]>("cell_centroid", n_)};
-        if (timings) {
-            exec_.fence();
-            timings->build += timer.seconds() * 1e3;
-        }
+        lap(timer, timings, &Timings::build);
         report.faces = geometry(timings);
         return report;
     }
@@ -228,10 +223,7 @@ public:
         tet_mesh::cells(exec_, positions_, box_, tets_, geometry_, cells_,
                         scratch(tet_mesh::cells_scratch_bytes(faces())).data());
         cells_current_ = true;
-        if (timings) {
-            exec_.fence();
-            timings->cells += timer.seconds() * 1e3;
-        }
+        lap(timer, timings, &Timings::cells);
     }
 
     void set_fallback(Fallback f) { fallback_ = f; }
@@ -262,6 +254,15 @@ public:
 
 private:
     bool built() const { return state_.alive.extent(0) > 0; }
+
+    // With timings: fence, add the time since `timer` started to the phase
+    // `field`, restart the timer.
+    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
+        if (!timings) return;
+        exec_.fence();
+        timings->*field += timer.seconds() * 1e3;
+        timer.reset();
+    }
 
     // positions_ = x snapped to the grid, in box units.
     template <class X>
@@ -296,10 +297,7 @@ private:
         tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
-        if (timings) {
-            exec_.fence();
-            timings->geometry += timer.seconds() * 1e3;
-        }
+        lap(timer, timings, &Timings::geometry);
         return faces;
     }
 
@@ -309,7 +307,6 @@ private:
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
     bool cells_current_ = false;
-    double unused_ = 0;
     tet_mesh::Points4<Memory> positions_;
     neighbor_search::CellList<ExecSpace> list_;
     tet_mesh::Mesh<Memory> tets_;

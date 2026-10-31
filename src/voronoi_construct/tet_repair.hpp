@@ -15,9 +15,9 @@
 //      would rewrite and their outer neighbours (largest vote wins), and
 //   4. applies the plans that won all their votes; their new tetrahedra
 //      are dirty for the next round, losing plans retry.
-// Triangles no flip repairs, flips that would not close their cavity, and
+// Triangles no flip repairs (none is valid, or none closes its cavity) and
 // tetrahedra seen inverted are listed as stuck, for the host fallback
-// (tet_flips::finish).
+// (tet_flips::finish) or a rebuild.
 namespace tet_repair {
 
 namespace ep = exact_predicates;
@@ -47,8 +47,8 @@ struct State {
     Kokkos::View<char*, MemorySpace> alive;
     Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
     // The tetrahedra flips created since the last move (each once, but for
-    // the host fallback's repeats):
-    // touched_entries of them, -1 if more than fit or the host fallback ran.
+    // the host fallback's repeats): touched_entries of them, -1 if more
+    // than fit.
     Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
@@ -77,14 +77,12 @@ struct Stats {
     int stuck = 0;  // entries listed in State::stuck
 };
 
-// Whether new tetrahedra `fresh` close the cavity of the old ones `old` of
-// mesh m exactly: six outer faces, each face of a new tetrahedron matched
-// once (outside or by another new one), each outer face used once, and no
-// new tetrahedron duplicating the outer one it attaches to. Near-degenerate
-// configurations can break this.
+// The outer faces of the cavity of tetrahedra old[0, olds): the sorted
+// particles of each and the tetrahedron across it (-1 if none). Returns
+// their number, or -1 if there are more than 8.
 template <class M>
-KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const int (*fresh)[4], int freshes) {
-    int outer_key[8][3], outer_tet[8], outers = 0;
+KOKKOS_INLINE_FUNCTION int outer_faces(const M& m, const int* old, int olds, int (*key)[3], int* across) {
+    int outers = 0;
     for (int r = 0; r < olds; ++r) {
         const int o = old[r];
         const int v[4] = {m.vertex(o, 0), m.vertex(o, 1), m.vertex(o, 2), m.vertex(o, 3)};
@@ -93,12 +91,23 @@ KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const i
             bool inner = false;
             for (int q = 0; q < olds; ++q) inner |= w == old[q];
             if (inner) continue;
-            if (outers == 8) return false;
-            tet_mesh::sorted_face(v, j, outer_key[outers]);
-            outer_tet[outers++] = w;
+            if (outers == 8) return -1;
+            tet_mesh::sorted_face(v, j, key[outers]);
+            across[outers++] = w;
         }
     }
-    if (outers != 6) return false;
+    return outers;
+}
+
+// Whether new tetrahedra `fresh` close the cavity of the old ones `old` of
+// mesh m exactly: six outer faces, each face of a new tetrahedron matched
+// once (outside or by another new one), each outer face used once, and no
+// new tetrahedron duplicating the outer one it attaches to. Near-degenerate
+// configurations can break this.
+template <class M>
+KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const int (*fresh)[4], int freshes) {
+    int outer_key[8][3], outer_tet[8];
+    if (outer_faces(m, old, olds, outer_key, outer_tet) != 6) return false;
     int used[6] = {0, 0, 0, 0, 0, 0};
     for (int r = 0; r < freshes; ++r)
         for (int c = 0; c < 4; ++c) {
@@ -106,7 +115,7 @@ KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const i
             tet_mesh::sorted_face(fresh[r], c, key);
             int matches = 0;
             for (int q = 0; q < 6; ++q)
-                if (key[0] == outer_key[q][0] && key[1] == outer_key[q][1] && key[2] == outer_key[q][2]) {
+                if (tet_mesh::same_face(key, outer_key[q])) {
                     ++matches;
                     ++used[q];
                     if (outer_tet[q] >= 0 && tet_mesh::position(m, outer_tet[q], fresh[r][c]) >= 0) return false;
@@ -116,7 +125,7 @@ KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const i
                 for (int c2 = 0; c2 < 4; ++c2) {
                     int other[3];
                     tet_mesh::sorted_face(fresh[s2], c2, other);
-                    matches += key[0] == other[0] && key[1] == other[1] && key[2] == other[2];
+                    matches += tet_mesh::same_face(key, other);
                 }
             }
             if (matches != 1) return false;
@@ -130,7 +139,7 @@ namespace detail {
 
 // A planned flip: the old tetrahedra and the new ones (vertex lists).
 struct Plan {
-    enum Kind : int { none = 0, flip23 = 2, flip32 = 3, unflippable = -1 };
+    enum Kind : int { none = 0, flip23 = 2, flip32 = 3, unflippable = -1, rejected = -2 };
     int kind = none;
     int old[3] = {-1, -1, -1};
     int fresh[3][4];
@@ -183,20 +192,12 @@ KOKKOS_INLINE_FUNCTION Plan unpack(const Packed& s) {
     return p;
 }
 
-// Plan the repair of triangle t|u (t's face opposite corner k): the first
-// valid 2->3 or 3->2 flip, or stuck. Unlike the host, it does not try
-// another flip when this one would not close its cavity.
-template <class Mesh, class Point>
-KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k) {
-    Plan p;
-    const int u = m.adjacent(t, k);
-    const int T[4] = {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)};
-    const int far = tet_mesh::far_vertex(m, t, u);
-    if (far < 0 || !ep::in_sphere(point, T, far)) return p;
-    const int a = T[k];
-    int f[3];
-    tet_mesh::sorted_face(T, k, f);
-    // 2->3: segment a-far crosses the shared face.
+// The 2->3 flip of triangle t|u, apex a of t and far vertex far of u, f the
+// triangle: valid when segment a-far crosses the triangle, i.e. the three
+// new tetrahedra share one orientation.
+template <class Point>
+KOKKOS_INLINE_FUNCTION bool flip23(const Point& point, int t, int u, int a, int far, const int* f, Plan& p) {
+    p = {Plan::flip23, {t, u, -1}, {}, 2, 3};
     int positive = 0, negative = 0;
     for (int e = 0; e < 3; ++e) {
         const int n[4] = {a, far, f[e], f[(e + 1) % 3]};
@@ -205,56 +206,73 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
         negative += o < 0;
         for (int c = 0; c < 4; ++c) p.fresh[e][c] = n[c];
     }
-    if (positive == 3 || negative == 3) {
-        p.kind = Plan::flip23;
-        p.old[0] = t;
-        p.old[1] = u;
-        p.olds = 2;
-        p.freshes = 3;
-        return p;
-    }
-    // 3->2: an edge p-q of the face with exactly three tetrahedra around it.
-    for (int e = 0; e < 3; ++e) {
-        const int pv = f[e], qv = f[(e + 1) % 3];
-        int ring[3] = {t, -1, -1}, size = 1;
-        bool closed = false;
-        for (int current = t, previous = -1; size <= 3;) {
-            const int next = tet_mesh::next_around_edge(m, current, previous, pv, qv);
-            if (next < 0) break;
-            if (next == t) {
-                closed = true;
-                break;
-            }
-            if (size == 3) break;
-            ring[size++] = next;
-            previous = current;
-            current = next;
+    return positive == 3 || negative == 3;
+}
+
+// The 3->2 flip around edge pv-qv of triangle t|u: valid when exactly three
+// tetrahedra, u among them, share the edge and pv and qv lie on opposite
+// sides of the triangle of their other particles.
+template <class Mesh, class Point>
+KOKKOS_INLINE_FUNCTION bool flip32(const Mesh& m, const Point& point, int t, int u, int pv, int qv, Plan& p) {
+    int ring[3] = {t, -1, -1}, size = 1;
+    bool closed = false;
+    for (int current = t, previous = -1; size <= 3;) {
+        const int next = tet_mesh::next_around_edge(m, current, previous, pv, qv);
+        if (next < 0) break;
+        if (next == t) {
+            closed = true;
+            break;
         }
-        if (!closed || size != 3 || (ring[1] != u && ring[2] != u)) continue;
-        int others[3], count = 0;
-        for (int r = 0; r < 3; ++r)
-            for (int j = 0; j < 4; ++j) {
-                const int v = m.vertex(ring[r], j);
-                bool seen = v == pv || v == qv;
-                for (int c = 0; c < count; ++c) seen |= others[c] == v;
-                if (!seen && count < 3) others[count++] = v;
-            }
-        if (count != 3) continue;
-        const int n1[4] = {pv, others[0], others[1], others[2]}, n2[4] = {qv, others[0], others[1], others[2]};
-        if (ep::orient(point, n1) == 0 || ep::orient(point, n2) == 0) continue;
-        const int side_p[4] = {others[0], others[1], others[2], pv}, side_q[4] = {others[0], others[1], others[2], qv};
-        if (ep::orient(point, side_p) * ep::orient(point, side_q) >= 0) continue;
-        p.kind = Plan::flip32;
-        for (int r = 0; r < 3; ++r) p.old[r] = ring[r];
-        p.olds = 3;
-        p.freshes = 2;
-        for (int c = 0; c < 4; ++c) {
-            p.fresh[0][c] = n1[c];
-            p.fresh[1][c] = n2[c];
-        }
-        return p;
+        if (size == 3) break;
+        ring[size++] = next;
+        previous = current;
+        current = next;
     }
-    p.kind = Plan::unflippable;
+    if (!closed || size != 3 || (ring[1] != u && ring[2] != u)) return false;
+    int others[3], count = 0;
+    for (int r = 0; r < 3; ++r)
+        for (int j = 0; j < 4; ++j) {
+            const int v = m.vertex(ring[r], j);
+            bool seen = v == pv || v == qv;
+            for (int c = 0; c < count; ++c) seen |= others[c] == v;
+            if (!seen && count < 3) others[count++] = v;
+        }
+    if (count != 3) return false;
+    const int n1[4] = {pv, others[0], others[1], others[2]}, n2[4] = {qv, others[0], others[1], others[2]};
+    if (ep::orient(point, n1) == 0 || ep::orient(point, n2) == 0) return false;
+    const int side_p[4] = {others[0], others[1], others[2], pv}, side_q[4] = {others[0], others[1], others[2], qv};
+    if (ep::orient(point, side_p) * ep::orient(point, side_q) >= 0) return false;
+    p = {Plan::flip32, {ring[0], ring[1], ring[2]}, {}, 3, 2};
+    for (int c = 0; c < 4; ++c) {
+        p.fresh[0][c] = n1[c];
+        p.fresh[1][c] = n2[c];
+    }
+    return true;
+}
+
+// Plan the repair of triangle t|u (t's face opposite corner k) if it fails
+// the local Delaunay test: the first of the 2->3 flip and the 3->2 flips
+// around its three edges that is valid (and, if `closing`, closes its
+// cavity); else unflippable (none is valid) or rejected (none of the valid
+// ones closes).
+template <class Mesh, class Point>
+KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k, bool closing) {
+    Plan p;
+    const int u = m.adjacent(t, k);
+    const int T[4] = {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)};
+    const int far = tet_mesh::far_vertex(m, t, u);
+    if (far < 0 || !ep::in_sphere(point, T, far)) return p;
+    int f[3];
+    tet_mesh::sorted_face(T, k, f);
+    bool rejected = false;
+    for (int candidate = 0; candidate < 4; ++candidate) {
+        const bool valid = candidate == 0 ? flip23(point, t, u, T[k], far, f, p)
+                                          : flip32(m, point, t, u, f[candidate - 1], f[candidate % 3], p);
+        if (!valid) continue;
+        if (!closing || closes(m, p.old, p.olds, p.fresh, p.freshes)) return p;
+        rejected = true;
+    }
+    p.kind = rejected ? Plan::rejected : Plan::unflippable;
     return p;
 }
 
@@ -268,6 +286,16 @@ KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
     x *= 0x85ebca6bu;
     x ^= x >> 13;
     return x;
+}
+
+// Add stuck entry (t, k).
+template <class Counters, class Stuck>
+KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& stuck, int t, int k) {
+    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
+    if (at < static_cast<int>(stuck.extent(0))) {
+        stuck(at, 0) = t;
+        stuck(at, 1) = k;
+    }
 }
 
 // List t as dirty unless it already is.
@@ -369,31 +397,26 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
         "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
             st.dirty(t) = 0;
             if (!st.alive(t)) return;
-            auto from = [&](double cx, double cy, double cz, int v) {
-                return Vec3{tet_mesh::wrap(x(v, 0) - cx, box), tet_mesh::wrap(x(v, 1) - cy, box),
-                                    tet_mesh::wrap(x(v, 2) - cz, box)};
-            };
+            auto from = [&](Vec3 c, int v) { return tet_mesh::wrap(tet_mesh::row(x, v) - c, box); };
             const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
-            const Vec3 d[3] = {from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[1]),
-                                       from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[2]),
-                                       from(x(v[0], 0), x(v[0], 1), x(v[0], 2), v[3])};
-            const double volume6 = dot(d[0], cross(d[1], d[2]));
-            const double shape = Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2]));
-            // Well shaped and clearly positive, else decide exactly.
-            bool suspect = !(volume6 > 1e-3 * shape);
-            // Slivers: suspect anyway; their centres are computed exactly below
-            // (the same test as in tet_mesh::circumcentre).
-            if (!(Kokkos::abs(volume6) > 1e-4 * shape)) {
+            const Vec3 p = tet_mesh::row(x, v[0]);
+            const Vec3 d[3] = {from(p, v[1]), from(p, v[2]), from(p, v[3])};
+            double volume6, shape;
+            // Slivers: suspect; their centres are computed exactly below.
+            if (tet_mesh::detail::sliver(d, volume6, shape)) {
                 const int at = Kokkos::atomic_fetch_add(&counters(counter::freed), 1);
                 if (at < static_cast<int>(slivers.extent(0))) slivers(at) = t;
                 detail::mark(st, t);
                 return;
             }
+            // Well shaped and clearly positive, else decide exactly.
+            bool suspect = !(volume6 > 1e-3 * shape);
             const Vec3 c = tet_mesh::detail::circumcentre(d[0], d[1], d[2]);
-            const double cx = x(v[0], 0) + c.x, cy = x(v[0], 1) + c.y, cz = x(v[0], 2) + c.z, r2 = dot(c, c);
-            centre(t, 0) = cx;
-            centre(t, 1) = cy;
-            centre(t, 2) = cz;
+            const Vec3 at = p + c;
+            const double r2 = dot(c, c);
+            centre(t, 0) = at.x;
+            centre(t, 1) = at.y;
+            centre(t, 2) = at.z;
             centre(t, 3) = r2;
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
@@ -401,7 +424,7 @@ void move_screened(const ExecSpace& exec, const X& x, double box,
                 if (u < 0) continue;
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
-                const Vec3 e = from(cx, cy, cz, far);
+                const Vec3 e = from(at, far);
                 suspect = dot(e, e) < r2 + margin;
             }
             if (suspect) detail::mark(st, t);
@@ -487,13 +510,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     const ep::Offset o[4] = {{0, 0, 0}, ep::offset(point, v[0], v[1]), ep::offset(point, v[0], v[2]),
                                              ep::offset(point, v[0], v[3])};
                     // Turned inside out: listed for the host, but flips usually untangle it.
-                    if (ep::orient(o[1], o[2], o[3]) <= 0) {
-                        const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                        if (at < static_cast<int>(stuck.extent(0))) {
-                            stuck(at, 0) = t;
-                            stuck(at, 1) = inverted;
-                        }
-                    }
+                    if (ep::orient(o[1], o[2], o[3]) <= 0) detail::list_stuck(counters, stuck, t, inverted);
                     for (int k = 0; k < 4; ++k) {
                         const int u = adjacent(t, k);
                         if (u < 0 || (dirty(u) && u < t)) continue;
@@ -547,24 +564,14 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 const int t = work(i, 0), k = work(i, 1);
                 detail::Plan p;
                 const int u = adjacent(t, k);
-                if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k);
-                if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) {
-                    p.kind = detail::Plan::none;  // never votes, so it cannot block other flips
-                    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                    if (at < static_cast<int>(stuck.extent(0))) {
-                        stuck(at, 0) = t;
-                        stuck(at, 1) = rejected;
-                    }
-                }
+                if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k, false);
+                // The first valid flip nearly always closes its cavity; if
+                // not, the first of the others that does (checking each
+                // candidate inside one plan() made steps 2 % slower).
+                if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) p = detail::plan(m, point, t, k, true);
                 plans(i) = detail::pack(p);
-                if (p.kind == detail::Plan::unflippable) {
-                    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
-                    if (at < static_cast<int>(stuck.extent(0))) {
-                        stuck(at, 0) = t;
-                        stuck(at, 1) = k;
-                    }
-                }
-                if (p.kind <= 0) return;
+                if (p.kind < 0) detail::list_stuck(counters, stuck, t, p.kind == detail::Plan::rejected ? rejected : k);
+                if (p.kind <= 0) return;  // never votes, so it cannot block other flips
                 for (int r = 0; r < p.olds; ++r) {
                     const int o = p.old[r];
                     Kokkos::atomic_max(&lock(o), vote);
@@ -605,25 +612,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     detail::mark(st, p.old[0]);  // retry next round
                     return;
                 }
-                // Outer faces of the old tetrahedra: sorted triple, outer tet, its index back.
-                int outer_key[8][3], outer_tet[8], outer_back[8], outers = 0;
-                for (int r = 0; r < p.olds; ++r) {
-                    const int o = p.old[r];
-                    const int v[4] = {vertex(o, 0), vertex(o, 1), vertex(o, 2), vertex(o, 3)};
-                    for (int j = 0; j < 4; ++j) {
-                        const int w = adjacent(o, j);
-                        bool inner = false;
-                        for (int q = 0; q < p.olds; ++q) inner |= w == p.old[q];
-                        if (inner || outers == 8) continue;
-                        tet_mesh::sorted_face(v, j, outer_key[outers]);
-                        outer_tet[outers] = w;
-                        outer_back[outers] = -1;
-                        if (w >= 0)
-                            for (int b = 0; b < 4; ++b)
-                                if (adjacent(w, b) == o) outer_back[outers] = b;
-                        ++outers;
-                    }
-                }
+                // Outer faces of the old tetrahedra (six: the plan closes).
+                int outer_key[8][3], outer_tet[8];
+                const int outers = outer_faces(m, p.old, p.olds, outer_key, outer_tet);
                 Kokkos::atomic_inc(&counters(p.kind == detail::Plan::flip23 ? counter::flips23 : counter::flips32));
                 // Edges the old tetrahedra represented; they get new representatives below.
                 int kept_edge[19][2], kept_edges = 0;
@@ -664,17 +655,17 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         int key[3];
                         tet_mesh::sorted_face(v, c, key);
                         for (int q = 0; q < outers; ++q)
-                            if (key[0] == outer_key[q][0] && key[1] == outer_key[q][1] && key[2] == outer_key[q][2]) {
-                                adjacent(slot[r], c) = outer_tet[q];
-                                if (outer_tet[q] >= 0 && outer_back[q] >= 0) adjacent(outer_tet[q], outer_back[q]) = slot[r];
+                            if (tet_mesh::same_face(key, outer_key[q])) {
+                                const int w = outer_tet[q];
+                                adjacent(slot[r], c) = w;
+                                if (w >= 0) adjacent(w, tet_mesh::opposite(m, w, key)) = slot[r];
                             }
                         for (int s2 = 0; s2 < p.freshes; ++s2) {
                             if (s2 == r) continue;
-                            const int w[4] = {p.fresh[s2][0], p.fresh[s2][1], p.fresh[s2][2], p.fresh[s2][3]};
                             for (int c2 = 0; c2 < 4; ++c2) {
                                 int other[3];
-                                tet_mesh::sorted_face(w, c2, other);
-                                if (key[0] == other[0] && key[1] == other[1] && key[2] == other[2]) adjacent(slot[r], c) = slot[s2];
+                                tet_mesh::sorted_face(p.fresh[s2], c2, other);
+                                if (tet_mesh::same_face(key, other)) adjacent(slot[r], c) = slot[s2];
                             }
                         }
                     }

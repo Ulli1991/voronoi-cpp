@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
-#include <deque>
 #include <limits>
 #include <map>
 #include <unordered_map>
@@ -17,13 +16,12 @@
 // device repair got stuck.
 //
 // A shared triangle is locally Delaunay when the far vertex of either
-// tetrahedron lies outside the other's circumsphere. Failing triangles are
-// repaired by a 2->3 flip when the two tetrahedra form a convex pair, or by
-// a 3->2 flip when one edge of the triangle has exactly three tetrahedra
-// around it; otherwise the triangle waits until neighbouring flips change its
-// surroundings, and what still fails is rebuilt locally (Bowyer-Watson on the
-// particles around it). Every decision is an exact sign on the snapped
-// positions shared with the device, so a tie is the same tie everywhere.
+// tetrahedron lies outside the other's circumsphere. The device repair
+// flips failing triangles while a flip is valid and closes its cavity; the
+// host rebuilds the surroundings of those it left (Bowyer-Watson on the
+// particles around them), and the device flips again. Every decision is an
+// exact sign on the snapped positions shared with the device, so a tie is
+// the same tie everywhere.
 namespace tet_flips {
 
 namespace ep = exact_predicates;
@@ -38,7 +36,8 @@ struct Mesh {
 };
 
 struct Stats {
-    long long checked = 0, flips23 = 0, flips32 = 0, stuck = 0, rebuilt = 0, unrepaired = 0;
+    long long flips23 = 0, flips32 = 0, rebuilt = 0;  // device flips and local rebuilds
+    int stuck = 0;                                    // entries finish() left
 };
 
 namespace detail {
@@ -305,15 +304,6 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     return {};
 }
 
-// tet_repair::closes for host lists of up to three new tetrahedra.
-inline bool closes(const Mesh& m, const std::vector<int>& old, const std::vector<Tet>& fresh) {
-    int tets[3][4];
-    for (std::size_t r = 0; r < fresh.size() && r < 3; ++r)
-        for (int c = 0; c < 4; ++c) tets[r][c] = fresh[r][c];
-    return fresh.size() <= 3 &&
-           tet_repair::closes(m, old.data(), static_cast<int>(old.size()), tets, static_cast<int>(fresh.size()));
-}
-
 // Whether the triangle between neighbours t and u fails the local Delaunay test.
 inline bool fails(const Mesh& m, int t, int u) {
     const int far = tet_mesh::far_vertex(m, t, u);
@@ -322,214 +312,25 @@ inline bool fails(const Mesh& m, int t, int u) {
 
 }  // namespace detail
 
-// Restore the Delaunay property everywhere: flips first, local rebuilds for
-// what they cannot repair.
+// Rebuild the surroundings of every inverted tetrahedron and failing
+// triangle of m locally, in up to eight passes while rebuilds succeed (the
+// device repair has done every flip it could before, and flips what the
+// rebuilds leave).
 inline Stats repair(Mesh& m) {
     Stats stats;
-    std::deque<int> queue;
-    std::vector<char> queued(m.count, 0);
-    for (int t = 0; t < m.count; ++t)
-        if (m.alive(t)) {
-            queue.push_back(t);
-            queued[t] = 1;
-        }
-    auto push = [&](int t) {
-        if (t >= static_cast<int>(queued.size())) queued.resize(m.count, 0);
-        if (!queued[t]) {
-            queue.push_back(t);
-            queued[t] = 1;
-        }
-    };
-    long long budget = 50 * static_cast<long long>(m.count) + 1000;
-    std::vector<std::pair<int, int>> stuck;
-    for (int round = 0; round < 8; ++round) {
-        while (!queue.empty() && budget-- > 0) {
-            const int t = queue.front();
-            queue.pop_front();
-            queued[t] = 0;
+    for (long long pass = 0, before = -1; pass < 8 && stats.rebuilt > before; ++pass) {
+        before = stats.rebuilt;
+        for (int t = 0; t < m.count; ++t) {
             if (!m.alive(t)) continue;
-            const Tet T = detail::tet(m, t);
-            // Turned inside out: flips usually untangle it, else rebuild below.
-            if (ep::orient(m.point, T.data()) <= 0) stuck.emplace_back(t, -1);
-            for (int k = 0; k < 4; ++k) {
-                const int u = m.adjacent(t, k);
+            int u = -1;  // the failing triangle t|u, or t inverted
+            if (ep::orient(m.point, detail::tet(m, t).data()) > 0) {
+                for (int k = 0; k < 4 && u < 0; ++k)
+                    if (m.adjacent(t, k) >= 0 && detail::fails(m, t, m.adjacent(t, k))) u = m.adjacent(t, k);
                 if (u < 0) continue;
-                const int far = tet_mesh::far_vertex(m, t, u);
-                ++stats.checked;
-                if (far < 0 || !ep::in_sphere(m.point, T.data(), far)) continue;
-                const int a = T[k];  // apex of t opposite the shared face
-                int face[3];
-                tet_mesh::sorted_face(T.data(), k, face);
-                // 2->3: the segment a-far crosses the shared face exactly when the
-                // three tetrahedra (a, far, edge of the face) share one orientation.
-                std::vector<Tet> three;
-                int positive = 0, negative = 0;
-                for (int e = 0; e < 3; ++e) {
-                    const Tet n{a, far, face[e], face[(e + 1) % 3]};
-                    const int o = ep::orient(m.point, n.data());
-                    positive += o > 0;
-                    negative += o < 0;
-                    three.push_back(n);
-                }
-                if ((positive == 3 || negative == 3) && detail::closes(m, {t, u}, three)) {
-                    for (int s : detail::replace(m, {t, u}, three)) push(s);
-                    ++stats.flips23;
-                    break;
-                }
-                // 3->2: an edge of the face with exactly three tetrahedra around it.
-                bool done = false;
-                for (int e = 0; e < 3 && !done; ++e) {
-                    const int p = face[e], q = face[(e + 1) % 3];
-                    // Walk around edge p-q until the walk closes.
-                    std::vector<int> ring{t};
-                    bool closed = false;
-                    for (int current = t, previous = -1; ring.size() <= 3;) {
-                        const int next = tet_mesh::next_around_edge(m, current, previous, p, q);
-                        if (next < 0) break;
-                        if (next == t) {
-                            closed = true;
-                            break;
-                        }
-                        ring.push_back(next);
-                        previous = current;
-                        current = next;
-                    }
-                    if (!closed) continue;
-                    if (ring.size() != 3 || std::find(ring.begin(), ring.end(), u) == ring.end()) continue;
-                    // The three tetrahedra share edge p-q; their other vertices
-                    // form the triangle of the two new tetrahedra.
-                    std::vector<int> others;
-                    for (int r : ring)
-                        for (int j = 0; j < 4; ++j) {
-                            const int v = m.vertex(r, j);
-                            if (v != p && v != q && std::find(others.begin(), others.end(), v) == others.end())
-                                others.push_back(v);
-                        }
-                    if (others.size() != 3) continue;
-                    const std::vector<Tet> two{{p, others[0], others[1], others[2]}, {q, others[0], others[1], others[2]}};
-                    if (ep::orient(m.point, two[0].data()) == 0 || ep::orient(m.point, two[1].data()) == 0) continue;
-                    // Valid only if p and q lie on opposite sides of the new triangle.
-                    const Tet side_p{others[0], others[1], others[2], p}, side_q{others[0], others[1], others[2], q};
-                    if (ep::orient(m.point, side_p.data()) * ep::orient(m.point, side_q.data()) >= 0) continue;
-                    if (!detail::closes(m, ring, two)) continue;
-                    for (int s : detail::replace(m, ring, two)) push(s);
-                    ++stats.flips32;
-                    done = true;
-                }
-                if (done) break;
-                ++stats.stuck;
-                stuck.emplace_back(t, u);
             }
-        }
-        // Triangles no flip could repair: rebuild their surroundings.
-        bool rebuilt = false;
-        for (auto [t, u] : stuck) {
-            if (!m.alive(t)) continue;
-            if (u < 0) {
-                if (ep::orient(m.point, detail::tet(m, t).data()) > 0) continue;
-            } else {
-                bool adjacent = false;
-                for (int k = 0; k < 4; ++k) adjacent |= m.adjacent(t, k) == u;
-                if (!m.alive(u) || !adjacent || !detail::fails(m, t, u)) continue;
-            }
-            const auto fresh = detail::rebuild(m, t, u);
-            if (fresh.empty()) {
-                ++stats.unrepaired;
-                continue;
-            }
-            ++stats.rebuilt;
-            rebuilt = true;
-            for (int s : fresh) push(s);
-        }
-        stuck.clear();
-        if (!rebuilt) break;
-    }
-    return stats;
-}
-
-// Number of inverted tetrahedra plus shared triangles that fail the local
-// Delaunay test (each failing triangle counted from both sides).
-inline long long failing(const Mesh& m) {
-    long long bad = 0;
-    for (int t = 0; t < m.count; ++t) {
-        if (!m.alive(t)) continue;
-        if (ep::orient(m.point, detail::tet(m, t).data()) <= 0) {
-            ++bad;
-            continue;
-        }
-        for (int k = 0; k < 4; ++k) {
-            const int u = m.adjacent(t, k);
-            bad += u >= 0 && detail::fails(m, t, u);
+            stats.rebuilt += !detail::rebuild(m, t, u).empty();  // else stuck: the device lists it again
         }
     }
-    return bad;
-}
-
-// A host copy of the device mesh and its repair state.
-template <class ExecSpace>
-Mesh to_host(const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
-             const tet_repair::State<typename ExecSpace::memory_space>& state) {
-    auto copy = [](const auto& v) {
-        auto h = Kokkos::create_mirror(Kokkos::HostSpace{}, v);  // a copy even on host backends
-        Kokkos::deep_copy(h, v);
-        return h;
-    };
-    return {copy(dm.vertex), copy(dm.adjacent), copy(state.alive), copy(state.point), state.count};
-}
-
-// Repair the whole mesh on the host (the last resort of finish): repair a
-// host copy, copy it back, mark every tetrahedron it changed as touched, and
-// give each edge around them one representative (the lowest-numbered
-// tetrahedron around it); a tetrahedron whose edge bits change is touched
-// too. The device free list stays valid: the host only rewrites live
-// tetrahedra and appends new ones.
-template <class ExecSpace>
-Stats finish_everywhere(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
-             tet_repair::State<typename ExecSpace::memory_space>& state) {
-    exec.fence();
-    const Mesh before = to_host<ExecSpace>(dm, state);
-    Mesh m = to_host<ExecSpace>(dm, state);
-    const Stats stats = repair(m);
-    auto touched = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, state.touched);
-    auto edges = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, dm.edges);
-    std::vector<int> changed;
-    for (int t = 0; t < m.count; ++t) {
-        bool same = t < before.count && m.alive(t) == before.alive(t);
-        for (int k = 0; k < 4 && same; ++k)
-            same = m.vertex(t, k) == before.vertex(t, k) && m.adjacent(t, k) == before.adjacent(t, k);
-        if (same) continue;
-        touched(t) = 1;
-        changed.push_back(t);
-        if (!m.alive(t)) edges(t) = 0;
-    }
-    for (int t : changed) {
-        if (!m.alive(t)) continue;
-        for (int k = 0; k < 6; ++k) {
-            int ka, kb;
-            tet_mesh::edge_ends(k, ka, kb);
-            const int a = m.vertex(t, ka), b = m.vertex(t, kb);
-            int ring[tet_mesh::max_ring_length + 1];
-            const int length = std::min(tet_mesh::walk_edge(m, t, a, b, ring), tet_mesh::max_ring_length + 1);
-            const int lowest = *std::min_element(ring, ring + std::max(length, 1));
-            for (int r = 0; r < length; ++r) {
-                const int u = ring[r];
-                const int pa = tet_mesh::position(m, u, a), pb = tet_mesh::position(m, u, b);
-                if (pa < 0 || pb < 0) continue;
-                const int bit = 1 << tet_mesh::edge_index(pa, pb);
-                const int bits = u == lowest ? edges(u) | bit : edges(u) & ~bit;
-                if (bits != edges(u)) touched(u) = 1;  // its faces are renumbered
-                edges(u) = static_cast<std::uint8_t>(bits);
-            }
-        }
-    }
-    Kokkos::deep_copy(exec, dm.vertex, m.vertex);
-    Kokkos::deep_copy(exec, dm.adjacent, m.adjacent);
-    Kokkos::deep_copy(exec, state.alive, m.alive);
-    Kokkos::deep_copy(exec, state.touched, touched);
-    Kokkos::deep_copy(exec, dm.edges, edges);
-    exec.fence();
-    state.count = m.count;
-    state.touched_entries = -1;  // touched_list misses the host's changes
     return stats;
 }
 
@@ -584,36 +385,26 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 // Finish a device repair that left stuck entries. The tetrahedra within a
 // few adjacency steps of them are copied to the host as a local mesh (its
 // own particle numbering, in the same order, so every exact decision is the
-// same), repaired there, and the changed and new ones written back; new
-// ones are appended after state.count, so the device free list stays valid.
-// Every tetrahedron the host changed is touched and listed, each edge around
-// them gets one representative (the lowest-numbered tetrahedron around it;
-// a tetrahedron whose edge bits change is touched too), and the device
-// repair runs again from them and the stuck entries, to settle the region's
-// border and to find what the host could not repair. If that still
-// leaves stuck entries the region grows once (8, then 16 steps); then, or
-// if a local result does not fit its border, the whole mesh is repaired on
-// the host.
+// same; faces to the rest of the mesh are open), repaired there, and the
+// changed and new ones written back; new ones are appended after
+// state.count, so the device free list stays valid. Every tetrahedron the
+// host changed is touched and listed, each edge around them gets one
+// representative (the lowest-numbered tetrahedron around it; a tetrahedron
+// whose edge bits change is touched too), and the device repair runs again
+// from them and the stuck entries, to settle the region's border and to
+// find what the host could not repair. If that still leaves stuck entries
+// the region grows once (8, then 16 steps); what is left after that is
+// stats.stuck (voronoi::Mesh then rebuilds).
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state) {
-    constexpr int attempts = 2;
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     Stats total;
-    auto everywhere = [&] {
-        const Stats rest = finish_everywhere(exec, dm, state);
-        total.flips23 += rest.flips23;
-        total.flips32 += rest.flips32;
-        total.rebuilt += rest.rebuilt;
-        total.unrepaired += rest.unrepaired;
-        total.stuck = 0;
-        return total;
-    };
-    for (int attempt = 0, hops = 8; attempt < attempts; ++attempt, hops *= 2) {
-        exec.fence();
-        const int stuck = Kokkos::min(state.host_counters(tet_repair::counter::stuck), static_cast<int>(state.stuck.extent(0)));
-        if (stuck == 0) return total;
+    // The entries of the last device repair (its counters are on the host).
+    total.stuck = Kokkos::min(state.host_counters(tet_repair::counter::stuck), static_cast<int>(state.stuck.extent(0)));
+    for (int hops = 8; hops <= 16 && total.stuck > 0; hops *= 2) {
+        const int stuck = total.stuck;
         const int size = detail::stuck_region(exec, dm, state, stuck, hops);
         // The region's rows and particles to the host.
         Kokkos::View<int* [8], Memory> rows(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("region_rows")),
@@ -667,12 +458,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 if (it == local.end()) outside[detail::face_key(detail::tet(m, i), k)] = u;
             }
         }
-        const Stats stats = repair(m);
-        total.checked += stats.checked;
-        total.flips23 += stats.flips23;
-        total.flips32 += stats.flips32;
-        total.rebuilt += stats.rebuilt;
-        total.unrepaired += stats.unrepaired;
+        total.rebuilt += repair(m).rebuilt;
 
         // Changed and new tetrahedra back, with global numbers.
         const int added = m.count - size;
@@ -680,7 +466,6 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
             tet_repair::reserve(dm, state, state.count + added + (state.count + added) / 64);
         auto global = [&](int l) { return l < size ? host_listed(l) : state.count + l - size; };
         std::vector<int> changed;  // rows: slot, alive, 4 vertices, 4 neighbours, open-face bits
-        bool closed = true;
         for (int l = 0; l < m.count; ++l) {
             bool same = l < size && m.alive(l);
             for (int k = 0; k < 4 && same; ++k)
@@ -692,20 +477,16 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
             for (int k = 0; k < 4; ++k) {
                 neighbour[k] = m.adjacent(l, k) >= 0 ? global(m.adjacent(l, k)) : -1;
                 if (m.alive(l) && m.adjacent(l, k) < 0) {
+                    // Host flips and rebuilds keep the region's open faces.
                     const auto it = outside.find(detail::face_key(detail::tet(m, l), k));
-                    closed &= it != outside.end();
-                    if (it != outside.end()) {
-                        neighbour[k] = it->second;
-                        open |= 1 << k;
-                    }
+                    if (it == outside.end()) throw std::logic_error("tet_flips::finish: a region lost its border");
+                    neighbour[k] = it->second;
+                    open |= 1 << k;
                 }
             }
             changed.insert(changed.end(), {global(l), m.alive(l), particle[m.vertex(l, 0)], particle[m.vertex(l, 1)],
                                            particle[m.vertex(l, 2)], particle[m.vertex(l, 3)], neighbour[0],
                                            neighbour[1], neighbour[2], neighbour[3], open});
-        }
-        if (!closed) {  // the local result does not fit its border: repair everything
-            return everywhere();
         }
         const int count = static_cast<int>(changed.size()) / 11;
         Kokkos::View<int* [11], Kokkos::LayoutRight, Memory> update("region_update", count);
@@ -747,12 +528,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     const int u = adjacent(t, k);
                     int key[3];
                     tet_mesh::sorted_face(v, k, key);
-                    const int w[4] = {vertex(u, 0), vertex(u, 1), vertex(u, 2), vertex(u, 3)};
-                    for (int j = 0; j < 4; ++j) {
-                        int other[3];
-                        tet_mesh::sorted_face(w, j, other);
-                        if (other[0] == key[0] && other[1] == key[1] && other[2] == key[2]) adjacent(u, j) = t;
-                    }
+                    adjacent(u, tet_mesh::opposite(dm, u, key)) = t;
                 }
             });
         // One representative per edge around the changed tetrahedra.
@@ -794,9 +570,8 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         total.flips23 += device.flips23;
         total.flips32 += device.flips32;
         total.stuck = device.stuck;
-        if (device.stuck == 0) return total;
     }
-    return everywhere();
+    return total;
 }
 
 }  // namespace tet_flips

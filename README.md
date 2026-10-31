@@ -109,7 +109,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 | `tet_mesh.hpp` | persistent tetrahedra: `from_rings`, circumcentres, face rings kept in place, faces, per-cell face lists |
 | `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of the cells around errors |
 | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
-| `tet_flips.hpp` | host fallback of the repair (flips, local Bowyer-Watson) |
+| `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the pipeline below behind one interface |
 
 **Clipping.** Each cell is built by walking the grid cells of its level
@@ -134,38 +134,61 @@ rebuilds the cells around anything wrong by exact clipping.
 **Persistent mesh.** Per step: snap; screen the tetrahedra whose local
 Delaunay test may fail (double, with a margin) and repair them by flips on
 the device (plans vote by a hash of their index; every flip decided by
-exact predicates and checked to close its cavity); finish stuck triangles
-on the host or rebuild; circumcentres of the created tetrahedra; walk only
+exact predicates and checked to close its cavity, the next candidate
+flip if it does not); rebuild the surroundings of stuck triangles on the
+host, or rebuild the mesh; circumcentres of the created tetrahedra; walk only
 the faces whose ring changed; face geometry.
 
 ## Measured performance
 
-One A100 40 GB (Raven gpu1), double precision, periodic unit box, job
-31694457, commit f32c909. Rates in million cells per second.
+One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates
+in million cells per second. 2.1M column: job 31701509 (commit 2311937's
+code); 256^3 column: job 31694457 (commit f32c909, before the plume-derived
+speedups, so the current code is faster there).
 
-| | 2,097,152 cells (128^3) | 16,777,216 cells (256^3) |
+Throughput in million cells per second (cells processed per second of GPU time).
+
+| Million cells per second | 2,097,152 cells (128^3) | 16,777,216 cells (256^3) |
 |---|---|---|
-| Warp rebuild, jittered | 34.7 (60.4 ms) | 34.8 (482 ms) |
-| Warp rebuild, uniform random | 16.5 | |
-| Warp rebuild, clustered (Gaussian blobs, ~1:500) | 13.0 | |
-| Warp rebuild, halo (1:10^4 core to edge) | 12.1 | |
-| Warp rebuild, lattice / wave | 46.0 / 33.5 | |
-| Exact start (warp with rings + `tet_start::build`), jittered | 120 ms | 1.43 s |
-| `voronoi::Mesh` first update (start, state, all faces) | 146 ms | 2.14 s |
-| Step at 0.03 spacings (repair, centres, rings, faces) | 11.1 ms (189 M/s) | 64 ms (262 M/s) |
-| Step at 0.1 spacings | 18.9 ms | |
-| Step at 0.3 spacings | 37.1 ms | 180 ms |
-| `update_cells()` (face lists, ordered volumes and centroids; job 31697589) | 6.9 ms | 54 ms |
-| Device memory, plain warp rebuild | 701 B/cell | 656 B/cell |
-| Device memory peak, start and steps (with face lists) | 2221 B/cell | 2200 B/cell (37.9 GB in use) |
+| Full rebuild (warp clipping), jittered | **40.1** | 34.8 |
+| Full rebuild, uniform random | **20.0** | |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | **15.6** | |
+| Full rebuild, halo (1:10^4 core to edge) | **14.3** | |
+| Full rebuild, lattice / wave | **50.2 / 38.5** | |
+| Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
+| Moving-mesh update, 0.03 spacings per step | **201** | 262 |
+| Moving-mesh update, 0.1 spacings per step | 115 | |
+| Moving-mesh update, 0.3 spacings per step | 57 | 93 |
+| `update_cells()` alone (face lists, ordered volumes and centroids) | 326 | 311 |
+| Moving-mesh update + `update_cells()`, 0.03 spacings (bit-reproducible) | **124** | |
+
+Inputs (all in the periodic unit box, `src/test/support.hpp`):
+
+| Name | Points | Tests |
+|---|---|---|
+| jittered | cubic lattice, each point moved randomly by up to ±0.1 lattice spacing per axis | the typical hydro start; nearly regular, ~16 faces per cell |
+| uniform random | independent uniform points | unstructured cells of very different size and shape |
+| clustered | 8 Gaussian blobs (σ = 0.04) with 80 % of the points, 20 % uniform background | density contrast ~1:500 (blob centre to void) |
+| halo | 4 halos with ρ ∝ 1/(r² + c²) to r = 0.2, c = 0.002, 90 % of the points, 10 % background | density contrast ~1:10^4 (core to edge) |
+| lattice | perfect cubic lattice | fully degenerate: 8 points on every circumsphere |
+| wave (moved lattice) | the lattice with every point moved by up to 1e-5 spacing | nearly degenerate: ties broken only by tiny offsets |
+
+Moving-mesh update rates are per step of a smooth flow that moves the
+points by the given number of mean interparticle spacings per step
+(spacing = (box volume / n)^(1/3)): 0.03 spacings is a typical hydro
+step, 0.3 a very large one (more flips per step, lower throughput).
+
+Device memory: plain warp rebuild 701 B/cell (656 at 256^3); peak during
+start and steps, with face lists, 2221 B/cell (2200 at 256^3, 37.9 GB in use).
 
 Steps are medians of steps 2-10 on jittered points moved by a smooth flow;
 the step at 256^3 moves particles by the same number of spacings, but the
 flow varies on the box scale, so neighbours shear half as much per step
 (half the flips per cell). On jittered, uniform and clustered input at
 0.1 and 0.3 spacings no triangle ever sticks; the first step out of a
-degenerate start (wave lattice) leaves 178k stuck at 2.1M, rebuilt in
-0.17 s. The per-cell face lists account for most of the step peak above
+degenerate start (wave lattice, 2.1M) is repaired on the device alone in
+0.81 s (job 31701509; research_notes/shrink_2026-10-31.md), while
+icosahedral shells@1e-9 still leave ~8k of 262k stuck (host or rebuild). The per-cell face lists account for most of the step peak above
 2fd8b50's 2080 B/cell (about 140 B/cell; not measured separately).
 
 ## Tests

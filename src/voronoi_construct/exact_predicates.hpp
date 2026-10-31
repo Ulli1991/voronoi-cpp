@@ -105,6 +105,18 @@ KOKKOS_INLINE_FUNCTION i128 lift(const Offset& a) {
     return i128(a[0]) * a[0] + i128(a[1]) * a[1] + i128(a[2]) * a[2];
 }
 
+// The circumcentre of the origin and a, b, c is n / (2 det3(a, b, c)), with
+// n = |a|^2 (b x c) + |b|^2 (c x a) + |c|^2 (a x b); returns det3(a, b, c).
+KOKKOS_INLINE_FUNCTION i128 circumcentre(const Offset& a, const Offset& b, const Offset& c, i128* n) {
+    i128 bc[3], ca[3], ab[3];
+    cross(b, c, bc);
+    cross(c, a, ca);
+    cross(a, b, ab);
+    const i128 la = lift(a), lb = lift(b), lc = lift(c);
+    for (int k = 0; k < 3; ++k) n[k] = la * bc[k] + lb * ca[k] + lc * ab[k];
+    return a[0] * bc[0] + a[1] * bc[1] + a[2] * bc[2];
+}
+
 // det3 in double and its permanent (the same sum with absolute values), which
 // bounds the rounding error: |det - exact| <= 8 eps permanent.
 KOKKOS_INLINE_FUNCTION double det3_float(const Offset& a, const Offset& b, const Offset& c, double& permanent) {

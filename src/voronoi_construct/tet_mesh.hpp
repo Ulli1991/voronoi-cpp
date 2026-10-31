@@ -91,6 +91,18 @@ KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
 }
 
+KOKKOS_INLINE_FUNCTION bool same_face(const int* a, const int* b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
+
+// The corner of tetrahedron t opposite its face f (sorted particles).
+template <class M>
+KOKKOS_INLINE_FUNCTION int opposite(const M& m, int t, const int* f) {
+    for (int k = 0; k < 3; ++k) {
+        const int v = m.vertex(t, k);
+        if (v != f[0] && v != f[1] && v != f[2]) return k;
+    }
+    return 3;
+}
+
 // The longest ring of tetrahedra around an edge that the walks follow.
 constexpr int max_ring_length = 64;
 
@@ -127,6 +139,13 @@ KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring 
 // multiplication by 1 / box (computed once per kernel) instead of a
 // division: it picks the same image unless d is within an ulp of half a box.
 KOKKOS_INLINE_FUNCTION double wrap(double d, double box) { return d - box * Kokkos::nearbyint(d * (1.0 / box)); }
+KOKKOS_INLINE_FUNCTION Vec3 wrap(Vec3 d, double box) { return {wrap(d.x, box), wrap(d.y, box), wrap(d.z, box)}; }
+
+// Row i of positions or centres x.
+template <class X>
+KOKKOS_INLINE_FUNCTION Vec3 row(const X& x, int i) {
+    return {x(i, 0), x(i, 1), x(i, 2)};
+}
 
 namespace detail {
 // The point equidistant from the origin and a, b, c.
@@ -134,6 +153,15 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(Vec3 a, Vec3 b, Vec3 c) {
     const Vec3 bc = cross(b, c), ca = cross(c, a), ab = cross(a, b);
     const double scale = 0.5 / dot(a, bc);
     return (bc * dot(a, a) + ca * dot(b, b) + ab * dot(c, c)) * scale;
+}
+
+// Whether a tetrahedron with edge vectors d[0..2] from one corner is too
+// flat for that formula (its determinant is tiny): six times its volume
+// against the product of the edge lengths.
+KOKKOS_INLINE_FUNCTION bool sliver(const Vec3* d, double& volume6, double& shape) {
+    volume6 = dot(d[0], cross(d[1], d[2]));
+    shape = Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2]));
+    return !(Kokkos::abs(volume6) > 1e-4 * shape);
 }
 }  // namespace detail
 
@@ -279,10 +307,10 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
                 const int e = ring(base + m);
                 adjacent(e, 2) = ring(base + (m + 1) % k);      // opposite p: triangle (i, j, q)
                 adjacent(e, 3) = ring(base + (m + k - 1) % k);  // opposite q: triangle (i, j, p)
-                for (int drop = 0; drop < 2; ++drop) {          // opposite i, then j
-                    int tri[3] = {vertex(e, drop == 0 ? 1 : 0), vertex(e, 2), vertex(e, 3)};
-                    for (int a = 1; a < 3; ++a)
-                        for (int b = a; b > 0 && tri[b - 1] > tri[b]; --b) Kokkos::kokkos_swap(tri[b - 1], tri[b]);
+                const int v[4] = {vertex(e, 0), vertex(e, 1), vertex(e, 2), vertex(e, 3)};
+                for (int drop = 0; drop < 2; ++drop) {  // opposite i, then j
+                    int tri[3];
+                    sorted_face(v, drop, tri);
                     const int h = face_of(tri[0], tri[1]);
                     int other = -1;
                     for (int r = 0; h >= 0 && r < length(h); ++r)
@@ -610,30 +638,20 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
 // offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images).
 template <class X>
 KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, double box, const int* v, const Vec3* d) {
-    Vec3 c = detail::circumcentre(d[0], d[1], d[2]);
-    // Nearly flat (sliver) tetrahedra: the double formula divides by a
-    // tiny determinant. Redo it on the snapped grid, where numerator
-    // and denominator are exact integers, and divide once at the end.
-    const double volume6 = dot(d[0], cross(d[1], d[2]));
-    if (!(Kokkos::abs(volume6) > 1e-4 * Kokkos::sqrt(dot(d[0], d[0]) * dot(d[1], d[1]) * dot(d[2], d[2])))) {
-        namespace ep = exact_predicates;
-        ep::Offset g[3];
-        for (int k = 0; k < 3; ++k)
-            for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(ep::snap(x(v[0], a), box), ep::snap(x(v[k + 1], a), box));
-        ep::i128 bc[3], ca[3], ab[3];
-        ep::cross(g[1], g[2], bc);
-        ep::cross(g[2], g[0], ca);
-        ep::cross(g[0], g[1], ab);
-        const ep::i128 la = ep::lift(g[0]), lb = ep::lift(g[1]), lc = ep::lift(g[2]);
-        const ep::i128 det = ep::det3(g[0], g[1], g[2]);
-        if (det != 0) {
-            const double unit = box / ep::scale / (2 * double(det));
-            c = {double(la * bc[0] + lb * ca[0] + lc * ab[0]) * unit,
-                 double(la * bc[1] + lb * ca[1] + lc * ab[1]) * unit,
-                 double(la * bc[2] + lb * ca[2] + lc * ab[2]) * unit};
-        }
-    }
-    return c;
+    double volume6, shape;
+    const Vec3 c = detail::circumcentre(d[0], d[1], d[2]);
+    if (!detail::sliver(d, volume6, shape)) return c;
+    // Redo it on the snapped grid, where numerator and denominator are
+    // exact integers, and divide once at the end.
+    namespace ep = exact_predicates;
+    ep::Offset g[3];
+    for (int k = 0; k < 3; ++k)
+        for (int a = 0; a < 3; ++a) g[k][a] = ep::delta(ep::snap(x(v[0], a), box), ep::snap(x(v[k + 1], a), box));
+    ep::i128 n[3];
+    const ep::i128 det = ep::circumcentre(g[0], g[1], g[2], n);
+    if (det == 0) return c;
+    const double unit = box / ep::scale / (2 * double(det));
+    return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
 
 // 1. Circumcentres, one thread per tetrahedron: of the first `count` (all
@@ -651,10 +669,8 @@ void circumcentres(const ExecSpace& exec, const X& x, double box,
         KOKKOS_LAMBDA(int s) {
             const int t = listed ? only(s) : s;
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
-            Vec3 d[3];
-            for (int k = 0; k < 3; ++k)
-                d[k] = {wrap(x(v[k + 1], 0) - x(v[0], 0), box), wrap(x(v[k + 1], 1) - x(v[0], 1), box),
-                        wrap(x(v[k + 1], 2) - x(v[0], 2), box)};
+            const Vec3 p = row(x, v[0]);
+            const Vec3 d[3] = {wrap(row(x, v[1]) - p, box), wrap(row(x, v[2]) - p, box), wrap(row(x, v[3]) - p, box)};
             const Vec3 c = circumcentre(x, box, v, d);
             mesh.centre(t, 0) = x(v[0], 0) + c.x;
             mesh.centre(t, 1) = x(v[0], 1) + c.y;
@@ -675,14 +691,9 @@ void faces(const ExecSpace& exec, const X& x, double box,
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f) {
             const int i = mesh.owner(f), j = mesh.neighbour(f);
             const int begin = mesh.ring_start(f), end = begin + mesh.ring_length(f);
-            auto vertex = [&](int m) {
-                const int t = mesh.ring(m);
-                return Vec3{wrap(mesh.centre(t, 0) - x(i, 0), box),
-                                    wrap(mesh.centre(t, 1) - x(i, 1), box),
-                                    wrap(mesh.centre(t, 2) - x(i, 2), box)};
-            };
-            const Vec3 dj{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box),
-                                  wrap(x(j, 2) - x(i, 2), box)};
+            const Vec3 p = row(x, i);
+            auto vertex = [&](int m) { return wrap(row(mesh.centre, mesh.ring(m)) - p, box); };
+            const Vec3 dj = wrap(row(x, j) - p, box);
             // Fan triangles (first, previous, v): twice the area vector, and
             // (previous + v) weighted by the triangle's area projected on dj
             // (the face is perpendicular to dj up to rounding), divided once
@@ -744,9 +755,9 @@ namespace detail {
 template <class X, class Area, class Centroid>
 KOKKOS_INLINE_FUNCTION double pyramid(const X& x, double box, const Area& area, const Centroid& centroid, int i, int j,
                                       int f, Vec3& c) {
-    const Vec3 d{wrap(x(j, 0) - x(i, 0), box), wrap(x(j, 1) - x(i, 1), box), wrap(x(j, 2) - x(i, 2), box)};
-    const Vec3 A{area(f, 0), area(f, 1), area(f, 2)};
-    c = {centroid(f, 0), centroid(f, 1), centroid(f, 2)};
+    const Vec3 d = wrap(row(x, j) - row(x, i), box);
+    const Vec3 A = row(area, f);
+    c = row(centroid, f);
     if (j < i) c = c + d;
     return Kokkos::abs(dot(A, d));
 }
