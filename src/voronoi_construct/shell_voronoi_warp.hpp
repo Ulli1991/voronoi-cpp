@@ -340,7 +340,7 @@ struct Kernel {
     __device__ __forceinline__ void build(Polyhedron& c, int t) const {
         const int l = lane();
         const auto& positions = grid.positions;
-        const double box = grid.box;
+        const double* side = grid.box.side;
         const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
 
         int planes = 0;
@@ -361,9 +361,9 @@ struct Kernel {
             // Lane i loads candidate i at once; the loop broadcasts it.
             Vec3 mine{0, 0, 0};
             if (l < buffered)
-                mine = {positions(slot, 0) + image(packed, 0) * box - p.x,
-                        positions(slot, 1) + image(packed, 1) * box - p.y,
-                        positions(slot, 2) + image(packed, 2) * box - p.z};
+                mine = {positions(slot, 0) + image(packed, 0) * side[0] - p.x,
+                        positions(slot, 1) + image(packed, 1) * side[1] - p.y,
+                        positions(slot, 2) + image(packed, 2) * side[2] - p.z};
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
@@ -384,10 +384,10 @@ struct Kernel {
         // overlap. A level is certified once the next cell's lower bound
         // exceeds 2R.
         int level = adaptive ? int(grid.level(t)) : grid.levels, home[3], finer = -1;
-        home_cell(p, box, level, home);
+        home_cell(p, grid, level, home);
         while (status == ok) {
-            const double width = box / (1 << level);
-            const int reach = level_reach(level), entries = stencil.ends(reach);
+            const double width = grid.narrowest / (1 << level);
+            const int reach = level_reach(level, grid.fewest), entries = stencil.ends(reach);
             for (int first = 0; first < entries && status == ok; first += lanes) {
                 if (double(stencil.bound2(first)) * width * width >= 4.0 * radius2) {
                     certified = true;
@@ -405,9 +405,9 @@ struct Kernel {
                     double d2 = 0;
                     bool take = false;
                     if (q < end && q != t) {
-                        const double ddx = positions(q, 0) + image(packed, 0) * box - p.x;
-                        const double ddy = positions(q, 1) + image(packed, 1) * box - p.y;
-                        const double ddz = positions(q, 2) + image(packed, 2) * box - p.z;
+                        const double ddx = positions(q, 0) + image(packed, 0) * side[0] - p.x;
+                        const double ddy = positions(q, 1) + image(packed, 1) * side[1] - p.y;
+                        const double ddz = positions(q, 2) + image(packed, 2) * side[2] - p.z;
                         d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                         take = d2 < 4.0 * radius2;
                     }

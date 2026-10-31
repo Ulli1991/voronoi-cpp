@@ -15,6 +15,10 @@
 //       adds adjacency and stuck details.
 //   --memory (both modes): device memory per phase (Kokkos allocations:
 //       current, peak, and the live allocations at the peak by label).
+//   --box=<Lx>,<Ly>,<Lz> (both modes; default 1,1,1): a periodic box of
+//       these sides; lattices get about equal spacings along every axis
+//       (e.g. --box=2,2,0.0625 with 4194304 jittered points is a
+//       512 x 512 x 16 slab), the other distributions stretch with the box.
 //
 // Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 // <sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>.
@@ -103,6 +107,23 @@ double flag_value(int argc, char** argv, const std::string& flag, double fallbac
     return fallback;
 }
 
+// --box=Lx,Ly,Lz (or one side, a cube); the unit cube by default.
+exact_predicates::Box box_flag(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg.rfind("--box=", 0) != 0) continue;
+        double side[3];
+        int count = 0;
+        for (std::size_t at = 6; at <= arg.size() && count < 3; ++count) {
+            const std::size_t end = std::min(arg.find(',', at), arg.size());
+            side[count] = std::stod(arg.substr(at, end - at));
+            at = end + 1;
+        }
+        return count == 1 ? exact_predicates::Box(side[0]) : exact_predicates::Box(side[0], side[1], side[2]);
+    }
+    return {};
+}
+
 // Positional arguments, flags removed.
 std::vector<std::string> positional(int argc, char** argv) {
     std::vector<std::string> args;
@@ -111,21 +132,23 @@ std::vector<std::string> positional(int argc, char** argv) {
     return args;
 }
 
-int rebuild(const std::vector<std::string>& args, double width_factor, bool check) {
+int rebuild(const std::vector<std::string>& args, const Box& box, double width_factor, bool check) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
     const std::string selection = args.size() > 3 ? args[3] : "all";
     const int repeats = args.size() > 4 ? std::max(1, std::stoi(args[4])) : 5;
-    const Positions x = to_device(make_points(kind, requested));
+    const Positions x = to_device(make_points(kind, requested, box));
     const int n = static_cast<int>(x.extent(0));
     neighbor_search::CellList<Exec> list;
-    neighbor_search::configure(list, n, 1.0, width_factor * std::cbrt(1.0 / n));
+    const double width = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
+    neighbor_search::configure(list, n, box, width_factor * width);
     const double build_ms = median_ms(repeats, [&] { neighbor_search::build(exec, list, x); });
     const auto grid = shell_voronoi::make_grid(list);
     DeviceMemory::phase("positions_and_cell_list", n);
-    std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " grid="
-              << list.cells_per_side() << "^3 repeats=" << repeats << "\n";
+    std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0] << ","
+              << box.side[1] << "," << box.side[2] << " tiles=" << list.tiles[0] << "x" << list.tiles[1] << "x"
+              << list.tiles[2] << " grid=" << (1 << list.levels) << "^3_per_tile repeats=" << repeats << "\n";
     int failures = 0;
     std::vector<double> first_volumes;
     for (const std::string variant : {"thread", "exact", "warp"}) {
@@ -139,7 +162,7 @@ int rebuild(const std::vector<std::string>& args, double width_factor, bool chec
         std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
                   << " construct_Mcells_s=" << n / construct_ms / 1e3
                   << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-        if (check) failures += check_cells(cells, x, std::cout);
+        if (check) failures += check_cells(cells, x, std::cout, box);
         const auto volume = to_host(cells.volume);
         if (first_volumes.empty()) {
             first_volumes.assign(volume.data(), volume.data() + n);
@@ -220,7 +243,7 @@ std::uint64_t cells_checksum(const Mesh& mesh) {
     return h;
 }
 
-int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi::Fallback fallback) {
+int step(const std::vector<std::string>& args, const Box& box, bool verify, bool debug, voronoi::Fallback fallback) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -228,12 +251,12 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
     const int steps = args.size() > 4 ? std::stoi(args[4]) : 10;
     const int repeats = 3;
     // In slot order: a spatial particle order, as a hydro code keeps it.
-    Points points = in_slot_order(make_points(kind, requested));
+    Points points = in_slot_order(make_points(kind, requested, box), box);
     const int n = static_cast<int>(points.size());
-    const double spacing = std::cbrt(1.0 / n);
+    const double spacing = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
     Positions x = to_device(points);
-    std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind
-              << " displacement=" << displacement << " steps=" << steps
+    std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0]
+              << "," << box.side[1] << "," << box.side[2] << " displacement=" << displacement << " steps=" << steps
               << " fallback=" << (fallback == voronoi::Fallback::host      ? "host"
                                   : fallback == voronoi::Fallback::rebuild ? "rebuild"
                                                                            : "cheapest")
@@ -243,7 +266,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
         // The start kernels: clipping with rings, from_rings, and the exact
         // start (tet_start::build: check, patch); build rewrites rings, so it
         // is timed together with a fresh clipping.
-        const auto list = cell_list(x);
+        const auto list = cell_list(x, box);
         const auto grid = shell_voronoi::make_grid(list);
         auto cells = cells_with_rings(list);  // sizes the ring pool
         tet_mesh::Mesh<Memory> mesh;
@@ -263,7 +286,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
     }
 
     DeviceMemory::phase("positions_and_bench_start_kernels", n, false);
-    Mesh mesh(exec, 1.0);
+    Mesh mesh(exec, box);
     mesh.set_fallback(fallback);
     {
         voronoi::Timings t;
@@ -277,7 +300,7 @@ int step(const std::vector<std::string>& args, bool verify, bool debug, voronoi:
     const Flow flow;
     int failures = 0;
     for (int s = 1; s <= steps; ++s) {
-        flow.advect(points, displacement * spacing);
+        flow.advect(points, displacement * spacing, box);
         x = to_device(points);
         exec.fence();
         voronoi::Timings t;
@@ -311,14 +334,16 @@ int main(int argc, char** argv) {
     if (has_flag(argc, argv, "--memory")) DeviceMemory::start();
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
-        return rebuild(args, flag_value(argc, argv, "--width", 1.0), !has_flag(argc, argv, "--no-check")) != 0;
+        return rebuild(args, box_flag(argc, argv), flag_value(argc, argv, "--width", 1.0),
+                       !has_flag(argc, argv, "--no-check")) != 0;
     if (args.size() >= 4 && args[0] == "step")
-        return step(args, has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug"),
+        return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug"),
                     has_flag(argc, argv, "--fallback=rebuild") ? voronoi::Fallback::rebuild
                     : has_flag(argc, argv, "--fallback=host")  ? voronoi::Fallback::host
                                                                : voronoi::Fallback::cheapest) != 0;
     std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
-                 "                          [--fallback=host|rebuild] [--memory]\n";
+                 "                          [--fallback=host|rebuild] [--memory]\n"
+                 "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }

@@ -43,15 +43,30 @@ namespace voronoi {
 namespace ep = exact_predicates;
 
 namespace detail {
-// positions = x snapped to the grid, in box units.
+// positions = x snapped to the grid (whole grid steps).
 template <class ExecSpace, class X>
-void snap_positions(const ExecSpace& exec, const X& x, double box,
+void snap_positions(const ExecSpace& exec, const X& x, const ep::Box& box,
                     const tet_mesh::Points4<typename ExecSpace::memory_space>& positions) {
-    const double unit = box / ep::scale;
+    const double unit = box.step;
     Kokkos::parallel_for(
         "voronoi::snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, positions.extent(0)), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) positions(i, a) = ep::snap(x(i, a), box) * unit;
+            for (int a = 0; a < 3; ++a) positions(i, a) = ep::snap(x(i, a), box, a) * unit;
         });
+}
+
+// Why a start failed: cells the clipping could not certify (in one periodic
+// image, see shell_voronoi::level_reach), or else not exact.
+template <class ExecSpace>
+std::string not_exact(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells) {
+    int uncertified = 0;
+    const auto status = cells.status;
+    Kokkos::parallel_reduce(
+        "voronoi::uncertified", Kokkos::RangePolicy<ExecSpace>(exec, 0, status.extent(0)),
+        KOKKOS_LAMBDA(int i, int& count) { count += status(i) == shell_voronoi::uncertified; }, uncertified);
+    if (uncertified == 0) return "voronoi::Mesh: the start is not exact";
+    return "voronoi::Mesh: " + std::to_string(uncertified) +
+           " cells reach too far to be certified in one periodic image (a cell's radius must stay below about 3/16 "
+           "of the shortest box side): too few particles across the box";
 }
 }  // namespace detail
 
@@ -89,9 +104,12 @@ public:
     template <class T>
     using View = Kokkos::View<T, Memory>;
 
+    // A periodic box of sides box.side[a] (see exact_predicates::Box: sides
+    // are rounded to whole grid steps, side[] holds them), or a cube.
+    Mesh(const ExecSpace& exec, const ep::Box& box) : exec_(exec), box_(box) {}
     Mesh(const ExecSpace& exec, double box) : exec_(exec), box_(box) {}
 
-    // New positions of all particles, x(i, a) in [0, box) for particle i
+    // New positions of all particles, x(i, a) in [0, side[a]) for particle i
     // (any view on the device). Repairs the mesh, or builds it on the first
     // call or when the number of particles changed; exact on return either
     // way. `active` (particle ids) is accepted for a later repair limited
@@ -152,7 +170,7 @@ public:
                 report.start = tet_start::build(exec_, grid, cells, tets_);
             }
             ring_entries_ = cells.capacity();
-            if (!report.start.exact) throw std::runtime_error("voronoi::Mesh: the start is not exact");
+            if (!report.start.exact) throw std::runtime_error(detail::not_exact(exec_, cells));
         }
         // Capacities: 1/8 more than the starting mesh needs (ring pools
         // 1/2 more: room to append between compactions); the repair and
@@ -229,7 +247,12 @@ public:
     void set_fallback(Fallback f) { fallback_ = f; }
 
     int particles() const { return n_; }
-    double box() const { return box_; }
+    // The box; box() is the side of a cubic one.
+    const ep::Box& sides() const { return box_; }
+    double box() const {
+        if (!box_.cubic()) throw std::logic_error("voronoi::Mesh::box: the box is not a cube; use sides()");
+        return box_.side[0];
+    }
     // Faces f < faces(). owner() and neighbour() have exactly faces() rows;
     // area() and face_centroid() may hold more (spare capacity): loop to
     // faces(), never to their extent.
@@ -264,7 +287,7 @@ private:
         timer.reset();
     }
 
-    // positions_ = x snapped to the grid, in box units.
+    // positions_ = x snapped to the grid.
     template <class X>
     void snap(const X& x) {
         if (static_cast<int>(positions_.extent(0)) != n_)
@@ -275,7 +298,8 @@ private:
     // The cell list of positions p.
     template <class P>
     void index(const P& p) {
-        if (list_.n != n_) neighbor_search::configure(list_, n_, box_, box_ * std::cbrt(1.0 / n_));
+        if (list_.n != n_) neighbor_search::configure(list_, n_, box_, box_.cubic() ? box_.side[0] * std::cbrt(1.0 / n_)
+                                                                                   : std::cbrt(box_.volume() / n_));
         neighbor_search::build(exec_, list_, p);
     }
 
@@ -302,7 +326,7 @@ private:
     }
 
     ExecSpace exec_;
-    double box_;
+    ep::Box box_;
     int n_ = 0;
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
