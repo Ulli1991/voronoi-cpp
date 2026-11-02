@@ -2,6 +2,9 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <cstddef>
+#include <utility>
+
 // The Euler equations of an ideal gas in D = 1, 2 or 3 dimensions, per cell
 // and per face: conversions, the MUSCL-Hancock half step and the HLL and
 // HLLC fluxes along a face normal.
@@ -13,8 +16,12 @@
 // research_notes/hydro_stage1_2026-10-31.md.
 //
 // Every expression is written so that D = 3 is the arithmetic, in the same
-// order, of the 3D-only code before (dot products left to right, the loops
-// over d < D the former loops over d < 3): the same bits.
+// order and the same form, of the 3D-only code before: dot products written
+// out left to right, vectors and states built as brace initializers
+// {f(0), .., f(N - 1)} (braced) where that code had them, loops over d < D
+// where it looped over d < 3. Compilers contract a * b + c into FMAs
+// depending on that form, so a loop where an initializer was gives other
+// bits (measured on the A100 and with gcc).
 namespace hydro {
 
 template <int D>
@@ -30,20 +37,36 @@ struct Vec {
     KOKKOS_INLINE_FUNCTION const double& operator[](int a) const { return v[a]; }
 };
 using Vec3 = Vec<3>;
+
+// T{f(0), f(1), .., f(N - 1)}: a brace initializer for any N.
+template <class T, class F, std::size_t... I>
+KOKKOS_INLINE_FUNCTION T braced_from(const F& f, std::index_sequence<I...>) {
+    return T{f(static_cast<int>(I))...};
+}
+template <class T, std::size_t N, class F>
+KOKKOS_INLINE_FUNCTION T braced(const F& f) {
+    return braced_from<T>(f, std::make_index_sequence<N>{});
+}
+template <int D, class F>
+KOKKOS_INLINE_FUNCTION Vec<D> make_vec(const F& f) {
+    return braced<Vec<D>, D>(f);
+}
+template <int D, class F>
+KOKKOS_INLINE_FUNCTION State<D> make_state(const F& f) {
+    return braced<State<D>, D + 2>(f);
+}
+
 template <int D>
 KOKKOS_INLINE_FUNCTION Vec<D> operator+(Vec<D> a, Vec<D> b) {
-    for (int k = 0; k < D; ++k) a[k] = a[k] + b[k];
-    return a;
+    return make_vec<D>([&](int k) { return a[k] + b[k]; });
 }
 template <int D>
 KOKKOS_INLINE_FUNCTION Vec<D> operator-(Vec<D> a, Vec<D> b) {
-    for (int k = 0; k < D; ++k) a[k] = a[k] - b[k];
-    return a;
+    return make_vec<D>([&](int k) { return a[k] - b[k]; });
 }
 template <int D>
 KOKKOS_INLINE_FUNCTION Vec<D> operator*(Vec<D> a, double s) {
-    for (int k = 0; k < D; ++k) a[k] = a[k] * s;
-    return a;
+    return make_vec<D>([&](int k) { return a[k] * s; });
 }
 // Left to right, written out per D (a loop could be contracted otherwise).
 template <int D>
@@ -55,9 +78,7 @@ KOKKOS_INLINE_FUNCTION double dot(Vec<D> a, Vec<D> b) {
 // The velocity (or momentum) entries 1 .. D of a state.
 template <std::size_t N, int D = dimension_of<N>>
 KOKKOS_INLINE_FUNCTION Vec<D> velocity(const Kokkos::Array<double, N>& W) {
-    Vec<D> v;
-    for (int k = 0; k < D; ++k) v[k] = W[1 + k];
-    return v;
+    return make_vec<D>([&](int k) { return W[1 + k]; });
 }
 
 // Ideal gas with LUNA's RAMSES floors (template_config.py:41-42): density
@@ -77,11 +98,7 @@ KOKKOS_INLINE_FUNCTION State<D> primitive(const Kokkos::Array<double, N>& U, con
     const double smalle = gas.smallc * gas.smallc / gas.gamma / (gas.gamma - 1.0);
     const double kinetic = 0.5 * rho * dot(v, v);
     const double e = Kokkos::fmax(U[D + 1] - kinetic, smalle * rho);
-    State<D> W;
-    W[0] = rho;
-    for (int k = 0; k < D; ++k) W[1 + k] = v[k];
-    W[D + 1] = (gas.gamma - 1.0) * e;
-    return W;
+    return make_state<D>([&](int k) { return k == 0 ? rho : k == D + 1 ? (gas.gamma - 1.0) * e : v[k - 1]; });
 }
 
 // W -> U (conversions.py:39-48).
@@ -90,11 +107,8 @@ KOKKOS_INLINE_FUNCTION State<D> conserved(const Kokkos::Array<double, N>& W, con
     const double rho = W[0];
     const Vec<D> v = velocity(W);
     const double kinetic = 0.5 * rho * dot(v, v);
-    State<D> U;
-    U[0] = rho;
-    for (int k = 0; k < D; ++k) U[1 + k] = rho * W[1 + k];
-    U[D + 1] = W[D + 1] / (gas.gamma - 1.0) + kinetic;
-    return U;
+    return make_state<D>(
+        [&](int k) { return k == 0 ? rho : k == D + 1 ? W[D + 1] / (gas.gamma - 1.0) + kinetic : rho * W[k]; });
 }
 
 template <std::size_t N, int D = dimension_of<N>>
@@ -167,12 +181,8 @@ KOKKOS_INLINE_FUNCTION Side<D> side(const State<D>& W, Vec<D> n, Vec<D> w, const
     s.c = c2 > 0 ? Kokkos::sqrt(c2) : 0.0;
     s.E = W[P] / (gas.gamma - 1.0) + W[0] * (0.5 * dot(s.v, s.v));
     const double m = W[0] * s.vn;
-    s.F[0] = m;
-    for (int k = 0; k < D; ++k) s.F[1 + k] = m * s.v[k] + W[P] * n[k];
-    s.F[P] = (s.E + W[P]) * s.vn;
-    s.U[0] = W[0];
-    for (int k = 0; k < D; ++k) s.U[1 + k] = W[0] * s.v[k];
-    s.U[P] = s.E;
+    s.F = make_state<D>([&](int k) { return k == 0 ? m : k == P ? (s.E + W[P]) * s.vn : m * s.v[k - 1] + W[P] * n[k - 1]; });
+    s.U = make_state<D>([&](int k) { return k == 0 ? W[0] : k == P ? s.E : W[0] * s.v[k - 1]; });
     return s;
 }
 
@@ -181,7 +191,9 @@ KOKKOS_INLINE_FUNCTION Side<D> side(const State<D>& W, Vec<D> n, Vec<D> w, const
 // + |w|^2 / 2 F_rho, momentum + w F_rho.
 template <int D>
 KOKKOS_INLINE_FUNCTION State<D> to_lab(State<D> F, Vec<D> w) {
-    F[D + 1] += dot(w, velocity(F)) + 0.5 * dot(w, w) * F[0];
+    if constexpr (D == 1) F[2] += w[0] * F[1] + 0.5 * dot(w, w) * F[0];
+    if constexpr (D == 2) F[3] += w[0] * F[1] + w[1] * F[2] + 0.5 * dot(w, w) * F[0];
+    if constexpr (D == 3) F[4] += w[0] * F[1] + w[1] * F[2] + w[2] * F[3] + 0.5 * dot(w, w) * F[0];
     for (int k = 0; k < D; ++k) F[1 + k] += w[k] * F[0];
     return F;
 }
@@ -242,10 +254,8 @@ struct HLLC {
         const double rho_star = denom / nonzero(S - SM);
         const double E_star = s.E * (1.0 / W[0]) + (SM - s.vn) * (SM + W[P] * (1.0 / nonzero(denom)));
         const Vec<D> v_star = s.v + n * (SM - s.vn);
-        State<D> U_star;
-        U_star[0] = rho_star;
-        for (int k = 0; k < D; ++k) U_star[1 + k] = rho_star * v_star[k];
-        U_star[P] = rho_star * E_star;
+        const State<D> U_star =
+            make_state<D>([&](int k) { return k == 0 ? rho_star : k == P ? rho_star * E_star : rho_star * v_star[k - 1]; });
         State<D> F;
         for (int v = 0; v < D + 2; ++v) F[v] = s.F[v] + S * (U_star[v] - s.U[v]);
         return detail::to_lab(F, w);

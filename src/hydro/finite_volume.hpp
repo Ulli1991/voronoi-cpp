@@ -208,23 +208,17 @@ public:
 
         template <class Rows>
         KOKKOS_INLINE_FUNCTION Vec row(const Rows& v, int i) const {
-            Vec r;
-            for (int a = 0; a < D; ++a) r[a] = v(i, a);
-            return r;
+            return make_vec<D>([&](int a) { return v(i, a); });
         }
         // The conserved state of cell i per unit volume.
         KOKKOS_INLINE_FUNCTION State per_volume(const Cells& q, int i) const {
             const double inv = 1.0 / volume(i);
-            State u;
-            for (int v = 0; v < V; ++v) u[v] = q(i, v) * inv;
-            return u;
+            return make_state<D>([&](int v) { return q(i, v) * inv; });
         }
         // Nearest image of generator j seen from generator i.
         KOKKOS_INLINE_FUNCTION Vec separation(int i, int j) const {
-            Vec d;
-            for (int a = 0; a < D; ++a)
-                d[a] = tet_mesh::wrap(positions(j, a) - positions(i, a), box.side[a], box.inverse[a]);
-            return d;
+            return make_vec<D>(
+                [&](int a) { return tet_mesh::wrap(positions(j, a) - positions(i, a), box.side[a], box.inverse[a]); });
         }
         KOKKOS_INLINE_FUNCTION int other(int f, int i) const { return owner(f) == i ? neighbour(f) : owner(f); }
         // Face centroid of face f relative to the centroid of cell i (a side of f).
@@ -383,7 +377,7 @@ public:
                     const Vec a = geo.row(geo.area, f);
                     const double w = Kokkos::sqrt(dot(a, a));
                     const Vec d = geo.separation(i, j) + geo.row(geo.centroid, j) - ci;
-                    double X[U] = {1};
+                    double X[U] = {1};  // the regressors (1, d)
                     for (int p = 1; p < U; ++p) X[p] = d[p - 1];
                     for (int p = 0; p < U; ++p)
                         for (int r = p; r < U; ++r) A[p][r] += w * X[p] * X[r];
@@ -469,8 +463,7 @@ public:
                 return W;
             } else {
                 Gradient grad;
-                for (int v = 0; v < V; ++v)
-                    for (int a = 0; a < D; ++a) grad[v][a] = g(i, D * v + a);
+                for (int v = 0; v < V; ++v) grad[v] = make_vec<D>([&](int a) { return g(i, D * v + a); });
                 State Wf = half_step(W, grad, dt, gas);
                 for (int v = 0; v < V; ++v) Wf[v] += dot(grad[v], r);
                 if (Wf[0] > 0 && Wf[D + 1] > 0) return Wf;
