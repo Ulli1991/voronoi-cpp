@@ -53,9 +53,15 @@ for variant in MAIN FIX; do
         "${!variant}/hydro_sedov" 128 jittered --moving --snapshots=1 --steps="${STEPS:-200}" \
             --out="$out/repro_${variant}_$run" | grep -E "step|final|updates" | tail -3
     done
+    # The other paths, 50 steps each: static; order 0 (per-cell loop); per-cell
+    # loop at order 1, moving; HLL, moving.
+    for flags in "" "--order=0" "--update=cell --moving" "--riemann=hll --moving"; do
+        tag="$(echo "$flags" | tr -d ' -=' )"
+        "${!variant}/hydro_sedov" 128 jittered $flags --snapshots=1 --steps=50 --out="$out/path_${tag:-static}_$variant" > /dev/null
+    done
 done
 # The last snapshot of each run: hashes of its U, x and volume.
-for dir in "$out"/repro_*; do
+for dir in "$out"/repro_* "$out"/path_*; do
     f="$(ls "$dir"/snapdir_*/*.hdf5 | tail -1)"
     sums=""
     for set in U x volume; do
