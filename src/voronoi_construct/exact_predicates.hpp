@@ -6,6 +6,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 // Exact geometric predicates on positions snapped to a grid of 2^30 steps
 // across the longest side of the periodic box, for host and device.
@@ -27,15 +28,18 @@ __extension__ typedef unsigned __int128 u128;
 constexpr double scale = 1073741824.0;  // 2^30
 constexpr double epsilon = 1.1102230246251565e-16;  // 2^-53
 
-struct Offset {
-    i64 v[3];
+// An exact offset between snapped points in D dimensions.
+template <int D>
+struct OffsetN {
+    i64 v[D];
     KOKKOS_INLINE_FUNCTION i64& operator[](int a) { return v[a]; }
     KOKKOS_INLINE_FUNCTION const i64& operator[](int a) const { return v[a]; }
 };
+using Offset = OffsetN<3>;
 
 constexpr i64 period = i64(1) << 30;  // grid steps across the (longest) side
 
-// A periodic box [0, side[0]) x [0, side[1]) x [0, side[2]). One grid step,
+// A periodic box [0, side[0]) x ... x [0, side[D - 1]). One grid step,
 // the longest side / 2^30, serves every axis, and each side is a whole
 // number period[a] of steps: the grid is isotropic, so the integer in-sphere
 // test is the in-sphere test of the snapped points themselves. (Per-axis
@@ -44,35 +48,59 @@ constexpr i64 period = i64(1) << 30;  // grid steps across the (longest) side
 // points.) A side that is not a whole number of steps is rounded to one
 // (relative change below 2^-31 longest / side; none for sides in ratios of
 // powers of two, e.g. 2 x 2 x 1/16); side[] holds the rounded sides. A cubic
-// box is 2^30 steps on every axis, as before.
-struct Box {
-    double side[3] = {1, 1, 1};
-    double inverse[3] = {1, 1, 1};  // 1 / side
+// box is 2^30 steps on every axis.
+template <int D>
+struct BoxN {
+    static_assert(D >= 1 && D <= 3, "exact_predicates::BoxN: 1, 2 or 3 dimensions");
+    double side[D];
+    double inverse[D];  // 1 / side
     double step = 1 / scale;
-    i64 period[3] = {exact_predicates::period, exact_predicates::period, exact_predicates::period};
+    i64 period[D];
 
-    Box() = default;
-    Box(double cube) : Box(cube, cube, cube) {}  // NOLINT: a cube converts implicitly
-    Box(double x, double y, double z) {
-        const double given[3] = {x, y, z}, longest = std::max({x, y, z});
-        if (!(x > 0 && y > 0 && z > 0) || !std::isfinite(longest))
-            throw std::invalid_argument("exact_predicates::Box: sides must be positive and finite");
+    BoxN() : BoxN(1.0) {}
+    BoxN(double cube) {  // NOLINT: a cube converts implicitly
+        double given[D];
+        for (int a = 0; a < D; ++a) given[a] = cube;
+        init(given);
+    }
+    template <class... S, std::enable_if_t<(D > 1) && sizeof...(S) == D, int> = 0>
+    BoxN(S... sides) {  // one side per axis
+        const double given[D] = {static_cast<double>(sides)...};
+        init(given);
+    }
+    bool cubic() const {
+        for (int a = 1; a < D; ++a)
+            if (side[a] != side[0]) return false;
+        return true;
+    }
+    double shortest() const { return *std::min_element(side, side + D); }
+    double volume() const {
+        double v = side[0];
+        for (int a = 1; a < D; ++a) v *= side[a];
+        return v;
+    }
+
+private:
+    void init(const double* given) {
+        const double longest = *std::max_element(given, given + D);
+        for (int a = 0; a < D; ++a)
+            if (!(given[a] > 0)) throw std::invalid_argument("exact_predicates::Box: sides must be positive and finite");
+        if (!std::isfinite(longest)) throw std::invalid_argument("exact_predicates::Box: sides must be positive and finite");
         step = longest / scale;
-        for (int a = 0; a < 3; ++a) {
+        for (int a = 0; a < D; ++a) {
             period[a] = std::max(std::llround(given[a] / step), 2LL);
             side[a] = given[a] == longest ? longest : static_cast<double>(period[a]) * step;
             inverse[a] = 1.0 / side[a];
         }
     }
-    bool cubic() const { return side[0] == side[1] && side[1] == side[2]; }
-    double shortest() const { return std::min({side[0], side[1], side[2]}); }
-    double volume() const { return side[0] * side[1] * side[2]; }
 };
+using Box = BoxN<3>;
 
 // The grid step of coordinate x along `axis` of `box`, in [0, period[axis]):
 // the one definition of "on the grid" every caller uses. In a cube, x / step
 // is x / side * 2^30 to the bit (scaling by 2^30 is exact).
-KOKKOS_INLINE_FUNCTION int snap(double x, const Box& box, int axis) {
+template <int D>
+KOKKOS_INLINE_FUNCTION int snap(double x, const BoxN<D>& box, int axis) {
     const i64 s = static_cast<i64>(Kokkos::floor(x / box.step)), steps = box.period[axis];
     if ((steps & (steps - 1)) == 0) return static_cast<int>(s & (steps - 1));  // a power of two
     const i64 r = s % steps;
@@ -242,41 +270,45 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
     return d * o < 0;
 }
 
-// Snapped particle positions, point(i, a) for a < 3, in [0, period[a]) so
-// 32 bits hold them exactly; padded to 16 bytes (one aligned load per
+// Snapped particle positions, point(i, a) for a < D, in [0, period[a]) so
+// 32 bits hold them exactly; in 3D padded to 16 bytes (one aligned load per
 // point). The periods are the box's (a unit cube unless given).
-template <class MemorySpace>
+template <class MemorySpace, int D = 3>
 struct Points {
-    using View = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
+    static constexpr int dimensions = D, columns = D == 3 ? 4 : D;
+    using Box = BoxN<D>;
+    using View = Kokkos::View<int* [columns], Kokkos::LayoutRight, MemorySpace>;
     View view;
-    i64 period[3] = {exact_predicates::period, exact_predicates::period, exact_predicates::period};
+    i64 period[D];
 
-    Points() = default;
-    Points(const std::string& label, std::size_t n, const Box& box = {}) : view(label, n) { periods(box.period); }
+    Points() { periods(BoxN<D>().period); }
+    Points(const std::string& label, std::size_t n, const BoxN<D>& box = {}) : view(label, n) { periods(box.period); }
     Points(const View& v, const i64* steps) : view(v) { periods(steps); }
     KOKKOS_INLINE_FUNCTION int& operator()(int i, int a) const { return view(i, a); }
     KOKKOS_INLINE_FUNCTION std::size_t extent(int r) const { return view.extent(r); }
 
 private:
     void periods(const i64* steps) {
-        for (int a = 0; a < 3; ++a) period[a] = steps[a];
+        for (int a = 0; a < D; ++a) period[a] = steps[a];
     }
 };
 
 // point(i) = the snapped x(i) for positions x in `box` (point's box).
-template <class ExecSpace, class X>
-void snap(const ExecSpace& exec, const X& x, const Box& box, const Points<typename ExecSpace::memory_space>& point) {
+template <class ExecSpace, class X, int D>
+void snap(const ExecSpace& exec, const X& x, const typename Points<typename ExecSpace::memory_space, D>::Box& box,
+          const Points<typename ExecSpace::memory_space, D>& point) {
     Kokkos::parallel_for(
         "exact_predicates::snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, x.extent(0)), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) point(i, a) = snap(x(i, a), box, a);
+            for (int a = 0; a < D; ++a) point(i, a) = snap(x(i, a), box, a);
         });
 }
 
 // The predicates on particles, by index into snapped positions.
 template <class P>
-KOKKOS_INLINE_FUNCTION Offset offset(const P& point, int from, int to) {
-    return {delta(point(from, 0), point(to, 0), point.period[0]), delta(point(from, 1), point(to, 1), point.period[1]),
-            delta(point(from, 2), point(to, 2), point.period[2])};
+KOKKOS_INLINE_FUNCTION OffsetN<P::dimensions> offset(const P& point, int from, int to) {
+    OffsetN<P::dimensions> o;
+    for (int a = 0; a < P::dimensions; ++a) o[a] = delta(point(from, a), point(to, a), point.period[a]);
+    return o;
 }
 
 // Orientation sign of tetrahedron v.

@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
 
     // Mesh.
     Kokkos::Timer timer;
-    voronoi::Mesh<Exec> mesh(exec, box);
+    voronoi::Mesh<3, Exec> mesh(exec, box);
     {
         if (!input_order) points = morton_order(points, box);
         const Positions x = to_device(points);
@@ -271,13 +271,13 @@ int main(int argc, char** argv) {
     auto simulate = [&](auto solver) {
         using R = decltype(solver);
         (void)solver;
-        hydro::FiniteVolume<Exec, R> fv(exec, mesh, gas, order, update, limiter,
+        hydro::FiniteVolume<3, Exec, R> fv(exec, mesh, gas, order, update, limiter,
                                         moving ? hydro::Motion::moving : hydro::Motion::static_mesh);
         {  // Q = U V: the background moving with the bulk velocity, the blast's pressure on top
             auto Q = Kokkos::create_mirror_view(fv.state());
             for (long long i = 0; i < n; ++i) {
-                const hydro::State W{sedov.rho(), bulk, 0, 0, sedov.pressure()};
-                const hydro::State u = hydro::conserved(W, gas);
+                const hydro::State<3> W{sedov.rho(), bulk, 0, 0, sedov.pressure()};
+                const hydro::State<3> u = hydro::conserved(W, gas);
                 for (int v = 0; v < 5; ++v) Q(i, v) = u[v] * volume(i);
             }
             for (int k = 0; k < deposit; ++k) Q(by_distance[k], 4) += p_inject / (gas.gamma - 1.0) * volume(by_distance[k]);
@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
                 snap.z[i] = x(i, 2);
                 snap.volume[i] = V(i);
                 for (int v = 0; v < 5; ++v) snap.U[v][i] = Q(i, v) / V(i);
-                const hydro::State W = hydro::primitive({snap.U[0][i], snap.U[1][i], snap.U[2][i], snap.U[3][i], snap.U[4][i]}, gas);
+                const hydro::State<3> W = hydro::primitive(hydro::State<3>{snap.U[0][i], snap.U[1][i], snap.U[2][i], snap.U[3][i], snap.U[4][i]}, gas);
                 if (std::abs(W[0] / sedov.rho() - 1) <= 1e-6 && std::abs(W[4] / sedov.pressure() - 1) <= 1e-6) continue;
                 double r2 = 0;
                 for (int a = 0; a < 3; ++a) {

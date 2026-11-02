@@ -486,7 +486,7 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
     return sets;
 }
 
-using Mesh = voronoi::Mesh<Exec>;
+using Mesh = voronoi::Mesh<3, Exec>;
 
 // A host copy of the mesh's tetrahedra.
 inline tet_flips::Mesh host_tetrahedra(const Mesh& mesh) {

@@ -45,22 +45,35 @@ namespace neighbor_search {
 constexpr int fine_levels = 10;
 constexpr int max_levels = 10;  // base levels: Morton cell numbers fit in an int
 
-template <class ExecSpace>
+// In D = 2 or 3 dimensions (a quadtree in 2D); 1D needs no cell list.
+template <class ExecSpace, int D = 3>
 struct CellList {
+    static_assert(D == 2 || D == 3, "neighbor_search::CellList: 2 or 3 dimensions");
     using memory_space = typename ExecSpace::memory_space;
+    static constexpr int dimensions = D;
 
     int n = 0;
     int levels = 2;  // the base grid has 2^levels cells per tile side
-    exact_predicates::Box box;
-    int tiles[3] = {1, 1, 1};
+    exact_predicates::BoxN<D> box;
+    int tiles[D];
 
     Kokkos::View<int*, memory_space> order, cell_offsets;
-    Kokkos::View<double* [3], memory_space> positions;
+    Kokkos::View<double* [D], memory_space> positions;
     Kokkos::View<std::uint32_t*, memory_space> fine;
     Kokkos::View<std::uint8_t*, memory_space> level;
     Kokkos::View<char*, memory_space> sort_scratch;  // radix sort temporary storage (CUDA)
+    // The sort's buffers (24 bytes per particle) when positions are smaller (2D).
+    Kokkos::View<double*, memory_space> sort_storage;
 
-    int cell_count() const { return tiles[0] * tiles[1] * tiles[2] << (3 * levels); }
+    CellList() {
+        for (int a = 0; a < D; ++a) tiles[a] = 1;
+    }
+    int tile_count() const {
+        int t = 1;
+        for (int a = 0; a < D; ++a) t *= tiles[a];
+        return t;
+    }
+    int cell_count() const { return tile_count() << (D * levels); }
 };
 
 // Morton interleaving: bit k of x goes to bit 3k + 2, of y to 3k + 1, of z to 3k.
@@ -88,6 +101,17 @@ KOKKOS_INLINE_FUNCTION std::uint32_t spread3_short(std::uint32_t v) {
 KOKKOS_INLINE_FUNCTION std::uint32_t morton_short(std::uint32_t x, std::uint32_t y, std::uint32_t z) {
     return spread3_short(x) << 2 | spread3_short(y) << 1 | spread3_short(z);
 }
+// In 2D: bit k of x goes to bit 2k + 1, of y to 2k.
+KOKKOS_INLINE_FUNCTION std::uint64_t spread2(std::uint64_t v) {
+    v &= 0xffffffffull;
+    v = (v | v << 16) & 0x0000ffff0000ffffull;
+    v = (v | v << 8) & 0x00ff00ff00ff00ffull;
+    v = (v | v << 4) & 0x0f0f0f0f0f0f0f0full;
+    v = (v | v << 2) & 0x3333333333333333ull;
+    v = (v | v << 1) & 0x5555555555555555ull;
+    return v;
+}
+KOKKOS_INLINE_FUNCTION std::uint64_t morton(std::uint64_t x, std::uint64_t y) { return spread2(x) << 1 | spread2(y); }
 
 // Integer coordinate of x on a grid of `side` cells over [0, box) (one
 // axis). Every user computes it this way, so a particle's node never
@@ -141,28 +165,28 @@ inline int bits(long long count) {
 }
 
 // Bits of a particle's key: its tile, then its Morton key inside the tile.
-template <class ExecSpace>
-int key_bits(const CellList<ExecSpace>& s) {
-    return bits(static_cast<long long>(s.tiles[0]) * s.tiles[1] * s.tiles[2]) + 3 * (s.levels + fine_levels);
+template <class ExecSpace, int D>
+int key_bits(const CellList<ExecSpace, D>& s) {
+    return bits(s.tile_count()) + D * (s.levels + fine_levels);
 }
 
 // Size the tiles, the base grid (2^levels cells per tile side, the power of
 // two nearest to tile / cell_width) and the buffers. Call again whenever n,
 // the box or the width changes; unchanged buffers are kept. Levels are
 // capped so that keys fit 64 bits and cell numbers an int.
-template <class ExecSpace>
-void configure(CellList<ExecSpace>& s, int n, const exact_predicates::Box& box, double cell_width) {
+template <class ExecSpace, int D>
+void configure(CellList<ExecSpace, D>& s, int n, const exact_predicates::BoxN<D>& box, double cell_width) {
     s.n = n;
     s.box = box;
     const double shortest = box.shortest();
     long long tiles = 1;
     int most = max_levels;
-    for (int a = 0; a < 3; ++a) {
+    for (int a = 0; a < D; ++a) {
         s.tiles[a] = static_cast<int>(std::max(1LL, std::llround(box.side[a] / shortest)));
         tiles *= s.tiles[a];
         most = std::min(most, 30 - bits(s.tiles[a]) - fine_levels);  // grid coordinates fit an int
     }
-    most = std::min({most, (64 - bits(tiles)) / 3 - fine_levels, (30 - bits(tiles)) / 3});
+    most = std::min({most, (64 - bits(tiles)) / D - fine_levels, (30 - bits(tiles)) / D});
     if (most < 2)
         throw std::invalid_argument("neighbor_search::configure: box too elongated (" + std::to_string(tiles) +
                                     " tiles of its shortest side)");
@@ -172,6 +196,7 @@ void configure(CellList<ExecSpace>& s, int n, const exact_predicates::Box& box, 
     detail::ensure(s.positions, "slot_positions", n);
     detail::ensure(s.fine, "slot_fine_keys", n);
     detail::ensure(s.level, "slot_levels", n);
+    if constexpr (D < 3) detail::ensure(s.sort_storage, "cell_list_sort_storage", 3 * n);
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         std::size_t bytes = 0;
@@ -186,29 +211,36 @@ void configure(CellList<ExecSpace>& s, int n, const exact_predicates::Box& box, 
 
 // Sort the particles by Morton key, then fill the slots, the base-cell
 // offsets and the per-slot levels.
-template <class ExecSpace, class InPositions>
-void build(const ExecSpace& exec, const CellList<ExecSpace>& s, const InPositions& in_positions) {
+template <class ExecSpace, int D, class InPositions>
+void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPositions& in_positions) {
     const int n = s.n, cells = s.cell_count(), base = s.levels, depth = s.levels + fine_levels;
-    const exact_predicates::Box box = s.box;
-    const int tx = s.tiles[0], ty = s.tiles[1], tz = s.tiles[2];
+    const exact_predicates::BoxN<D> box = s.box;
+    const int tx = s.tiles[0], ty = s.tiles[1], tz = s.tiles[D - 1];
     const auto order = s.order;
     const auto cell_offsets = s.cell_offsets;
     const auto positions = s.positions;
     const auto fine = s.fine;
     const auto level = s.level;
-    const detail::SortBuffers b = detail::sort_buffers(positions.data(), n);
+    const detail::SortBuffers b = detail::sort_buffers(D == 3 ? positions.data() : s.sort_storage.data(), n);
     using Range = Kokkos::RangePolicy<ExecSpace>;
 
     Kokkos::parallel_for("cell_list::keys", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
         const int tiles[3] = {tx, ty, tz};
-        int c[3], tile[3];
-        for (int a = 0; a < 3; ++a) {
+        int c[D], tile[D];
+        for (int a = 0; a < D; ++a) {
             const int g = grid_coordinate(in_positions(i, a), box.side[a], tiles[a] << depth);
             tile[a] = g >> depth;
             c[a] = g & ((1 << depth) - 1);
         }
-        const std::uint64_t t = (static_cast<std::uint64_t>(tile[0]) * ty + tile[1]) * tz + tile[2];
-        b.keys[0][i] = t << (3 * depth) | morton(c[0], c[1], c[2]);
+        std::uint64_t key;  // (CUDA lambdas may not first capture inside if constexpr)
+        if constexpr (D == 3) {
+            const std::uint64_t t = (static_cast<std::uint64_t>(tile[0]) * tiles[1] + tile[1]) * tiles[2] + tile[2];
+            key = t << (3 * depth) | morton(c[0], c[1], c[2]);
+        } else {
+            const std::uint64_t t = static_cast<std::uint64_t>(tile[0]) * tiles[1] + tile[1];
+            key = t << (2 * depth) | morton(c[0], c[1]);
+        }
+        b.keys[0][i] = key;
         b.ids[0][i] = i;
     });
     // Stable by key, so equal keys keep the particle-ID order.
@@ -237,12 +269,12 @@ void build(const ExecSpace& exec, const CellList<ExecSpace>& s, const InPosition
     }
     const std::uint64_t* keys = b.keys[sorted];
     const int* ids = b.ids[sorted];
-    constexpr std::uint64_t fine_mask = (std::uint64_t(1) << (3 * fine_levels)) - 1;
+    constexpr std::uint64_t fine_mask = (std::uint64_t(1) << (D * fine_levels)) - 1;
 
     // Slot q starts every base cell after the one before it, up to its own.
     Kokkos::parallel_for("cell_list::slots", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int q) {
-        const int previous = q == 0 ? -1 : static_cast<int>(keys[q - 1] >> (3 * fine_levels));
-        const int cell = q == n ? cells : static_cast<int>(keys[q] >> (3 * fine_levels));
+        const int previous = q == 0 ? -1 : static_cast<int>(keys[q - 1] >> (D * fine_levels));
+        const int cell = q == n ? cells : static_cast<int>(keys[q] >> (D * fine_levels));
         for (int c = previous + 1; c <= cell; ++c) cell_offsets(c) = q;
         if (q < n) {
             order(q) = ids[q];
@@ -250,16 +282,16 @@ void build(const ExecSpace& exec, const CellList<ExecSpace>& s, const InPosition
         }
     });
     // Per-slot level: the deepest node around q holding at least `enough`
-    // particles, refined by the eighth root of its count. Coarser nodes are
+    // particles, refined by the (2^D)-th root of its count. Coarser nodes are
     // blocks of base cells; finer ones are found in the base cell's fine keys.
     Kokkos::parallel_for("cell_list::levels", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
         constexpr int enough = 64;
-        const int cell = static_cast<int>(keys[q] >> (3 * fine_levels));
+        const int cell = static_cast<int>(keys[q] >> (D * fine_levels));
         const int begin = cell_offsets(cell), end = cell_offsets(cell + 1);
         int node = base, count = end - begin;
         if (count >= enough) {
             while (node < depth) {
-                const int drop = 3 * (depth - node - 1);
+                const int drop = D * (depth - node - 1);
                 const std::uint32_t prefix = fine(q) >> drop;
                 const int lo = lower_bound(fine, begin, q, prefix << drop);
                 const int hi = lower_bound(fine, q, end, (prefix + 1) << drop);
@@ -270,17 +302,17 @@ void build(const ExecSpace& exec, const CellList<ExecSpace>& s, const InPosition
         } else {
             while (node > 0 && count < enough) {
                 --node;
-                const int span = 3 * (base - node);
+                const int span = D * (base - node);
                 const int first = (cell >> span) << span;
                 count = cell_offsets(first + (1 << span)) - cell_offsets(first);
             }
         }
-        // One particle per cell: count / 8^k ~ 1, k rounded.
-        const int finer = static_cast<int>(Kokkos::log2(static_cast<double>(Kokkos::max(count, 1))) / 3.0 + 0.5);
+        // One particle per cell: count / 2^(D k) ~ 1, k rounded.
+        const int finer = static_cast<int>(Kokkos::log2(static_cast<double>(Kokkos::max(count, 1))) / double(D) + 0.5);
         level(q) = static_cast<std::uint8_t>(Kokkos::clamp(node + finer, 2, depth));
     });
     Kokkos::parallel_for("cell_list::positions", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-        for (int a = 0; a < 3; ++a) positions(q, a) = in_positions(order(q), a);
+        for (int a = 0; a < D; ++a) positions(q, a) = in_positions(order(q), a);
     });
 }
 

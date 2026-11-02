@@ -27,8 +27,8 @@
 namespace {
 
 using namespace support;
-using hydro::State;
-using hydro::Vec3;
+using State = hydro::State<3>;
+using Vec3 = hydro::Vec<3>;
 
 double relative(const State& a, const State& b) {
     double diff = 0, scale = 0;
@@ -42,8 +42,8 @@ double relative(const State& a, const State& b) {
 // The exact Euler flux of W along the unit normal n.
 State exact_flux(const State& W, Vec3 n, const hydro::Gas& gas) {
     const State U = hydro::conserved(W, gas);
-    const double vn = W[1] * n.x + W[2] * n.y + W[3] * n.z;
-    return {U[0] * vn, U[1] * vn + W[4] * n.x, U[2] * vn + W[4] * n.y, U[3] * vn + W[4] * n.z, (U[4] + W[4]) * vn};
+    const double vn = W[1] * n[0] + W[2] * n[1] + W[3] * n[2];
+    return {U[0] * vn, U[1] * vn + W[4] * n[0], U[2] * vn + W[4] * n[1], U[3] * vn + W[4] * n[2], (U[4] + W[4]) * vn};
 }
 
 struct LunaCase {
@@ -91,12 +91,12 @@ const LunaCase luna_hllc[] = {
 Vec3 rotate(Vec3 v, Vec3 a) {
     const double angle = std::sqrt(hydro::dot(a, a));
     const Vec3 k = a * (1.0 / angle);
-    const Vec3 kxv{k.y * v.z - k.z * v.y, k.z * v.x - k.x * v.z, k.x * v.y - k.y * v.x};
+    const Vec3 kxv{k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]};
     return v * std::cos(angle) + kxv * std::sin(angle) + k * (hydro::dot(k, v) * (1 - std::cos(angle)));
 }
 State rotate(const State& s, Vec3 a) {
     const Vec3 v = rotate(Vec3{s[1], s[2], s[3]}, a);
-    return {s[0], v.x, v.y, v.z, s[4]};
+    return {s[0], v[0], v[1], v[2], s[4]};
 }
 
 template <class Riemann, std::size_t N>
@@ -152,7 +152,7 @@ HostCells host_extensive(const FV& fv) {
 
 // The state per unit volume, Q / V with the mesh's current volumes.
 template <class FV>
-HostCells host_state(const FV& fv, const voronoi::Mesh<Exec>& mesh) {
+HostCells host_state(const FV& fv, const voronoi::Mesh<3, Exec>& mesh) {
     HostCells h = host_extensive(fv);
     const auto volume = to_host(mesh.volume());
     for (std::size_t i = 0; i < h.extent(0); ++i)
@@ -162,7 +162,7 @@ HostCells host_state(const FV& fv, const voronoi::Mesh<Exec>& mesh) {
 
 // Sets Q = U V from the state per unit volume.
 template <class FV>
-void set_state(FV& fv, const voronoi::Mesh<Exec>& mesh, const HostCells& h) {
+void set_state(FV& fv, const voronoi::Mesh<3, Exec>& mesh, const HostCells& h) {
     auto m = Kokkos::create_mirror_view(fv.state());
     const auto volume = to_host(mesh.volume());
     for (std::size_t i = 0; i < h.extent(0); ++i)
@@ -176,7 +176,7 @@ HostCells rough_state(int n, const hydro::Gas& gas) {
     std::uniform_real_distribution<double> unit(-1.0, 1.0);
     HostCells h("rough", n);
     for (int i = 0; i < n; ++i) {
-        const hydro::State W{1 + 0.3 * unit(rng), 0.5 * unit(rng), 0.5 * unit(rng), 0.5 * unit(rng),
+        const State W{1 + 0.3 * unit(rng), 0.5 * unit(rng), 0.5 * unit(rng), 0.5 * unit(rng),
                              (i < 8 ? 100.0 : 1.0) * (1 + 0.3 * unit(rng))};
         const State U = hydro::conserved(W, gas);
         for (int v = 0; v < 5; ++v) h(i, v) = U[v];
@@ -188,10 +188,10 @@ const char* name(hydro::Update u) { return u == hydro::Update::per_cell ? "per c
 
 template <class Riemann>
 void mesh_tests(Check& check, const std::string& kind, const std::string& solver) {
-    using FV = hydro::FiniteVolume<Exec, Riemann>;
+    using FV = hydro::FiniteVolume<3, Exec, Riemann>;
     const hydro::Gas gas{5.0 / 3.0};
     const int n = 4096;
-    voronoi::Mesh<Exec> mesh(Exec{}, 1.0);
+    voronoi::Mesh<3, Exec> mesh(Exec{}, 1.0);
     mesh.update(to_device(make_points_off_grid(kind, n)));
     mesh.update_cells();
     const auto volume = to_host(mesh.volume());
@@ -265,15 +265,15 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
 // whose displacement v dt is a multiple of the grid step (2^-30 of the
 // box), so a uniform translation of the points translates the snapped mesh
 // exactly.
-using Moving = hydro::FiniteVolume<Exec>;
+using Moving = hydro::FiniteVolume<3, Exec>;
 
 // A mesh and a FiniteVolume on it (members in this order: the mesh is built first).
 struct MovingRun {
-    voronoi::Mesh<Exec> mesh;
+    voronoi::Mesh<3, Exec> mesh;
     Moving fv;
     MovingRun(const Points& points, const hydro::Gas& gas, hydro::Motion motion, const Box& box = {})
         : mesh(Exec{}, box), fv(Exec{}, build(mesh, points), gas, 1, hydro::Update::per_face, hydro::Limiter::face_centroid, motion) {}
-    static voronoi::Mesh<Exec>& build(voronoi::Mesh<Exec>& mesh, const Points& points) {
+    static voronoi::Mesh<3, Exec>& build(voronoi::Mesh<3, Exec>& mesh, const Points& points) {
         mesh.update(to_device(points));
         mesh.update_cells();
         return mesh;
@@ -282,20 +282,20 @@ struct MovingRun {
 
 // A blast at the box centre (pressure 100 within r < 0.15, else 1), moving
 // with velocity (bulk, 0, 0).
-HostCells blast(const voronoi::Mesh<Exec>& mesh, double bulk, const hydro::Gas& gas) {
+HostCells blast(const voronoi::Mesh<3, Exec>& mesh, double bulk, const hydro::Gas& gas) {
     const auto x = to_host(mesh.positions());
     HostCells h("blast", x.extent(0));
     for (std::size_t i = 0; i < x.extent(0); ++i) {
         double r2 = 0;
         for (int a = 0; a < 3; ++a) r2 += (x(i, a) - 0.5) * (x(i, a) - 0.5);
-        const State U = hydro::conserved({1.0, bulk, 0, 0, r2 < 0.15 * 0.15 ? 100.0 : 1.0}, gas);
+        const State U = hydro::conserved(State{1.0, bulk, 0, 0, r2 < 0.15 * 0.15 ? 100.0 : 1.0}, gas);
         for (int v = 0; v < 5; ++v) h(i, v) = U[v];
     }
     return h;
 }
 
 // The density in 8 radial bins (r < 0.4) around centre (cx, 0.5, 0.5), by generator.
-std::array<double, 8> profile(const voronoi::Mesh<Exec>& mesh, const HostCells& u, double cx) {
+std::array<double, 8> profile(const voronoi::Mesh<3, Exec>& mesh, const HostCells& u, double cx) {
     const auto x = to_host(mesh.positions());
     std::array<double, 8> sum{}, count{};
     for (std::size_t i = 0; i < x.extent(0); ++i) {
@@ -319,7 +319,7 @@ void moving_tests(Check& check) {
     const Points points = make_points("jittered", n);
     {  // a uniform state with a bulk velocity
         MovingRun run(points, gas, hydro::Motion::moving);
-        const State U = hydro::conserved({1.3, 1.0, 0.5, -0.25, 0.7}, gas);
+        const State U = hydro::conserved(State{1.3, 1.0, 0.5, -0.25, 0.7}, gas);
         HostCells h("uniform", n);
         for (int i = 0; i < n; ++i)
             for (int v = 0; v < 5; ++v) h(i, v) = U[v];
@@ -419,7 +419,7 @@ void moving_tests(Check& check) {
         const int m = static_cast<int>(stretched.size());
         {
             MovingRun run(stretched, gas, hydro::Motion::moving, box);
-            const State U = hydro::conserved({1.3, 1.0, 0.5, -0.25, 0.7}, gas);
+            const State U = hydro::conserved(State{1.3, 1.0, 0.5, -0.25, 0.7}, gas);
             HostCells h("uniform", m);
             for (int i = 0; i < m; ++i)
                 for (int v = 0; v < 5; ++v) h(i, v) = U[v];
@@ -477,8 +477,8 @@ void moving_tests(Check& check) {
             const HostCells a = host_state(rest.fv, rest.mesh), b = host_state(flow.fv, flow.mesh);
             if (motion == hydro::Motion::moving)
                 for (int i = 0; i < n; ++i) {  // cell by cell: the same cells, moved by bulk t
-                    const State Wa = hydro::primitive({a(i, 0), a(i, 1), a(i, 2), a(i, 3), a(i, 4)}, gas);
-                    State Wb = hydro::primitive({b(i, 0), b(i, 1), b(i, 2), b(i, 3), b(i, 4)}, gas);
+                    const State Wa = hydro::primitive(State{a(i, 0), a(i, 1), a(i, 2), a(i, 3), a(i, 4)}, gas);
+                    State Wb = hydro::primitive(State{b(i, 0), b(i, 1), b(i, 2), b(i, 3), b(i, 4)}, gas);
                     Wb[1] -= bulk;
                     double d = std::abs(Wb[0] - Wa[0]) / Wa[0] + std::abs(Wb[4] - Wa[4]) / Wa[4];
                     for (int v = 1; v <= 3; ++v) d += std::abs(Wb[v] - Wa[v]) / bulk;
