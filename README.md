@@ -372,7 +372,8 @@ In order (research_notes/dimension_design_2026-11-02.md):
 6. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
    by an exact local rebuild of the hole, conservative remap from the
    volumes (reports/GPU Delaunay insertion and removal.md).
-7. Self-gravity by multigrid, after the hydro suite passes at speed:
+7. Self-gravity by multigrid, after the hydro suite passes at speed, starting
+   from LUNA's gravity solvers (same author; multigrid with coarse-grid gather):
    V-cycles warm-started from the previous step's potential (as LUNA does),
    aiming at 2-4 V-cycles per step, so the solve runs at full GPU speed.
    Options: an auxiliary Cartesian grid (deposit, solve, interpolate) or
