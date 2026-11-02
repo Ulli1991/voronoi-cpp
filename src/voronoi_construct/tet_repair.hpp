@@ -411,13 +411,14 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             }
             // Well shaped and clearly positive, else decide exactly.
             bool suspect = !(volume6 > 1e-3 * shape);
-            const Vec3 c = tet_mesh::detail::circumcentre(d[0], d[1], d[2]);
-            const Vec3 at = p + c;
-            const double r2 = dot(c, c);
-            centre(t, 0) = at.x;
-            centre(t, 1) = at.y;
-            centre(t, 2) = at.z;
-            centre(t, 3) = r2;
+            // The stored centre comes from tet_mesh::stored_centre, as for
+            // created tetrahedra: the same bits whichever kernel and corner
+            // order computed it.
+            double stored[4];
+            tet_mesh::stored_centre(x, box, v, stored);
+            for (int a = 0; a < 4; ++a) centre(t, a) = stored[a];
+            const Vec3 at{stored[0], stored[1], stored[2]};
+            const double r2 = stored[3];
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);

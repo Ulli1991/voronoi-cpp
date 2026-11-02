@@ -135,6 +135,22 @@ KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring 
     return steps;
 }
 
+// Sorts the four corners v by particle id and returns the parity of the
+// permutation (+1 even, -1 odd). Circumcentres computed from the sorted
+// corners do not depend on the order a repair left them in, so they are
+// the same bits whichever flips (in whatever order) built the tetrahedron.
+KOKKOS_INLINE_FUNCTION int sort_corners(int* v) {
+    int parity = 1;
+    for (int a = 1; a < 4; ++a)
+        for (int b = a; b > 0 && v[b - 1] > v[b]; --b) {
+            const int t = v[b - 1];
+            v[b - 1] = v[b];
+            v[b] = t;
+            parity = -parity;
+        }
+    return parity;
+}
+
 using Box = exact_predicates::Box;
 
 // A coordinate difference in a periodic box, to the nearest image. A
@@ -662,6 +678,33 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* 
     return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
 
+#if defined(__CUDACC__)
+#define TET_MESH_NOINLINE __noinline__
+#else
+#define TET_MESH_NOINLINE __attribute__((noinline))
+#endif
+
+// The circumcentre of the tetrahedron with corners v (in any order) as
+// stored in Mesh::centre: absolute, from the corner with the lowest particle
+// id (sort_corners), and the squared radius. Not inlined, so that every
+// kernel that computes a centre (the screening of a step, the centres of
+// created tetrahedra) runs the same machine code: inlined copies may
+// contract multiply-adds differently, and which kernel computes a given
+// tetrahedron's centre depends on the order of the flips, so the same
+// tetrahedron would get centres differing in the last bits run to run.
+template <class X>
+KOKKOS_FUNCTION TET_MESH_NOINLINE void stored_centre(const X& x, const Box& box, const int* corners, double* out) {
+    int v[4] = {corners[0], corners[1], corners[2], corners[3]};
+    sort_corners(v);
+    const Vec3 p = row(x, v[0]);
+    const Vec3 d[3] = {wrap(row(x, v[1]) - p, box), wrap(row(x, v[2]) - p, box), wrap(row(x, v[3]) - p, box)};
+    const Vec3 c = circumcentre(x, box, v, d);
+    out[0] = x(v[0], 0) + c.x;
+    out[1] = x(v[0], 1) + c.y;
+    out[2] = x(v[0], 2) + c.z;
+    out[3] = dot(c, c);
+}
+
 // 1. Circumcentres, one thread per tetrahedron: of the first `count` (all
 // if negative), or of those listed in `only` (e.g. the ones a repair
 // touched, at unchanged positions).
@@ -677,13 +720,9 @@ void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
         KOKKOS_LAMBDA(int s) {
             const int t = listed ? only(s) : s;
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
-            const Vec3 p = row(x, v[0]);
-            const Vec3 d[3] = {wrap(row(x, v[1]) - p, box), wrap(row(x, v[2]) - p, box), wrap(row(x, v[3]) - p, box)};
-            const Vec3 c = circumcentre(x, box, v, d);
-            mesh.centre(t, 0) = x(v[0], 0) + c.x;
-            mesh.centre(t, 1) = x(v[0], 1) + c.y;
-            mesh.centre(t, 2) = x(v[0], 2) + c.z;
-            mesh.centre(t, 3) = dot(c, c);
+            double c[4];
+            stored_centre(x, box, v, c);
+            for (int a = 0; a < 4; ++a) mesh.centre(t, a) = c[a];
         });
 }
 
@@ -700,17 +739,36 @@ void faces(const ExecSpace& exec, const X& x, const Box& box,
             const int i = mesh.owner(f), j = mesh.neighbour(f);
             const int begin = mesh.ring_start(f), end = begin + mesh.ring_length(f);
             const Vec3 p = row(x, i);
-            auto vertex = [&](int m) { return wrap(row(mesh.centre, mesh.ring(m)) - p, box); };
+            // The ring is walked from the tetrahedron with the smallest
+            // centre (x, then y, then z) towards the smaller of its two ring
+            // neighbours, not from where the walk that stored it started:
+            // the same polygon gives the same bits whatever order the repair
+            // left the ring in (exact ties of centres, cospherical points,
+            // add or reorder only zero terms or remain order dependent).
+            const int length = end - begin;
+            auto smaller = [&](int a, int b) {  // centre of ring entry a < that of b
+                const int ta = mesh.ring(begin + a), tb = mesh.ring(begin + b);
+                for (int c = 0; c < 3; ++c)
+                    if (mesh.centre(ta, c) != mesh.centre(tb, c)) return mesh.centre(ta, c) < mesh.centre(tb, c);
+                return false;
+            };
+            int start = 0;
+            for (int m = 1; m < length; ++m)
+                if (smaller(m, start)) start = m;
+            const int step = smaller((start + length - 1) % length, (start + 1) % length) ? length - 1 : 1;
+            auto vertex = [&](int k) {
+                return wrap(row(mesh.centre, mesh.ring(begin + (start + k * step) % length)) - p, box);
+            };
             const Vec3 dj = wrap(row(x, j) - p, box);
             // Fan triangles (first, previous, v): twice the area vector, and
             // (previous + v) weighted by the triangle's area projected on dj
             // (the face is perpendicular to dj up to rounding), divided once
             // per face (idea from Doug Rennehan's plume, commit 6cbb429).
-            const Vec3 first = vertex(begin);
-            Vec3 previous = vertex(begin + 1), twice_area{0, 0, 0}, weighted{0, 0, 0};
+            const Vec3 first = vertex(0);
+            Vec3 previous = vertex(1), twice_area{0, 0, 0}, weighted{0, 0, 0};
             double weight = 0;
-            for (int m = begin + 2; m < end; ++m) {
-                const Vec3 v = vertex(m);
+            for (int k = 2; k < length; ++k) {
+                const Vec3 v = vertex(k);
                 const Vec3 twice = cross(previous - first, v - first);
                 twice_area = twice_area + twice;
                 const double w = Kokkos::abs(dot(twice, dj));

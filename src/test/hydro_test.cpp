@@ -372,6 +372,47 @@ void moving_tests(Check& check) {
         what << c;
         check.expect(c.pass(), "moving mesh, 60 steps: the mesh equals an exact rebuild (" + what.str() + ")");
     }
+    {  // two identical moving runs give the same bits, step by step
+        MovingRun a(points, gas, hydro::Motion::moving), b(points, gas, hydro::Motion::moving);
+        set_state(a.fv, a.mesh, blast(a.mesh, 0, gas));
+        set_state(b.fv, b.mesh, blast(b.mesh, 0, gas));
+        auto same = [&](const auto& x, const auto& y) {
+            const auto hx = to_host(x), hy = to_host(y);
+            return std::memcmp(hx.data(), hy.data(), hx.span() * sizeof(double)) == 0;
+        };
+        int first = -1;
+        std::string what_differs;
+        for (int s = 0; s < 15 && first < 0; ++s) {
+            const double dta = a.fv.time_step(0.3), dtb = b.fv.time_step(0.3);
+            a.fv.step(dta);
+            b.fv.step(dtb);
+            if (dta != dtb) what_differs += " dt";
+            if (!same(a.fv.point_velocities(), b.fv.point_velocities())) what_differs += " point velocities";
+            if (!same(a.fv.positions(), b.fv.positions())) what_differs += " positions";
+            if (!same(a.mesh.volume(), b.mesh.volume())) what_differs += " volumes";
+            if (!same(a.mesh.centroid(), b.mesh.centroid())) what_differs += " centroids";
+            if (!same(a.fv.state(), b.fv.state())) what_differs += " state";
+            if (a.mesh.faces() != b.mesh.faces()) what_differs += " face count";
+            if (!what_differs.empty()) first = s;
+        }
+        check.expect(first < 0, "moving mesh: two identical runs give the same bits over 15 steps" +
+                                    (first < 0 ? std::string() : " (step " + std::to_string(first) + ":" + what_differs + ")"));
+        // The cause of 918 vs 923 steps at 256^3: a tetrahedron's stored
+        // centre depended on which kernel (screening or created) computed it
+        // and on its corner order, both set by the order of the racy flips.
+        // Every stored centre must equal a fresh computation bit for bit.
+        const auto& tets = a.mesh.tetrahedra();
+        const auto stored = to_host(tets.centre);
+        tet_mesh::circumcentres(Exec{}, a.mesh.positions(), a.mesh.sides(), tets, a.mesh.repair_state().count);
+        const auto fresh = to_host(tets.centre);
+        const auto alive = to_host(a.mesh.repair_state().alive);
+        long long differ = 0;
+        for (int t = 0; t < a.mesh.repair_state().count; ++t)
+            if (alive(t))
+                for (int c = 0; c < 4; ++c) differ += stored(t, c) != fresh(t, c);
+        check.expect(differ == 0, "moving mesh: every stored circumcentre equals a fresh one bit for bit (" +
+                                      std::to_string(differ) + " differ)");
+    }
     {  // Galilean invariance: a blast at rest and the same blast moving with the box
         const double bulk = 16, dt = std::ldexp(1.0, -12);  // bulk dt = 2^-8 of the box
         const int steps = 40;
