@@ -148,27 +148,41 @@ elif [[ "$mode" == static256 || "$mode" == moving256full ]]; then
     echo "== ours 256^3 jittered $kind, whole run, final snapshot"
     ours 256 jittered $mesh --snapshots=1 --out="$out/voronoi256_$kind"
 elif [[ "$mode" == library_check ]]; then
-    # The library checks of scripts/bench_a100.sh for two builds, MAIN and
-    # FIX (build directories), interleaved command by command; ctest of FIX.
+    # The library checks of scripts/bench_a100.sh for several builds,
+    # VARIANTS (default "MAIN FIX": names of variables holding directories
+    # with voronoi_bench), interleaved command by command; ctest of FIX.
     module purge
     module load gcc/14 cuda/13.0 cmake hdf5-serial
     ctest --test-dir "$FIX" --output-on-failure
     for kind in jittered uniform clustered halo lattice wave; do
-        for variant in MAIN FIX; do
+        for variant in ${VARIANTS:-MAIN FIX}; do
             echo "== $variant rebuild $kind"
             "${!variant}/voronoi_bench" rebuild 2097152 "$kind" warp 3 | grep -vE "^  "
         done
     done
     for kind in jittered uniform clustered halo lattice wave; do
-        for variant in MAIN FIX; do
+        for variant in ${VARIANTS:-MAIN FIX}; do
             echo "== $variant verify $kind"
             "${!variant}/voronoi_bench" step 262144 "$kind" 0.3 3 --verify | grep -E "^start|verify"
         done
     done
     for d in 0.03 0.1 0.3; do
-        for variant in MAIN FIX; do
+        for variant in ${VARIANTS:-MAIN FIX}; do
             echo "== $variant step 2097152 jittered $d"
             "${!variant}/voronoi_bench" step 2097152 jittered "$d" 10 --memory | grep -vE "^  "
+        done
+    done
+elif [[ "$mode" == reproducibility ]]; then
+    # Two identical moving runs per build (BEFORE, AFTER: hydro_sedov paths)
+    # at 128^3 and 256^3 (STEPS steps, default 200), each writing its last
+    # state; the pairs are compared bit for bit afterwards.
+    for n in 128 256; do
+        for variant in BEFORE AFTER; do
+            for run in 1 2; do
+                echo "== $variant n=${n}^3 moving run $run"
+                HYDRO_BIN="${!variant}" ours $n jittered --moving --snapshots=1 --steps="${STEPS:-200}" \
+                    --out="$out/repro_${variant}_${n}_$run"
+            done
         done
     done
 elif [[ "$mode" == memory_compare ]]; then
