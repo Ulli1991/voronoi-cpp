@@ -871,3 +871,22 @@ Open decisions for the owner (refinement):
 8. LUNA comparisons: add a fixed-dt / LUNA-CFL option; keep AREPO-ng's limiter.
 9. Refinement details: after the literature report (reports/GPU Delaunay insertion and removal.md).
 10. Non-cubic boxes in every dimension: `BoxN<D>` carries one side per axis (as box3 does in 3D), with the same isotropic snapping step.
+
+## Refinement and derefinement: methods chosen from the literature (2026-11-02)
+
+Source: reports/GPU Delaunay insertion and removal.md (notes in research_notes/GPU Delaunay insertion and removal/).
+How each piece maps onto our code; all throughputs are estimates until benchmarked.
+
+| | Insert (refine) | Remove (derefine) |
+|---|---|---|
+| 1D | split the interval at the new point; splice links by prefix-sum compaction | merge the interval into its neighbours; no two adjacent operations per step |
+| 2D | locate in the parent's star (O(1)), 1-3 split, then the 2D Lawson flips (never stuck) | flip the degree down to 3, then 3-1 collapse (mean degree 6 < ~9 crossover of Devillers' ear queue); no fallback |
+| 3D | locate in the parent's star, 1-4 split, then tet_repair's vote-locked 2-3/3-2 flips (a single insertion never gets stuck, Joe 1991); rare stuck facets: tet_flips' local rebuild, later on the device | independent set of victims with a one-ring buffer; per victim, the conflict part of the Delaunay triangulation of its link under the same particle-id perturbation, sewn in (CGAL triangulate-and-sew; Buchin et al. 2013) — the device port of tet_flips' local rebuild; flips are not the main path (can stick) |
+
+- Batching: regions claimed by write-min of a hash of the particle id (gQM3D / deterministic reservations) through the existing vote locks; cavities strictly disjoint including boundaries; one child per parent per round; a fixed number of rounds per step, losers deferred to the next step (AREPO tolerates off-threshold cells for a few steps).
+- Placement: daughter at 0.025 r_cell from the parent (AREPO), random direction (avoids systematic cospherical sets on the integer grid); location is O(1) in the parent's star.
+- Exactness: the perturbation is keyed to the fixed particle id (D3), so a rebuilt hole matches its boundary by construction.
+- Remap: at fixed generator positions the conservative remap needs no polyhedron clipping: a merged cell's neighbours get V_after - V_before each, a split divides by the two daughter volumes (first order, as AREPO). Our inference, to verify.
+- Criteria: AREPO's mass thresholds (split > 2 m_target, merge < 0.5 m_target), roundness test for splits, no two neighbouring merges, no split next to a merge, in the time-step kernel.
+- Budget: at 54 M cell updates/s, 1 % of cells per step costs 5 % of a step at ~11 M operations/s; 3D device removal estimated 1-10 M/s. First benchmarks: stuck-flip rate for 1 % near-parent batches and removal rate, on jittered, uniform and clustered input.
+- Tests: exact against a rebuild after inserts/removals; conservation to rounding; a refining blast against LUNA's AMR.
