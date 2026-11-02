@@ -349,3 +349,4 @@ private:
 };
 
 }  // namespace voronoi
+#include "sorted_mesh.hpp"  // Mesh<1>
