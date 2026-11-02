@@ -122,9 +122,9 @@ int main(int argc, char** argv) {
         voronoi::detail::snap_positions(exec, x, 1.0, padded);  // x is on the grid: the same positions
         tet_mesh::circumcentres(exec, padded, 1.0, mesh);
         const int faces = static_cast<int>(owned_faces.size());
-        tet_mesh::Geometry<Memory> geometry{Kokkos::View<double* [3], Memory>("area", faces),
-                                            Kokkos::View<double* [3], Memory>("centroid", faces),
-                                            Kokkos::View<double*, Memory>("volume", n)};
+        tet_mesh::Geometry<Memory> geometry{Kokkos::View<double* [3], Kokkos::LayoutRight, Memory>("area", faces),
+                                            Kokkos::View<double* [3], Kokkos::LayoutRight, Memory>("centroid", faces),
+                                            Kokkos::View<double*, Memory>("volume", n), {}};
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         double worst = worst_volume_difference(geometry, cells);
         check.expect(worst < 1e-12, "volumes from stored rings match clipping (" + sci(worst) + ")");
@@ -222,9 +222,9 @@ int main(int argc, char** argv) {
         const exact_predicates::BoxN<2> square(1.0);
         Kokkos::View<double* [2], Memory> p("p2", n);
         Kokkos::View<int*, Memory> owner("owner2", 2 * n), neighbour("neighbour2", 2 * n);
-        tet_mesh::Geometry<Memory, 2> geometry{Kokkos::View<double* [2], Memory>("area2", 2 * n),
-                                               Kokkos::View<double* [2], Memory>("centroid2", 2 * n),
-                                               Kokkos::View<double*, Memory>("volume2", n)};
+        tet_mesh::Geometry<Memory, 2> geometry{Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("area2", 2 * n),
+                                               Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("centroid2", 2 * n),
+                                               Kokkos::View<double*, Memory>("volume2", n), {}};
         auto hp = Kokkos::create_mirror_view(p);
         auto ho = Kokkos::create_mirror_view(owner);
         auto hn = Kokkos::create_mirror_view(neighbour);
@@ -253,7 +253,7 @@ int main(int argc, char** argv) {
         Kokkos::deep_copy(geometry.centroid, hc);
         tet_mesh::CellFaces<Memory, 2> cells{Kokkos::View<int*, Memory>("start2", n + 1), Kokkos::View<int*, Memory>("face2", 0),
                                              Kokkos::View<int*, Memory>("cursor2", n), Kokkos::View<double*, Memory>("v2", n),
-                                             Kokkos::View<double* [2], Memory>("c2", n)};
+                                             Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("c2", n)};
         Kokkos::View<char*, Memory> scratch("scratch2", tet_mesh::cells_scratch_bytes(2 * n));
         tet_mesh::cells(exec, p, square, Kokkos::View<const int*, Memory>(owner), Kokkos::View<const int*, Memory>(neighbour),
                         geometry, cells, scratch.data());
