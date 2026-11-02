@@ -66,8 +66,8 @@ inside a Slurm job; run GPU work through Slurm (`scripts/bench_a100.sh`).
 ```cpp
 #include "voronoi_mesh.hpp"
 
-voronoi::Mesh<> mesh(Kokkos::DefaultExecutionSpace{}, box);   // a cube of side box, or
-// voronoi::Mesh<> mesh(exec, exact_predicates::Box(lx, ly, lz)); // any three sides
+voronoi::Mesh<3> mesh(Kokkos::DefaultExecutionSpace{}, box);   // a cube of side box, or
+// voronoi::Mesh<3> mesh(exec, exact_predicates::Box(lx, ly, lz)); // any three sides
 mesh.update(x);          // x(i, a): positions in [0, side a), particle i = index i
 // ... move the particles ...
 voronoi::Report r = mesh.update(x);   // repairs the mesh; exact on return
@@ -107,6 +107,10 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 - `rebuild(x)` builds the exact mesh from scratch on demand.
 - `scratch(bytes)` lends device memory between updates (the spare ring
   pool).
+- The dimension is a template parameter, `voronoi::Mesh<D, Exec>`
+  (`exact_predicates::BoxN<D>`, `hydro::FiniteVolume<D, Exec, Riemann>`,
+  `hydro::State<D>`); D = 3 is implemented, 1D and 2D engines follow
+  (research_notes/dimension_design_2026-11-02.md). `Box` is `BoxN<3>`.
 
 ## How it works
 
