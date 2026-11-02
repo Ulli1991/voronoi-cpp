@@ -352,14 +352,24 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 ## Roadmap
 
 In order (research_notes/dimension_design_2026-11-02.md):
-1. Hydro speed: pass fusion, packed per-face rows, precision options
-   (geometry, gradients incl. FP16, face fluxes, Riemann; default all-double).
-2. 1D mesh and hydro with walls; Sod, Shu-Osher and Woodward-Colella against
+1. Hydro speed: pass fusion, packed per-face rows, precomputed least-squares
+   gradient weights, precision options (geometry, gradients incl. FP16, face
+   fluxes, Riemann; default all-double). Target: a fixed-grid code's rate per
+   face, ~300 M cell updates/s for the hydro step (a Voronoi cell has ~16
+   faces against 6).
+2. Mesh-step speed: incremental per-cell face lists, fused
+   circumcentre/ring/face passes, cheaper repair rounds.
+3. 1D mesh and hydro with walls; Sod, Shu-Osher and Woodward-Colella against
    the references and the fixed-grid code LUNA (a first CPU version gives
    LUNA's results to ~1e-14 on a static mesh).
-3. 2D mesh (polygon clipping, triangles with 2-2 flips) and hydro;
+4. 2D mesh (polygon clipping, triangles with 2-2 flips) and hydro;
    Kelvin-Helmholtz after McNally, Lyra & Passy (2012).
-4. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
+5. Rebuild on clustered input: tune the per-particle level choice at density
+   jumps (12-13 % of tested candidates lie outside the needed 2R radius on
+   clustered/halo input; expected 5-10 %), and look for a cheaper exact
+   certification bound than "everything within 2R" (irregular cells test ~2x
+   the candidates of jittered ones).
+6. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
    by an exact local rebuild of the hole, conservative remap from the
    volumes (reports/GPU Delaunay insertion and removal.md).
 
