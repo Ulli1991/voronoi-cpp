@@ -211,6 +211,29 @@ degenerate start (wave lattice, 2.1M) is repaired on the device alone in
 icosahedral shells@1e-9 still leave ~8k of 262k stuck (host or rebuild). The per-cell face lists account for most of the step peak above
 2fd8b50's 2080 B/cell (about 140 B/cell; not measured separately).
 
+### GPU against a full CPU node, same code
+
+The identical code (commit 57201bc) built with the Kokkos OpenMP backend on
+one Raven CPU node (2x Xeon Platinum 8360Y, 72 cores, `OMP_PROC_BIND=spread`,
+job 31796079) against one A100 40 GB (jobs 31795767, 31795035), 2,097,152
+cells, double. Throughput in million cells (or cell updates) per second.
+
+| | 72-core CPU node | A100 | A100 / CPU |
+|---|---|---|---|
+| Full rebuild, jittered / uniform / clustered | 4.1 / 2.8 / 2.0 | 39.9 / 19.9 / 15.5 | 9.7 / 7.0 / 7.9 |
+| Moving-mesh update, 0.03 / 0.3 spacings | 11.5 / 1.7 | 202 / 57 | 17.5 / 33 |
+| `update_cells()` | 43 | 343 | 7.9 |
+| Hydro, static mesh, MUSCL-Hancock HLLC | 9.8 | 112 | 11.4 |
+| Hydro, moving mesh | 8.9 | 55 | 6.2 |
+
+For scale, the hardware ratios A100 / node are about 3.9 in memory bandwidth
+(1.55 TB/s against ~0.4 TB/s) and 1.8 in FP64 peak. Every phase gains more
+than the bandwidth ratio: the clipping is latency- and divergence-bound
+(DRAM traffic under 1 % on the GPU), the flip repair is many small parallel
+rounds with atomics, and even the bandwidth-like hydro passes gain 1.6-3x
+beyond bandwidth. The CPU build is the generic Kokkos OpenMP path (per-thread
+clipping, no hand vectorisation), so a CPU-tuned code would narrow the gap.
+
 ## Tests
 
 Seven CTest programs specify the library and the hydro; details, oracles, run times and
