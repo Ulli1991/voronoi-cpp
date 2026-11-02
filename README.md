@@ -12,9 +12,9 @@ progress (see "Roadmap").
 
 The hydro (`src/hydro/`): MUSCL-Hancock with HLLC or HLL, AREPO-style
 least-squares gradients and mesh regularisation, on a static or moving mesh,
-bit-reproducible run to run. On Sedov 3D the moving mesh reaches the
-accuracy of a fixed-grid code at the same GPU time in fewer cells and steps
-(see "Hydro").
+bit-reproducible run to run. On Sedov 3D the moving mesh is more accurate
+than the static mesh at the same resolution in 4.6x fewer steps (see
+"Hydro").
 
 ## Install and build
 
