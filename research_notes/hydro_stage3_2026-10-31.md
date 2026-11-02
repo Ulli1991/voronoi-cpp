@@ -214,9 +214,90 @@ flips), no rebuild.
   loop over the face neighbours; they could share one pass.
 - (Done: the per-face loop fits a whole moving 256^3 run since 7082aad,
   see above; 0.25 GB to spare.)
-- Moving runs are not bit-reproducible run to run (918 vs 923 steps at
-  256^3); find where the mesh update or the hydro loses determinism.
+- (Done: moving runs are bit-reproducible, see "Bit-reproducible moving
+  runs" below.)
 - The radial profiles of the moving mesh have empty innermost bins (the
   cells have moved out of the hot centre, as in a Lagrangian scheme); the
   plots show them as zero (`reports/hydro_stage3_*.png`).
 - The static 256^3 Sedov needs more than one 15-min job.
+
+## Library check of 7082aad (round of 2026-11-02)
+
+Job 31788670 (A100), main 7a7adb8 (MAIN) against hydro-stage1 with 7082aad
+(FIX1), interleaved: rebuild pipeline M cells/s jittered 39.40/39.39,
+uniform 19.70/19.69, clustered 15.40/15.38, halo 14.12/14.07, lattice
+49.12/49.13, wave 37.87/37.88; `step 262144 <6 inputs> 0.3 3 --verify` 18/18
+PASS for both; mesh step 2.1M jittered at spacings 0.03/0.1/0.3: 205.1/204.2,
+114.5/114.9, 57.7/57.7 M cells/s; update_cells unchanged (~344/337/322 M
+cells/s); start ~118 ms both; peak 2190.65 / 2221.32 B/cell for both. No
+metric more than 1% worse (largest: halo rebuild -0.35%). 7082aad is needed:
+without it a caller that borrows `scratch()` larger than the spare ring pool
+runs out of memory on long moving runs (job 31702077). Main has it as 3d6fda3.
+
+## Bit-reproducible moving runs
+
+Cause: the device repair flips in a racy order, so the same final
+tetrahedron can end up in another slot, with its corners in another order,
+its circumcentre computed by another kernel (the screening of a step,
+tet_repair::move_screened, or tet_mesh::circumcentres for created ones; the
+compiler contracts a * b + c into FMAs differently in each), and each face
+ring stored from another representative tetrahedron (the one whose
+atomic_exchange won). The face geometry then summed the same polygon in
+another order: last-bit differences in volumes and centroids from step 1
+(the two-run CTest fails at step 1 on main's library), growing into 918 vs
+923 steps for two identical 256^3 runs.
+
+Fix (src/voronoi_construct/tet_mesh.hpp, tet_repair.hpp):
+- every stored centre comes from corners sorted by particle id
+  (`sort_corners`, parity for the orientation test) in arithmetic rounded
+  op by op (`rounded::mul/add/sub`: `__dmul_rn`/`__dadd_rn`/`__dsub_rn` on
+  CUDA, a volatile product on the host), inlined in both kernels
+  (`rounded_offsets`, `rounded_sliver`, `rounded_circumcentre`,
+  `store_centre`, `stored_centre`);
+- every face ring is stored in a canonical order (`walk_edge_canonical`
+  in update_face_rings): from the tetrahedron whose two particles other
+  than the edge's are least, towards its smaller neighbour; `faces()` is
+  main's, unchanged.
+
+Variants measured (mesh step, `voronoi_bench step 2097152 jittered <d> 10`,
+M cells/s, median of steps 2-9; jobs 31788670, 31790276, 31791016,
+31795034, each interleaved with its reference):
+
+| variant | 0.03 | 0.1 | 0.3 |
+|---|---|---|---|
+| main (7a7adb8 / 3d6fda3) | 205.1 / 202.0 | 114.5 / 114.5 | 57.7 / 57.4 |
+| FIX2: noinline shared centre, canonical start searched in faces() | 154.2 (-25%) | 96.0 (-16%) | 52.5 (-9%) |
+| FIX3: inline rounded centre, same faces() search | 174.6 (-14%) | 103.7 (-9%) | 54.6 (-5%) |
+| FIX4: FIX3, one load per ring entry in the search | 183.3 (-9%) | 107.0 (-7%) | 55.6 (-3%) |
+| FIX5 (committed): FIX3 centres, canonical ring stored, faces() as main | 197.2 (-2.4%) | 111.6 (-2.5%) | 54.7 (-4.7%) |
+
+Job 31795034, FIX5 against main 3d6fda3: rebuild unchanged (jittered
+39.41/39.42, uniform 19.70/19.71, clustered 15.40/15.37, halo 14.03/14.10,
+lattice 49.13/49.11, wave 37.89/37.89 M cells/s), verify 18/18 PASS,
+update_cells unchanged (344.6/343.9, 337.5/337.7, 324.6/323.5 M cells/s),
+start 118.0/118.1 ms, peak memory identical (2190.65 / 2221.32 B/cell),
+CUDA ctest 7/7. The cost sits in the ring walks of the dirty faces (screen
+and repair unchanged, gpu_ms 5.17 vs 5.24 ms at 0.03). The owner accepted
+FIX5's cost for bit-reproducible runs.
+
+Whole moving hydro step (Sedov, per-face loop, 200 steps; job 31795035, 7082aad
+without the fix against FIX5): 128^3 55.9 / 55.4 M cell updates/s, 256^3
+56.9 / 57.3 M cell updates/s. FIX5's two identical runs give identical
+U, x and volume at step 200 at 128^3 and 256^3 (also FIX3, FIX4, which agree
+with each other bit for bit), and on the CPU (OpenMP, 8 threads, 32^3, 80
+steps).
+
+Not measured on the GPU: a cheaper variant that walks no extra time (the
+least tetrahedron found while `dirty_lengths` measures the ring and stored
+as its start; the direction picked from its two neighbours when writing).
+It passed the CPU checks (bit-identical runs, CTest `hydro`); the whole working-tree
+diff of that state is /raven/u/uli/voronoi-cpp/build-hydro/fix6-ring-walk.diff.
+
+## Non-cubic boxes
+
+The hydro takes the box sides from `Mesh::sides()` (src/hydro/finite_volume.hpp:
+`Geometry::box` an `exact_predicates::Box`, wrap per axis, drift per axis),
+snapshots write Lx, Ly, Lz (src/hydro/snapshot.hpp), hydro_sedov takes
+`--box=fx,fy,fz` (multiples of 50 pc). CTest `hydro`: in a (2, 1, 1) box a
+uniform state with bulk velocity stays uniform on the moving mesh (5e-16),
+is conserved over 10 moving steps, and the mesh equals an exact rebuild.
