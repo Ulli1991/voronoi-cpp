@@ -120,11 +120,89 @@ more accurate than LUNA (L1 rho 0.034 vs 0.050) at 5.4x LUNA's GPU time.
 Moving, per-face loop, first 40 steps: 2418.6 B/cell at the peak (mesh
 with its repair state, face lists and the hydro's Q, positions, point
 velocities, and the gradients and face fluxes in the spare ring pool);
-42.03 GB of 42.40 GB in use. Over a whole run this does not fit: a later
-repair grew the ring pool by 6.8 GiB and failed (job 31701027). With the
+42.03 GB of 42.40 GB in use. Over a whole run this did not fit: a later
+repair grew the ring pool by 6.8 GiB and failed (job 31701027; fixed by
+7082aad, see "The 256^3 moving run with the per-face loop"). With the
 per-cell loop (no face flux array; the gradients fit in the spare pool
 without growing it) the whole moving 256^3 run completed (job 31701234;
 its peak was not recorded). Static: 2370.6 B/cell, 41.22 GB.
+
+## Accuracy per GPU-second against LUNA (2026-10-31, after merging main 9159978)
+
+LUNA's Sedov (`scripts/validation/runs/sedov3d_run.py`), ORDER=1 minmod,
+HLLC, FP64, `hydro_kernel=pallas`, at increasing resolution until its L1
+density error reaches our moving mesh at 256^3. One analysis for both codes
+(`scripts/hydro_sedov_compare.py`, the final snapshot at 1e4 yr). Runs
+longer than one 15-min job continue from LUNA's own checkpoints: a
+checkpoint every 330 s of wall time (`checkpoint_wall_time_interval`,
+`src/luna/setup/outputs.py:325-360`) and `restart=1` in a chained job,
+which restarts from the newest checkpoint (`docs/CONFIG.md:672-674`;
+`scripts/hydro_a100.sh` mode `luna_resolution`). GPU time, both codes,
+without start-up, compilation and output: LUNA steps x N^3 / (median of
+its 10-step "perf" windows after step 10); ours the sum of the fenced
+phases (`gpu_s`). LUNA at 512^3 does not fit the A100 40 GB in FP64 with
+Pallas ("Out of memory while trying to allocate 10.30GiB", job 31701766).
+
+| code | N^3 | steps | GPU time | L1 rho | L1 v_r | L1 P | job |
+|---|---|---|---|---|---|---|---|
+| LUNA | 128 | 1075 | 2.7 s | 0.0766 | 0.0311 | 0.0203 | 31701998 |
+| LUNA | 192 | 2329 | 16.3 s | 0.0595 | 0.0231 | 0.0152 | 31701761 |
+| LUNA | 256 | 4031 | 64.6 s | 0.0495 | 0.0181 | 0.0126 | 31701999 |
+| LUNA | 320 | 6167 | 188.2 s | 0.0425 | 0.0148 | 0.0109 | 31701762 |
+| LUNA | 384 | 8727 | 459.7 s | 0.0376 | 0.0128 | 0.0097 | 31701763 |
+| LUNA | 448 | 11703 | 932.8 s | 0.0341 | 0.0114 | 0.0088 | 31701765 + 31701767 (restart at step 7775) |
+| ours, static | 128 | 1642 | 31.8 s | 0.0750 | 0.0289 | 0.0203 | 31701848 |
+| ours, moving | 128 | 354 | 13.9 s | 0.0580 | 0.0181 | 0.0147 | 31701848 |
+| ours, moving, per-face loop | 256 | 918 / 923 | 287.2 / 288.5 s | 0.0341 | 0.0093 | 0.0088 | 31701847 / 31702077 |
+
+Equal accuracy (L1 rho): LUNA's GPU time interpolated linearly in log(t)
+against log(L1) between its two neighbouring resolutions:
+- 0.0341 (ours moving 256^3): LUNA 448^3 reaches it exactly, 932.8 s
+  against our 288 s: the moving mesh needs 3.2x less GPU time (its v_r
+  error is lower too, 0.0093 vs 0.0114; P equal).
+- 0.0580 (ours moving 128^3): LUNA 19.7 s (between 192^3 and 256^3)
+  against our 13.9 s: 1.4x less.
+- 0.0750 (ours static 128^3): LUNA 3.2 s (between 128^3 and 192^3)
+  against our 31.8 s: the static mesh needs 10x more.
+
+Two moving 256^3 runs of the same build took 918 and 923 steps (jobs
+31701847, 31702077): the moving-mesh run is not bit-reproducible run to
+run (the static one is, CTest); the cause is not isolated (the mesh
+update is the candidate). Their accuracy agrees to the digits shown.
+
+## The 256^3 moving run with the per-face loop (2026-10-31)
+
+What grew: the hydro's scratch (gradients 120 B/cell and face fluxes
+318 B/cell) grows the mesh's spare ring pool to 438 B/cell. When the
+appended rings overflow the pool in use, `tet_mesh::update_face_rings`
+compacts them into the spare pool and then grows the emptied pool to the
+size of the one in use, "the next spare: as large as this one" (the
+library before this change): both pools at 438 B/cell, the second
+allocation of 6.847 GiB fails. Fix (commit 7082aad, `tet_mesh.hpp`): when
+the emptied pool is the smaller one and holds the rings with a quarter to
+append, the compacted rings are copied back into it and the grown pool
+stays the spare (one device copy of the ring entries per compaction);
+otherwise it grows as before. With pools of equal size (no scratch growth)
+nothing changes. CTest `hydro`: after 60 moving steps with the per-face
+loop the mesh equals an exact rebuild of the snapped points.
+
+Same job (31702077), the merged library without (BEFORE) and with (AFTER)
+the change, moving 256^3, per-face loop, whole Sedov:
+
+| | BEFORE | AFTER |
+|---|---|---|
+| result | "failed to allocate 6.847 GiB (face_rings_pool)" | 923 steps, t_end reached |
+| Kokkos peak, mesh build | 2166.8 B/cell | 2166.8 B/cell |
+| peak after the hydro set-up | 2230.8 B/cell | 2230.8 B/cell |
+| peak over the steps | (failed) | 2418.6 B/cell, 42.15 GB of 42.40 GB in use; ring pools 688.5 B/cell |
+| median step, first 100 steps (job 31701846) | 298.5 ms | 298.6 ms |
+
+The whole moving 256^3 Sedov with the per-face loop takes 288 s of GPU
+phases (median step 308 ms: time step 23.0, point velocities 24.3,
+gradients 61.7, fluxes 52.7, gather 46.2, drift 0.9, mesh update 49.3,
+update_cells 50.3), against 364 s with the per-cell loop (job 31701234).
+761 stuck triangles over the run, finished by the host fallback (382 host
+flips), no rebuild.
 
 ## Open items
 
@@ -134,11 +212,92 @@ its peak was not recorded). Static: 2370.6 B/cell, 41.22 GB.
   (uniform random) moving mesh.
 - The point-velocity kernel (3.3 ms) and the time-step kernel (2.7 ms) both
   loop over the face neighbours; they could share one pass.
-- 256^3 moving needs the per-cell loop (memory); its HLLC fluxes take
-  176 ms per step against ~50 ms for the per-face flux kernel. A face flux
-  array outside the ring pool, or a smaller repair reserve, would be needed
-  for the per-face loop.
+- (Done: the per-face loop fits a whole moving 256^3 run since 7082aad,
+  see above; 0.25 GB to spare.)
+- (Done: moving runs are bit-reproducible, see "Bit-reproducible moving
+  runs" below.)
 - The radial profiles of the moving mesh have empty innermost bins (the
   cells have moved out of the hot centre, as in a Lagrangian scheme); the
   plots show them as zero (`reports/hydro_stage3_*.png`).
 - The static 256^3 Sedov needs more than one 15-min job.
+
+## Library check of 7082aad (round of 2026-11-02)
+
+Job 31788670 (A100), main 7a7adb8 (MAIN) against hydro-stage1 with 7082aad
+(FIX1), interleaved: rebuild pipeline M cells/s jittered 39.40/39.39,
+uniform 19.70/19.69, clustered 15.40/15.38, halo 14.12/14.07, lattice
+49.12/49.13, wave 37.87/37.88; `step 262144 <6 inputs> 0.3 3 --verify` 18/18
+PASS for both; mesh step 2.1M jittered at spacings 0.03/0.1/0.3: 205.1/204.2,
+114.5/114.9, 57.7/57.7 M cells/s; update_cells unchanged (~344/337/322 M
+cells/s); start ~118 ms both; peak 2190.65 / 2221.32 B/cell for both. No
+metric more than 1% worse (largest: halo rebuild -0.35%). 7082aad is needed:
+without it a caller that borrows `scratch()` larger than the spare ring pool
+runs out of memory on long moving runs (job 31702077). Main has it as 3d6fda3.
+
+## Bit-reproducible moving runs
+
+Cause: the device repair flips in a racy order, so the same final
+tetrahedron can end up in another slot, with its corners in another order,
+its circumcentre computed by another kernel (the screening of a step,
+tet_repair::move_screened, or tet_mesh::circumcentres for created ones; the
+compiler contracts a * b + c into FMAs differently in each), and each face
+ring stored from another representative tetrahedron (the one whose
+atomic_exchange won). The face geometry then summed the same polygon in
+another order: last-bit differences in volumes and centroids from step 1
+(the two-run CTest fails at step 1 on main's library), growing into 918 vs
+923 steps for two identical 256^3 runs.
+
+Fix (src/voronoi_construct/tet_mesh.hpp, tet_repair.hpp):
+- every stored centre comes from corners sorted by particle id
+  (`sort_corners`, parity for the orientation test) in arithmetic rounded
+  op by op (`rounded::mul/add/sub`: `__dmul_rn`/`__dadd_rn`/`__dsub_rn` on
+  CUDA, a volatile product on the host), inlined in both kernels
+  (`rounded_offsets`, `rounded_sliver`, `rounded_circumcentre`,
+  `store_centre`, `stored_centre`);
+- every face ring is stored in a canonical order (`walk_edge_canonical`
+  in update_face_rings): from the tetrahedron whose two particles other
+  than the edge's are least, towards its smaller neighbour; `faces()` is
+  main's, unchanged.
+
+Variants measured (mesh step, `voronoi_bench step 2097152 jittered <d> 10`,
+M cells/s, median of steps 2-9; jobs 31788670, 31790276, 31791016,
+31795034, each interleaved with its reference):
+
+| variant | 0.03 | 0.1 | 0.3 |
+|---|---|---|---|
+| main (7a7adb8 / 3d6fda3) | 205.1 / 202.0 | 114.5 / 114.5 | 57.7 / 57.4 |
+| FIX2: noinline shared centre, canonical start searched in faces() | 154.2 (-25%) | 96.0 (-16%) | 52.5 (-9%) |
+| FIX3: inline rounded centre, same faces() search | 174.6 (-14%) | 103.7 (-9%) | 54.6 (-5%) |
+| FIX4: FIX3, one load per ring entry in the search | 183.3 (-9%) | 107.0 (-7%) | 55.6 (-3%) |
+| FIX5 (committed): FIX3 centres, canonical ring stored, faces() as main | 197.2 (-2.4%) | 111.6 (-2.5%) | 54.7 (-4.7%) |
+
+Job 31795034, FIX5 against main 3d6fda3: rebuild unchanged (jittered
+39.41/39.42, uniform 19.70/19.71, clustered 15.40/15.37, halo 14.03/14.10,
+lattice 49.13/49.11, wave 37.89/37.89 M cells/s), verify 18/18 PASS,
+update_cells unchanged (344.6/343.9, 337.5/337.7, 324.6/323.5 M cells/s),
+start 118.0/118.1 ms, peak memory identical (2190.65 / 2221.32 B/cell),
+CUDA ctest 7/7. The cost sits in the ring walks of the dirty faces (screen
+and repair unchanged, gpu_ms 5.17 vs 5.24 ms at 0.03). The owner accepted
+FIX5's cost for bit-reproducible runs.
+
+Whole moving hydro step (Sedov, per-face loop, 200 steps; job 31795035, 7082aad
+without the fix against FIX5): 128^3 55.9 / 55.4 M cell updates/s, 256^3
+56.9 / 57.3 M cell updates/s. FIX5's two identical runs give identical
+U, x and volume at step 200 at 128^3 and 256^3 (also FIX3, FIX4, which agree
+with each other bit for bit), and on the CPU (OpenMP, 8 threads, 32^3, 80
+steps).
+
+Not measured on the GPU: a cheaper variant that walks no extra time (the
+least tetrahedron found while `dirty_lengths` measures the ring and stored
+as its start; the direction picked from its two neighbours when writing).
+It passed the CPU checks (bit-identical runs, CTest `hydro`); the whole working-tree
+diff of that state is /raven/u/uli/voronoi-cpp/build-hydro/fix6-ring-walk.diff.
+
+## Non-cubic boxes
+
+The hydro takes the box sides from `Mesh::sides()` (src/hydro/finite_volume.hpp:
+`Geometry::box` an `exact_predicates::Box`, wrap per axis, drift per axis),
+snapshots write Lx, Ly, Lz (src/hydro/snapshot.hpp), hydro_sedov takes
+`--box=fx,fy,fz` (multiples of 50 pc). CTest `hydro`: in a (2, 1, 1) box a
+uniform state with bulk velocity stays uniform on the moving mesh (5e-16),
+is conserved over 10 moving steps, and the mesh equals an exact rebuild.

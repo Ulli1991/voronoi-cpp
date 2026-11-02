@@ -28,7 +28,7 @@ struct Units {
 struct SnapshotData {
     int index = 0;
     double time = 0;
-    double box = 1;
+    double sides[3] = {1, 1, 1};  // the box, Lx, Ly, Lz
     int order = 1;
     Gas gas;
     Units units;
@@ -91,9 +91,9 @@ inline std::string write_snapshot(const std::string& dir, const SnapshotData& s)
     detail::attribute(cells, "gamma", s.gas.gamma);
     detail::attribute(cells, "spatial_dimension", 3LL);
     detail::attribute(cells, "order", static_cast<long long>(s.order));
-    detail::attribute(cells, "Lx", s.box);
-    detail::attribute(cells, "Ly", s.box);
-    detail::attribute(cells, "Lz", s.box);
+    detail::attribute(cells, "Lx", s.sides[0]);
+    detail::attribute(cells, "Ly", s.sides[1]);
+    detail::attribute(cells, "Lz", s.sides[2]);
     detail::attribute(cells, "mesh", std::string("voronoi"));
     detail::attribute(cells, "N_cells", static_cast<long long>(n));
     detail::dataset(cells, "x", s.x);

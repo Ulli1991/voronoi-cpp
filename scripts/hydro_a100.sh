@@ -42,7 +42,8 @@ nvidia-smi -L
 ours() {
     module purge
     module load gcc/14 cuda/13.0 cmake hdf5-serial
-    "$build/hydro_sedov" "$@" | grep -v "^  "
+    # Allocations at the memory peaks (lines "  <label> ...") only when DETAILS is set.
+    "${HYDRO_BIN:-$build/hydro_sedov}" "$@" | grep -v "${DETAILS:+^NEVER}${DETAILS:-^  }"
 }
 
 luna() {  # luna <nx> <order> <riemann solver> <run dir> [Config overrides]
@@ -146,6 +147,73 @@ elif [[ "$mode" == static256 || "$mode" == moving256full ]]; then
     fi
     echo "== ours 256^3 jittered $kind, whole run, final snapshot"
     ours 256 jittered $mesh --snapshots=1 --out="$out/voronoi256_$kind"
+elif [[ "$mode" == library_check ]]; then
+    # The library checks of scripts/bench_a100.sh for several builds,
+    # VARIANTS (default "MAIN FIX": names of variables holding directories
+    # with voronoi_bench), interleaved command by command; ctest of FIX.
+    module purge
+    module load gcc/14 cuda/13.0 cmake hdf5-serial
+    ctest --test-dir "$FIX" --output-on-failure
+    for kind in jittered uniform clustered halo lattice wave; do
+        for variant in ${VARIANTS:-MAIN FIX}; do
+            echo "== $variant rebuild $kind"
+            "${!variant}/voronoi_bench" rebuild 2097152 "$kind" warp 3 | grep -vE "^  "
+        done
+    done
+    for kind in jittered uniform clustered halo lattice wave; do
+        for variant in ${VARIANTS:-MAIN FIX}; do
+            echo "== $variant verify $kind"
+            "${!variant}/voronoi_bench" step 262144 "$kind" 0.3 3 --verify | grep -E "^start|verify"
+        done
+    done
+    for d in 0.03 0.1 0.3; do
+        for variant in ${VARIANTS:-MAIN FIX}; do
+            echo "== $variant step 2097152 jittered $d"
+            "${!variant}/voronoi_bench" step 2097152 jittered "$d" 10 --memory | grep -vE "^  "
+        done
+    done
+elif [[ "$mode" == reproducibility ]]; then
+    # Two identical moving runs per build (BEFORE, AFTER: hydro_sedov paths)
+    # at 128^3 and 256^3 (STEPS steps, default 200), each writing its last
+    # state; the pairs are compared bit for bit afterwards.
+    for n in 128 256; do
+        for variant in BEFORE AFTER; do
+            for run in 1 2; do
+                echo "== $variant n=${n}^3 moving run $run"
+                HYDRO_BIN="${!variant}" ours $n jittered --moving --snapshots=1 --steps="${STEPS:-200}" \
+                    --out="$out/repro_${variant}_${n}_$run"
+            done
+        done
+    done
+elif [[ "$mode" == memory_compare ]]; then
+    # Two builds of hydro_sedov in one job (BEFORE, AFTER: paths), moving
+    # 256^3 per-face, STEPS steps (default 100, 0: the whole run), device
+    # memory per phase.
+    for variant in BEFORE AFTER; do
+        echo "== $variant ${!variant}: ours n=256^3 jittered moving per-face --steps=${STEPS:-100} (0: whole run)"
+        HYDRO_BIN="${!variant}" ours 256 jittered --moving --update=face --steps="${STEPS:-100}" --memory
+    done
+elif [[ "$mode" == moving256face ]]; then
+    echo "== ours 256^3 jittered moving per-face, whole run, final snapshot"
+    ours 256 jittered --moving --update=face --snapshots=1 --memory --out="$out/voronoi256_moving_face"
+elif [[ "$mode" == ours128 ]]; then
+    for mesh in --moving ""; do
+        echo "== ours 128^3 jittered ${mesh:-static}, whole run"
+        ours 128 jittered $mesh --out="$out/voronoi128${mesh:+_moving}"
+    done
+elif [[ "$mode" == luna_resolution ]]; then
+    # LUNA's whole Sedov at NX^3 (HLLC, Pallas, FP64), checkpointed every 5.5
+    # minutes of wall time (outputs.py:325-360) so that a run longer than one
+    # job continues with RESTART=1 from the newest checkpoint
+    # (docs/CONFIG.md:672-674); then the analysis of the final snapshot.
+    nx="${NX:?}"
+    dir="$out/luna${nx}_hllc"
+    echo "== LUNA ${nx}^3 ORDER=1 hllc pallas restart=${RESTART:-0}"
+    compgen -G "$dir/snapdir_001/*.hdf5" > /dev/null || luna "$nx" 1 hllc "$dir" n_snaps=1 hydro_kernel=pallas clear_output_dir=0 enable_checkpointing=1 \
+        checkpoint_wall_time_interval=330 max_checkpoints=2 checkpoint_dir="$dir/checkpoints" restart="${RESTART:-0}"
+    if compgen -G "$dir/snapdir_001/*.hdf5" > /dev/null; then
+        "$luna_env/bin/python" "$repo/scripts/hydro_sedov_compare.py" "$dir/sedov.png" "luna${nx}=$dir" | grep -E "final|10000.0"
+    fi
 elif [[ "$mode" == luna256 ]]; then
     echo "== LUNA 256^3 ORDER=1 hllc pallas, whole run, final snapshot"
     luna 256 1 hllc "$out/luna256_hllc" n_snaps=1 hydro_kernel=pallas

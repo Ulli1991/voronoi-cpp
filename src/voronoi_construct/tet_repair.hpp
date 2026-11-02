@@ -398,26 +398,28 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             st.dirty(t) = 0;
             if (!st.alive(t)) return;
             auto from = [&](Vec3 c, int v) { return tet_mesh::wrap(tet_mesh::row(x, v) - c, box); };
-            const int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
-            const Vec3 p = tet_mesh::row(x, v[0]);
-            const Vec3 d[3] = {from(p, v[1]), from(p, v[2]), from(p, v[3])};
+            // Corners sorted by particle id and the centre in rounded
+            // arithmetic, as tet_mesh::stored_centre for created tetrahedra:
+            // the same bits whichever kernel and corner order computed it.
+            int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+            const int parity = tet_mesh::sort_corners(v);
+            Vec3 d[3];
+            tet_mesh::rounded_offsets(x, box, v, d);
             double volume6, shape;
             // Slivers: suspect; their centres are computed exactly below.
-            if (tet_mesh::detail::sliver(d, volume6, shape)) {
+            if (tet_mesh::rounded_sliver(d, volume6, shape)) {
                 const int at = Kokkos::atomic_fetch_add(&counters(counter::freed), 1);
                 if (at < static_cast<int>(slivers.extent(0))) slivers(at) = t;
                 detail::mark(st, t);
                 return;
             }
-            // Well shaped and clearly positive, else decide exactly.
-            bool suspect = !(volume6 > 1e-3 * shape);
-            const Vec3 c = tet_mesh::detail::circumcentre(d[0], d[1], d[2]);
-            const Vec3 at = p + c;
-            const double r2 = dot(c, c);
-            centre(t, 0) = at.x;
-            centre(t, 1) = at.y;
-            centre(t, 2) = at.z;
-            centre(t, 3) = r2;
+            // Well shaped and clearly positive (in the stored corner order),
+            // else decide exactly.
+            bool suspect = !(parity * volume6 > 1e-3 * shape);
+            const Vec3 c = tet_mesh::rounded_circumcentre(d, volume6);
+            tet_mesh::store_centre(x, v[0], c, centre, t);
+            const Vec3 at{centre(t, 0), centre(t, 1), centre(t, 2)};
+            const double r2 = centre(t, 3);
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);

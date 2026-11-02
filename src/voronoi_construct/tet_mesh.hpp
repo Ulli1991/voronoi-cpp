@@ -135,6 +135,92 @@ KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring 
     return steps;
 }
 
+// The ring of edge i-j from t written to ring[] in a canonical order: from
+// the tetrahedron whose two other particles (ids, smaller first) are least,
+// towards the smaller of its two ring neighbours. Every ring is stored this
+// way (update_face_rings), so the face geometry (tet_mesh::faces) is summed
+// in the same order whichever tetrahedron the racy repair left as the
+// face's representative. Open or overlong rings: walk_edge from t. Returns
+// the number of steps, as walk_edge.
+template <class M>
+KOKKOS_INLINE_FUNCTION int walk_edge_canonical(const M& m, int t, int i, int j, int* ring) {
+    auto key = [&](int u) {  // the other two particles of u, packed
+        int lo = -1, hi = -1;
+        for (int c = 0; c < 4; ++c) {
+            const int v = m.vertex(u, c);
+            if (v == i || v == j) continue;
+            if (lo < 0) lo = v; else hi = v;
+        }
+        if (lo > hi) Kokkos::kokkos_swap(lo, hi);
+        return (static_cast<long long>(lo) << 32) | static_cast<unsigned>(hi);
+    };
+    // First walk: the least key, its predecessor and successor on the ring.
+    int current = t, before = -1, steps = 0, best = -1, best_before = -1, best_after = -1, last = -1;
+    long long best_key = 0, before_key = 0, after_key = 0, last_key = 0, first_key = 0;
+    bool closed = false;
+    for (;;) {
+        const long long k = key(current);
+        if (steps == 0) first_key = k;
+        if (best >= 0 && best_after < 0) {
+            best_after = current;
+            after_key = k;
+        }
+        if (best < 0 || k < best_key) {
+            best = current;
+            best_key = k;
+            best_before = before;
+            before_key = last_key;
+            best_after = -1;
+        }
+        const int next = next_around_edge(m, current, before, i, j);
+        ++steps;
+        if (next < 0 || steps > max_ring_length) break;
+        last = current;
+        last_key = k;
+        before = current;
+        current = next;
+        if (current == t) {
+            closed = true;
+            break;
+        }
+    }
+    if (!closed || steps < 3) return walk_edge(m, t, i, j, ring);
+    if (best_before < 0) {  // best is t: its predecessor is the last
+        best_before = last;
+        before_key = last_key;
+    }
+    if (best_after < 0) {  // best is the last: its successor is t
+        best_after = t;
+        after_key = first_key;
+    }
+    // Second walk from best, away from the larger neighbour.
+    current = best;
+    before = after_key < before_key ? best_before : best_after;
+    for (int s = 0; s < steps; ++s) {
+        ring[s] = current;
+        const int next = next_around_edge(m, current, before, i, j);
+        before = current;
+        current = next;
+    }
+    return steps;
+}
+
+// Sorts the four corners v by particle id and returns the parity of the
+// permutation (+1 even, -1 odd). Circumcentres computed from the sorted
+// corners do not depend on the order a repair left them in, so they are
+// the same bits whichever flips (in whatever order) built the tetrahedron.
+KOKKOS_INLINE_FUNCTION int sort_corners(int* v) {
+    int parity = 1;
+    for (int a = 1; a < 4; ++a)
+        for (int b = a; b > 0 && v[b - 1] > v[b]; --b) {
+            const int t = v[b - 1];
+            v[b - 1] = v[b];
+            v[b] = t;
+            parity = -parity;
+        }
+    return parity;
+}
+
 using Box = exact_predicates::Box;
 
 // A coordinate difference in a periodic box, to the nearest image. A
@@ -580,7 +666,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     }
     auto store = KOKKOS_LAMBDA(int f, int at, const Kokkos::View<int*, typename ExecSpace::memory_space>& pool) {
         if (at + ring_length(f) > capacity) Kokkos::abort("update_face_rings: ring capacity exceeded");
-        walk_edge(mesh, ~ring_start(f), owner(f), neighbour(f), &pool(at));
+        walk_edge_canonical(mesh, ~ring_start(f), owner(f), neighbour(f), &pool(at));
         ring_start(f) = at;
     };
     if (append) {
@@ -662,6 +748,117 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* 
     return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
 
+// Products, sums and differences rounded one by one (no fused multiply-add):
+// inlined into different kernels they give the same bits, where the
+// compiler is otherwise free to contract a * b + c differently per kernel.
+namespace rounded {
+KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
+#if defined(__CUDA_ARCH__)
+    return __dmul_rn(a, b);
+#else
+    const volatile double r = a * b;  // stored, so it cannot be fused into a later sum
+    return r;
+#endif
+}
+KOKKOS_INLINE_FUNCTION double add(double a, double b) {
+#if defined(__CUDA_ARCH__)
+    return __dadd_rn(a, b);
+#else
+    return a + b;
+#endif
+}
+KOKKOS_INLINE_FUNCTION double sub(double a, double b) {
+#if defined(__CUDA_ARCH__)
+    return __dsub_rn(a, b);
+#else
+    return a - b;
+#endif
+}
+KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
+    return {sub(mul(a.y, b.z), mul(a.z, b.y)), sub(mul(a.z, b.x), mul(a.x, b.z)), sub(mul(a.x, b.y), mul(a.y, b.x))};
+}
+KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x), mul(a.y, b.y)), mul(a.z, b.z)); }
+}  // namespace rounded
+
+// The pieces of a stored circumcentre (Mesh::centre), each operation rounded
+// on its own (`rounded`). Both kernels that compute centres (the screening
+// of a step, tet_repair::move_screened, and the centres of created
+// tetrahedra, circumcentres()) use them on the corners sorted by particle id
+// (sort_corners), and which kernel computes a given tetrahedron depends on
+// the order of the repair's flips: so the same tetrahedron gets the same
+// bits either way, and the face geometry is the same run to run.
+
+namespace R = rounded;
+
+// Offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images) of corners v.
+template <class X>
+KOKKOS_INLINE_FUNCTION void rounded_offsets(const X& x, const Box& box, const int* v, Vec3* d) {
+    double e[3][3];
+    for (int k = 0; k < 3; ++k)
+        for (int a = 0; a < 3; ++a) {
+            const double delta = R::sub(x(v[k + 1], a), x(v[0], a));
+            e[k][a] = R::sub(delta, R::mul(box.side[a], Kokkos::nearbyint(R::mul(delta, box.inverse[a]))));
+        }
+    for (int k = 0; k < 3; ++k) d[k] = {e[k][0], e[k][1], e[k][2]};
+}
+
+// Six times the signed volume and the shape scale of detail::sliver; true
+// for a sliver (centre computed exactly).
+KOKKOS_INLINE_FUNCTION bool rounded_sliver(const Vec3* d, double& volume6, double& shape) {
+    volume6 = R::dot(d[0], R::cross(d[1], d[2]));
+    shape = Kokkos::sqrt(R::mul(R::mul(R::dot(d[0], d[0]), R::dot(d[1], d[1])), R::dot(d[2], d[2])));
+    return !(Kokkos::abs(volume6) > R::mul(1e-4, shape));
+}
+
+// The circumcentre relative to corner 0 (detail::circumcentre, rounded).
+KOKKOS_INLINE_FUNCTION Vec3 rounded_circumcentre(const Vec3* d, double volume6) {
+    const Vec3 bc = R::cross(d[1], d[2]), ca = R::cross(d[2], d[0]), ab = R::cross(d[0], d[1]);
+    const double scale = 0.5 / volume6, aa = R::dot(d[0], d[0]), bb = R::dot(d[1], d[1]), cc = R::dot(d[2], d[2]);
+    return {R::mul(R::add(R::add(R::mul(bc.x, aa), R::mul(ca.x, bb)), R::mul(ab.x, cc)), scale),
+            R::mul(R::add(R::add(R::mul(bc.y, aa), R::mul(ca.y, bb)), R::mul(ab.y, cc)), scale),
+            R::mul(R::add(R::add(R::mul(bc.z, aa), R::mul(ca.z, bb)), R::mul(ab.z, cc)), scale)};
+}
+
+// Stores centre c relative to corner v0 as Mesh::centre row: absolute, and
+// the squared radius.
+template <class X, class Centre>
+KOKKOS_INLINE_FUNCTION void store_centre(const X& x, int v0, Vec3 c, const Centre& centre, int t) {
+    centre(t, 0) = R::add(x(v0, 0), c.x);
+    centre(t, 1) = R::add(x(v0, 1), c.y);
+    centre(t, 2) = R::add(x(v0, 2), c.z);
+    centre(t, 3) = R::dot(c, c);
+}
+
+// The stored circumcentre of tetrahedron t with corners `corners` (any
+// order); slivers exactly on the snapped grid, as circumcentre().
+template <class X, class Centre>
+KOKKOS_INLINE_FUNCTION void stored_centre(const X& x, const Box& box, const int* corners, const Centre& centre, int t) {
+    int v[4] = {corners[0], corners[1], corners[2], corners[3]};
+    sort_corners(v);
+    Vec3 d[3];
+    rounded_offsets(x, box, v, d);
+    double volume6, shape;
+    Vec3 c;
+    if (!rounded_sliver(d, volume6, shape)) {
+        c = rounded_circumcentre(d, volume6);
+    } else {
+        namespace ep = exact_predicates;
+        ep::Offset g[3];
+        for (int k = 0; k < 3; ++k)
+            for (int a = 0; a < 3; ++a)
+                g[k][a] = ep::delta(ep::snap(x(v[0], a), box, a), ep::snap(x(v[k + 1], a), box, a), box.period[a]);
+        ep::i128 n[3];
+        const ep::i128 det = ep::circumcentre(g[0], g[1], g[2], n);
+        if (det != 0) {
+            const double unit = box.step / (2 * double(det));
+            c = {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
+        } else {
+            c = rounded_circumcentre(d, volume6);
+        }
+    }
+    store_centre(x, v[0], c, centre, t);
+}
+
 // 1. Circumcentres, one thread per tetrahedron: of the first `count` (all
 // if negative), or of those listed in `only` (e.g. the ones a repair
 // touched, at unchanged positions).
@@ -677,13 +874,7 @@ void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
         KOKKOS_LAMBDA(int s) {
             const int t = listed ? only(s) : s;
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
-            const Vec3 p = row(x, v[0]);
-            const Vec3 d[3] = {wrap(row(x, v[1]) - p, box), wrap(row(x, v[2]) - p, box), wrap(row(x, v[3]) - p, box)};
-            const Vec3 c = circumcentre(x, box, v, d);
-            mesh.centre(t, 0) = x(v[0], 0) + c.x;
-            mesh.centre(t, 1) = x(v[0], 1) + c.y;
-            mesh.centre(t, 2) = x(v[0], 2) + c.z;
-            mesh.centre(t, 3) = dot(c, c);
+            stored_centre(x, box, v, mesh.centre, t);
         });
 }
 
