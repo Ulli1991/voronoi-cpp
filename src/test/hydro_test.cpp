@@ -271,8 +271,8 @@ using Moving = hydro::FiniteVolume<Exec>;
 struct MovingRun {
     voronoi::Mesh<Exec> mesh;
     Moving fv;
-    MovingRun(const Points& points, const hydro::Gas& gas, hydro::Motion motion)
-        : mesh(Exec{}, 1.0), fv(Exec{}, build(mesh, points), gas, 1, hydro::Update::per_face, hydro::Limiter::face_centroid, motion) {}
+    MovingRun(const Points& points, const hydro::Gas& gas, hydro::Motion motion, const Box& box = {})
+        : mesh(Exec{}, box), fv(Exec{}, build(mesh, points), gas, 1, hydro::Update::per_face, hydro::Limiter::face_centroid, motion) {}
     static voronoi::Mesh<Exec>& build(voronoi::Mesh<Exec>& mesh, const Points& points) {
         mesh.update(to_device(points));
         mesh.update_cells();
@@ -412,6 +412,53 @@ void moving_tests(Check& check) {
                 for (int c = 0; c < 4; ++c) differ += stored(t, c) != fresh(t, c);
         check.expect(differ == 0, "moving mesh: every stored circumcentre equals a fresh one bit for bit (" +
                                       std::to_string(differ) + " differ)");
+    }
+    {  // a non-cubic box (2, 1, 1): uniform state with a bulk velocity, conservation
+        const Box box(2.0, 1.0, 1.0);
+        const Points stretched = make_points("jittered", n, box);
+        const int m = static_cast<int>(stretched.size());
+        {
+            MovingRun run(stretched, gas, hydro::Motion::moving, box);
+            const State U = hydro::conserved({1.3, 1.0, 0.5, -0.25, 0.7}, gas);
+            HostCells h("uniform", m);
+            for (int i = 0; i < m; ++i)
+                for (int v = 0; v < 5; ++v) h(i, v) = U[v];
+            set_state(run.fv, run.mesh, h);
+            const double dt = std::ldexp(1.0, -12);  // v dt: whole grid steps (box.step = 2^-29)
+            for (int s = 0; s < 5; ++s) {
+                run.fv.time_step(0.3);
+                run.fv.step(dt);
+            }
+            const HostCells after = host_state(run.fv, run.mesh);
+            double worst = 0;
+            for (int i = 0; i < m; ++i)
+                worst = std::max(worst, relative({after(i, 0), after(i, 1), after(i, 2), after(i, 3), after(i, 4)}, U));
+            check.expect(worst < 1e-13, "box (2, 1, 1), moving mesh: a uniform state with a bulk velocity stays uniform (" +
+                                            sci(worst) + ", " + std::to_string(m) + " cells)");
+        }
+        {
+            MovingRun run(stretched, gas, hydro::Motion::moving, box);
+            set_state(run.fv, run.mesh, rough_state(m, gas));
+            auto sums = [&](const HostCells& q) {
+                std::array<long double, 5> s{};
+                for (int i = 0; i < m; ++i)
+                    for (int v = 0; v < 5; ++v) s[v] += q(i, v);
+                return s;
+            };
+            const auto before = sums(host_extensive(run.fv));
+            for (int s = 0; s < 10; ++s) run.fv.step(run.fv.time_step(0.3));
+            const auto after = sums(host_extensive(run.fv));
+            const double scale = static_cast<double>(before[0]) * std::sqrt(static_cast<double>(before[4] / before[0]));
+            double worst = std::max(std::abs(static_cast<double>((after[0] - before[0]) / before[0])),
+                                    std::abs(static_cast<double>((after[4] - before[4]) / before[4])));
+            for (int v = 1; v <= 3; ++v) worst = std::max(worst, std::abs(static_cast<double>(after[v] - before[v])) / scale);
+            const auto snapped = to_host(run.mesh.positions());
+            Points on_grid(m);
+            for (int i = 0; i < m; ++i) on_grid[i] = {snapped(i, 0), snapped(i, 1), snapped(i, 2)};
+            const Comparison c = compare_with_rebuild(run.mesh, to_device(on_grid));
+            check.expect(worst < 1e-14 && c.pass(), "box (2, 1, 1), moving mesh: conserved over 10 steps (" + sci(worst) +
+                                                        "), the mesh equals an exact rebuild");
+        }
     }
     {  // Galilean invariance: a blast at rest and the same blast moving with the box
         const double bulk = 16, dt = std::ldexp(1.0, -12);  // bulk dt = 2^-8 of the box

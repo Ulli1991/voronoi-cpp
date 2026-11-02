@@ -189,7 +189,7 @@ public:
         Kokkos::View<const double* [3], Memory> area, face_centroid, centroid;
         Kokkos::View<const double*, Memory> volume;
         tet_mesh::Points4<Memory> positions;
-        double box;
+        exact_predicates::Box box;  // the periodic box, sides per axis (Mesh::sides())
 
         KOKKOS_INLINE_FUNCTION Vec3 row(const Kokkos::View<const double* [3], Memory>& v, int i) const {
             return {v(i, 0), v(i, 1), v(i, 2)};
@@ -201,9 +201,9 @@ public:
         }
         // Nearest image of generator j seen from generator i.
         KOKKOS_INLINE_FUNCTION Vec3 separation(int i, int j) const {
-            return {tet_mesh::wrap(positions(j, 0) - positions(i, 0), box, 1.0 / box),
-                    tet_mesh::wrap(positions(j, 1) - positions(i, 1), box, 1.0 / box),
-                    tet_mesh::wrap(positions(j, 2) - positions(i, 2), box, 1.0 / box)};
+            return {tet_mesh::wrap(positions(j, 0) - positions(i, 0), box.side[0], box.inverse[0]),
+                    tet_mesh::wrap(positions(j, 1) - positions(i, 1), box.side[1], box.inverse[1]),
+                    tet_mesh::wrap(positions(j, 2) - positions(i, 2), box.side[2], box.inverse[2])};
         }
         KOKKOS_INLINE_FUNCTION int other(int f, int i) const { return owner(f) == i ? neighbour(f) : owner(f); }
         // Face centroid of face f relative to the centroid of cell i (a side of f).
@@ -248,7 +248,7 @@ public:
         const Mesh& mesh = *mesh_;
         faces_ = mesh.faces();
         geometry_ = {mesh.owner(),         mesh.neighbour(), mesh.cell_face_start(), mesh.cell_face(), mesh.area(),
-                     mesh.face_centroid(), mesh.centroid(),  mesh.volume(),          mesh.positions(), mesh.box()};
+                     mesh.face_centroid(), mesh.centroid(),  mesh.volume(),          mesh.positions(), mesh.sides()};
     }
 
     // Gradients, then face fluxes, in the mesh's scratch memory.
@@ -302,12 +302,12 @@ public:
     void move(double dt, Timings* timings) {
         const auto x = x_;
         const auto w = w_;
-        const double box = mesh_->box();
+        const exact_predicates::Box box = mesh_->sides();
         Kokkos::parallel_for(
             "hydro::drift", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
                 for (int a = 0; a < 3; ++a) {
                     const double moved = x(i, a) + dt * w(i, a);
-                    x(i, a) = moved - box * Kokkos::floor(moved / box);
+                    x(i, a) = moved - box.side[a] * Kokkos::floor(moved / box.side[a]);
                 }
             });
         phase_end(timings, &Timings::drift);

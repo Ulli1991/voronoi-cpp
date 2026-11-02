@@ -4,7 +4,7 @@
 //
 //   hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face]
 //               [--limiter=face|cell|none] [--riemann=hllc|hll] [--moving]
-//               [--bulk=<km/s>] [--out=<dir>] [--snapshots=10]
+//               [--bulk=<km/s>] [--box=fx,fy,fz] [--out=<dir>] [--snapshots=10]
 //               [--steps=<max>] [--input-order] [--memory]
 //
 // side^3 generating points in a 50 pc periodic box (jittered: a lattice
@@ -15,7 +15,8 @@
 // (gamma - 1) E / V_deposit over their actual volume V_deposit; run to
 // 1e4 yr. --moving: the points move with the flow (AREPO-ng's
 // regularisation), the mesh is updated every step. --bulk: the whole box
-// moves along x at that speed (a moving blast wave). --out writes snapshots
+// moves along x at that speed (a moving blast wave). --box: the box sides as
+// multiples of 50 pc (default 1,1,1; about side^3 cells). --out writes snapshots
 // 0..snapshots at equal times (LUNA's time_bet_snaps = t_end / n_snaps).
 // --steps stops after that many steps (timing runs). Particles are numbered
 // in Morton order of their positions (--input-order: as generated, lattice
@@ -106,7 +107,7 @@ std::string flag(int argc, char** argv, const std::string& name, const std::stri
 
 // The points in Morton order (21 bits per coordinate): particle ids follow
 // space, so neighbouring cells sit close in memory.
-Points morton_order(Points points, double box) {
+Points morton_order(Points points, const Box& box) {
     auto spread = [](std::uint64_t v) {  // the 21 bits of v to every third bit
         v &= 0x1fffff;
         v = (v | v << 32) & 0x1f00000000ffffULL;
@@ -119,7 +120,7 @@ Points morton_order(Points points, double box) {
     std::vector<std::pair<std::uint64_t, std::size_t>> keys(points.size());
     for (std::size_t i = 0; i < points.size(); ++i) {
         std::uint64_t key = 0;
-        for (int a = 0; a < 3; ++a) key |= spread(static_cast<std::uint64_t>(points[i][a] / box * (1 << 21))) << a;
+        for (int a = 0; a < 3; ++a) key |= spread(static_cast<std::uint64_t>(points[i][a] * box.inverse[a] * (1 << 21))) << a;
         keys[i] = {key, i};
     }
     std::sort(keys.begin(), keys.end());
@@ -182,7 +183,7 @@ int main(int argc, char** argv) {
         if (std::string(argv[i]).rfind("--", 0) != 0) args.push_back(argv[i]);
     if (args.size() < 2) {
         std::cerr << "usage: hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--limiter=face|cell|none]"
-                     " [--riemann=hllc|hll] [--moving] [--bulk=km/s] [--out=dir]"
+                     " [--riemann=hllc|hll] [--moving] [--bulk=km/s] [--box=fx,fy,fz] [--out=dir]"
                      " [--snapshots=10] [--steps=max] [--input-order] [--memory]\n";
         return 2;
     }
@@ -207,17 +208,23 @@ int main(int argc, char** argv) {
     const int snapshots = std::stoi(flag(argc, argv, "--snapshots", "10"));
     const long long max_steps = std::stoll(flag(argc, argv, "--steps", "0"));
     const bool input_order = flag(argc, argv, "--input-order", "") == "1";
-    const long long n = static_cast<long long>(side) * side * side;
     const Sedov sedov;
+    // The periodic box: --box=fx,fy,fz times the 50 pc of LUNA's set-up (a
+    // cube by default); the lattice keeps about equal spacings per axis.
+    const std::string shape_arg = flag(argc, argv, "--box", "1,1,1");
+    double f[3] = {1, 1, 1};
+    std::sscanf(shape_arg.c_str(), "%lf,%lf,%lf", &f[0], &f[1], &f[2]);
+    const Box box(sedov.box * f[0], sedov.box * f[1], sedov.box * f[2]);
+    Points points = scaled(make_points_off_grid(kind, side * side * side, shape(box)), box);
+    const long long n = static_cast<long long>(points.size());
     const hydro::Gas gas{sedov.gamma};
     const Exec exec;
 
     // Mesh.
     Kokkos::Timer timer;
-    voronoi::Mesh<Exec> mesh(exec, sedov.box);
+    voronoi::Mesh<Exec> mesh(exec, box);
     {
-        Points points = scaled(make_points_off_grid(kind, static_cast<int>(n)), sedov.box);
-        if (!input_order) points = morton_order(points, sedov.box);
+        if (!input_order) points = morton_order(points, box);
         const Positions x = to_device(points);
         mesh.update(x);
         mesh.update_cells();
@@ -230,11 +237,13 @@ int main(int argc, char** argv) {
     // Initial state on the host: the deposit cells by distance to the centre.
     const auto positions = to_host(mesh.positions());
     const auto volume = to_host(mesh.volume());
-    const double centre = 0.5 * sedov.box, spacing = sedov.box / side, target = 8 * spacing * spacing * spacing;
+    // LUNA's 8 central cells: 8 mean cell volumes.
+    const double target = 8 * box.volume() / static_cast<double>(n);
+    const double centre[3] = {0.5 * box.side[0], 0.5 * box.side[1], 0.5 * box.side[2]};
     auto radius = [&](long long i) {
         double r2 = 0;
         for (int a = 0; a < 3; ++a) {
-            const double d = tet_mesh::wrap(positions(i, a) - centre, sedov.box, 1.0 / sedov.box);
+            const double d = tet_mesh::wrap(positions(i, a) - centre[a], box.side[a], box.inverse[a]);
             r2 += d * d;
         }
         return std::sqrt(r2);
@@ -277,7 +286,7 @@ int main(int argc, char** argv) {
         DeviceMemory::phase("hydro_setup", n);
 
         hydro::SnapshotData snap;
-        snap.box = sedov.box;
+        for (int a = 0; a < 3; ++a) snap.sides[a] = box.side[a];
         snap.order = order;
         snap.gas = gas;
         snap.units = sedov.units;
@@ -292,7 +301,7 @@ int main(int argc, char** argv) {
             snap.time = t;
             for (auto* c : {&snap.x, &snap.y, &snap.z, &snap.volume}) c->resize(n);
             for (int v = 0; v < 5; ++v) snap.U[v].resize(n);
-            const double cx = centre + bulk * t;
+            const double cx = centre[0] + bulk * t;
             double disturbed = 0;
             for (long long i = 0; i < n; ++i) {
                 snap.x[i] = x(i, 0);
@@ -304,13 +313,13 @@ int main(int argc, char** argv) {
                 if (std::abs(W[0] / sedov.rho() - 1) <= 1e-6 && std::abs(W[4] / sedov.pressure() - 1) <= 1e-6) continue;
                 double r2 = 0;
                 for (int a = 0; a < 3; ++a) {
-                    const double d = tet_mesh::wrap(x(i, a) - (a == 0 ? cx : centre), sedov.box, 1.0 / sedov.box);
+                    const double d = tet_mesh::wrap(x(i, a) - (a == 0 ? cx : centre[a]), box.side[a], box.inverse[a]);
                     r2 += d * d;
                 }
                 disturbed = std::max(disturbed, std::sqrt(r2));
             }
             std::cout << "snapshot: index=" << index << " time=" << t << " disturbed_radius=" << disturbed
-                      << " half_box=" << 0.5 * sedov.box;
+                      << " shortest_half_box=" << 0.5 * box.shortest();
             if (!out.empty()) std::cout << " file=" << hydro::write_snapshot(out, snap);
             std::cout << "\n";
         };
@@ -356,6 +365,7 @@ int main(int argc, char** argv) {
         }
         exec.fence();
         const double wall_s = wall.seconds();
+        if (t < sedov.t_end() && !out.empty()) write(next, t);  // stopped by --steps: the last state
         DeviceMemory::phase("steps", n);
         const Totals after = totals(fv);
         const double step_ms = median(dt_ms) + median(velocity_ms) + median(gradient_ms) + median(flux_ms) + median(update_ms) +
