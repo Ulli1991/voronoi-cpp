@@ -56,6 +56,16 @@ KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y
 KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
     return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
+// The 2D vector of the face and cell arrays (tet_mesh::cells in 2D).
+struct Vec2 {
+    double x, y;
+};
+KOKKOS_INLINE_FUNCTION Vec2 operator+(Vec2 a, Vec2 b) { return {a.x + b.x, a.y + b.y}; }
+KOKKOS_INLINE_FUNCTION Vec2 operator-(Vec2 a, Vec2 b) { return {a.x - b.x, a.y - b.y}; }
+KOKKOS_INLINE_FUNCTION Vec2 operator*(Vec2 a, double s) { return {a.x * s, a.y * s}; }
+KOKKOS_INLINE_FUNCTION double dot(Vec2 a, Vec2 b) { return a.x * b.x + a.y * b.y; }
+template <int D>
+using VecN = std::conditional_t<D == 2, Vec2, Vec3>;
 
 // Read-only inputs, all in slot order, from a built neighbor_search::CellList.
 template <class MemorySpace>

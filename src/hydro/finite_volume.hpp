@@ -9,7 +9,8 @@
 #include <string>
 #include <utility>
 
-// Finite volumes on a voronoi::Mesh, static or moving with the flow:
+// Finite volumes on a voronoi::Mesh<D> (D = 2, 3 here; D = 1 has its own
+// fused step, finite_volume_1d.hpp), static or moving with the flow:
 // MUSCL-Hancock (order 1) or first-order Godunov (order 0), a Riemann
 // solver on every face along its normal in the frame of the moving face
 // (HLLC by default, as LUNA's riemann_solver; HLL; any type with their
@@ -45,7 +46,7 @@
 //     both get the same bits) and writes the new state into a second array;
 //   per_face: one thread per face writes its flux into a face array, then
 //     one thread per cell gathers them and updates in place.
-// Gradients (15 doubles per cell) and the face fluxes live in the mesh's
+// Gradients ((D + 2) D doubles per cell) and the face fluxes live in the mesh's
 // scratch memory, asked for at every step after the mesh update (scratch
 // is valid until the mesh's next update(), rebuild() or update_cells()).
 namespace hydro {
@@ -71,16 +72,21 @@ struct MeshStats {
     long long updates = 0, rebuilds = 0, stuck = 0, host_flips = 0, device_flips = 0;
 };
 
-template <class ExecSpace = Kokkos::DefaultExecutionSpace, class Riemann = HLLC>
+template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class Riemann = HLLC>
 class FiniteVolume {
 public:
+    static_assert(D == 2 || D == 3, "hydro::FiniteVolume: D = 1 is finite_volume_1d.hpp");
+    static constexpr int V = D + 2;  // variables
     using Memory = typename ExecSpace::memory_space;
-    using Mesh = voronoi::Mesh<ExecSpace>;
-    using Cells = Kokkos::View<double* [5], Memory>;
-    using Points = Kokkos::View<double* [3], Memory>;
+    using Mesh = voronoi::Mesh<D, ExecSpace>;
+    using State = hydro::State<D>;
+    using Vec = hydro::Vec<D>;
+    using Gradient = hydro::Gradient<D>;
+    using Cells = Kokkos::View<double* [V], Memory>;
+    using Points = Kokkos::View<double* [D], Memory>;
     using Unmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
-    using Gradients = Kokkos::View<double* [15], typename Cells::array_layout, Memory, Unmanaged>;
-    using FaceFluxes = Kokkos::View<double* [5], typename Cells::array_layout, Memory, Unmanaged>;
+    using Gradients = Kokkos::View<double* [V * D], typename Cells::array_layout, Memory, Unmanaged>;
+    using FaceFluxes = Kokkos::View<double* [V], typename Cells::array_layout, Memory, Unmanaged>;
 
     // AREPO next generation's mesh regularisation as its Sedov examples
     // configure it (examples/sedov_3d/sedov_globaltstp_3d/Config.sh:11-13:
@@ -144,16 +150,16 @@ public:
             KOKKOS_LAMBDA(int i, double& smallest) {
                 const State Wi = primitive(geo.per_volume(q, i), gas);
                 const double ci = sound_speed(Wi, gas);
-                const double r = Kokkos::cbrt(geo.volume(i) * (3.0 / (4.0 * M_PI)));
-                Vec3 relative{Wi[1], Wi[2], Wi[3]};
-                if (moving) relative = relative - Vec3{w(i, 0), w(i, 1), w(i, 2)};
+                const double r = radius(geo.volume(i));
+                Vec relative = velocity(Wi);
+                if (moving) relative = relative - geo.row(w, i);
                 double step = r / (ci + Kokkos::sqrt(dot(relative, relative)));
                 for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                     const int j = geo.other(geo.face(k), i);
                     const State Wj = primitive(geo.per_volume(q, j), gas);
-                    const Vec3 d = geo.separation(i, j);
+                    const Vec d = geo.separation(i, j);
                     const double dist = Kokkos::sqrt(dot(d, d));
-                    const Vec3 dv{Wj[1] - Wi[1], Wj[2] - Wi[2], Wj[3] - Wi[3]};
+                    const Vec dv = velocity(Wj) - velocity(Wi);
                     const double vsig = ci + sound_speed(Wj, gas) - dot(dv, d) / dist;
                     if (vsig > 0) step = Kokkos::fmin(step, (dist + r) / vsig);
                 }
@@ -183,39 +189,54 @@ public:
     // -1 with the per-cell loop, which does not count them).
     long long fallbacks() const { return fallbacks_; }
 
+    // The radius of a sphere (D = 3) or circle (D = 2) of volume v
+    // (AREPO's get_cell_radius, voronoi.c:1053-1071).
+    KOKKOS_INLINE_FUNCTION static double radius(double v) {
+        if constexpr (D == 3)
+            return Kokkos::cbrt(v * (3.0 / (4.0 * M_PI)));
+        else
+            return Kokkos::sqrt(v * (1.0 / M_PI));
+    }
+
     // Mesh arrays and the per-face and per-cell operations on them.
     struct Geometry {
         Kokkos::View<const int*, Memory> owner, neighbour, start, face;
-        Kokkos::View<const double* [3], Memory> area, face_centroid, centroid;
+        Kokkos::View<const double* [D], Memory> area, face_centroid, centroid;
         Kokkos::View<const double*, Memory> volume;
-        tet_mesh::Points4<Memory> positions;
-        exact_predicates::Box box;  // the periodic box, sides per axis (Mesh::sides())
+        typename Mesh::Positions positions;
+        exact_predicates::BoxN<D> box;  // the periodic box, sides per axis (Mesh::sides())
 
-        KOKKOS_INLINE_FUNCTION Vec3 row(const Kokkos::View<const double* [3], Memory>& v, int i) const {
-            return {v(i, 0), v(i, 1), v(i, 2)};
+        template <class Rows>
+        KOKKOS_INLINE_FUNCTION Vec row(const Rows& v, int i) const {
+            Vec r;
+            for (int a = 0; a < D; ++a) r[a] = v(i, a);
+            return r;
         }
         // The conserved state of cell i per unit volume.
         KOKKOS_INLINE_FUNCTION State per_volume(const Cells& q, int i) const {
             const double inv = 1.0 / volume(i);
-            return {q(i, 0) * inv, q(i, 1) * inv, q(i, 2) * inv, q(i, 3) * inv, q(i, 4) * inv};
+            State u;
+            for (int v = 0; v < V; ++v) u[v] = q(i, v) * inv;
+            return u;
         }
         // Nearest image of generator j seen from generator i.
-        KOKKOS_INLINE_FUNCTION Vec3 separation(int i, int j) const {
-            return {tet_mesh::wrap(positions(j, 0) - positions(i, 0), box.side[0], box.inverse[0]),
-                    tet_mesh::wrap(positions(j, 1) - positions(i, 1), box.side[1], box.inverse[1]),
-                    tet_mesh::wrap(positions(j, 2) - positions(i, 2), box.side[2], box.inverse[2])};
+        KOKKOS_INLINE_FUNCTION Vec separation(int i, int j) const {
+            Vec d;
+            for (int a = 0; a < D; ++a)
+                d[a] = tet_mesh::wrap(positions(j, a) - positions(i, a), box.side[a], box.inverse[a]);
+            return d;
         }
         KOKKOS_INLINE_FUNCTION int other(int f, int i) const { return owner(f) == i ? neighbour(f) : owner(f); }
         // Face centroid of face f relative to the centroid of cell i (a side of f).
-        KOKKOS_INLINE_FUNCTION Vec3 face_offset(int f, int i) const {
+        KOKKOS_INLINE_FUNCTION Vec face_offset(int f, int i) const {
             const int o = owner(f);
-            const Vec3 relative = o == i ? row(face_centroid, f) : row(face_centroid, f) + separation(i, o);
+            const Vec relative = o == i ? row(face_centroid, f) : row(face_centroid, f) + separation(i, o);
             return relative - row(centroid, i);
         }
         KOKKOS_INLINE_FUNCTION double surface(int i) const {
             double sum = 0;
             for (int k = start(i); k < start(i + 1); ++k) {
-                const Vec3 a = row(area, face(k));
+                const Vec a = row(area, face(k));
                 sum += Kokkos::sqrt(dot(a, a));
             }
             return sum;
@@ -239,7 +260,7 @@ public:
         const auto x = x_;
         Kokkos::parallel_for(
             "hydro::positions", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
-                for (int a = 0; a < 3; ++a) x(i, a) = from(i, a);
+                for (int a = 0; a < D; ++a) x(i, a) = from(i, a);
             });
     }
 
@@ -253,8 +274,8 @@ public:
 
     // Gradients, then face fluxes, in the mesh's scratch memory.
     void borrow_scratch() {
-        const std::size_t gradient_bytes = order_ == 1 ? sizeof(double) * 15 * std::size_t(n_) : 0;
-        const std::size_t flux_bytes = update_ == Update::per_face ? sizeof(double) * 5 * std::size_t(faces_) : 0;
+        const std::size_t gradient_bytes = order_ == 1 ? sizeof(double) * V * D * std::size_t(n_) : 0;
+        const std::size_t flux_bytes = update_ == Update::per_face ? sizeof(double) * V * std::size_t(faces_) : 0;
         char* base = mesh_->scratch(gradient_bytes + flux_bytes).data();
         if (order_ == 1) gradients_ = Gradients(reinterpret_cast<double*>(base), n_);
         if (update_ == Update::per_face) flux_ = FaceFluxes(reinterpret_cast<double*>(base + gradient_bytes), faces_);
@@ -264,7 +285,8 @@ public:
     // (src/voronoi/voronoi_vertex_velocities.cc:26-139 with
     // REGULARIZE_MESH_CM_DRIFT, _USE_SOUNDSPEED, _FACE_ANGLE): the fluid
     // velocity (:31), plus, for a cell whose largest face angle
-    // sqrt(A / pi) / (d_ij / 2) (src/voronoi/cell.cc:563, 576-578) exceeds
+    // sqrt(A / pi) / (d_ij / 2) (src/voronoi/cell.cc:563, 576-578; in 2D
+    // A / 2 / (d_ij / 2), A the face's length, AREPO voronoi_2d.c:1309) exceeds
     // 0.75 cell_max_angle_factor, a drift towards the cell's centroid at
     // fraction * c, fraction rising linearly from 0 to cell_shaping_speed
     // at cell_max_angle_factor (:100-106, :109-137; no gravity).
@@ -279,8 +301,8 @@ public:
                 double max_angle = 0;
                 for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                     const int f = geo.face(k);
-                    const Vec3 a = geo.row(geo.area, f), d = geo.separation(i, geo.other(f, i));
-                    const double angle = Kokkos::sqrt(Kokkos::sqrt(dot(a, a)) / M_PI) / (0.5 * Kokkos::sqrt(dot(d, d)));
+                    const Vec a = geo.row(geo.area, f), d = geo.separation(i, geo.other(f, i));
+                    const double angle = face_angle(Kokkos::sqrt(dot(a, a))) / (0.5 * Kokkos::sqrt(dot(d, d)));
                     max_angle = Kokkos::fmax(max_angle, angle);
                 }
                 double fraction = 0;
@@ -288,24 +310,29 @@ public:
                     fraction = max_angle > cell_max_angle_factor
                                    ? cell_shaping_speed
                                    : cell_shaping_speed * (max_angle - 0.75 * cell_max_angle_factor) / (0.25 * cell_max_angle_factor);
-                Vec3 v{W[1], W[2], W[3]};
-                const Vec3 c = geo.row(geo.centroid, i);  // centroid - generator = -dx of AREPO
+                Vec v = velocity(W);
+                const Vec c = geo.row(geo.centroid, i);  // centroid - generator = -dx of AREPO
                 const double d = Kokkos::sqrt(dot(c, c));
                 if (d > 0 && fraction > 0) v = v + c * (fraction * sound_speed(W, gas) / d);
-                w(i, 0) = v.x;
-                w(i, 1) = v.y;
-                w(i, 2) = v.z;
+                for (int a = 0; a < D; ++a) w(i, a) = v[a];
             });
+    }
+    // The size of a face of area (2D: length) |A| in AREPO's face angle.
+    KOKKOS_INLINE_FUNCTION static double face_angle(double area) {
+        if constexpr (D == 3)
+            return Kokkos::sqrt(area / M_PI);
+        else
+            return 0.5 * area;
     }
 
     // The points drift by dt * w and stay in the box; the mesh is updated.
     void move(double dt, Timings* timings) {
         const auto x = x_;
         const auto w = w_;
-        const exact_predicates::Box box = mesh_->sides();
+        const exact_predicates::BoxN<D> box = mesh_->sides();
         Kokkos::parallel_for(
             "hydro::drift", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
-                for (int a = 0; a < 3; ++a) {
+                for (int a = 0; a < D; ++a) {
                     const double moved = x(i, a) + dt * w(i, a);
                     x(i, a) = moved - box.side[a] * Kokkos::floor(moved / box.side[a]);
                 }
@@ -327,7 +354,7 @@ public:
     // (Arepo2-nextgeneration-SoA, src/mesh/mesh_gradients.cc; lines in the
     // notes): a least-squares fit W_j - W_i = a + g.d_ij over all face
     // neighbours j, weighted by the face area, d_ij between the cell
-    // centroids (an intercept a and the gradient g: four unknowns); then,
+    // centroids (an intercept a and the gradient g: D + 1 unknowns); then,
     // for each variable, the gradient is scaled down face by face (faces
     // above 1e-6 of the cell's surface, in the cell's face order) until the
     // value extrapolated to every face centroid stays within the range of
@@ -340,36 +367,38 @@ public:
         const Limiter limiter = limiter_;
         Kokkos::parallel_for(
             "hydro::gradients", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
+                constexpr int U = D + 1;  // unknowns
                 const State Wi = primitive(geo.per_volume(q, i), gas);
                 const double tiny = 1e-6 * geo.surface(i);
-                const Vec3 ci = geo.row(geo.centroid, i);
-                double A[4][4] = {};
-                double b[5][4] = {};
+                const Vec ci = geo.row(geo.centroid, i);
+                double A[U][U] = {};
+                double b[V][U] = {};
                 State lo, hi;
-                for (int v = 0; v < 5; ++v) {
+                for (int v = 0; v < V; ++v) {
                     lo[v] = Kokkos::Experimental::finite_max_v<double>;
                     hi[v] = -Kokkos::Experimental::finite_max_v<double>;
                 }
                 for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                     const int f = geo.face(k), j = geo.other(f, i);
-                    const Vec3 a = geo.row(geo.area, f);
+                    const Vec a = geo.row(geo.area, f);
                     const double w = Kokkos::sqrt(dot(a, a));
-                    const Vec3 d = geo.separation(i, j) + geo.row(geo.centroid, j) - ci;
-                    const double X[4] = {1, d.x, d.y, d.z};
-                    for (int p = 0; p < 4; ++p)
-                        for (int r = p; r < 4; ++r) A[p][r] += w * X[p] * X[r];
+                    const Vec d = geo.separation(i, j) + geo.row(geo.centroid, j) - ci;
+                    double X[U] = {1};
+                    for (int p = 1; p < U; ++p) X[p] = d[p - 1];
+                    for (int p = 0; p < U; ++p)
+                        for (int r = p; r < U; ++r) A[p][r] += w * X[p] * X[r];
                     const State Wj = primitive(geo.per_volume(q, j), gas);
-                    for (int v = 0; v < 5; ++v) {
+                    for (int v = 0; v < V; ++v) {
                         const double dW = Wj[v] - Wi[v];
-                        for (int p = 0; p < 4; ++p) b[v][p] += w * X[p] * dW;
+                        for (int p = 0; p < U; ++p) b[v][p] += w * X[p] * dW;
                         if (w < tiny) continue;
                         lo[v] = Kokkos::fmin(lo[v], Wj[v]);
                         hi[v] = Kokkos::fmax(hi[v], Wj[v]);
                     }
                 }
-                // A is symmetric positive definite: Cholesky A = L L^T, once for all five.
-                double L[4][4] = {};
-                for (int p = 0; p < 4; ++p) {
+                // A is symmetric positive definite: Cholesky A = L L^T, once for all variables.
+                double L[U][U] = {};
+                for (int p = 0; p < U; ++p) {
                     for (int r = 0; r <= p; ++r) {
                         double sum = A[r][p];
                         for (int m = 0; m < r; ++m) sum -= L[p][m] * L[r][m];
@@ -377,31 +406,31 @@ public:
                     }
                 }
                 Gradient grad;
-                for (int v = 0; v < 5; ++v) {
-                    double z[4], x[4];
-                    for (int p = 0; p < 4; ++p) {
+                for (int v = 0; v < V; ++v) {
+                    double z[U], x[U];
+                    for (int p = 0; p < U; ++p) {
                         double sum = b[v][p];
                         for (int m = 0; m < p; ++m) sum -= L[p][m] * z[m];
                         z[p] = sum / L[p][p];
                     }
-                    for (int p = 3; p >= 0; --p) {
+                    for (int p = U - 1; p >= 0; --p) {
                         double sum = z[p];
-                        for (int m = p + 1; m < 4; ++m) sum -= L[m][p] * x[m];
+                        for (int m = p + 1; m < U; ++m) sum -= L[m][p] * x[m];
                         x[p] = sum / L[p][p];
                     }
-                    grad[v] = Vec3{x[1], x[2], x[3]};
+                    for (int a = 0; a < D; ++a) grad[v][a] = x[1 + a];
                 }
                 // limit_gradient (mesh_gradients.cc:120-148), face by face.
                 for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                     if (limiter == Limiter::none) break;
                     const int f = geo.face(k);
-                    const Vec3 a = geo.row(geo.area, f);
+                    const Vec a = geo.row(geo.area, f);
                     if (Kokkos::sqrt(dot(a, a)) < tiny) continue;
                     const int j = geo.other(f, i);
-                    const Vec3 r = limiter == Limiter::face_centroid
+                    const Vec r = limiter == Limiter::face_centroid
                                        ? geo.face_offset(f, i)
                                        : geo.separation(i, j) + geo.row(geo.centroid, j) - ci;
-                    for (int v = 0; v < 5; ++v) {
+                    for (int v = 0; v < V; ++v) {
                         const double dp = dot(grad[v], r);
                         if (dp > 0 && Wi[v] + dp > hi[v])
                             grad[v] = grad[v] * (hi[v] > Wi[v] ? (hi[v] - Wi[v]) / dp : 0.0);
@@ -409,11 +438,8 @@ public:
                             grad[v] = grad[v] * (lo[v] < Wi[v] ? (lo[v] - Wi[v]) / dp : 0.0);
                     }
                 }
-                for (int v = 0; v < 5; ++v) {
-                    g(i, 3 * v + 0) = grad[v].x;
-                    g(i, 3 * v + 1) = grad[v].y;
-                    g(i, 3 * v + 2) = grad[v].z;
-                }
+                for (int v = 0; v < V; ++v)
+                    for (int a = 0; a < D; ++a) g(i, D * v + a) = grad[v][a];
             });
     }
 
@@ -435,7 +461,7 @@ public:
         // r + dt/2 w_face: the half step in the frame of the moving cell
         // (see the notes; AREPO-ng shifts its extrapolation the same way,
         // mesh_fluxes.cc:441).
-        KOKKOS_INLINE_FUNCTION State side(int i, Vec3 r, int& fallbacks) const {
+        KOKKOS_INLINE_FUNCTION State side(int i, Vec r, int& fallbacks) const {
             const State W = primitive(geo.per_volume(q, i), gas);
             if constexpr (Order == 0) {
                 (void)r;
@@ -443,10 +469,11 @@ public:
                 return W;
             } else {
                 Gradient grad;
-                for (int v = 0; v < 5; ++v) grad[v] = Vec3{g(i, 3 * v), g(i, 3 * v + 1), g(i, 3 * v + 2)};
+                for (int v = 0; v < V; ++v)
+                    for (int a = 0; a < D; ++a) grad[v][a] = g(i, D * v + a);
                 State Wf = half_step(W, grad, dt, gas);
-                for (int v = 0; v < 5; ++v) Wf[v] += dot(grad[v], r);
-                if (Wf[0] > 0 && Wf[4] > 0) return Wf;
+                for (int v = 0; v < V; ++v) Wf[v] += dot(grad[v], r);
+                if (Wf[0] > 0 && Wf[D + 1] > 0) return Wf;
                 ++fallbacks;
                 return W;
             }
@@ -456,11 +483,11 @@ public:
         // plus, along the generator direction n, (c.(w_L - w_R)) / |d| with
         // c the face centroid relative to the generators' midpoint, |c|
         // limited to 0.9 |d|.
-        KOKKOS_INLINE_FUNCTION Vec3 face_velocity(int f, int o, int j) const {
-            const Vec3 wL{w(o, 0), w(o, 1), w(o, 2)}, wR{w(j, 0), w(j, 1), w(j, 2)};
-            const Vec3 d = geo.separation(o, j);
+        KOKKOS_INLINE_FUNCTION Vec face_velocity(int f, int o, int j) const {
+            const Vec wL = geo.row(w, o), wR = geo.row(w, j);
+            const Vec d = geo.separation(o, j);
             const double dist = Kokkos::sqrt(dot(d, d));
-            const Vec3 c = geo.row(geo.face_centroid, f) - d * 0.5;
+            const Vec c = geo.row(geo.face_centroid, f) - d * 0.5;
             double facv = dot(c, wL - wR) / dist;
             const double cc = Kokkos::sqrt(dot(c, c));
             if (cc > 0.9 * dist) facv *= 0.9 * dist / cc;
@@ -468,21 +495,21 @@ public:
         }
         KOKKOS_INLINE_FUNCTION State operator()(int f, int& fallbacks) const {
             const int o = geo.owner(f), j = geo.neighbour(f);
-            const Vec3 a = geo.row(geo.area, f);
+            const Vec a = geo.row(geo.area, f);
             const double magnitude = Kokkos::sqrt(dot(a, a));
-            Vec3 wf{0, 0, 0};
+            Vec wf{};
             if constexpr (Moving) wf = face_velocity(f, o, j);
             State L, R;
             if constexpr (Order == 0) {
-                L = side(o, {0, 0, 0}, fallbacks);
-                R = side(j, {0, 0, 0}, fallbacks);
+                L = side(o, Vec{}, fallbacks);
+                R = side(j, Vec{}, fallbacks);
             } else {
-                const Vec3 shift = wf * (0.5 * dt);
+                const Vec shift = wf * (0.5 * dt);
                 L = side(o, geo.face_offset(f, o) + shift, fallbacks);
                 R = side(j, geo.face_offset(f, j) + shift, fallbacks);
             }
             State F = Riemann::flux(L, R, a * (1.0 / magnitude), wf, gas);
-            for (int v = 0; v < 5; ++v) F[v] *= magnitude;
+            for (int v = 0; v < V; ++v) F[v] *= magnitude;
             return F;
         }
     };
@@ -505,15 +532,15 @@ public:
             // A100 (job 31699166); fallbacks() is -1.
             Kokkos::parallel_for(
                 "hydro::fluxes_and_update", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
-                    State sum{0, 0, 0, 0, 0};
+                    State sum{};
                     for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                         const int f = geo.face(k);
                         int fallbacks = 0;
                         const State F = flux(f, fallbacks);
                         const double sign = geo.owner(f) == i ? 1.0 : -1.0;
-                        for (int v = 0; v < 5; ++v) sum[v] += sign * F[v];
+                        for (int v = 0; v < V; ++v) sum[v] += sign * F[v];
                     }
-                    for (int v = 0; v < 5; ++v) next(i, v) = q(i, v) - dt * sum[v];
+                    for (int v = 0; v < V; ++v) next(i, v) = q(i, v) - dt * sum[v];
                 });
             fallbacks_ = -1;
             phase_end(timings, &Timings::fluxes);
@@ -527,20 +554,20 @@ public:
                 int fallbacks = 0;
                 const State value = flux(f, fallbacks);
                 count += fallbacks;
-                for (int v = 0; v < 5; ++v) F(f, v) = value[v];
+                for (int v = 0; v < V; ++v) F(f, v) = value[v];
             },
             fallbacks_);
         phase_end(timings, &Timings::fluxes);
         const auto q = q_;
         Kokkos::parallel_for(
             "hydro::update", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int i) {
-                State sum{0, 0, 0, 0, 0};
+                State sum{};
                 for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                     const int f = geo.face(k);
                     const double sign = geo.owner(f) == i ? 1.0 : -1.0;
-                    for (int v = 0; v < 5; ++v) sum[v] += sign * F(f, v);
+                    for (int v = 0; v < V; ++v) sum[v] += sign * F(f, v);
                 }
-                for (int v = 0; v < 5; ++v) q(i, v) = q(i, v) - dt * sum[v];
+                for (int v = 0; v < V; ++v) q(i, v) = q(i, v) - dt * sum[v];
             });
         phase_end(timings, &Timings::update);
     }

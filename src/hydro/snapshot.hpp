@@ -75,7 +75,7 @@ inline std::string write_snapshot(const std::string& dir, const SnapshotData& s)
     const std::size_t n = s.x.size();
     std::vector<double> rho(n), vx(n), vy(n), vz(n), e_int(n), P(n), U(5 * n);
     for (std::size_t i = 0; i < n; ++i) {
-        const State W = primitive({s.U[0][i], s.U[1][i], s.U[2][i], s.U[3][i], s.U[4][i]}, s.gas);
+        const State<3> W = primitive(State<3>{s.U[0][i], s.U[1][i], s.U[2][i], s.U[3][i], s.U[4][i]}, s.gas);
         rho[i] = W[0];
         vx[i] = W[1];
         vy[i] = W[2];

@@ -9,6 +9,7 @@
 #include "support.hpp"
 
 #include <map>
+#include <random>
 #include <set>
 
 namespace {
@@ -174,6 +175,101 @@ int main(int argc, char** argv) {
         }
         check.expect(error < 1e-12 * std::sqrt(r2), "sliver circumcentre is exact (error / radius " +
                                                        sci(error / std::sqrt(r2)) + ")");
+    }
+    {
+        // The 2D pieces of stage 0, before a 2D engine uses them: the cell
+        // list in 2D sorts by tile and Morton key (checked against a host
+        // sort of keys computed here), and tet_mesh::cells in 2D sums the
+        // faces of a square lattice (given by hand) to cells of area h^2
+        // and centroid 0 at their generators (pyramid 1/4, centroid 2/3).
+        constexpr int m = 24, n = m * m;
+        const exact_predicates::BoxN<2> box(2.0, 1.0);  // 2 x 1 tiles
+        Kokkos::View<double* [2], Memory> x("x2", n);
+        auto hx = Kokkos::create_mirror_view(x);
+        std::mt19937_64 rng(3);
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        for (int i = 0; i < n; ++i) {
+            hx(i, 0) = 2.0 * unit(rng);
+            hx(i, 1) = unit(rng);
+        }
+        Kokkos::deep_copy(x, hx);
+        neighbor_search::CellList<Exec, 2> list;
+        neighbor_search::configure(list, n, box, std::sqrt(box.volume() / n));
+        neighbor_search::build(exec, list, x);
+        const auto order = to_host(list.order);
+        const int depth = list.levels + neighbor_search::fine_levels;
+        std::vector<std::pair<std::uint64_t, int>> keys(n);
+        for (int i = 0; i < n; ++i) {
+            int c[2], tile[2];
+            for (int a = 0; a < 2; ++a) {
+                const int g = neighbor_search::grid_coordinate(hx(i, a), box.side[a], list.tiles[a] << depth);
+                tile[a] = g >> depth;
+                c[a] = g & ((1 << depth) - 1);
+            }
+            std::uint64_t morton = 0;
+            for (int b = 0; b < depth; ++b)
+                morton |= (std::uint64_t(c[0] >> b & 1) << (2 * b + 1)) | (std::uint64_t(c[1] >> b & 1) << (2 * b));
+            keys[i] = {(std::uint64_t(tile[0]) * list.tiles[1] + tile[1]) << (2 * depth) | morton, i};
+        }
+        std::sort(keys.begin(), keys.end());
+        bool sorted = list.tiles[0] == 2 && list.tiles[1] == 1;
+        for (int q = 0; q < n; ++q) sorted = sorted && order(q) == keys[q].second;
+        check.expect(sorted, "2D cell list: 2 x 1 tiles, slots in (tile, Morton key, id) order");
+
+        // Square lattice m x m in a unit square, spacing h; faces to the
+        // right and upper neighbours, owned by the lower id.
+        const double h = 1.0 / m;
+        const exact_predicates::BoxN<2> square(1.0);
+        Kokkos::View<double* [2], Memory> p("p2", n);
+        Kokkos::View<int*, Memory> owner("owner2", 2 * n), neighbour("neighbour2", 2 * n);
+        tet_mesh::Geometry<Memory, 2> geometry{Kokkos::View<double* [2], Memory>("area2", 2 * n),
+                                               Kokkos::View<double* [2], Memory>("centroid2", 2 * n),
+                                               Kokkos::View<double*, Memory>("volume2", n)};
+        auto hp = Kokkos::create_mirror_view(p);
+        auto ho = Kokkos::create_mirror_view(owner);
+        auto hn = Kokkos::create_mirror_view(neighbour);
+        auto ha = Kokkos::create_mirror_view(geometry.area);
+        auto hc = Kokkos::create_mirror_view(geometry.centroid);
+        for (int i = 0; i < n; ++i) {
+            const int ix = i % m, iy = i / m;
+            hp(i, 0) = (ix + 0.5) * h;
+            hp(i, 1) = (iy + 0.5) * h;
+            const int across[2] = {(ix + 1) % m + iy * m, ix + ((iy + 1) % m) * m};
+            for (int a = 0; a < 2; ++a) {
+                const int f = 2 * i + a, j = across[a];
+                const double sign = i < j ? 1.0 : -1.0;  // owner to neighbour
+                ho(f) = std::min(i, j);
+                hn(f) = std::max(i, j);
+                ha(f, a) = sign * h;
+                ha(f, 1 - a) = 0;
+                hc(f, a) = sign * 0.5 * h;  // relative to the owner
+                hc(f, 1 - a) = 0;
+            }
+        }
+        Kokkos::deep_copy(p, hp);
+        Kokkos::deep_copy(owner, ho);
+        Kokkos::deep_copy(neighbour, hn);
+        Kokkos::deep_copy(geometry.area, ha);
+        Kokkos::deep_copy(geometry.centroid, hc);
+        tet_mesh::CellFaces<Memory, 2> cells{Kokkos::View<int*, Memory>("start2", n + 1), Kokkos::View<int*, Memory>("face2", 0),
+                                             Kokkos::View<int*, Memory>("cursor2", n), Kokkos::View<double*, Memory>("v2", n),
+                                             Kokkos::View<double* [2], Memory>("c2", n)};
+        Kokkos::View<char*, Memory> scratch("scratch2", tet_mesh::cells_scratch_bytes(2 * n));
+        tet_mesh::cells(exec, p, square, Kokkos::View<const int*, Memory>(owner), Kokkos::View<const int*, Memory>(neighbour),
+                        geometry, cells, scratch.data());
+        const auto volume = to_host(cells.volume);
+        const auto centroid = to_host(cells.centroid);
+        const auto start = to_host(cells.start);
+        double worst_volume = 0, worst_centroid = 0;
+        bool four = true;
+        for (int i = 0; i < n; ++i) {
+            worst_volume = std::max(worst_volume, std::abs(volume(i) - h * h) / (h * h));
+            worst_centroid = std::max({worst_centroid, std::abs(centroid(i, 0)) / h, std::abs(centroid(i, 1)) / h});
+            four = four && start(i + 1) - start(i) == 4;
+        }
+        check.expect(four && worst_volume < 1e-14 && worst_centroid < 1e-14,
+                     "2D tet_mesh::cells on a square lattice: 4 faces per cell, area h^2 (" + sci(worst_volume) +
+                         "), centroid at the generator (" + sci(worst_centroid) + ")");
     }
     return check.failed() != 0;
 }

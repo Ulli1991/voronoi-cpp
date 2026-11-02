@@ -97,12 +97,19 @@ struct Timings {
 // a rebuild 0.17-0.25 s; so rebuild when more than n / 1000 are stuck.
 enum class Fallback { cheapest, host, rebuild };
 
-template <class ExecSpace = Kokkos::DefaultExecutionSpace>
-class Mesh {
+// The mesh in D dimensions: one interface, an engine per D (3D: the
+// tetrahedra below; 1D: the sorted order, sorted_mesh.hpp).
+template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace>
+class Mesh;
+
+template <class ExecSpace>
+class Mesh<3, ExecSpace> {
 public:
+    static constexpr int dimensions = 3;
     using Memory = typename ExecSpace::memory_space;
     template <class T>
     using View = Kokkos::View<T, Memory>;
+    using Positions = tet_mesh::Points4<Memory>;
 
     // A periodic box of sides box.side[a] (see exact_predicates::Box: sides
     // are rounded to whole grid steps, side[] holds them), or a cube.
@@ -238,7 +245,7 @@ public:
         if (cells_current_) return;
         Kokkos::Timer timer;
         // Its temporaries live in the spare ring pool (see scratch).
-        tet_mesh::cells(exec_, positions_, box_, tets_, geometry_, cells_,
+        tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
                         scratch(tet_mesh::cells_scratch_bytes(faces())).data());
         cells_current_ = true;
         lap(timer, timings, &Timings::cells);
