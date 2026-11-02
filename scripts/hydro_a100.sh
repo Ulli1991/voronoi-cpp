@@ -147,6 +147,30 @@ elif [[ "$mode" == static256 || "$mode" == moving256full ]]; then
     fi
     echo "== ours 256^3 jittered $kind, whole run, final snapshot"
     ours 256 jittered $mesh --snapshots=1 --out="$out/voronoi256_$kind"
+elif [[ "$mode" == library_check ]]; then
+    # The library checks of scripts/bench_a100.sh for two builds, MAIN and
+    # FIX (build directories), interleaved command by command; ctest of FIX.
+    module purge
+    module load gcc/14 cuda/13.0 cmake hdf5-serial
+    ctest --test-dir "$FIX" --output-on-failure
+    for kind in jittered uniform clustered halo lattice wave; do
+        for variant in MAIN FIX; do
+            echo "== $variant rebuild $kind"
+            "${!variant}/voronoi_bench" rebuild 2097152 "$kind" warp 3 | grep -vE "^  "
+        done
+    done
+    for kind in jittered uniform clustered halo lattice wave; do
+        for variant in MAIN FIX; do
+            echo "== $variant verify $kind"
+            "${!variant}/voronoi_bench" step 262144 "$kind" 0.3 3 --verify | grep -E "^start|verify"
+        done
+    done
+    for d in 0.03 0.1 0.3; do
+        for variant in MAIN FIX; do
+            echo "== $variant step 2097152 jittered $d"
+            "${!variant}/voronoi_bench" step 2097152 jittered "$d" 10 --memory | grep -vE "^  "
+        done
+    done
 elif [[ "$mode" == memory_compare ]]; then
     # Two builds of hydro_sedov in one job (BEFORE, AFTER: paths), moving
     # 256^3 per-face, STEPS steps (default 100, 0: the whole run), device
