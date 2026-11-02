@@ -378,6 +378,10 @@ In order (research_notes/dimension_design_2026-11-02.md):
    Options: an auxiliary Cartesian grid (deposit, solve, interpolate) or
    multigrid on the Voronoi mesh itself with gravity as face fluxes.
    Multigrid weak-scales poorly (coarse levels), which matters for multi-GPU.
+   Coarse levels are inefficient on GPUs anyway (too little work per launch),
+   so they can run on the host CPUs: fine levels on the GPU, levels below a
+   size threshold on the CPU, one small transfer each way per V-cycle; with
+   several GPUs the CPU side also gathers the coarse levels of all of them.
 
 ## Repository layout
 
