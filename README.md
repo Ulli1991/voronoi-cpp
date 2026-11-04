@@ -1,12 +1,20 @@
 # voronoi-cpp
 
-Kokkos C++ library for exact 3D Voronoi meshes of moving particles in a
-periodic box (a cube or any three sides) on GPUs (CUDA, validated on an A100 40 GB; OpenMP and Serial
-builds run the same code for checks). It is the geometry base of a planned
-moving-mesh finite-volume hydro solver: the solver hands over particle
-positions and gets back faces (owner, neighbour, area vector, centroid),
-cell volumes and centroids, and per-cell face lists. Stage 1 of the hydro
-solver (static mesh, MUSCL-Hancock, HLLC) is in `src/hydro/` (see "Hydro").
+Kokkos C++ library for exact Voronoi meshes of moving particles in a
+periodic box (a cube or any three sides) on GPUs (CUDA, validated on an A100
+40 GB; OpenMP and Serial builds run the same code for checks), with a
+moving-mesh finite-volume hydro solver on top. The solver hands over
+particle positions and gets back faces (owner, neighbour, area vector,
+centroid), cell volumes and centroids, and per-cell face lists; the mesh is
+kept exact as the particles move. The library is templated on the dimension
+(`voronoi::Mesh<D, Exec>`); the 3D mesh is complete, 1D and 2D are in
+progress (see "Roadmap").
+
+The hydro (`src/hydro/`): MUSCL-Hancock with HLLC or HLL, AREPO-style
+least-squares gradients and mesh regularisation, on a static or moving mesh,
+bit-reproducible run to run. On Sedov 3D the moving mesh is more accurate
+than the static mesh at the same resolution in 4.6x fewer steps (see
+"Hydro").
 
 ## Install and build
 
@@ -318,19 +326,63 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
 ## Limitations and open items
 
-- The warp rebuild is 1.5-4 % slower than on 2fd8b50 (uniform 16.5 vs
-  17.2 M cells/s), the cost of the pooled face output and of particle ids
-  in the clipping output (research_notes/cleanup2_2026-10-31.md).
+- The hydro step is not yet optimised: on the A100 at 128^3 the moving step
+  runs at ~55 M cell updates/s and its hydro part alone at ~89 M cells/s,
+  slower than the mesh (~143 M cells/s). Pass fusion and compile-time
+  precision options are in progress; a precision study
+  (research_notes/precision_2026-11-02.md) found float face fluxes summed in
+  double to be the largest single gain (gather 2.8x).
+- Bit-reproducible moving runs cost 2.5-4.7 % on the mesh step alone
+  (canonical circumcentres and face-ring order); the whole hydro step is
+  unchanged.
+- On the CPU (gcc's default FP contraction) some hydro modes differ from the
+  GPU in the last bits; the A100 runs are bit-identical run to run.
 - Clipping alone is not watertight on uniform random input at 2.1M cells;
   the exact start makes the mesh exact.
 - Snapped duplicates (two particles in one grid cell) make every predicate
   flat; nothing repairs them.
 - The device repair breaks down near one spacing of motion per step
   (stuck triangles, host or rebuild fallback); substepping helps.
-- Ghost particles (multi-GPU) and repair limited to active regions are not
-  implemented; `update()` takes an `active` list for later.
+- Ghost particles (multi-GPU), repair limited to active regions, and
+  refinement/derefinement are not implemented yet; `update()` takes an
+  `active` list for later.
 - Periodic boxes only (any three sides; see the certification limit
-  above for thin slabs).
+  above for thin slabs); 1D gets wall boundaries with the 1D mesh.
+
+## Roadmap
+
+In order (research_notes/dimension_design_2026-11-02.md):
+1. Hydro speed: pass fusion, packed per-face rows, precomputed least-squares
+   gradient weights, precision options (geometry, gradients incl. FP16, face
+   fluxes, Riemann; default all-double). Target: a fixed-grid code's rate per
+   face, ~300 M cell updates/s for the hydro step (a Voronoi cell has ~16
+   faces against 6).
+2. Mesh-step speed: incremental per-cell face lists, fused
+   circumcentre/ring/face passes, cheaper repair rounds.
+3. 1D mesh and hydro with walls; Sod, Shu-Osher and Woodward-Colella against
+   the references and the fixed-grid code LUNA (a first CPU version gives
+   LUNA's results to ~1e-14 on a static mesh).
+4. 2D mesh (polygon clipping, triangles with 2-2 flips) and hydro;
+   Kelvin-Helmholtz after McNally, Lyra & Passy (2012).
+5. Rebuild on clustered input: tune the per-particle level choice at density
+   jumps (12-13 % of tested candidates lie outside the needed 2R radius on
+   clustered/halo input; expected 5-10 %), and look for a cheaper exact
+   certification bound than "everything within 2R" (irregular cells test ~2x
+   the candidates of jittered ones).
+6. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
+   by an exact local rebuild of the hole, conservative remap from the
+   volumes (reports/GPU Delaunay insertion and removal.md).
+7. Self-gravity by multigrid, after the hydro suite passes at speed, starting
+   from LUNA's gravity solvers (same author; multigrid with coarse-grid gather):
+   V-cycles warm-started from the previous step's potential (as LUNA does),
+   aiming at 2-4 V-cycles per step, so the solve runs at full GPU speed.
+   Options: an auxiliary Cartesian grid (deposit, solve, interpolate) or
+   multigrid on the Voronoi mesh itself with gravity as face fluxes.
+   Multigrid weak-scales poorly (coarse levels), which matters for multi-GPU.
+   Coarse levels are inefficient on GPUs anyway (too little work per launch),
+   so they can run on the host CPUs: fine levels on the GPU, levels below a
+   size threshold on the CPU, one small transfer each way per V-cycle; with
+   several GPUs the CPU side also gathers the coarse levels of all of them.
 
 ## Repository layout
 
