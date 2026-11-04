@@ -1,6 +1,6 @@
 # Testing voronoi-cpp
 
-Seven CTest programs in `src/test/` specify the library and the hydro; `voronoi_bench`
+Nine CTest programs in `src/test/` specify the library and the hydro; `voronoi_bench`
 (`src/bench/`) adds the large-scale checks that are too slow for CTest.
 Every test prints one `ok` or `FAIL` line per expectation and exits non-zero
 on any failure. All tests run on the default Kokkos execution space, so a
@@ -10,7 +10,7 @@ code.
 ## Running them
 
 ```sh
-ctest --test-dir <build> --output-on-failure            # all seven
+ctest --test-dir <build> --output-on-failure            # all nine
 OMP_NUM_THREADS=1 ctest --test-dir <build-omp>          # CPU, one thread
 ```
 
@@ -20,7 +20,7 @@ README) runs the CUDA tests and the A100 checks below in one gpu1 job.
 ## The tests
 
 CPU times: OpenMP build (gcc 15), one thread of a Raven login node
-(Xeon Platinum 8360Y), 2026-10-31. On the A100 all seven take about 35 s.
+(Xeon Platinum 8360Y), 2026-10-31. On the A100 the seven 3D programs take about 35 s, the two 1D ones a few seconds.
 
 | Test | n | CPU, 1 thread | What it specifies |
 |---|---|---|---|
@@ -31,6 +31,8 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 | `repair` | ~4096 | 10 s | steps of a smooth flow through `voronoi::Mesh`: jittered (0.03 and 0.3 spacings, 10 steps), lattice and wave (0.03 and 0.3, 4 steps; their starts are decided by the perturbation alone, wave's first step is the step-1 regression), shells@1e-9 (0.03, 2 steps), jittered in a box of side 2 (0.3, 3 steps), uniform in a 1:2:3 box (0.3, 3 steps), jittered in a 1:1:0.125 slab (32768, 0.3, 2 steps); after every step no failing triangle (brute force), the same Delaunay neighbours and face count as an exact rebuild by clipping, volumes within 1e-10, total volume the box |
 | `voronoi_mesh` | 4096 | 2 s | the hydro contract of `voronoi::Mesh` on off-grid positions in a box of side 2: the first update builds an exact mesh; faces once with owner < neighbour, closing every cell; volumes fill the box; per-cell face lists name each face twice, in increasing id of the other particle; cell centroids equal clipping's; the same input gives the same volumes and centroids bit for bit; a permuted input gives the permuted faces; a local rebuild returns each face of the listed cells once with the mesh's area; updates repair and stay exact; on icosahedral shells@1e-9, where the device repair leaves stuck triangles, the step is exact with `Fallback::host` (local rebuilds on the host) and with `Fallback::rebuild`; in a 1:2:3 box the mesh is exact, its volumes fill the box and `box()` refuses it; a slab 4 cells thin is refused with the "cannot certify" error |
 | `hydro` | 4096 (jittered, uniform) | 8.0 s | the finite-volume hydro (`src/hydro/`): HLLC and HLL equal LUNA's `hllc_flux_primitive` / `hll_flux_primitive` on 15 / 12 sample faces (values printed by LUNA, float64; within 1e-14), equal states give the exact flux, also through a moving face (F(U) - (w.n) U), swapping states and normal flips the flux, rotating states, normal and face velocity rotates the flux (1000 random rotations, 1e-13); HLLC on jittered and uniform random meshes, HLL on jittered, HLLC with stored float gradient weights (`weight32`) and with everything reduced (`lowweights`: float face rows and weights, FP16 gradients, float fluxes and Riemann; uniform within 1e-6, loops within 1e-5, float rows), first and second order, per-cell and per-face loops: a uniform moving state stays uniform to rounding (3 steps, within 1e-13), mass, momentum and energy of a rough state (a blast plus 30 % random perturbations) are conserved over 10 steps within 1e-14 (long double sums); two runs give the same bits; the two loops agree within 1e-12 (measured 4e-16 with HLLC, the same bits with HLL); moving mesh (points on the snapping grid, steps whose displacement is a multiple of a grid step): a uniform state with a bulk velocity stays uniform over 5 steps (1e-13; measured 5e-16), mass, momentum and energy are conserved over 10 steps with moving cells (1e-14), a blast moving with the box at Mach 12 equals the blast at rest cell by cell after 40 steps (1e-6; measured 7e-8, rounding grown through the blast) and in its radial density profile (1e-10; measured 1e-13), while on a static mesh the profiles differ by more than 1000 times that (measured 7e-2); two identical moving runs (a blast, 15 steps) give the same bits in time steps, point velocities, positions, volumes, centroids, state and face count, and every stored circumcentre equals a fresh `tet_mesh::circumcentres` computation bit for bit (the repair's flip order does not reach the geometry; the price, accepted by the owner: mesh step 2.4/2.5/4.7 % slower at spacings 0.03/0.1/0.3, research_notes/hydro_stage3_2026-10-31.md); in a (2, 1, 1) box a uniform state with bulk velocity (1, 0.5, -0.25) stays uniform on the moving mesh (1e-13; measured 5e-16), is conserved over 10 moving steps and the mesh equals an exact rebuild |
+| `mesh1d` | 2048 | under 1 s | the 1D mesh (`voronoi::Mesh<1>`, `sorted_mesh.hpp`) against a host oracle, periodic and with walls, lines of length 1 and 3, uniform, lattice and clumps of snapped duplicates (ties by id): the sorted order, volumes and centroids exact in quarter grid steps of the 2^52 grid, volumes summing to the line in integers, faces once with owner < neighbour, area +-1, per-cell face lists by id of the other particle, the end cells reaching the walls; moving: after every step (small ones that keep the order, large ones that cross, points wrapping through L) the mesh equals a fresh build bit for bit, and the order is sorted again only when points crossed |
+| `hydro1d` | 16-1024 | 5 s | the 1D hydro (`finite_volume_1d.hpp`): uniform states stay uniform (periodic with bulk velocity, reflective walls at rest; static and moving, order 0 and 1; 1e-13), mass, momentum and energy of a rough state conserved over 40 steps (1e-14; momentum only when periodic), two runs give the same bits (state and positions), inflow keeps its state; Sod (Toro 1) against the exact cell averages within LUNA's bounds at N = 128, 256, static and moving, uniform and jittered; **LUNA's own final states of Sod, Shu-Osher and Woodward-Colella at N = 16, walls included, equal ours to 1e-12** (values printed by LUNA, `luna_1d_values.hpp`; measured 7e-16 to 3e-14) in LUNA's number of steps; Shu-Osher moving at N = 1024: unregularised points cross, regularised ones do not |
 
 ### Oracles
 
@@ -92,6 +94,17 @@ voronoi_bench step 262144 <kind> 0.3 3 --verify --box=1,2,3      # uniform jitte
 ```
 
 Each `verify:` line must end in `PASS`.
+
+## The 1D tests against LUNA (not in CTest)
+
+`scripts/dim1d_a100.sh <mode>` (see its head) runs both codes in one job on one node; its log holds the node and
+`clock-<job>.csv` the clock. `scripts/compare_1d.py <runs> <out> <refs>` prints, per test and series, field L1 of rho,
+v, P (the integral of |f_h - f_ref| dx / L of the code's reconstructed field, by Gauss-Legendre on the union of the
+cell edges of both fields; never sampled at generators), the ratio to LUNA at the same N, the largest difference of
+static runs from LUNA, and GPU-seconds and cell updates to a target error, interpolated between a code's own runs.
+Sod's reference is the exact solution; Shu-Osher's and Woodward-Colella's a fine LUNA MC run,
+`compare_1d.py ref <problem> <run> <refs>`, checked against AthenaK PPMX 16384. Results and pass bars:
+research_notes/stage1_1d_2026-11-04.md.
 
 ## The 3D gate of a dimension stage
 

@@ -1,6 +1,7 @@
 """Field L1 of the 1D tests, ours (hydro_1d .npy) and LUNA's (luna_1d_run.py .npz), and GPU time to a target error.
 
     python compare_1d.py <runs dir> <out dir> [reference dir]
+    python compare_1d.py ref <problem> <fine luna .npz> <reference dir>     # make ref_<problem>.npz, check it
 
 Run with LUNA's environment. The norm is the one of research_notes/stage1_1d_2026-11-04.md: the integral of
 |f_h - f_ref| dx / L of the code's reconstructed field, for rho, v and P:
@@ -31,6 +32,8 @@ BOUNDARY = {"sod": "outflow", "shu-osher": "outflow", "woodward-colella": "refle
 GL_X, GL_W = np.polynomial.legendre.leggauss(4)
 SUB = 4
 VARS = ("rho", "v", "P")
+# Shu-Osher, moving: the region all generators still cover at t_end; to its left is the inflowing gas of the grown end cell.
+REGION = {"shu-osher": (0.0, 5.0)}
 TARGETS = {"sod": {"rho": 3e-5, "v": 1e-5, "P": 1e-5}, "shu-osher": {"rho": 1e-3, "v": 3e-4, "P": 3e-4},
            "woodward-colella": {"rho": 5e-3, "v": 2e-3, "P": 2e-2}}
 
@@ -132,10 +135,11 @@ class Reference:
         return self.field(x)
 
 
-def l1(field, ref, problem):
+def l1(field, ref, problem, region=None):
     """Integral of |f_h - f_ref| dx / L per variable, Gauss-Legendre on the union of the fields' breakpoints."""
     a, b = DOMAIN[problem]
-    points = np.unique(np.concatenate([field.edges, np.clip(ref.breaks, a, b)]))
+    lo, hi = region if region else (a, b)
+    points = np.unique(np.concatenate([[lo, hi], np.clip(field.edges, lo, hi), np.clip(ref.breaks, lo, hi)]))
     width = np.diff(points)
     keep = width > 0
     left, width = points[:-1][keep], width[keep]
@@ -151,6 +155,24 @@ def l1(field, ref, problem):
     return total / (b - a)
 
 
+def make_reference(problem, path, out):
+    """ref_<problem>.npz from a fine LUNA run, with its distance to the stored AthenaK and LUNA references."""
+    d = np.load(path)
+    a, b = DOMAIN[problem]
+    n = d["rho"].size
+    os.makedirs(out, exist_ok=True)
+    np.savez(f"{out}/ref_{problem}.npz", edges=np.linspace(a, b, n + 1), rho=d["rho"], u=d["u"], p=d["p"], N=n, t=d["t"])
+    root = os.environ.get("LUNA_REFERENCE_SOLUTIONS", "/raven/u/uli/luna-reference-solutions")
+    names = {"shu-osher": ("athenak/shu_osher/so_ppmx_rk4_16384.npz", "luna/shu_osher/shu_osher_mc.npz"),
+             "woodward-colella": ("athenak/woodward_colella/a9_ppmx_rk4_16384.npz", "luna/woodward_colella/woodward_colella_mc.npz")}
+    ak = np.load(f"{root}/{names[problem][0]}")["ref_rho"]
+    stored = np.load(f"{root}/{names[problem][1]}")["rho"]
+    for name, rho in (("AthenaK PPMX 16384", ak), ("LUNA MC 65536 on 8192", stored)):
+        k = n // rho.size
+        print(f"{problem}: N={n} t={float(d['t'])} rho block-averaged onto {rho.size}: L1 distance to {name} "
+              f"{np.abs(d['rho'].reshape(rho.size, k).mean(1) - rho).mean():.3e}")
+
+
 def interp(ns, errors, costs, eps):
     """log-log interpolation of cost at error eps between two runs bracketing it, in order of N."""
     for i in range(len(ns) - 1):
@@ -162,6 +184,9 @@ def interp(ns, errors, costs, eps):
 
 
 def main():
+    if sys.argv[1] == "ref":
+        make_reference(sys.argv[2], sys.argv[3], sys.argv[4])
+        return
     runs, reports = sys.argv[1], sys.argv[2]
     refs_dir = sys.argv[3] if len(sys.argv) > 3 else runs
     os.makedirs(reports, exist_ok=True)
@@ -183,6 +208,8 @@ def main():
         row = dict(meta)
         row["L1"] = l1(rec, refs[problem], problem).tolist()
         row["L1_mean"] = l1(mean, refs[problem], problem).tolist()
+        if problem in REGION:
+            row["L1_region"] = l1(rec, refs[problem], problem, REGION[problem]).tolist()
         rows.append(row)
     with open(f"{reports}/dim1d_errors.json", "w") as out:
         json.dump(rows, out, indent=1)
@@ -203,6 +230,19 @@ def main():
         if l:
             ratios = [a / b for a, b in zip(r["L1"] + r["L1_mean"], l["L1"] + l["L1_mean"])]
             print(f"| {r['problem']} | {r['series']} | {r['N']} | " + " | ".join(f"{x:.3f}" for x in ratios) + " |")
+    print("\n## Region of REGION only (Shu-Osher x > 0, the gas the moving cells cover), ratio to LUNA\n")
+    for r in rows:
+        l = index.get(("luna", r["problem"], r["N"]))
+        if l and "L1_region" in r and not r["series"].startswith("luna"):
+            ratios = [a / b for a, b in zip(r["L1_region"], l["L1_region"])]
+            print(f"| {r['problem']} | {r['series']} | {r['N']} | " + " | ".join(f"{x:.3f}" for x in ratios) + " |")
+    print("\n## Largest difference ours static - LUNA at the same N (uniform lattice: the same scheme)\n")
+    for r in rows:
+        if r["series"] != "static" or ("luna", r["problem"], r["N"]) not in index:
+            continue
+        a = np.load(os.path.join(runs, r["file"]))[:, 3:6].T
+        d = np.load(os.path.join(runs, index[("luna", r["problem"], r["N"])]["file"]))
+        print(f"| {r['problem']} | {r['N']} | {max(np.abs(a[k] - d[n]).max() for k, n in enumerate(('rho', 'u', 'p'))):.2e} |")
     print("\n## GPU-seconds and cell updates to the target error (interpolated between a code's own runs)\n")
     print("| test | variable | eps | series | T(eps) s | W(eps) cell updates |")
     print("|---|---|---|---|---|---|")

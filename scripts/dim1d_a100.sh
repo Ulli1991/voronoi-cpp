@@ -3,10 +3,11 @@
 #   sbatch --export=ALL,REPO=$PWD,BUILD=<build dir>,OUT=<runs dir> -o <logs>/dim1d-%j.out scripts/dim1d_a100.sh <mode> [args]
 # Modes:
 #   build            configure if needed, build everything wide (18 CPUs), ctest
-#   ladder <problem> <low> <high>   both codes on N = 2^low .. 2^high: LUNA (MC, HLLC, CFL 0.8,
-#                    Pallas), ours static and moving (LUNA's rule 0.8; AREPO's rule 0.3 up to 2^16),
-#                    .npy/.npz + .json into OUT; repeats give the fastest; hashes must agree
-#   reference <problem> <N> <hours-free seconds>   LUNA MC at N in one stretch, resumable (state in OUT)
+#   ladder <problem> <b> [<b> ...]   both codes on N = 2^b: LUNA (MC, HLLC, CFL 0.8, Pallas), ours
+#                    static and moving (LUNA's rule 0.8; AREPO's rule 0.3 up to 2^16), .npy/.npz + .json
+#                    into OUT; repeats give the fastest; hashes must agree
+#   first            build, ctest, a moving Sod on 2^30 and 2^52 grids, throughput, small ladders
+#   reference <problem> <N> <seconds>   LUNA MC at N for that long, resumable (state in OUT)
 #   throughput       hydro only and whole moving step at 2^12 .. 2^24, ours and LUNA
 # The clock and the node go into the log (nvidia-smi, one line per 5 s, into OUT/clock-<job>.csv).
 #SBATCH -J dim1d
@@ -51,18 +52,16 @@ luna() {  # luna <problem> <N> [key=value ...]
     (cd "$out" && "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" "$p" "$n" hllc "$out/luna_${p}_${n}.npz" "$@" 2>&1 | grep -E "^luna|Error|error")
 }
 
-case "$mode" in
-build)
+do_build() {
     use_ours
-    export CUDA_LAUNCH_BLOCKING=0
     [[ -f "$build/cuda/CMakeCache.txt" ]] || cmake -S "$repo" -B "$build/cuda" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_PREFIX_PATH=/u/uli/kokkos-cuda -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper | tail -2
-    cmake --build "$build/cuda" -j18 2>&1 | grep -E "warning|error|Error |Built target" | sort | uniq -c | sort -rn | head -30
-    ctest --test-dir "$build/cuda" --output-on-failure | tail -14
-    ;;
-ladder)
-    p="$2"
-    for ((b = $3; b <= $4; ++b)); do
+    cmake --build "$build/cuda" -j18 "$@" 2>&1 | grep -E "warning|error|Error |Built target" | sort | uniq -c | sort -rn | head -30
+}
+do_ladder() {
+    local p="$1"
+    shift
+    for b in "$@"; do
         n=$((1 << b))
         use_luna
         luna "$p" "$n"
@@ -71,22 +70,46 @@ ladder)
         ours "$p" "$n" moving --moving
         ((b <= 16)) && ours "$p" "$n" moving-arepo --moving --dt=arepo
     done
-    ;;
-reference)
-    use_luna
-    luna "$2" "$3" series=reference max_s="$4" resume="$out/state_$2_$3.npz"
-    ;;
-throughput)
+}
+do_throughput() {
     use_ours
     for n in 4096 65536 1048576 16777216; do
-        "$build/cuda/hydro_1d" sod "$n" --steps=$((n > 2000000 ? 200 : 2000)) --repeats=3 | grep -E "^ours"
-        "$build/cuda/hydro_1d" sod "$n" --steps=$((n > 2000000 ? 200 : 2000)) --repeats=3 --moving | grep -E "^ours"
-        "$build/cuda/hydro_1d" sod "$n" --steps=$((n > 2000000 ? 200 : 2000)) --repeats=2 --moving --phases | grep -E "^(ours|phase)"
+        s=$((n > 2000000 ? 200 : 2000))
+        "$build/cuda/hydro_1d" sod "$n" --steps=$s --repeats=3 | grep -E "^ours"
+        "$build/cuda/hydro_1d" sod "$n" --steps=$s --repeats=3 --moving | grep -E "^ours"
+        "$build/cuda/hydro_1d" sod "$n" --steps=$s --repeats=2 --moving --phases | grep -E "^(ours|phase)"
     done
     use_luna
     for n in 4096 65536 1048576 16777216; do
         (cd "$out" && "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" sod "$n" hllc "$out/luna_rate_$n.npz" \
             steps=$((n > 2000000 ? 200 : 2000)) repeats=3 2>&1 | grep -E "^luna|^run|Error|error")
     done
+}
+
+case "$mode" in
+build)
+    do_build
+    ctest --test-dir "$build/cuda" --output-on-failure | tail -14
+    ;;
+first)  # build, ctest, the grid's bits on a moving Sod, throughput, the small ladders
+    do_build
+    ctest --test-dir "$build/cuda" --output-on-failure | tail -14
+    [[ -f "$build/cuda30/CMakeCache.txt" ]] || cmake -S "$repo" -B "$build/cuda30" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-DVORONOI_1D_BITS=30 \
+        -DCMAKE_PREFIX_PATH=/u/uli/kokkos-cuda -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper | tail -1
+    cmake --build "$build/cuda30" -j18 --target hydro_1d 2>&1 | grep -E " error |Error " | head
+    ours sod 65536 moving --moving
+    "$build/cuda30/hydro_1d" sod 65536 --moving --repeats=1 --memory --series=moving30 --out="$out/moving30_sod_65536.npy" | grep -E "^ours"
+    do_throughput
+    for p in sod shu-osher woodward-colella; do do_ladder "$p" 8 10 12 14; done
+    ;;
+ladder)
+    do_ladder "$2" "${@:3}"
+    ;;
+reference)
+    use_luna
+    luna "$2" "$3" series=reference max_s="$4" resume="$out/state_$2_$3.npz"
+    ;;
+throughput)
+    do_throughput
     ;;
 esac
