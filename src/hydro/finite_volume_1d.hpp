@@ -33,7 +33,7 @@
 // - moving: the point velocity is the fluid velocity plus AREPO-ng's
 //   regularisation. A face in 1D has no extent, so the face angle of
 //   finite_volume.hpp does not exist; the criterion is AREPO-ng's other
-//   branch (voronoi_vertex_velocities.cc:48-85, !REGULARIZE_MESH_FACE_ANGLE,
+//   branch (Arepo2-nextgeneration, set_vertex_velocities, !REGULARIZE_MESH_FACE_ANGLE,
 //   with CellShapingFactor 1 and CellShapingSpeed 0.5 of its examples): a
 //   drift at fraction * c towards the cell's centroid, displaced towards
 //   higher density, fraction rising from 0 at an offset of 0.75 r to 0.5 at
@@ -42,15 +42,14 @@
 //   The face velocity is the mean of the two point velocities: AREPO-ng's
 //   prepare_face_velocity (mesh_fluxes.cc:294-331) with the face centroid at
 //   the generators' midpoint.
-// - walls (a mesh with Ends::walls): each wall face takes a ghost state for
-//   the outside: reflective, the mirror of the cell's face state (normal
-//   velocity negated); outflow (zero gradient), the cell's face state;
-//   inflow, a fixed state. The ghost is also the cell's outer neighbour in
-//   its gradient, at the mirrored centroid (AREPO's mirror ghosts,
-//   voronoi_1d.c:130-133, with the velocity flipped for reflection). On a
-//   uniform line these are LUNA's ghost cells of BOUNDARY 2 and 1
-//   (halo_local.py:16-31): its ghost's slope is the mirror of the edge
-//   cell's (reflective), or zero (zero gradient: two equal ghosts).
+// - walls (a mesh with Ends::walls): a wall face is static and takes a ghost
+//   state for the outside, LUNA's ghost cells on a uniform line
+//   (halo_local.py:16-31, the wide step of muscl_hancock.py:246-247):
+//   reflective, the mirror of the cell's face state (the ghost's stencil is
+//   the mirror of the cell's); zero gradient, the cell's W (two equal ghosts,
+//   a flat stencil, no half step); inflow, a fixed state, which LUNA does not
+//   have. The ghost is also the cell's outer neighbour in its gradient, at
+//   the mirrored centroid.
 namespace hydro {
 
 // The boundary of a wall of the 1D line.
@@ -221,7 +220,7 @@ public:
         }
 
         // The point velocity's difference from the fluid's, AREPO-ng's
-        // regularisation (voronoi_vertex_velocities.cc:48-120), for a cell of
+        // regularisation (set_vertex_velocities, voronoi_vertex_velocities.cc), for a cell of
         // primitives W, limited density gradient g, centroid c relative to the
         // generator and volume `volume`. Below 0.5 r the displaced centre
         // stays below the threshold of 0.75 r.
