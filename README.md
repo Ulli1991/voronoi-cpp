@@ -327,11 +327,11 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 ## Limitations and open items
 
 - The hydro step is not yet at its target (~300 M cell updates/s): on the
-  A100 at 128^3 double precision runs at 123 M cell updates/s static, its
-  hydro part at 111 M cells/s on a moving mesh, the whole moving step at
-  64 M cell updates/s; the mesh step alone at ~155 M cells/s. Compile-time
+  A100 at 128^3 double precision runs at 152 M cell updates/s static, its
+  hydro part at 140 M cells/s on a moving mesh, the whole moving step at
+  73 M cell updates/s; the mesh step alone at ~155 M cells/s. Compile-time
   precision options (`--precision=`, default double, main's bits): mixed
-  166 / 154 / 76, low 179 / 162 / 78
+  +10 %, low +19 % on the hydro static, +4 % / +7 % on the whole moving step
   (research_notes/hydro_speed_2026-11-04.md).
 - Bit-reproducible moving runs cost 2.5-4.7 % on the mesh step alone
   (canonical circumcentres and face-ring order); the whole hydro step is

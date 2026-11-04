@@ -25,14 +25,16 @@
 // research_notes/hydro_stage1_2026-10-31.md and hydro_stage3_2026-10-31.md.
 //
 // A step (research_notes/hydro_speed_2026-11-04.md):
-//   time_step(): W = primitive(Q / V) and the sound speed once per cell,
-//   then one sweep over each cell's face list:
+//   time_step(): W = primitive(Q / V), the sound speed and the cell's radius
+//   once per cell, then one sweep over each cell's face list:
 //     - (moving) the mesh-generating point velocity, fluid velocity plus
 //       AREPO-ng's regularisation;
-//     - the cell's time step, reduced to the global one;
 //     - (order 1) the least-squares gradients of W over the face
 //       neighbours, limited at the face centroids (AREPO next generation),
 //       stored for step();
+//   then the global time step, a reduction over the cells and over the faces
+//   (two small kernels: fusing them into the sweep costs warps and fills its
+//   registers, research_notes/hydro_speed_2026-11-04.md);
 //   step(dt):
 //   1. per face: the face velocity from the two point velocities
 //      (AREPO-ng); each side's W advanced half a step with the primitive
@@ -107,8 +109,8 @@ public:
     using Cells = Kokkos::View<double* [V], Kokkos::LayoutRight, Memory>;
     using Points = Kokkos::View<double* [D], Kokkos::LayoutRight, Memory>;
     using Unmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
-    // Per cell and step: W = primitive(Q / V) and the sound speed.
-    using Prims = Kokkos::View<double* [V + 1], Kokkos::LayoutRight, Memory, Unmanaged>;
+    // Per cell and step: W = primitive(Q / V), the sound speed, the radius.
+    using Prims = Kokkos::View<double* [V + 2], Kokkos::LayoutRight, Memory, Unmanaged>;
     using Gradients = Kokkos::View<GStore* [gradient_width], Kokkos::LayoutRight, Memory, Unmanaged>;
     using Exponents = Kokkos::View<std::uint32_t*, Memory, Unmanaged>;  // FP16 gradients: one byte per group
     using FaceFluxes = Kokkos::View<FluxStore* [V], Kokkos::LayoutRight, Memory, Unmanaged>;
@@ -159,8 +161,8 @@ public:
     // neighbour j with vsig_ij = c_i + c_j - (v_j - v_i).d_ij / d_ij > 0,
     // d_ij between the generators (timestep_treebased.cc:72-91; AREPO walks
     // every particle a signal can reach, here only the face neighbours).
-    // The same sweep sets the point velocities (moving; they do not depend
-    // on dt) and the gradients that the next step() uses.
+    // The sweep before it sets the point velocities (moving; they do not
+    // depend on dt) and the gradients that the next step() uses.
     double time_step(double courant, Timings* timings = nullptr) {
         timer_.reset();
         refresh();
@@ -277,14 +279,6 @@ public:
             const Vec relative = o == i ? face_centroid_of(f) : face_centroid_of(f) + separation(i, o);
             return relative - row(centroid, i);
         }
-        KOKKOS_INLINE_FUNCTION double surface(int i) const {
-            double sum = 0;
-            for (int k = start(i); k < start(i + 1); ++k) {
-                const Vec a = area_of(face(k));
-                sum += Kokkos::sqrt(dot(a, a));
-            }
-            return sum;
-        }
     };
 
     // The phases, public only because CUDA device lambdas may not be
@@ -323,7 +317,7 @@ public:
     void borrow_scratch() {
         auto sectors = [](std::size_t bytes) { return (bytes + 31) / 32 * 32; };
         const std::size_t cells = static_cast<std::size_t>(n_);
-        const std::size_t prim_bytes = sectors(sizeof(double) * (V + 1) * cells);
+        const std::size_t prim_bytes = sectors(sizeof(double) * (V + 2) * cells);
         const std::size_t gradient_bytes = order_ == 1 ? sizeof(GStore) * gradient_width * cells : 0;
         const std::size_t exponent_bytes = order_ == 1 && P::half ? sectors(sizeof(std::uint32_t) * cells) : 0;
         const std::size_t flux_bytes =
@@ -337,7 +331,7 @@ public:
             flux_ = FaceFluxes(reinterpret_cast<FluxStore*>(base + gradient_bytes + exponent_bytes), faces_);
     }
 
-    // W = primitive(Q / V) and the sound speed of every cell, once per step.
+    // W = primitive(Q / V), the sound speed and the radius of every cell, once per step.
     void primitives() {
         const auto q = q_;
         const auto prim = prims_;
@@ -348,6 +342,7 @@ public:
                 const State W = primitive(geo.per_volume(q, i), gas);
                 for (int v = 0; v < V; ++v) prim(i, v) = W[v];
                 prim(i, V) = sound_speed(W, gas);
+                prim(i, V + 1) = radius(geo.volume(i));
             });
     }
     // Row i of the primitives.
@@ -366,7 +361,6 @@ public:
     //     centroid at fraction * c, fraction rising linearly from 0 to
     //     cell_shaping_speed at cell_max_angle_factor (:100-106, :109-137; no
     //     gravity);
-    //   - the cell's time step (see time_step());
     //   - (Grad) the gradients of the primitives as AREPO's next generation
     //     computes them (Arepo2-nextgeneration-SoA, src/mesh/mesh_gradients.cc:16-106):
     //     the area-weighted least-squares fit W_j - W_i = a + g.d_ij with an
@@ -378,8 +372,7 @@ public:
     //     in the cell's face order) until the value extrapolated to every face
     //     centroid stays within the range of the neighbours' values (:62-97,
     //     limit_gradient :120-148).
-    // The point velocities and time step are the arithmetic of main 3fd11aa's
-    // separate kernels (their bits).
+    // The point velocities are the arithmetic of main 3fd11aa's kernel (its bits).
     template <bool Moving, bool Grad>
     struct Sweep {
         Prims prim;
@@ -389,15 +382,11 @@ public:
         Geometry geo;
         Gas gas;
         Limiter limiter;
-        double courant;
 
-        KOKKOS_INLINE_FUNCTION void operator()(int i, double& smallest) const {
+        KOKKOS_INLINE_FUNCTION void operator()(int i) const {
             constexpr bool exact = std::is_same_v<G, double>;
             const State Wi = primitive_row(prim, i);
-            const double ci = prim(i, V);
-            const double r = radius(geo.volume(i));
-            const double tiny = Grad ? 1e-6 * geo.surface(i) : 0.0;
-            double pairs = Kokkos::Experimental::infinity_v<double>, max_angle = 0;
+            double surface = 0, smallest_face = Kokkos::Experimental::infinity_v<double>, max_angle = 0;
             Gradient<D, G> grad;
             // The neighbours' range: values W_j (double), or differences
             // W_j - W_i (reduced precision: rounded once).
@@ -417,14 +406,11 @@ public:
                 const int f = geo.face(k), j = geo.other(f, i);
                 const State Wj = primitive_row(prim, j);
                 const Vec d = geo.separation(i, j);
-                const double dist = Kokkos::sqrt(dot(d, d));
-                const Vec dv = velocity(Wj) - velocity(Wi);
-                const double vsig = ci + prim(j, V) - dot(dv, d) / dist;
-                if (vsig > 0) pairs = Kokkos::fmin(pairs, (dist + r) / vsig);
-                if constexpr (!Moving && !Grad) continue;
                 const Vec a = geo.area_of(f);
                 const double magnitude = Kokkos::sqrt(dot(a, a));
-                if constexpr (Moving) max_angle = Kokkos::fmax(max_angle, face_angle(magnitude) / (0.5 * dist));
+                surface += magnitude;
+                smallest_face = Kokkos::fmin(smallest_face, magnitude);
+                if constexpr (Moving) max_angle = Kokkos::fmax(max_angle, face_angle(magnitude) / (0.5 * Kokkos::sqrt(dot(d, d))));
                 if constexpr (Grad) {
                     G weight[D], X[U];
                     if constexpr (Mesh::with_weights) {
@@ -445,38 +431,42 @@ public:
                             const G w = static_cast<G>(magnitude);
                             for (int p = 0; p < U; ++p) b[v][p] += w * X[p] * static_cast<G>(dW);
                         }
-                        if (magnitude < tiny) continue;
                         const G value = exact ? static_cast<G>(Wj[v]) : static_cast<G>(dW);
                         lo[v] = Kokkos::fmin(lo[v], value);
                         hi[v] = Kokkos::fmax(hi[v], value);
                     }
                 }
             }
+            // Rare: a face below 1e-6 of the surface does not count for the
+            // range or the limiter. The common case needs no loop for the
+            // surface and no face area in the limiter's loop.
+            const double tiny = 1e-6 * surface;
+            const bool any_tiny = smallest_face < tiny;
+            if constexpr (Grad) {
+                if (any_tiny) neighbour_range(i, Wi, tiny, lo, hi);
+            }
             if constexpr (Grad && !Mesh::with_weights) solve(M, b, grad);
-            Vec wi{};
             if constexpr (Moving) {
                 double fraction = 0;
                 if (max_angle > 0.75 * cell_max_angle_factor)
                     fraction = max_angle > cell_max_angle_factor
                                    ? cell_shaping_speed
                                    : cell_shaping_speed * (max_angle - 0.75 * cell_max_angle_factor) / (0.25 * cell_max_angle_factor);
-                wi = velocity(Wi);
+                Vec wi = velocity(Wi);
                 const Vec c = centroid;  // centroid - generator = -dx of AREPO
                 const double cd = Kokkos::sqrt(dot(c, c));
-                if (cd > 0 && fraction > 0) wi = wi + c * (fraction * ci / cd);
+                if (cd > 0 && fraction > 0) wi = wi + c * (fraction * prim(i, V) / cd);
                 for (int a = 0; a < D; ++a) w(i, a) = wi[a];
             }
-            Vec relative = velocity(Wi);
-            if constexpr (Moving) relative = relative - wi;
-            const double step = Kokkos::fmin(r / (ci + Kokkos::sqrt(dot(relative, relative))), pairs);
-            smallest = Kokkos::fmin(smallest, courant * step);
             if constexpr (Grad) {
                 // limit_gradient (mesh_gradients.cc:120-148), face by face.
                 for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
                     if (limiter == Limiter::none) break;
                     const int f = geo.face(k);
-                    const Vec a = geo.area_of(f);
-                    if (Kokkos::sqrt(dot(a, a)) < tiny) continue;
+                    if (any_tiny) {
+                        const Vec a = geo.area_of(f);
+                        if (Kokkos::sqrt(dot(a, a)) < tiny) continue;
+                    }
                     const int j = geo.other(f, i);
                     const Vec offset = limiter == Limiter::face_centroid
                                            ? geo.face_offset(f, i)
@@ -498,6 +488,26 @@ public:
                     }
                 }
                 store(i, grad);
+            }
+        }
+
+        // The neighbours' range without the faces below tiny.
+        KOKKOS_FUNCTION void neighbour_range(int i, const State& Wi, double tiny, G (&lo)[V], G (&hi)[V]) const {
+            constexpr bool exact = std::is_same_v<G, double>;
+            for (int v = 0; v < V; ++v) {
+                lo[v] = Kokkos::Experimental::finite_max_v<G>;
+                hi[v] = -Kokkos::Experimental::finite_max_v<G>;
+            }
+            for (int k = geo.start(i); k < geo.start(i + 1); ++k) {
+                const int f = geo.face(k), j = geo.other(f, i);
+                const Vec a = geo.area_of(f);
+                if (Kokkos::sqrt(dot(a, a)) < tiny) continue;
+                const State Wj = primitive_row(prim, j);
+                for (int v = 0; v < V; ++v) {
+                    const G value = exact ? static_cast<G>(Wj[v]) : static_cast<G>(Wj[v] - Wi[v]);
+                    lo[v] = Kokkos::fmin(lo[v], value);
+                    hi[v] = Kokkos::fmax(hi[v], value);
+                }
             }
         }
 
@@ -558,6 +568,40 @@ public:
         }
     };
 
+    // The cell terms of the time step (see time_step()).
+    template <bool Moving>
+    struct CellStep {
+        Prims prim;
+        Points w;
+        double courant;
+
+        KOKKOS_INLINE_FUNCTION void operator()(int i, double& smallest) const {
+            Vec relative = make_vec<D>([&](int a) { return prim(i, 1 + a); });
+            if constexpr (Moving) relative = relative - make_vec<D>([&](int a) { return w(i, a); });
+            const double step = prim(i, V + 1) / (prim(i, V) + Kokkos::sqrt(dot(relative, relative)));
+            smallest = Kokkos::fmin(smallest, courant * step);
+        }
+    };
+    // The pair terms: vsig_ij and d_ij are the same from both sides, so each
+    // face gives both cells' terms at once; only their minimum is wanted.
+    struct FaceStep {
+        Prims prim;
+        Geometry geo;
+        double courant;
+
+        KOKKOS_INLINE_FUNCTION void operator()(int f, double& smallest) const {
+            const int o = geo.owner_of(f), j = geo.neighbour_of(f);
+            const Vec d = geo.separation(o, j);
+            const double dist = Kokkos::sqrt(dot(d, d));
+            const Vec dv = make_vec<D>([&](int a) { return prim(j, 1 + a) - prim(o, 1 + a); });
+            const double vsig = prim(o, V) + prim(j, V) - dot(dv, d) / dist;
+            if (vsig > 0) {
+                smallest = Kokkos::fmin(smallest, courant * ((dist + prim(o, V + 1)) / vsig));
+                smallest = Kokkos::fmin(smallest, courant * ((dist + prim(j, V + 1)) / vsig));
+            }
+        }
+    };
+
     // Runs the sweep; returns the global time step.
     double sweep(double courant) {
         const bool moving = motion_ == Motion::moving;
@@ -567,11 +611,15 @@ public:
     }
     template <bool Moving, int Order>
     double sweep(double courant) {
-        double dt = 0;
-        Kokkos::parallel_reduce("hydro::sweep", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
-                                Sweep<Moving, Order == 1>{prims_, w_, gradients_, exponents_, geometry_, gas_, limiter_, courant},
-                                Kokkos::Min<double>(dt));
-        return dt;
+        const Kokkos::RangePolicy<ExecSpace> cells(exec_, 0, n_);
+        if constexpr (Moving || Order == 1)
+            Kokkos::parallel_for("hydro::sweep", cells,
+                                 Sweep<Moving, Order == 1>{prims_, w_, gradients_, exponents_, geometry_, gas_, limiter_});
+        double by_cell = 0, by_face = 0;
+        Kokkos::parallel_reduce("hydro::cell_step", cells, CellStep<Moving>{prims_, w_, courant}, Kokkos::Min<double>(by_cell));
+        Kokkos::parallel_reduce("hydro::face_step", Kokkos::RangePolicy<ExecSpace>(exec_, 0, faces_),
+                                FaceStep{prims_, geometry_, courant}, Kokkos::Min<double>(by_face));
+        return Kokkos::min(by_cell, by_face);
     }
 
     // The points drift by dt * w and stay in the box; the mesh is updated.
