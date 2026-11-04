@@ -261,11 +261,7 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
     const int u = m.adjacent(t, k);
     const int T[4] = {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)};
     const int far = tet_mesh::far_vertex(m, t, u);
-#ifdef MESH_PLAN_KNOWN
-    if (far < 0) return p;  // the find step found it failing, in this mesh
-#else
     if (far < 0 || !ep::in_sphere(point, T, far)) return p;
-#endif
     int f[3];
     tet_mesh::sorted_face(T, k, f);
     bool rejected = false;
@@ -399,9 +395,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
     const double snap = box.step * 1.7320508075688772;  // largest move by snapping
     Kokkos::parallel_for(
         "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
-#ifndef MESH_NO_DIRTY_CLEAR
             st.dirty(t) = 0;
-#endif
             if (!st.alive(t)) return;
             auto from = [&](Vec3 c, int v) { return tet_mesh::wrap(tet_mesh::row(x, v) - c, box); };
             // Corners sorted by particle id and the centre in rounded
@@ -429,13 +423,9 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);
-#ifdef MESH_ONE_SIDED_SCREEN
                 // A triangle fails from both sides or from neither: the
                 // side with the lower index decides.
                 if (u < t) continue;
-#else
-                if (u < 0) continue;
-#endif
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
                 const Vec3 e = from(at, far);
@@ -731,14 +721,6 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         // Flips that found no slot retry next round with 1/8 more room.
         if (count + host(counter::growth) > capacity) reserve(m, s, capacity + Kokkos::max(capacity / 8, count + host(counter::growth) - capacity));
     }
-#ifdef MESH_NO_DIRTY_CLEAR
-    if (dirty_count > 0) {  // only after the last round of the limit
-        const auto dirty = s.dirty;
-        const auto listed = s.listed;
-        Kokkos::parallel_for(
-            "tet_repair::unlist", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int i) { dirty(listed(i)) = 0; });
-    }
-#endif
     stats.stuck = Kokkos::min(host(counter::stuck), static_cast<int>(s.stuck.extent(0)));
     s.touched_entries = host(counter::created) <= static_cast<int>(s.touched_list.extent(0)) ? host(counter::created) : -1;
     // The created tetrahedra did not fit their list (this step updates all

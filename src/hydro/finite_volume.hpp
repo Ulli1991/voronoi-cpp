@@ -635,6 +635,7 @@ public:
                 }
             });
         phase_end(timings, &Timings::drift);
+        geometry_ = {};  // no reference to what the update may reallocate
         const voronoi::Report report = mesh_->update(x_);
         mesh_stats_.updates += 1;
         mesh_stats_.rebuilds += report.rebuilt;

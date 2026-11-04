@@ -88,6 +88,21 @@ verify)
         done
     done
     ;;
+mem256)
+    # Moving 256^3: per face in all-double and mixed, per cell; 40 steps, --memory.
+    for b in $BUILDS; do
+        for flags in "" "--precision=mixed" "--update=cell" ${MEM_FLAGS:-}; do
+            echo "== $(basename "$b") hydro 256^3 moving $flags"
+            "$b/hydro_sedov" 256 jittered --moving --steps=40 --memory $flags | grep -E "^(mesh|run|phases|throughput|memory)|Kokkos ERROR" | cut -c1-250
+        done
+    done
+    ;;
+tend256)
+    for b in $BUILDS; do
+        echo "== $(basename "$b") hydro 256^3 moving to t_end ${TEND_FLAGS:-}"
+        "$b/hydro_sedov" 256 jittered --moving --memory ${TEND_FLAGS:-} | grep -E "^(mesh|run|phases|throughput|memory|mesh_updates|conservation)|Kokkos ERROR" | cut -c1-250
+    done
+    ;;
 checksums)
     for b in $BUILDS; do
         for d in 0.03 0.1 0.3; do

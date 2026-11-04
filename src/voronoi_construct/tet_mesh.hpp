@@ -3,6 +3,7 @@
 #include "exact_predicates.hpp"
 #include "shell_voronoi.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -507,20 +508,22 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
 
 // Face rings kept from step to step. Face start(t) + rank is the rank-th
 // edge (in bit order) that tetrahedron t represents; its ring of tetrahedra
-// is pool[ring_start(f), ring_start(f) + ring_length(f)). Numbers and ring
-// positions come in pairs, this step's and the last one's; the pool comes
-// twice, one in use and a spare to compact it into.
+// is pool[ring_start(f), ring_start(f) + ring_length(f)). The pool comes
+// twice, one in use and a spare to compact it into. Between updates the spare
+// is the mesh's scratch memory; during update_face_rings and update_cells it
+// holds their temporaries (the last step's numbers, the dirty list, the
+// renumbering table), which cost no memory of their own.
 template <class MemorySpace>
 struct FaceRings {
     using Ints = Kokkos::View<int*, MemorySpace>;
-    Ints start[2], ring_start[2], ring_length[2], pool[2];
+    using Borrowed = Kokkos::View<int*, MemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    Ints start, ring_start, ring_length, pool[2];
     Ints owner, neighbour;
-    Ints dirty;                                // faces to walk this step
-    Kokkos::View<int, MemorySpace> listed;     // their number
-    int faces = -1;   // -1: none yet, every face is walked
-    int current = 0;  // start, ring_start, ring_length [current] are the last step's
-    int in_use = 0;   // pool[in_use] holds the rings
-    int used = 0;     // its entries in use, superseded rings included
+    Borrowed dirty;                         // faces to walk this step, in the spare pool
+    Kokkos::View<int, MemorySpace> listed;  // their number
+    int faces = -1;       // -1: none yet, every face is walked
+    int in_use = 0;       // pool[in_use] holds the rings
+    int used = 0;         // its entries in use, superseded rings included
     int tets = 0;         // tetrahedra numbered by the last update
     int dirty_count = 0;  // entries of `dirty`
     // Whether the spare pool holds, from its start, the new number of every
@@ -533,15 +536,13 @@ template <class MemorySpace>
 FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
     using Ints = Kokkos::View<int*, MemorySpace>;
     FaceRings<MemorySpace> r;
-    for (int b = 0; b < 2; ++b) {
-        r.start[b] = Ints("face_rings_start", tets + 1);
-        r.ring_start[b] = Ints("face_rings_ring_start", faces);
-        r.ring_length[b] = Ints("face_rings_ring_length", faces);
+    r.start = Ints("face_rings_start", tets + 1);
+    r.ring_start = Ints("face_rings_ring_start", faces);
+    r.ring_length = Ints("face_rings_ring_length", faces);
+    for (int b = 0; b < 2; ++b)
         r.pool[b] = Ints(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_rings_pool")), entries);
-    }
     r.owner = Ints("face_rings_owner", faces);
     r.neighbour = Ints("face_rings_neighbour", faces);
-    r.dirty = Ints(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_rings_dirty")), faces);
     r.listed = Kokkos::View<int, MemorySpace>("face_rings_listed");
     return r;
 }
@@ -572,6 +573,14 @@ KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, const Touch
 }
 
 namespace detail {
+// The last step's numbers (start of each tetrahedron, ring of each face),
+// the renumbering table to fill: copies in the spare pool.
+template <class MemorySpace>
+struct OldFaces {
+    using Borrowed = typename FaceRings<MemorySpace>::Borrowed;
+    Borrowed renumber, start, ring_start, ring_length;
+};
+
 // Number the faces of update_face_rings, with owner and neighbour. A face
 // represented by an untouched tetrahedron takes its old ring (unless marked
 // later), one represented by a touched tetrahedron gets ring_start 0 (always
@@ -580,18 +589,14 @@ namespace detail {
 template <class ExecSpace>
 int number_faces(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_space>& mesh, int count,
                  const Kokkos::View<char*, typename ExecSpace::memory_space>& touched,
-                 const FaceRings<typename ExecSpace::memory_space>& rings, int now,
-                 const Kokkos::View<int*, typename ExecSpace::memory_space,
-                                    Kokkos::MemoryTraits<Kokkos::Unmanaged>>& renumber) {
+                 const FaceRings<typename ExecSpace::memory_space>& rings,
+                 const OldFaces<typename ExecSpace::memory_space>& old) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const bool all = rings.faces < 0;
-    const bool with_renumber = renumber.data() != nullptr;
     const int old_tets = rings.tets;
     const auto edges = mesh.edges;
-    const auto start = rings.start[now], old_start = rings.start[rings.current];
-    const auto all_ring_start = rings.ring_start[now], all_ring_length = rings.ring_length[now];
-    const auto old_ring_start = rings.ring_start[rings.current];
-    const auto old_ring_length = rings.ring_length[rings.current];
+    const auto start = rings.start;
+    const auto all_ring_start = rings.ring_start, all_ring_length = rings.ring_length;
     const auto owner = rings.owner, neighbour = rings.neighbour;
     const int face_capacity = static_cast<int>(owner.extent(0));
     int faces = 0;
@@ -606,8 +611,8 @@ int number_faces(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_sp
             if (t == count - 1) start(count) = sum;
             const bool kept = !all && !touched(t);
             // Faces of this tetrahedron's last contents with no number of their own.
-            if (with_renumber && !kept && t < old_tets)
-                for (int g = old_start(t); g < old_start(t + 1); ++g) renumber(g) = -1;
+            if (!all && !kept && t < old_tets)
+                for (int g = old.start(t); g < old.start(t + 1); ++g) old.renumber(g) = -1;
             for (int f = first, rank = 0; bits && f < face_capacity; ++f, ++rank, bits &= bits - 1) {
                 int ka, kb;
                 edge_ends(Kokkos::Experimental::countr_zero_builtin(static_cast<unsigned>(bits)), ka, kb);
@@ -619,10 +624,10 @@ int number_faces(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_sp
                     all_ring_start(f) = ~t;
                     all_ring_length(f) = walk_edge(mesh, t, i, j);
                 } else if (kept) {
-                    const int old = old_start(t) + rank;
-                    all_ring_start(f) = old_ring_start(old);
-                    all_ring_length(f) = old_ring_length(old);
-                    if (with_renumber) renumber(old) = f;
+                    const int was = old.start(t) + rank;
+                    all_ring_start(f) = old.ring_start(was);
+                    all_ring_length(f) = old.ring_length(was);
+                    old.renumber(was) = f;
                 } else {
                     all_ring_start(f) = 0;
                 }
@@ -641,43 +646,56 @@ int number_faces(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_sp
 // clean rings are never read and only listed faces are walked. Requires
 // that untouched tetrahedra keep their edge bits. When the pool is full,
 // the rings are compacted into the spare one. Face arrays and pools grow
-// (by 1/8 and 1/4) when they are too small. Sets
+// (by 1/32 and 1/4) when they are too small. Sets
 // mesh.owner/neighbour/ring_start/ring_length/ring; returns the number of faces.
 template <class ExecSpace>
 int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_space>& mesh, int count,
                       const Kokkos::View<char*, typename ExecSpace::memory_space>& touched,
                       const Kokkos::View<const int*, typename ExecSpace::memory_space>& touched_list,
                       FaceRings<typename ExecSpace::memory_space>& rings) {
+    using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
+    using Borrowed = typename FaceRings<Memory>::Borrowed;
     const bool all = rings.faces < 0;
-    const int now = 1 - rings.current;
-    if (static_cast<int>(rings.start[now].extent(0)) < count + 1)
-        Kokkos::realloc(Kokkos::WithoutInitializing, rings.start[now], count + 1 + count / 8);
-    const auto edges = mesh.edges;
-    // The old faces' new numbers (cells_incremental) in the spare pool.
-    const auto& spare_now = rings.pool[1 - rings.in_use];
-    const Kokkos::View<int*, typename ExecSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>> renumber(
-        !all && static_cast<std::size_t>(rings.faces) <= spare_now.extent(0) ? spare_now.data() : nullptr,
-        !all && static_cast<std::size_t>(rings.faces) <= spare_now.extent(0) ? rings.faces : 0);
-    rings.renumber_valid = renumber.data() != nullptr;
-    rings.renumbered = rings.faces;
-    int faces = detail::number_faces(exec, mesh, count, touched, rings, now, renumber);
-    if (faces > static_cast<int>(rings.owner.extent(0))) {
-        const int capacity = faces + faces / 8;
-        for (auto* v : {&rings.owner, &rings.neighbour, &rings.dirty, &rings.ring_start[now], &rings.ring_length[now]})
-            Kokkos::realloc(Kokkos::WithoutInitializing, *v, capacity);
-        // The last step's ring positions are read by face number: kept.
-        Kokkos::resize(rings.ring_start[rings.current], capacity);
-        Kokkos::resize(rings.ring_length[rings.current], capacity);
-        faces = detail::number_faces(exec, mesh, count, touched, rings, now, renumber);
+    // These references would hold on to what is reallocated below.
+    mesh.owner = mesh.neighbour = mesh.ring_start = mesh.ring_length = mesh.ring = {};
+    // The spare pool: the renumbering table, then the last step's numbers.
+    detail::OldFaces<Memory> old;
+    if (!all) {
+        const std::size_t table = static_cast<std::size_t>(rings.faces), tets = static_cast<std::size_t>(rings.tets) + 1;
+        auto& spare = rings.pool[1 - rings.in_use];
+        if (spare.extent(0) < 3 * table + tets)
+            Kokkos::realloc(Kokkos::WithoutInitializing, spare, 3 * table + tets + table / 32);
+        int* at = spare.data();
+        old.renumber = Borrowed(at, table);
+        old.start = Borrowed(at + table, tets);
+        old.ring_start = Borrowed(at + table + tets, table);
+        old.ring_length = Borrowed(at + 2 * table + tets, table);
+        Kokkos::deep_copy(exec, old.start, Kokkos::subview(rings.start, std::make_pair(std::size_t(0), tets)));
+        Kokkos::deep_copy(exec, old.ring_start, Kokkos::subview(rings.ring_start, std::make_pair(std::size_t(0), table)));
+        Kokkos::deep_copy(exec, old.ring_length, Kokkos::subview(rings.ring_length, std::make_pair(std::size_t(0), table)));
     }
-    const auto start = rings.start[now];
-    const auto all_ring_start = rings.ring_start[now], all_ring_length = rings.ring_length[now];
+    if (static_cast<int>(rings.start.extent(0)) < count + 1)
+        Kokkos::realloc(Kokkos::WithoutInitializing, rings.start, count + 1 + count / 32);
+    rings.renumber_valid = !all;
+    rings.renumbered = rings.faces;
+    int faces = detail::number_faces(exec, mesh, count, touched, rings, old);
+    if (faces > static_cast<int>(rings.owner.extent(0))) {
+        const int capacity = faces + faces / 32;
+        for (auto* v : {&rings.owner, &rings.neighbour, &rings.ring_start, &rings.ring_length})
+            Kokkos::realloc(Kokkos::WithoutInitializing, *v, capacity);
+        faces = detail::number_faces(exec, mesh, count, touched, rings, old);
+    }
+    const auto start = rings.start;
+    const auto all_ring_start = rings.ring_start, all_ring_length = rings.ring_length;
     const auto owner = rings.owner, neighbour = rings.neighbour;
     const auto ring_start = Kokkos::subview(all_ring_start, std::make_pair(0, faces));
     const auto ring_length = Kokkos::subview(all_ring_length, std::make_pair(0, faces));
-    const auto dirty = rings.dirty;
     const auto listed = rings.listed;
+
+    // The dirty list follows the table, over the last numbers, done with.
+    rings.dirty = all ? Borrowed() : Borrowed(rings.pool[1 - rings.in_use].data() + rings.faces, faces);
+    const auto dirty = rings.dirty;
 
     // Dirty faces (a touched tetrahedron on their ring): ring_start
     // ~representative, listed once in `dirty`.
@@ -706,10 +724,10 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
             },
             dirty_faces);
     }
-#ifdef MESH_RING_FUSED
-    // The dirty faces' rings: walked, room claimed, walked in canonical order.
+    // The dirty faces' rings, in one kernel: walked, room claimed in the pool,
+    // walked again in canonical order. A ring that finds no room stays
+    // dirty, for the compaction.
     int dirty_entries = 0;
-    bool walked = false;
     if (!all) {
         const auto pool = rings.pool[rings.in_use];
         const int base = rings.used, room = static_cast<int>(pool.extent(0));
@@ -726,104 +744,66 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                 const int length = walk_edge_canonical(mesh, representative, owner(f), neighbour(f), place);
                 ring_length(f) = length;
                 sum += length;
-                if (at + length <= room) ring_start(f) = at;  // else compaction walks it
+                if (at + length <= room) ring_start(f) = at;
                 // Faces without an old number: ~f in the list.
                 if (touched(representative)) dirty(s) = ~f;
             },
             dirty_entries);
-        walked = true;
     }
-    int capacity = static_cast<int>(rings.pool[rings.in_use].extent(0));
-    const bool append = walked && rings.used + dirty_entries <= capacity;
-#else
-    // The dirty faces' ring lengths.
-    int dirty_entries = 0;
-    Kokkos::parallel_reduce(
-        "tet_mesh::dirty_lengths", Range(exec, 0, dirty_faces),
-        KOKKOS_LAMBDA(int s, int& sum) {
-            const int f = dirty(s), representative = ~ring_start(f);
-            ring_length(f) = walk_edge(mesh, representative, owner(f), neighbour(f));
-            sum += ring_length(f);
-            // Faces without an old number: ~f in the list.
-            if (touched(representative)) dirty(s) = ~f;
-        },
-        dirty_entries);
-
-    int capacity = static_cast<int>(rings.pool[rings.in_use].extent(0));
-    const bool append = !all && rings.used + dirty_entries <= capacity;
-#endif
-    if (!append) {  // compaction: the spare pool must hold every ring
+    if (!all && rings.used + dirty_entries <= static_cast<int>(rings.pool[rings.in_use].extent(0))) {
+        rings.used += dirty_entries;
+    } else {
+        // Rewrite every ring into the spare pool: copy the clean ones, walk the
+        // dirty ones. The temporaries there are gone.
+        rings.renumber_valid = false;
         int entries = 0;
         Kokkos::parallel_reduce(
             "tet_mesh::ring_entries", Range(exec, 0, faces),
             KOKKOS_LAMBDA(int f, int& sum) { sum += ring_length(f); }, entries);
-        auto& spare = rings.pool[1 - rings.in_use];
-        if (entries > static_cast<int>(spare.extent(0)))
-            Kokkos::realloc(Kokkos::WithoutInitializing, spare, entries + entries / 4);
-        capacity = static_cast<int>(spare.extent(0));
-    }
-    auto store = KOKKOS_LAMBDA(int f, int at, const Kokkos::View<int*, typename ExecSpace::memory_space>& pool) {
-        if (at + ring_length(f) > capacity) Kokkos::abort("update_face_rings: ring capacity exceeded");
-        walk_edge_canonical(mesh, ~ring_start(f), owner(f), neighbour(f), &pool(at));
-        ring_start(f) = at;
-    };
-    if (append) {
-#ifdef MESH_RING_FUSED
-        rings.used += dirty_entries;
-#else
-        // Append the dirty rings.
-        const auto pool = rings.pool[rings.in_use];
-        const int base = rings.used;
-        Kokkos::parallel_scan(
-            "tet_mesh::append_rings", Range(exec, 0, dirty_faces),
-            KOKKOS_LAMBDA(int s, int& sum, bool final) {
-                const int f = dirty(s) < 0 ? ~dirty(s) : dirty(s), length = ring_length(f);
-                if (final) store(f, base + sum, pool);
-                sum += length;
-            });
-        rings.used += dirty_entries;
-#endif
-    } else {
-        // Rewrite every ring into the spare pool: copy the clean ones, walk the dirty ones.
-        rings.renumber_valid = false;
-        const auto from = rings.pool[rings.in_use];
-        rings.in_use = 1 - rings.in_use;
-        const auto pool = rings.pool[rings.in_use];
-        int entries = 0;
-        Kokkos::parallel_scan(
-            "tet_mesh::compact_rings", Range(exec, 0, faces),
-            KOKKOS_LAMBDA(int f, int& sum, bool final) {
-                const int begin = ring_start(f), length = ring_length(f);
-                if (final && begin < 0) store(f, sum, pool);
-                if (final && begin >= 0) {
-                    if (sum + length > capacity) Kokkos::abort("update_face_rings: ring capacity exceeded");
-                    for (int r = 0; r < length; ++r) pool(sum + r) = from(begin + r);
-                    ring_start(f) = sum;
-                }
-                sum += length;
-            },
-            entries);
-        rings.used = entries;
+        {
+            auto& spare = rings.pool[1 - rings.in_use];
+            if (entries > static_cast<int>(spare.extent(0)))
+                Kokkos::realloc(Kokkos::WithoutInitializing, spare, entries + entries / 4);
+            const auto from = rings.pool[rings.in_use];
+            const auto pool = spare;
+            const int capacity = static_cast<int>(pool.extent(0));
+            rings.in_use = 1 - rings.in_use;
+            Kokkos::parallel_scan(
+                "tet_mesh::compact_rings", Range(exec, 0, faces),
+                KOKKOS_LAMBDA(int f, int& sum, bool final) {
+                    const int begin = ring_start(f), length = ring_length(f);
+                    if (final && sum + length > capacity) Kokkos::abort("update_face_rings: ring capacity exceeded");
+                    if (final && begin < 0) {
+                        walk_edge_canonical(mesh, ~begin, owner(f), neighbour(f), &pool(sum));
+                        ring_start(f) = sum;
+                    }
+                    if (final && begin >= 0) {
+                        for (int r = 0; r < length; ++r) pool(sum + r) = from(begin + r);
+                        ring_start(f) = sum;
+                    }
+                    sum += length;
+                },
+                entries);
+            rings.used = entries;
+        }
         // The pool just emptied is the next spare. If it is the smaller one
-        // (the spare had been grown, e.g. as scratch memory) and holds the
-        // rings with a quarter to append, the rings move back into it and the
-        // larger pool stays the spare; else it grows to this one's size.
-        // Without the move both pools end up as large as the grown spare.
+        // (the spare had been grown as scratch memory), the rings move back
+        // into it, grown only to hold them and half as much to append, and
+        // the larger pool stays the spare: both pools at the size of the
+        // scratch would be its size twice.
         auto& spare = rings.pool[1 - rings.in_use];
+        const auto& pool = rings.pool[rings.in_use];
         if (spare.extent(0) < pool.extent(0)) {
-            if (static_cast<std::size_t>(entries) + entries / 4 <= spare.extent(0)) {
-                Kokkos::deep_copy(exec, Kokkos::subview(spare, std::make_pair(0, entries)),
-                                  Kokkos::subview(pool, std::make_pair(0, entries)));
-                rings.in_use = 1 - rings.in_use;
-            } else {
-                Kokkos::realloc(Kokkos::WithoutInitializing, spare, pool.extent(0));
-            }
+            if (static_cast<std::size_t>(entries) + entries / 4 > spare.extent(0))
+                Kokkos::realloc(Kokkos::WithoutInitializing, spare, std::min<std::size_t>(entries + entries / 2, pool.extent(0)));
+            Kokkos::deep_copy(exec, Kokkos::subview(spare, std::make_pair(0, entries)),
+                              Kokkos::subview(pool, std::make_pair(0, entries)));
+            rings.in_use = 1 - rings.in_use;
         }
     }
     rings.faces = faces;
     rings.tets = count;
     rings.dirty_count = dirty_faces;
-    rings.current = now;
     mesh.owner = Kokkos::subview(owner, std::make_pair(0, faces));
     mesh.neighbour = Kokkos::subview(neighbour, std::make_pair(0, faces));
     mesh.ring_start = ring_start;
@@ -1297,7 +1277,7 @@ void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& b
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(out.volume.extent(0)), faces = static_cast<int>(owner.extent(0));
     if (static_cast<int>(out.face.extent(0)) < 2 * faces)
-        Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 4);
+        Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 16);
     const Kokkos::View<int*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>> other(reinterpret_cast<int*>(scratch),
                                                                                     2 * faces);
     const auto start = out.start, cursor = out.cursor, face = out.face;
@@ -1356,8 +1336,9 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
     using Ints = Kokkos::View<int*, Memory, Unmanaged>;
     const int n = static_cast<int>(out.volume.extent(0)), faces = static_cast<int>(owner.extent(0));
     const int old_faces = rings.renumbered;
+    // After the table and the dirty list (in the spare pool, update_face_rings).
     const Ints renumber(reinterpret_cast<int*>(scratch), old_faces);
-    int* at = renumber.data() + old_faces;
+    int* at = renumber.data() + old_faces + rings.dirty_count;
     const Ints old_start(at, n + 1);
     at += n + 1;
     const Ints old_face(at, 2 * old_faces);
@@ -1369,7 +1350,7 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
     Kokkos::deep_copy(exec, old_face, Kokkos::subview(out.face, std::make_pair(0, 2 * old_faces)));
     Kokkos::deep_copy(exec, marked, char(0));
     if (static_cast<int>(out.face.extent(0)) < 2 * faces)
-        Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 4);
+        Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 16);
     const auto start = out.start, cursor = out.cursor, face = out.face;
     const auto vertex = mesh.vertex;
     Kokkos::parallel_for(
