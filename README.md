@@ -385,6 +385,11 @@ In order (research_notes/dimension_design_2026-11-02.md):
    size threshold on the CPU, one small transfer each way per V-cycle; with
    several GPUs the CPU side also gathers the coarse levels of all of them.
 
+Every test in the suite reports accuracy per cost, since raw throughput alone
+does not compare a moving mesh with a fixed grid: GPU-seconds to a target
+error at 2-3 resolutions, and the equivalent fixed-grid throughput (the rate
+a fixed grid would need to match that time).
+
 ## Repository layout
 
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
