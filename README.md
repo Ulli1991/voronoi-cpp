@@ -304,28 +304,37 @@ sbatch -o <logs>/hydro-%j.out scripts/hydro_a100.sh build-cuda <out> <mode> (see
 
 `hydro_sedov` (needs HDF5; on Raven `module load hdf5-serial`) runs a
 Sedov blast (1e51 erg, n = 1 cm^-3, 50 pc box, 1e4 yr) and writes HDF5
-snapshots. Measured on one A100 (jobs 31699864, 31699865, 31700852), double,
-jittered points in Morton order, median of 40 steps:
+snapshots. Measured on one A100, double, jittered points in Morton order,
+median of 40 steps. The 2.1M column is current (job 31879405, HLLC rows; the
+same code varies by about 10 % between GPU jobs); the 16.8M column and the
+HLL and first-order rows are the earlier code (jobs 31699864, 31699865,
+31700852, kept until they are re-measured):
 
 | Million cell updates per second | 2,097,152 cells | 16,777,216 cells |
 |---|---|---|
-| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | **55** | 55 (whole run, job 31702077: 54) |
-| static mesh, MUSCL-Hancock HLLC, per-face loop | **112** | 105 |
+| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | **73** | 55 (whole run, job 31702077: 54) |
+| static mesh, MUSCL-Hancock HLLC, per-face loop | **152** | 105 |
 | static mesh, MUSCL-Hancock HLL, per-face loop | 116 | 114 |
 | static mesh, first order HLLC, per-cell loop | 288 | 290 |
-| device memory, mesh + hydro (static, per-face, second order) | 2370 B/cell | 2371 B/cell (41.2 GB in use) |
-| device memory, moving mesh + hydro (per-face) | 2418 B/cell | 2419 B/cell (42.2 GB in use, whole run, job 31702077) |
+| device memory, mesh + hydro (static, per-face, second order) | 2434 B/cell | 2371 B/cell (41.2 GB in use) |
+| device memory, moving mesh + hydro (per-face) | 2482 B/cell | 2419 B/cell (42.2 GB in use, whole run, job 31702077) |
 
 Sedov at 128^3 (job 31699863), HLLC: shock radius 0.978 of the
 Sedov-Taylor value at 1e4 yr, L1 density error 0.075 rho0 (first order:
 0.104); mass and energy conserved to 2e-16. On the moving mesh (jobs
 31700850-51): 354 steps instead of 1642, L1 density error 0.058 rho0, the
 same numbers with the whole box moving at 500 km/s; at 256^3 L1 0.034 in
-288 s of GPU time (job 31702077). Details:
+288 s of GPU time (job 31702077, earlier code). These L1 values are sampled at
+the mesh generators, which flatters a moving mesh; the field L1 (the integral
+of |rho_h - rho| dV) is the fair norm and is what the test suite will report
+(research_notes/accuracy_score_exploration_2026-11-04.md). Details:
 research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
 ## Limitations and open items
 
+- Moving hydro at 256^3 with the per-face loop currently runs out of the
+  40 GB A100 (also `--precision=mixed`); only the per-cell loop fits, 351 s
+  for the same Sedov run. Being fixed.
 - The hydro step is not yet at its target (~300 M cell updates/s): on the
   A100 at 128^3 double precision runs at 152 M cell updates/s static, its
   hydro part at 140 M cells/s on a moving mesh, the whole moving step at
@@ -353,11 +362,13 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 ## Roadmap
 
 In order (research_notes/dimension_design_2026-11-02.md):
-1. Hydro speed: pass fusion, packed per-face rows, precomputed least-squares
-   gradient weights, precision options (geometry, gradients incl. FP16, face
-   fluxes, Riemann; default all-double). Target: a fixed-grid code's rate per
-   face, ~300 M cell updates/s for the hydro step (a Voronoi cell has ~16
-   faces against 6).
+1. Hydro speed, first round done: 107 -> 152 M cell updates/s static double,
+   56 -> 73 for the whole moving step, with main's bits. The remaining limit is
+   memory waits in the gradient sweep; sliced lists, 16-bit offsets, tiles and
+   a face-major update did not help (research_notes/hydro_speed_2026-11-04.md).
+   Ceiling: a fixed-grid code's rate per face, ~300 M cell updates/s for the
+   hydro step (a Voronoi cell has ~16 faces against 6), which may stay out of
+   reach.
 2. Mesh-step speed: incremental per-cell face lists, fused
    circumcentre/ring/face passes, cheaper repair rounds.
 3. 1D mesh and hydro with walls; Sod, Shu-Osher and Woodward-Colella against
