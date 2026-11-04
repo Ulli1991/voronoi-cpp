@@ -24,16 +24,15 @@
 // computed from Q / V where they are needed. Line references are in
 // research_notes/hydro_stage1_2026-10-31.md and hydro_stage3_2026-10-31.md.
 //
-// A step (research_notes/hydro_speed_2026-11-02.md):
+// A step (research_notes/hydro_speed_2026-11-04.md):
 //   time_step(): W = primitive(Q / V) and the sound speed once per cell,
 //   then one sweep over each cell's face list:
 //     - (moving) the mesh-generating point velocity, fluid velocity plus
 //       AREPO-ng's regularisation;
 //     - the cell's time step, reduced to the global one;
 //     - (order 1) the least-squares gradients of W over the face
-//       neighbours, a weighted sum with the mesh's per-face-side weights
-//       (voronoi::Mesh::gradient_weights), limited at the face centroids
-//       (AREPO next generation), stored for step();
+//       neighbours, limited at the face centroids (AREPO next generation),
+//       stored for step();
 //   step(dt):
 //   1. per face: the face velocity from the two point velocities
 //      (AREPO-ng); each side's W advanced half a step with the primitive
@@ -50,8 +49,8 @@
 // Two update loops, measured against each other (research notes):
 //   per_cell: one thread per cell computes the flux of each of its faces
 //     (each face twice, once from each side, with the same arguments, so
-//     both get the same bits) and updates its state in place (the fluxes
-//     read only the primitive and gradient rows); no face array;
+//     both get the same bits) and updates its state, in place at order 1
+//     (the fluxes read only the primitive and gradient rows); no face array;
 //   per_face: one thread per face writes its flux into a face array, then
 //     one thread per cell gathers them and updates in place.
 // Per-cell and per-face data are rows (LayoutRight), so that a random
@@ -61,10 +60,10 @@
 // the mesh's next update(), rebuild() or update_cells(); nothing else may
 // use the mesh's scratch between time_step() and step()).
 //
-// Precision (precision.hpp): the default is double throughout except the
-// stored gradient weights (float); reduced precision is a compile-time
-// option of the weights, gradients, stored face fluxes, Riemann solve and
-// face geometry rows.
+// Precision (precision.hpp): the default is double throughout, the
+// least-squares fit solved in the sweep (main's bits); reduced precision and
+// stored weights are compile-time options of the weights, gradients, stored
+// face fluxes, Riemann solve and face geometry rows.
 namespace hydro {
 
 enum class Update { per_cell, per_face };
@@ -128,6 +127,8 @@ public:
           n_(mesh.particles()) {
         if (order != 0 && order != 1) throw std::invalid_argument("hydro::FiniteVolume: order 0 or 1");
         q_ = Cells("hydro_Q", n_);
+        if (order == 0 && update == Update::per_cell)
+            next_ = Cells(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("hydro_Q_next")), n_);
         if (motion == Motion::moving) {
             x_ = Points(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("hydro_x")), n_);
             w_ = Points("hydro_w", n_);
@@ -368,10 +369,11 @@ public:
     //   - the cell's time step (see time_step());
     //   - (Grad) the gradients of the primitives as AREPO's next generation
     //     computes them (Arepo2-nextgeneration-SoA, src/mesh/mesh_gradients.cc:16-106):
-    //     g = sum over the face neighbours j of weight_k (W_j - W_i) with the
-    //     mesh's least-squares weights of the list entry (:59; the area-weighted
-    //     fit with an intercept over the neighbours' centroids,
-    //     tet_mesh::gradient_weights); then, for each variable, the gradient
+    //     the area-weighted least-squares fit W_j - W_i = a + g.d_ij with an
+    //     intercept, d_ij between the centroids, summed here and solved after
+    //     the loop; with the weights option g = sum over the face neighbours
+    //     j of weight_k (W_j - W_i), the mesh's weights of the list entry
+    //     (:59; tet_mesh::gradient_weights); then, for each variable, the gradient
     //     is scaled down face by face (faces above 1e-6 of the cell's surface,
     //     in the cell's face order) until the value extrapolated to every face
     //     centroid stays within the range of the neighbours' values (:62-97,
@@ -601,6 +603,7 @@ public:
     // `fallbacks` counts the sides that took the cell's state.
     template <int Order, bool Moving>
     struct FaceFlux {
+        Cells q;
         Prims prim;
         Gradients g;
         Exponents exponents;
@@ -631,13 +634,17 @@ public:
         // (see the notes; AREPO-ng shifts its extrapolation the same way,
         // mesh_fluxes.cc:441). Reduced precision: the change of the state
         // (half step and extrapolation) in G, added to the double W.
+        // Order 0: W straight into the Riemann solve, computed here from Q
+        // and not read from the primitive rows: the compilers contract its
+        // products into the solver's sums (euler.hpp), and with loads the
+        // bits are not main's (research_notes/hydro_speed_2026-11-04.md).
         KOKKOS_INLINE_FUNCTION State side(int i, Vec r, int& fallbacks) const {
-            const State W = primitive_row(prim, i);
             if constexpr (Order == 0) {
                 (void)r;
                 (void)fallbacks;
-                return W;
+                return primitive(geo.per_volume(q, i), gas);
             } else {
+                const State W = primitive_row(prim, i);
                 const Gradient<D, G> grad = gradient(i);
                 State Wf;
                 if constexpr (std::is_same_v<G, double>) {
@@ -719,12 +726,14 @@ public:
 
     template <int Order, bool Moving>
     void advance(double dt, Timings* timings) {
-        const FaceFlux<Order, Moving> flux{prims_, gradients_, exponents_, w_, geometry_, gas_, dt};
+        const FaceFlux<Order, Moving> flux{q_, prims_, gradients_, exponents_, w_, geometry_, gas_, dt};
         const Geometry geo = geometry_;
         const auto q = q_;
         if (update_ == Update::per_cell) {
-            // In place: the fluxes read only the primitive and gradient rows.
+            // In place at order 1: the fluxes read only the primitive and
+            // gradient rows; order 0 reads Q (FaceFlux::side), so into next_.
             // Each cell counts the fallbacks of its own sides.
+            const auto next = Order == 0 ? next_ : q_;
             Kokkos::parallel_reduce(
                 "hydro::fluxes_and_update", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
                 KOKKOS_LAMBDA(int i, long long& count) {
@@ -738,10 +747,11 @@ public:
                         const double sign = owned ? 1.0 : -1.0;
                         for (int v = 0; v < V; ++v) sum[v] += sign * F[v];
                     }
-                    for (int v = 0; v < V; ++v) q(i, v) = q(i, v) - dt * sum[v];
+                    for (int v = 0; v < V; ++v) next(i, v) = q(i, v) - dt * sum[v];
                 },
                 fallbacks_);
             phase_end(timings, &Timings::fluxes);
+            if constexpr (Order == 0) std::swap(q_, next_);
             return;
         }
         const auto F = flux_;
@@ -780,7 +790,7 @@ private:
     bool swept_ = false;
     long long fallbacks_ = 0;
     Kokkos::Timer timer_;
-    Cells q_;
+    Cells q_, next_;
     Prims prims_;
     Points x_, w_;
     Gradients gradients_;

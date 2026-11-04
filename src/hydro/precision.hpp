@@ -8,7 +8,7 @@
 #include <cuda_fp16.h>
 #endif
 
-// The hydro's compile-time precision policy (research_notes/hydro_speed_2026-11-02.md).
+// The hydro's compile-time precision policy (research_notes/hydro_speed_2026-11-04.md).
 // The conserved state Q, the volumes and cell centroids, W = primitive(Q / V)
 // and the sums of the face fluxes are double in every policy. The default,
 // Precision<>, is double throughout, with the least-squares fit solved in
