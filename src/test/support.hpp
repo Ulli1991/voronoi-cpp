@@ -541,14 +541,16 @@ Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(con
 // neighbours, clipping faces the mesh lacks, mesh faces the clipping lacks
 // (and the largest of their areas, in spacings^2; clipping drops faces
 // below rounding level, the mesh keeps every Delaunay edge), the largest
-// relative volume difference and the total volume (box volumes).
+// relative volume difference and the total volume (box volumes). With
+// update_cells() done: list entries that break the per-cell lists (each face
+// in both its cells, in increasing id of the other particle).
 struct Comparison {
-    long long failing = 0, mismatched = 0, missing = 0, extra = 0, faces = 0, clipped_faces = 0;
+    long long failing = 0, mismatched = 0, missing = 0, extra = 0, faces = 0, clipped_faces = 0, wrong_lists = 0;
     double extra_area = 0, volume = 0, total = 0;
     int worst_cell = -1;
     // Exact: no failing triangle, no missing face, extra faces only below
     // rounding level, volumes equal to 1e-10.
-    bool pass() const { return failing == 0 && missing == 0 && extra_area < 1e-9 && volume < 1e-10; }
+    bool pass() const { return failing == 0 && missing == 0 && extra_area < 1e-9 && volume < 1e-10 && wrong_lists == 0; }
 };
 
 template <class M>
@@ -579,6 +581,15 @@ Comparison compare_with_rebuild(const M& mesh, const Positions& x) {
         c.extra_area = std::max(c.extra_area, std::sqrt(area(f, 0) * area(f, 0) + area(f, 1) * area(f, 1) +
                                                         area(f, 2) * area(f, 2)) / (spacing * spacing));
     }
+    const auto start = to_host(mesh.cell_face_start());
+    const auto list = to_host(mesh.cell_face());
+    c.wrong_lists = mesh.cells_current() ? std::abs(start(n) - 2 * mesh.faces()) : 0;
+    for (int i = 0; i < n; ++i)
+        for (int a = start(i), last = -1; mesh.cells_current() && a < start(i + 1) && c.wrong_lists == 0; ++a) {
+            const int f = list(a), other = owner(f) == i ? neighbour(f) : owner(f);
+            c.wrong_lists += (owner(f) != i && neighbour(f) != i) || other <= last;
+            last = other;
+        }
     const auto volume = to_host(mesh.volume());
     for (int i = 0; i < n; ++i) {
         c.total += volume(i) / box.volume();
@@ -594,7 +605,7 @@ Comparison compare_with_rebuild(const M& mesh, const Positions& x) {
 inline std::ostream& operator<<(std::ostream& out, const Comparison& c) {
     return out << "failing=" << c.failing << " mismatched_cells=" << c.mismatched << " missing_faces=" << c.missing
                << " extra_faces=" << c.extra << " extra_max_area=" << c.extra_area << " faces=" << c.faces
-               << " clipped_faces=" << c.clipped_faces << " total_volume=" << c.total
+               << " clipped_faces=" << c.clipped_faces << " wrong_lists=" << c.wrong_lists << " total_volume=" << c.total
                << " max_relative_volume_difference=" << c.volume;
 }
 

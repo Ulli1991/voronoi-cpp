@@ -263,8 +263,20 @@ public:
         if (cells_current_) return;
         Kokkos::Timer timer;
         // Its temporaries live in the spare ring pool (see scratch).
+#ifdef MESH_INCR_LIMIT
+        const auto& spare = rings_.pool[1 - rings_.in_use];
+        const std::size_t table = sizeof(int) * static_cast<std::size_t>(rings_.renumbered);
+        if (lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
+            state_.touched_entries <= MESH_INCR_LIMIT * n_ &&
+            table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <= spare.extent(0) * sizeof(int)) {
+            tet_mesh::cells_incremental(exec_, positions_, box_, owner(), neighbour(), tets_, state_.alive,
+                                        Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries)),
+                                        rings_, geometry_, cells_, reinterpret_cast<char*>(spare.data()));
+        } else
+#endif
         tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
                         scratch(tet_mesh::cells_scratch_bytes(faces())).data());
+        updates_since_lists_ = 0;
         if constexpr (with_weights) {
             // As many rows as list entries (2 per face), with the list's 1/32 spare.
             const std::size_t entries = 2 * static_cast<std::size_t>(faces());
@@ -277,6 +289,7 @@ public:
         lap(timer, timings, &Timings::cells);
     }
 
+    bool cells_current() const { return cells_current_; }
     void set_fallback(Fallback f) { fallback_ = f; }
 
     int particles() const { return n_; }
@@ -344,6 +357,8 @@ private:
     // Circumcentres of the created tetrahedra, face rings, faces and cells.
     int geometry(Timings* timings) {
         Kokkos::Timer timer;
+        lists_of_last_update_ = updates_since_lists_ == 0;
+        ++updates_since_lists_;
         const Kokkos::View<const int*, Memory> created =
             state_.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
                                        : Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries));
@@ -357,7 +372,14 @@ private:
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 8);
             if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 8);
         }
-        tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        {
+            tet_mesh::Geometry<Memory> out = geometry_;
+#ifdef MESH_NO_FACE_VOLUME
+            if (rings_built_) out.volume = {};  // update_cells() sums them
+            rings_built_ = true;
+#endif
+            tet_mesh::faces(exec_, positions_, box_, tets_, out);
+        }
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
@@ -370,6 +392,9 @@ private:
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
     bool cells_current_ = false;
+    bool rings_built_ = false;
+    int updates_since_lists_ = 1;       // updates since the last update_cells()
+    bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last
     tet_mesh::Points4<Memory> positions_;
     neighbor_search::CellList<ExecSpace> list_;
     tet_mesh::Mesh<Memory> tets_;
