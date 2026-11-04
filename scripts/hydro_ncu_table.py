@@ -23,8 +23,8 @@ col = {name: i for i, name in enumerate(head)}
 
 
 def short(name):
-    for pat in (r"Sweep<[^>]*>", r"advance<\d, \w+>\(double, \w+::Timings\*\)::\{lambda\(int(, long long&)?\)#\d\}",
-                r"FitLimit<\d>", r"Limit\b", r"Normal", r"gradients\(\)", r"primitives\(\)", r"time_step\(double", r"point_velocities_kernel", r"move\(double",
+    for pat in (r"Sweep<[^>]*>", r"CellStep<\w+>", r"FaceStep", r"FitLimit<\d, \w+>", r"advance<\d, \w+>\(double, \w+::Timings\*\)::\{lambda\(int(, long long&)?\)#\d\}",
+                r"gradients\(\)", r"primitives\(\)", r"time_step\(double", r"point_velocities_kernel", r"move\(double",
                 r"tet_mesh::\w+|tet_repair::\w+|voronoi::\w+|neighbor_search::\w+"):
         m = re.search(pat, name)
         if m:

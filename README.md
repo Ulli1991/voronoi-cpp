@@ -327,11 +327,11 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 ## Limitations and open items
 
 - The hydro step is not yet at its target (~300 M cell updates/s): on the
-  A100 at 128^3 double precision runs at 123 M cell updates/s static, its
-  hydro part at 111 M cells/s on a moving mesh, the whole moving step at
-  64 M cell updates/s; the mesh step alone at ~155 M cells/s. Compile-time
+  A100 at 128^3 double precision runs at 152 M cell updates/s static, its
+  hydro part at 140 M cells/s on a moving mesh, the whole moving step at
+  73 M cell updates/s; the mesh step alone at ~155 M cells/s. Compile-time
   precision options (`--precision=`, default double, main's bits): mixed
-  166 / 154 / 76, low 179 / 162 / 78
+  +10 %, low +19 % on the hydro static, +4 % / +7 % on the whole moving step
   (research_notes/hydro_speed_2026-11-04.md).
 - Bit-reproducible moving runs cost 2.5-4.7 % on the mesh step alone
   (canonical circumcentres and face-ring order); the whole hydro step is
@@ -370,10 +370,14 @@ In order (research_notes/dimension_design_2026-11-02.md):
    clustered/halo input; expected 5-10 %), and look for a cheaper exact
    certification bound than "everything within 2R" (irregular cells test ~2x
    the candidates of jittered ones).
-6. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
+6. Multi-GPU: domain decomposition by Morton ranges, ghost layers, local
+   rebuild of a boundary band, GPU-aware communication, weak and strong
+   scaling. Before refinement, so that insertion and load balance are designed
+   with the decomposition in mind; one A100 holds about 256^3.
+7. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
    by an exact local rebuild of the hole, conservative remap from the
    volumes (reports/GPU Delaunay insertion and removal.md).
-7. Self-gravity by multigrid, after the hydro suite passes at speed, starting
+8. Self-gravity by multigrid, after the hydro suite passes at speed, starting
    from LUNA's gravity solvers (same author; multigrid with coarse-grid gather):
    V-cycles warm-started from the previous step's potential (as LUNA does),
    aiming at 2-4 V-cycles per step, so the solve runs at full GPU speed.
@@ -384,6 +388,11 @@ In order (research_notes/dimension_design_2026-11-02.md):
    so they can run on the host CPUs: fine levels on the GPU, levels below a
    size threshold on the CPU, one small transfer each way per V-cycle; with
    several GPUs the CPU side also gathers the coarse levels of all of them.
+
+Every test in the suite reports accuracy per cost, since raw throughput alone
+does not compare a moving mesh with a fixed grid: GPU-seconds to a target
+error at 2-3 resolutions, and the equivalent fixed-grid throughput (the rate
+a fixed grid would need to match that time).
 
 ## Repository layout
 
