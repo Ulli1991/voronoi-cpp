@@ -298,7 +298,7 @@ flux array, then a per-cell gather; default at second order) or per cell
 
 ```text
 hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--limiter=face|cell|none]
-            [--riemann=hllc|hll] [--moving] [--bulk=km/s] [--out=dir] [--snapshots=10] [--steps=max] [--input-order] [--memory]
+            [--riemann=hllc|hll] [--precision=default|mixed|low|...] [--moving] [--bulk=km/s] [--out=dir] [--snapshots=10] [--steps=max] [--input-order] [--memory]
 sbatch -o <logs>/hydro-%j.out scripts/hydro_a100.sh build-cuda <out> <mode> (see the script)
 ```
 
@@ -326,12 +326,13 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
 ## Limitations and open items
 
-- The hydro step is not yet optimised: on the A100 at 128^3 the moving step
-  runs at ~55 M cell updates/s and its hydro part alone at ~89 M cells/s,
-  slower than the mesh (~143 M cells/s). Pass fusion and compile-time
-  precision options are in progress; a precision study
-  (research_notes/precision_2026-11-02.md) found float face fluxes summed in
-  double to be the largest single gain (gather 2.8x).
+- The hydro step is not yet at its target (~300 M cell updates/s): on the
+  A100 at 128^3 double precision runs at 123 M cell updates/s static, its
+  hydro part at 111 M cells/s on a moving mesh, the whole moving step at
+  64 M cell updates/s; the mesh step alone at ~155 M cells/s. Compile-time
+  precision options (`--precision=`, default double, main's bits): mixed
+  166 / 154 / 76, low 179 / 162 / 78
+  (research_notes/hydro_speed_2026-11-04.md).
 - Bit-reproducible moving runs cost 2.5-4.7 % on the mesh step alone
   (canonical circumcentres and face-ring order); the whole hydro step is
   unchanged.
