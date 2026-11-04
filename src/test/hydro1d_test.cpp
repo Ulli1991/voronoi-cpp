@@ -6,12 +6,18 @@
 // identical moving runs give the same bits; inflow keeps its state; Sod's
 // tube (Toro test 1) against the exact solution's cell averages within
 // LUNA's bounds at 128 and 256 cells (test_hydro_accuracy_shocktube.py:14),
-// on static and moving meshes, uniform and jittered.
+// on static and moving meshes, uniform and jittered; LUNA's own final states
+// of Sod, Shu-Osher and Woodward-Colella at N = 16 on a static uniform line
+// (values printed by LUNA, walls included), to 1e-12; Shu-Osher on a moving
+// mesh: the regularised points never cross, the unregularised ones do.
 
 #include "check.hpp"
 #include "exact_riemann.hpp"
 #include "finite_volume_1d.hpp"
+#include "luna_1d_values.hpp"
+#include "problems_1d.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
@@ -258,5 +264,59 @@ int main(int argc, char* argv[]) {
                                      std::to_string(steps) + " steps: L1 rho " + sci(l1[0]) + ", u " + sci(l1[1]) + ", p " +
                                      sci(l1[2]) + " within LUNA's bounds");
             }
+
+    // LUNA's final states, MC limiter (our face limiter on a uniform line), HLLC, CFL 0.8.
+    {
+        struct Case {
+            const char* name;
+            const double (*values)[3];
+            int steps;
+        };
+        const Case cases[] = {{"sod", luna_sod, luna_steps_sod},
+                              {"shu-osher", luna_shu_osher, luna_steps_shu_osher},
+                              {"woodward-colella", luna_woodward_colella, luna_steps_woodward_colella}};
+        namespace pr = hydro::problems_1d;
+        for (const Case& c : cases) {
+            const pr::Problem problem = pr::problem(c.name);
+            const hydro::Gas gamma14{pr::gamma_gas};
+            Mesh mesh(exec, problem.L, voronoi::Ends::walls);
+            build(mesh, points(16, problem.L, 0.0, 1));
+            FV<> fv(exec, mesh, gamma14, 1, hydro::Limiter::face_centroid, Motion::static_mesh, problem.walls);
+            set(fv, mesh, [&](double a, double b) {
+                const State U = problem.average(a + problem.origin, b + problem.origin);
+                return State{U[0] * (b - a), U[1] * (b - a), U[2] * (b - a)};
+            });
+            const int steps = run(fv, problem.t_end, 0.8, hydro::TimeStep::luna);
+            std::vector<Cell> line = cells(fv, mesh);
+            std::sort(line.begin(), line.end(), [](const Cell& a, const Cell& b) { return a.x < b.x; });
+            double worst = 0;
+            for (int i = 0; i < 16; ++i)
+                for (int v = 0; v < 3; ++v) worst = std::max(worst, std::abs(line[i].W[v] - c.values[i][v]) / (1e-3 + std::abs(c.values[i][v])));
+            check.expect(steps == c.steps && worst < 1e-12, std::string(c.name) + " at N = 16 equals LUNA's final state over " +
+                                                                std::to_string(steps) + " steps (" + sci(worst) + ")");
+        }
+    }
+
+    // Shu-Osher on a moving mesh: without the regularisation the end cell,
+    // grown by the inflow, runs into its neighbour; with it no points cross.
+    {
+        namespace pr = hydro::problems_1d;
+        const pr::Problem problem = pr::problem("shu-osher");
+        const hydro::Gas gamma14{pr::gamma_gas};
+        long long sorts[2];
+        for (int regularise = 0; regularise < 2; ++regularise) {
+            Mesh mesh(exec, problem.L, voronoi::Ends::walls);
+            build(mesh, points(1024, problem.L, 0.0, 1));
+            FV<> fv(exec, mesh, gamma14, 1, hydro::Limiter::face_centroid, Motion::moving, problem.walls, regularise == 1);
+            set(fv, mesh, [&](double a, double b) {
+                const State U = problem.average(a + problem.origin, b + problem.origin);
+                return State{U[0] * (b - a), U[1] * (b - a), U[2] * (b - a)};
+            });
+            run(fv, problem.t_end, 0.8, hydro::TimeStep::luna);
+            sorts[regularise] = mesh.sorts();
+        }
+        check.expect(sorts[1] == 0 && sorts[0] > 0, "Shu-Osher, moving, N = 1024: points crossed " + std::to_string(sorts[0]) +
+                                                        " times unregularised, " + std::to_string(sorts[1]) + " regularised");
+    }
     return check.failed() != 0;
 }
