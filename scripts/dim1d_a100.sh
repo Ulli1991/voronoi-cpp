@@ -102,6 +102,13 @@ first)  # build, ctest, the grid's bits on a moving Sod, throughput, the small l
     ours sod 65536 moving --moving
     "$build/cuda30/hydro_1d" sod 65536 --moving --repeats=1 --memory --series=moving30 --out="$out/moving30_sod_65536.npy" | grep -E "^ours"
     do_throughput
+    if [[ -x "${BASELINE:-}" ]]; then  # an older binary, for the rate of a change
+        use_ours
+        for n in 4096 1048576; do
+            "$BASELINE" sod "$n" --steps=2000 --repeats=3 | grep -E "^ours" | sed 's/^/baseline /'
+            "$BASELINE" sod "$n" --steps=2000 --repeats=3 --moving | grep -E "^ours" | sed 's/^/baseline /'
+        done
+    fi
     for p in sod shu-osher woodward-colella; do do_ladder "$p" 8 10 12 14; done
     ;;
 ladder)

@@ -77,6 +77,7 @@ public:
     using Cells = Kokkos::View<double* [V], Kokkos::LayoutRight, Memory>;
     using Points = Kokkos::View<double* [1], Kokkos::LayoutRight, Memory>;
     using Line = typename Mesh::Line;
+    using i64 = exact_predicates::i64;
 
     // mesh: built (update()). Walls must be given exactly when the mesh has
     // them. Moving: this object owns the positions (starting from the
@@ -176,6 +177,28 @@ public:
             }
         }
 
+        // load<R> far from the ends of the arrays (R + 1 <= s <= n - R - 2):
+        // the same bits from whole-step gaps read once, each key once.
+        template <int R>
+        KOKKOS_INLINE_FUNCTION void load_inner(int s, Cell (&cell)[2 * R + 1], double (&gap)[2 * R]) const {
+            constexpr int M = 2 * R + 1;
+            double steps[M + 1];  // steps[k]: grid steps from slot s - R - 1 + k to the next
+            i64 previous = static_cast<i64>(line.key(s - R - 1));
+            for (int k = 0; k <= M; ++k) {
+                const i64 here = static_cast<i64>(line.key(s - R + k));
+                const i64 d = here - previous;
+                steps[k] = static_cast<double>(d < 0 ? d + line.period : d);  // a periodic line's seam
+                previous = here;
+            }
+            for (int k = 0; k < M; ++k) {
+                const int i = line.order(s - R + k);
+                const double inv = 1.0 / ((steps[k] + steps[k + 1]) * (0.5 * line.step));
+                cell[k].W = primitive(State{q(i, 0) * inv, q(i, 1) * inv, q(i, 2) * inv}, gas);
+                cell[k].c = (steps[k + 1] - steps[k]) * (0.25 * line.step);
+            }
+            for (int k = 0; k < M - 1; ++k) gap[k] = steps[k + 1] * line.step;
+        }
+
         // The limited gradient of variable v of the cell at *cell (see the
         // head of this file), its neighbours at distances gapL and gapR.
         KOKKOS_INLINE_FUNCTION double gradient(const Cell* cell, double gapL, double gapR, int v) const {
@@ -231,7 +254,9 @@ public:
             KOKKOS_LAMBDA(int s, double& smallest) {
                 typename Stencil::Cell cell[3];
                 double gap[2] = {0, 0};
-                if (moving)
+                if (moving && s >= 2 && s <= st.line.n - 3)
+                    st.template load_inner<1>(s, cell, gap);
+                else if (moving)
                     st.template load<1>(s, cell, gap);
                 else
                     cell[1].W = st.primitive_of(s);
@@ -317,17 +342,29 @@ public:
         }
 
         KOKKOS_INLINE_FUNCTION void operator()(int s) const {
+            if (s >= 3 && s <= st.line.n - 4)
+                body<true>(s);
+            else
+                body<false>(s);
+        }
+
+        // Inner: no ghost in reach, nothing to wrap.
+        template <bool Inner>
+        KOKKOS_INLINE_FUNCTION void body(int s) const {
             const Line& line = st.line;
             const bool walls = !line.periodic;
             typename Stencil::Cell cell[5];
             double gap[4];
-            st.template load<2>(s, cell, gap);
+            if constexpr (Inner)
+                st.template load_inner<2>(s, cell, gap);
+            else
+                st.template load<2>(s, cell, gap);
             // Gradients of slots s - 1, s, s + 1 (k = 1, 2, 3) and their point velocities.
             State grad[5];
             double point[5] = {0, 0, 0, 0, 0};
             for (int k = 1; k <= 3; ++k) {
                 for (int v = 0; v < V; ++v) grad[k][v] = 0;
-                if (!cell[k].real) continue;
+                if (!Inner && !cell[k].real) continue;
                 if constexpr (Order == 1)
                     for (int v = 0; v < V; ++v) grad[k][v] = st.gradient(cell + k, gap[k - 1], gap[k], v);
                 if constexpr (Moving)
@@ -342,13 +379,15 @@ public:
                 // the mean of their point velocities.
                 double w = 0;
                 if constexpr (Moving)
-                    if (cell[a].real && cell[b].real) w = 0.5 * (point[a] + point[b]);
+                    if (Inner || (cell[a].real && cell[b].real)) w = 0.5 * (point[a] + point[b]);
                 const double shift = 0.5 * dt * w;
                 State L, R;
-                if (cell[a].real) L = face_state(cell[a].W, grad[a], 0.5 * gap[a] - cell[a].c + shift);
-                if (cell[b].real) R = face_state(cell[b].W, grad[b], -0.5 * gap[a] - cell[b].c + shift);
-                if (!cell[a].real) L = st.ghost_face(R, cell[b].W, true);
-                if (!cell[b].real) R = st.ghost_face(L, cell[a].W, false);
+                if (Inner || cell[a].real) L = face_state(cell[a].W, grad[a], 0.5 * gap[a] - cell[a].c + shift);
+                if (Inner || cell[b].real) R = face_state(cell[b].W, grad[b], -0.5 * gap[a] - cell[b].c + shift);
+                if constexpr (!Inner) {
+                    if (!cell[a].real) L = st.ghost_face(R, cell[b].W, true);
+                    if (!cell[b].real) R = st.ghost_face(L, cell[a].W, false);
+                }
                 F[f] = Riemann::flux(L, R, Vec<1>{1.0}, Vec<1>{w}, st.gas);
             }
             const int i = line.order(s);
