@@ -1,17 +1,14 @@
 #!/bin/bash
-# Stage 1 (1D) on one A100: LUNA's 1D tests, ours and LUNA's, at LUNA's
-# resolution ladders, and throughput at large N. Submit from the
-# repository root (logs on a shared file system):
-#   sbatch -o <logs>/dim1d-%j.out scripts/dim1d_a100.sh <build-cuda> <out> <ours|luna>
-# ours: ctest; hydro_1d for Sod (128-512), Shu-Osher (256-2048) and
-#   Woodward-Colella (256-4096): static (HLLC, HLL; LUNA's dt rule at 0.8),
-#   moving (HLLC, HLL at LUNA's rule 0.8; HLLC at AREPO's rule 0.3), and
-#   static jittered (HLLC); then Sod for 200 steps at 2^20, 2^22, 2^24
-#   cells, static and moving (throughput).
-# luna: scripts/luna_1d_run.py for the same problems and sizes, MC
-#   (LIMITER=1), HLLC and HLL, CFL 0.8, on the GPU (LUNA_DIR, default
-#   /raven/u/uli/LUNA, environment LUNA_ENV, default ~/jax-env, as
-#   hydro_a100.sh); then 200 steps of Sod at 2^20, 2^22, 2^24.
+# Stage 1 (1D) on one A100, both codes in one job on one node. From the repository root:
+#   sbatch --export=ALL,REPO=$PWD,BUILD=<build dir>,OUT=<runs dir> -o <logs>/dim1d-%j.out scripts/dim1d_a100.sh <mode> [args]
+# Modes:
+#   build            configure if needed, build everything wide (18 CPUs), ctest
+#   ladder <problem> <low> <high>   both codes on N = 2^low .. 2^high: LUNA (MC, HLLC, CFL 0.8,
+#                    Pallas), ours static and moving (LUNA's rule 0.8; AREPO's rule 0.3 up to 2^16),
+#                    .npy/.npz + .json into OUT; repeats give the fastest; hashes must agree
+#   reference <problem> <N> <hours-free seconds>   LUNA MC at N in one stretch, resumable (state in OUT)
+#   throughput       hydro only and whole moving step at 2^12 .. 2^24, ours and LUNA
+# The clock and the node go into the log (nvidia-smi, one line per 5 s, into OUT/clock-<job>.csv).
 #SBATCH -J dim1d
 #SBATCH -p gpu1,gpudev
 #SBATCH --gres=gpu:a100:1
@@ -21,49 +18,75 @@
 #SBATCH --time=00:15:00
 set -uo pipefail
 source /etc/profile.d/modules.sh
-build="$(realpath "${1:-build-cuda}")"
-out="$(realpath -m "${2:-dim1d-runs}")"
-mode="${3:-ours}"
-repo="$(pwd)"
+repo="${REPO:-$PWD}"
+build="${BUILD:-/raven/u/uli/voronoi-cpp/build-1d}"
+out="${OUT:-/raven/u/uli/voronoi-cpp/build-1d/runs}"
+mode="${1:-build}"
 luna_dir="${LUNA_DIR:-/raven/u/uli/LUNA}"
 luna_env="${LUNA_ENV:-$HOME/jax-env}"
 mkdir -p "$out"
-nvidia-smi -L
-declare -A sizes=([sod]="128 256 512" [shu-osher]="256 512 1024 2048" [woodward-colella]="256 512 1024 2048 4096")
-large="1048576 4194304 16777216"
+hostname
+nvidia-smi --query-gpu=name,clocks.max.sm,clocks.applications.graphics,power.limit --format=csv,noheader
+nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,utilization.gpu,memory.used,power.draw --format=csv,noheader -l 5 >"$out/clock-${SLURM_JOB_ID:-0}.csv" &
+smi=$!
+trap 'kill $smi 2>/dev/null' EXIT
 
-if [[ "$mode" == ours ]]; then
+use_ours() {
     module purge
     module load gcc/14 cuda/13.0 cmake hdf5-serial
-    ctest --test-dir "$build" --output-on-failure | tail -4
-    for p in sod shu-osher woodward-colella; do
-        for n in ${sizes[$p]}; do
-            for r in hllc hll; do
-                "$build/hydro_1d" "$p" "$n" --riemann=$r --out="$out/ours_${p}_${n}_static_$r.txt"
-                "$build/hydro_1d" "$p" "$n" --riemann=$r --moving --out="$out/ours_${p}_${n}_moving_$r.txt"
-            done
-            "$build/hydro_1d" "$p" "$n" --moving --dt=arepo --out="$out/ours_${p}_${n}_moving-arepo_hllc.txt"
-            "$build/hydro_1d" "$p" "$n" --jitter=0.5 --out="$out/ours_${p}_${n}_jittered_hllc.txt"
-        done
-    done
-    for n in $large; do
-        "$build/hydro_1d" sod "$n" --steps=200
-        "$build/hydro_1d" sod "$n" --steps=200 --moving
-        "$build/hydro_1d" sod "$n" --steps=200 --riemann=hll
-    done
-elif [[ "$mode" == luna ]]; then
+}
+use_luna() {
     module purge
     module load gcc/13 cuda/12
-    cd "$luna_dir"
-    for p in sod shu-osher woodward-colella; do
-        for n in ${sizes[$p]}; do
-            for r in hllc hll; do
-                "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" "$p" "$n" "$r" "$out/luna_${p}_${n}_$r.npz" 2>&1 | grep -E "^luna|Error"
-            done
-        done
+    export PYTHONDONTWRITEBYTECODE=1 XLA_PYTHON_CLIENT_PREALLOCATE=false LUNA_REFERENCE_SOLUTIONS=/raven/u/uli/luna-reference-solutions
+}
+ours() {  # ours <problem> <N> <series> [flags]
+    local p="$1" n="$2" s="$3"
+    shift 3
+    "$build/cuda/hydro_1d" "$p" "$n" --memory --series="$s" --out="$out/${s}_${p}_${n}.npy" "$@" | grep -E "^(ours|memory|phase)"
+}
+luna() {  # luna <problem> <N> [key=value ...]
+    local p="$1" n="$2"
+    shift 2
+    (cd "$out" && "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" "$p" "$n" hllc "$out/luna_${p}_${n}.npz" "$@" 2>&1 | grep -E "^luna|Error|error")
+}
+
+case "$mode" in
+build)
+    use_ours
+    export CUDA_LAUNCH_BLOCKING=0
+    [[ -f "$build/cuda/CMakeCache.txt" ]] || cmake -S "$repo" -B "$build/cuda" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH=/u/uli/kokkos-cuda -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper | tail -2
+    cmake --build "$build/cuda" -j18 2>&1 | grep -E "warning|error|Error |Built target" | sort | uniq -c | sort -rn | head -30
+    ctest --test-dir "$build/cuda" --output-on-failure | tail -14
+    ;;
+ladder)
+    p="$2"
+    for ((b = $3; b <= $4; ++b)); do
+        n=$((1 << b))
+        use_luna
+        luna "$p" "$n"
+        use_ours
+        ours "$p" "$n" static
+        ours "$p" "$n" moving --moving
+        ((b <= 16)) && ours "$p" "$n" moving-arepo --moving --dt=arepo
     done
-    for n in $large; do
-        "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" sod "$n" hllc "$out/luna_sod_${n}_steps.npz" steps=200 2>&1 | grep -E "^luna|Error"
-        "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" sod "$n" hll "$out/luna_sod_${n}_steps_hll.npz" steps=200 2>&1 | grep -E "^luna|Error"
+    ;;
+reference)
+    use_luna
+    luna "$2" "$3" series=reference max_s="$4" resume="$out/state_$2_$3.npz"
+    ;;
+throughput)
+    use_ours
+    for n in 4096 65536 1048576 16777216; do
+        "$build/cuda/hydro_1d" sod "$n" --steps=$((n > 2000000 ? 200 : 2000)) --repeats=3 | grep -E "^ours"
+        "$build/cuda/hydro_1d" sod "$n" --steps=$((n > 2000000 ? 200 : 2000)) --repeats=3 --moving | grep -E "^ours"
+        "$build/cuda/hydro_1d" sod "$n" --steps=$((n > 2000000 ? 200 : 2000)) --repeats=2 --moving --phases | grep -E "^(ours|phase)"
     done
-fi
+    use_luna
+    for n in 4096 65536 1048576 16777216; do
+        (cd "$out" && "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" sod "$n" hllc "$out/luna_rate_$n.npz" \
+            steps=$((n > 2000000 ? 200 : 2000)) repeats=3 2>&1 | grep -E "^luna|^run|Error|error")
+    done
+    ;;
+esac

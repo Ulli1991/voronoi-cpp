@@ -80,12 +80,12 @@ bool same(const Snapshot& a, const Snapshot& b) {
 
 // The oracle: sort (key, id) on the host, and every cell and face from it in
 // integers (quarter grid steps).
-std::string oracle(const Mesh& mesh, const std::vector<double>& x, const ep::BoxN<1>& box, bool periodic) {
+std::string oracle(const Mesh& mesh, const std::vector<double>& x, const sorted_mesh::Grid& grid, bool periodic) {
     const int n = static_cast<int>(x.size());
-    const long long P = box.period[0];
+    const long long P = sorted_mesh::Grid::period;
     std::vector<long long> key(n);
     for (int i = 0; i < n; ++i) {
-        long long k = static_cast<long long>(std::floor(x[i] / box.step));
+        long long k = static_cast<long long>(std::floor(x[i] / grid.step));
         key[i] = periodic ? ((k % P) + P) % P : std::clamp(k, 0LL, P - 1);
     }
     std::vector<int> order(n);
@@ -109,26 +109,26 @@ std::string oracle(const Mesh& mesh, const std::vector<double>& x, const ep::Box
         const int i = order[s];
         const long long l = gap(s - 1), r = gap(s);
         total += l + r;
-        if (m.volume[i] != static_cast<double>(l + r) * (0.5 * box.step)) return "volume of " + std::to_string(i);
-        if (m.centroid[i] != static_cast<double>(r - l) * (0.25 * box.step)) return "centroid of " + std::to_string(i);
-        if (m.position[i] != static_cast<double>(key[i]) * box.step) return "position of " + std::to_string(i);
+        if (m.volume[i] != static_cast<double>(l + r) * (0.5 * grid.step)) return "volume of " + std::to_string(i);
+        if (m.centroid[i] != static_cast<double>(r - l) * (0.25 * grid.step)) return "centroid of " + std::to_string(i);
+        if (m.position[i] != static_cast<double>(key[i]) * grid.step) return "position of " + std::to_string(i);
         const bool right_wall = !periodic && s == n - 1, left_wall = !periodic && s == 0;
         const int right = right_wall ? -2 : order[(s + 1) % n], left = left_wall ? -1 : order[(s + n - 1) % n];
         if (m.others[2 * i] != std::min(left, right) || m.others[2 * i + 1] != std::max(left, right))
             return "face list of " + std::to_string(i);
-        const double half = static_cast<double>(r) * (0.5 * box.step);
+        const double half = static_cast<double>(r) * (0.5 * grid.step);
         if (right_wall)
             faces.emplace_back(i, -2, 1.0, half);
         else
             faces.emplace_back(std::min(i, right), std::max(i, right), i < right ? 1.0 : -1.0, i < right ? half : -half);
-        if (left_wall) faces.emplace_back(i, -1, -1.0, -static_cast<double>(l) * (0.5 * box.step));
+        if (left_wall) faces.emplace_back(i, -1, -1.0, -static_cast<double>(l) * (0.5 * grid.step));
     }
     std::sort(faces.begin(), faces.end());
     if (faces != m.faces) return "faces";
     if (total != 2 * P) return "volumes do not sum to the line";
     double sum = 0;
     for (double v : m.volume) sum += v;
-    if (sum != box.side[0]) return "summed volumes differ from L";
+    if (std::abs(sum - grid.side) > 1e-12 * grid.side) return "summed volumes differ from L";  // total is the exact check
     return "";
 }
 
@@ -144,6 +144,7 @@ int main(int argc, char* argv[]) {
         const std::string ends = periodic ? "periodic" : "walls";
         for (const double L : {1.0, 3.0}) {
             const ep::BoxN<1> box(L);
+            const sorted_mesh::Grid grid(L);
             const int n = 1000;
             // Inputs: uniform random; a lattice; clumps of snapped duplicates (ties by id).
             std::vector<std::pair<std::string, std::vector<double>>> inputs;
@@ -152,12 +153,12 @@ int main(int argc, char* argv[]) {
             inputs.emplace_back("uniform", x);
             for (int i = 0; i < n; ++i) x[i] = L * ((n - 1 - i) + 0.5) / n;  // reversed ids
             inputs.emplace_back("lattice", x);
-            for (int i = 0; i < n; ++i) x[i] = L * std::floor(20 * unit(rng)) / 20 + 0.1 * box.step * unit(rng);
+            for (int i = 0; i < n; ++i) x[i] = L * std::floor(20 * unit(rng)) / 20 + 0.1 * grid.step * unit(rng);
             inputs.emplace_back("duplicates", x);
             for (const auto& [name, input] : inputs) {
                 Mesh mesh(exec, box, periodic ? voronoi::Ends::periodic : voronoi::Ends::walls);
                 mesh.update(device(input));
-                const std::string bad = oracle(mesh, input, box, periodic);
+                const std::string bad = oracle(mesh, input, grid, periodic);
                 check.expect(bad.empty(), "build: " + ends + " L=" + std::to_string(int(L)) + " " + name +
                                               ": the oracle's order, cells and faces" + (bad.empty() ? "" : " (" + bad + ")"));
             }
@@ -185,7 +186,7 @@ int main(int argc, char* argv[]) {
                 Mesh fresh(exec, box, periodic ? voronoi::Ends::periodic : voronoi::Ends::walls);
                 fresh.update(device(y));
                 all_same = all_same && same(read(mesh), read(fresh));
-                all_oracle = all_oracle && oracle(mesh, y, box, periodic).empty();
+                all_oracle = all_oracle && oracle(mesh, y, grid, periodic).empty();
             }
             check.expect(all_same && all_oracle, "moving " + ends + " L=" + std::to_string(int(L)) +
                                                      ": 12 updates equal a fresh build bit for bit and the oracle");
@@ -204,7 +205,7 @@ int main(int argc, char* argv[]) {
         for (double& v : x) v = std::fmod(v + 0.37, 1.0);
         mesh.order(device(x));
         mesh.update_cells();
-        check.expect(oracle(mesh, x, box, true).empty(), "order() then update_cells() equals the oracle");
+        check.expect(oracle(mesh, x, sorted_mesh::Grid(1.0), true).empty(), "order() then update_cells() equals the oracle");
         bool refused = false;
         try {
             mesh.update(device({0.1, 0.2}));

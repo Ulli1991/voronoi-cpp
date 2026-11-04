@@ -1,23 +1,22 @@
-"""L1 errors of the 1D tests, ours (hydro_1d text files) and LUNA's (luna_1d_run.py npz), and plots.
+"""Field L1 of the 1D tests, ours (hydro_1d .npy) and LUNA's (luna_1d_run.py .npz), and GPU time to a target error.
 
-    python compare_1d.py <runs dir> <reports dir> [margin=0.05]
+    python compare_1d.py <runs dir> <out dir> [reference dir]
 
-Run with LUNA's environment (it imports luna for the exact Riemann solver and
-the reference files, luna.reference_data.reference_path, which checks each
-file's sha256 against luna-reference-solutions/MANIFEST.json).
+Run with LUNA's environment. The norm is the one of research_notes/stage1_1d_2026-11-04.md: the integral of
+|f_h - f_ref| dx / L of the code's reconstructed field, for rho, v and P:
 
-Metrics, LUNA's:
-- Sod: L1 = sum_i V_i |q_i - exact cell average over cell i| for rho, u, p
-  (on N uniform cells LUNA's mean, tests/test_hydro_accuracy_shocktube.py,
-  shocktube.py:138-139), the exact averages by LUNA's exact_riemann.cell_average.
-- Shu-Osher, Woodward-Colella: our cells' mass, momentum and energy are
-  deposited conservatively onto N uniform cells (the identity on a uniform
-  line); rho against AthenaK PPMX 16384 (external; block mean onto N, LUNA's
-  shu_osher.py:72-74: h sum |e|, woodward_colella.py:69-73: mean |e|), and
-  rho, u, p against LUNA's own MC 65536 reference (regression only, its
-  README: "not external"), block-averaged in conserved variables onto N.
-PASS: each of ours (rho, u, p) <= LUNA's at the same N, solver and order
-times (1 + margin).
+- f_h is what the code reconstructs at t_end: ours, W_i + g_i (x - c_i) on [x_{i-1/2}, x_{i+1/2}] with the least-squares
+  slope and AREPO's face limiter (finite_volume_1d.hpp, redone here on the output); LUNA's, W_i + s_i (x - x_i)
+  with its MC slope (slopes.py:22-24; moncen). Both with the ghosts of their boundaries. "mean" is the piecewise
+  constant field of the same run, the second line.
+- f_ref: Sod, the exact solution (luna.hydro.exact_riemann.sample, the integral split at its waves); Shu-Osher and
+  Woodward-Colella, the finest run of <reference dir> (ref_<problem>.npz, keys edges, rho, u, p: piecewise constant on
+  its cells, the reference is ~8x finer than anything compared to it).
+- The integral is by Gauss-Legendre on the union of the cell edges of both fields (and the waves), so nothing is
+  sampled at generators or at a common grid.
+
+T(eps) is the GPU-seconds to the target error, log-log interpolated between two of a code's own runs bracketing eps
+(no extrapolation; "-" if the runs do not bracket it). W(eps) the same for cell updates.
 """
 import glob
 import json
@@ -26,171 +25,198 @@ import sys
 
 import numpy as np
 
-from luna.hydro import exact_riemann as er
-from luna.reference_data import reference_path
-
 G = 1.4
 DOMAIN = {"sod": (0.0, 1.0), "shu-osher": (-5.0, 5.0), "woodward-colella": (0.0, 1.0)}
-ATHENAK = {"shu-osher": "athenak/shu_osher/so_ppmx_rk4_16384.npz",
-           "woodward-colella": "athenak/woodward_colella/a9_ppmx_rk4_16384.npz"}
-LUNA_REF = {"shu-osher": "luna/shu_osher/shu_osher_mc.npz", "woodward-colella": "luna/woodward_colella/woodward_colella_mc.npz"}
-VARIANTS = ["static", "moving", "moving-arepo", "jittered"]
+BOUNDARY = {"sod": "outflow", "shu-osher": "outflow", "woodward-colella": "reflective"}
+GL_X, GL_W = np.polynomial.legendre.leggauss(4)
+SUB = 4
+VARS = ("rho", "v", "P")
+TARGETS = {"sod": {"rho": 3e-5, "v": 1e-5, "P": 1e-5}, "shu-osher": {"rho": 1e-3, "v": 3e-4, "P": 3e-4},
+           "woodward-colella": {"rho": 5e-3, "v": 2e-3, "P": 2e-2}}
 
 
-def conserved(rho, u, p):
-    return np.stack([rho, rho * u, p / (G - 1) + 0.5 * rho * u * u])
+def ghosts(W, boundary):
+    """The two ghost rows' values next to W (3, n): left, right, as LUNA's halo (halo_local.py)."""
+    left, right = W[:, 0].copy(), W[:, -1].copy()
+    if boundary == "reflective":
+        left[1], right[1] = -left[1], -right[1]
+    return left, right
 
 
-def primitive(U):
-    rho = U[0]
-    u = U[1] / rho
-    return rho, u, (G - 1) * (U[2] - 0.5 * rho * u * u)
+def mc_slopes(W, h, boundary):
+    """LUNA's limited slopes per unit length: moncen (slopes.py:22-24) on the uniform line with its ghosts."""
+    l, r = ghosts(W, boundary)
+    pad = np.concatenate([l[:, None], W, r[:, None]], axis=1)
+    dl, dr = pad[:, 1:-1] - pad[:, :-2], pad[:, 2:] - pad[:, 1:-1]
+    a, b, c = 2 * dl, 2 * dr, 0.5 * (dl + dr)
+    same = (a * b > 0) & (a * c > 0)
+    return np.where(same, np.sign(a) * np.minimum(np.abs(a), np.minimum(np.abs(b), np.abs(c))), 0.0) / h
 
 
-def block(U, n):
-    return U.reshape(3, n, -1).mean(axis=2)
+def face_limited_slopes(gen, cen, edges, W, boundary):
+    """Our gradients: the fit through the two neighbours, AREPO's limit_gradient at the face centroids, left then right."""
+    l, r = ghosts(W, boundary)
+    a, b = edges[0], edges[-1]
+    c_pad = np.concatenate([[2 * a - cen[0]], cen, [2 * b - cen[-1]]])
+    pad = np.concatenate([l[:, None], W, r[:, None]], axis=1)
+    dL, dR = c_pad[:-2] - cen, c_pad[2:] - cen
+    g = (pad[:, 2:] - pad[:, :-2]) / (dR - dL)
+    lo, hi = np.minimum(pad[:, :-2], pad[:, 2:]), np.maximum(pad[:, :-2], pad[:, 2:])
+    for r_face in (edges[:-1] - cen, edges[1:] - cen):
+        dp = g * r_face
+        with np.errstate(divide="ignore", invalid="ignore"):
+            up = np.where(hi > W, (hi - W) / dp, 0.0)
+            down = np.where(lo < W, (lo - W) / dp, 0.0)
+        g = np.where((dp > 0) & (W + dp > hi), g * up, np.where((dp < 0) & (W + dp < lo), g * down, g))
+    return g
 
 
-def deposit(x, V, U, a, b, n):
-    """Conservative deposit of extensive U * V on cells [x - V/2, x + V/2] onto n uniform cells of [a, b]."""
-    edges_in = a + np.concatenate([[0.0], np.cumsum(V)])
-    edges = np.linspace(a, b, n + 1)
-    # Cumulative integrals at the uniform edges, by linear interpolation of the cumulative sums.
-    out = np.empty((3, n))
-    for v in range(3):
-        cumulative = np.concatenate([[0.0], np.cumsum(U[v] * V)])
-        at = np.interp(edges, edges_in, cumulative)
-        out[v] = np.diff(at) / np.diff(edges)
-    return out
+class Field:
+    """Piecewise linear (reconstructed) or constant (mean) on cells [edges[i], edges[i + 1]]."""
+
+    def __init__(self, edges, W, slopes=None, centres=None):
+        self.edges, self.W, self.slopes, self.centres = edges, W, slopes, centres
+
+    def __call__(self, x):
+        i = np.clip(np.searchsorted(self.edges, x, side="right") - 1, 0, self.W.shape[1] - 1)
+        if self.slopes is None:
+            return self.W[:, i]
+        return self.W[:, i] + self.slopes[:, i] * (x - self.centres[i])
 
 
-def ours(path):
-    d = np.loadtxt(path)
-    return d[:, 0], d[:, 1], conserved(d[:, 2], d[:, 3], d[:, 4])
+def ours(path, problem):
+    """(reconstructed, mean) fields of a hydro_1d output."""
+    d = np.load(path)
+    gen, cen, V = d[:, 0], d[:, 1], d[:, 2]
+    W = d[:, 3:6].T
+    a = DOMAIN[problem][0]
+    edges = np.concatenate([[a], 0.5 * (gen[1:] + gen[:-1]), [DOMAIN[problem][1]]])
+    g = face_limited_slopes(gen, cen, edges, W, BOUNDARY[problem])
+    return Field(edges, W, g, cen), Field(edges, W)
 
 
-def errors(problem, n, x, V, U, refs):
-    """(L1 rho, u, p) against the problem's reference; x, V None for LUNA's uniform cells."""
+def luna(path, problem):
+    d = np.load(path)
+    W = np.stack([d["rho"], d["u"], d["p"]])
+    n = W.shape[1]
     a, b = DOMAIN[problem]
-    if problem == "sod":
-        WL, WR, x0, t = er.TORO[1]
-        widths = V if V is not None else np.full(n, (b - a) / n)
-        edges = a + np.concatenate([[0.0], np.cumsum(widths)])
-        exact = er.cell_average(WL, WR, G, edges, x0, t)
-        q = primitive(U)
-        return [float(np.sum(widths * np.abs(q[k] - exact[k])) / (b - a)) for k in range(3)]
-    if V is not None:
-        U = deposit(x, V, U, a, b, n)
-    rho, u, p = primitive(U)
-    athenak, luna_ref = refs
-    e_rho = rho - athenak.reshape(n, -1).mean(1)
-    h = (b - a) / n
-    scale = h if problem == "shu-osher" else 1.0 / n  # LUNA: h-weighted sum (SO), mean (WC)
-    r_rho, r_u, r_p = primitive(block(conserved(*luna_ref), n))
-    return [float(scale * np.abs(e_rho).sum()), float(scale * np.abs(u - r_u).sum()), float(scale * np.abs(p - r_p).sum()),
-            float(scale * np.abs(rho - r_rho).sum())]
+    edges = np.linspace(a, b, n + 1)
+    cen = 0.5 * (edges[1:] + edges[:-1])
+    return Field(edges, W, mc_slopes(W, (b - a) / n, BOUNDARY[problem]), cen), Field(edges, W)
+
+
+class Exact:
+    """Sod at t = 0.25, from LUNA's exact solver."""
+
+    def __init__(self):
+        from luna.hydro import exact_riemann as er
+        self.er = er
+        self.WL, self.WR, self.x0, self.t = er.TORO[1]
+        w = er.waves(self.WL, self.WR, G)
+        self.breaks = self.x0 + self.t * np.array([*w["left"], w["u"], *w["right"]])
+
+    def __call__(self, x):
+        out = self.er.sample(self.WL, self.WR, G, (x - self.x0) / self.t)
+        return np.stack(out[:3])
+
+
+class Reference:
+    """A finest run, piecewise constant on its cells."""
+
+    def __init__(self, path):
+        d = np.load(path)
+        self.field = Field(d["edges"], np.stack([d["rho"], d["u"], d["p"]]))
+        self.breaks = d["edges"]
+
+    def __call__(self, x):
+        return self.field(x)
+
+
+def l1(field, ref, problem):
+    """Integral of |f_h - f_ref| dx / L per variable, Gauss-Legendre on the union of the fields' breakpoints."""
+    a, b = DOMAIN[problem]
+    points = np.unique(np.concatenate([field.edges, np.clip(ref.breaks, a, b)]))
+    width = np.diff(points)
+    keep = width > 0
+    left, width = points[:-1][keep], width[keep]
+    left = (left[:, None] + width[:, None] * np.arange(SUB) / SUB).ravel()  # |f_h - f_ref| has kinks inside a segment
+    width = np.repeat(width / SUB, SUB)
+    total = np.zeros(3)
+    for start in range(0, left.size, 1 << 18):
+        lo, w = left[start:start + (1 << 18)], width[start:start + (1 << 18)]
+        x = lo[None, :] + 0.5 * w[None, :] * (GL_X[:, None] + 1)
+        shape = x.shape
+        f = field(x.ravel()) - ref(x.ravel())
+        total += (np.abs(f).reshape(3, *shape) * GL_W[None, :, None] * 0.5 * w[None, None, :]).sum(axis=(1, 2))
+    return total / (b - a)
+
+
+def interp(ns, errors, costs, eps):
+    """log-log interpolation of cost at error eps between two runs bracketing it, in order of N."""
+    for i in range(len(ns) - 1):
+        e0, e1 = errors[i], errors[i + 1]
+        if (e0 - eps) * (e1 - eps) <= 0 and e0 != e1:
+            f = np.log(eps / e0) / np.log(e1 / e0)
+            return float(np.exp(np.log(costs[i]) + f * (np.log(costs[i + 1]) - np.log(costs[i]))))
+    return None
 
 
 def main():
     runs, reports = sys.argv[1], sys.argv[2]
-    margin = float(sys.argv[3]) if len(sys.argv) > 3 else 0.05
+    refs_dir = sys.argv[3] if len(sys.argv) > 3 else runs
     os.makedirs(reports, exist_ok=True)
-    refs = {}
-    for p in ATHENAK:
-        ak = np.load(reference_path(ATHENAK[p]))["ref_rho"]
-        lr = np.load(reference_path(LUNA_REF[p]))
-        refs[p] = (ak, (lr["rho"], lr["u"], lr["p"]))
     rows = []
-    for path in sorted(glob.glob(f"{runs}/luna_*_*_hll*.npz")):
-        name = os.path.basename(path)[5:-4]
-        if "steps" in name:
+    timing = {}
+    for path in sorted(glob.glob(f"{runs}/*.json")):  # one JSON per run: series, problem, N, steps, wall_s, peak_bytes, ...
+        meta = json.load(open(path))
+        timing[(meta["series"], meta["problem"], meta["N"])] = meta
+    refs = {"sod": Exact()}
+    for p in ("shu-osher", "woodward-colella"):
+        f = f"{refs_dir}/ref_{p}.npz"
+        if os.path.exists(f):
+            refs[p] = Reference(f)
+    for (series, problem, n), meta in sorted(timing.items()):
+        if problem not in refs:
             continue
-        problem, n, solver = name.rsplit("_", 2)
-        n = int(n)
-        d = np.load(path)
-        luna = errors(problem, n, None, None, conserved(d["rho"], d["u"], d["p"]), refs.get(problem))
-        luna_rate = n * int(d["steps"]) / float(d["wall_s"])
-        for variant in VARIANTS:
-            f = f"{runs}/ours_{problem}_{n}_{variant}_{solver}.txt"
-            if not os.path.exists(f):
-                continue
-            x, V, U = ours(f)
-            mine = errors(problem, n, x - DOMAIN[problem][0] - 0.5 * V + DOMAIN[problem][0], V, U, refs.get(problem))
-            ok = all(m <= l * (1 + margin) for m, l in zip(mine[:3], luna[:3]))
-            rows.append(dict(problem=problem, N=n, solver=solver, variant=variant, ours=mine, luna=luna,
-                             ratio=[m / l if l > 0 else float("nan") for m, l in zip(mine, luna)], passed=bool(ok),
-                             luna_steps=int(d["steps"]), luna_rate=luna_rate))
+        path = os.path.join(runs, meta["file"])
+        rec, mean = (luna if series.startswith("luna") else ours)(path, problem)
+        row = dict(meta)
+        row["L1"] = l1(rec, refs[problem], problem).tolist()
+        row["L1_mean"] = l1(mean, refs[problem], problem).tolist()
+        rows.append(row)
     with open(f"{reports}/dim1d_errors.json", "w") as out:
         json.dump(rows, out, indent=1)
-    print(f"| problem | N | solver | ours | L1 rho | L1 u | L1 p | LUNA rho | LUNA u | LUNA p | ratio rho/u/p | PASS (margin {margin:.0%}) |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| test | series | N | steps | cell updates | T s | M updates/s | peak MB | L1 rho | L1 v | L1 P | mean rho | mean v | mean P |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
-        o, l = r["ours"], r["luna"]
-        print(f"| {r['problem']} | {r['N']} | {r['solver']} | {r['variant']} | {o[0]:.4g} | {o[1]:.4g} | {o[2]:.4g} | "
-              f"{l[0]:.4g} | {l[1]:.4g} | {l[2]:.4g} | {r['ratio'][0]:.3f}/{r['ratio'][1]:.3f}/{r['ratio'][2]:.3f} | "
-              f"{'PASS' if r['passed'] else 'FAIL'} |")
-    plots(runs, reports, rows)
-
-
-def plots(runs, reports, rows):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    ink, muted = "#0b0b0b", "#52514e"
-    colour = {"static": "#2a78d6", "moving": "#eb6834", "luna": "#1baf7a"}
-    shown = {"sod": 256, "shu-osher": 512, "woodward-colella": 512}
-    for problem, n in shown.items():
-        fig, (ax, conv) = plt.subplots(1, 2, figsize=(11, 4), gridspec_kw=dict(width_ratios=[1.6, 1]))
-        a, b = DOMAIN[problem]
-        if problem == "sod":
-            WL, WR, x0, t = er.TORO[1]
-            edges = np.linspace(a, b, 4097)
-            ref = er.cell_average(WL, WR, G, edges, x0, t)[0]
-            xr = 0.5 * (edges[1:] + edges[:-1])
-            label = "exact"
-        else:
-            ak = np.load(reference_path(ATHENAK[problem]))["ref_rho"]
-            xr = a + (np.arange(ak.size) + 0.5) * (b - a) / ak.size
-            ref, label = ak, "AthenaK PPMX 16384"
-        ax.plot(xr, ref, color=ink, lw=1.0, label=label)
-        luna = f"{runs}/luna_{problem}_{n}_hllc.npz"
-        if os.path.exists(luna):
-            d = np.load(luna)
-            ax.plot(a + (np.arange(n) + 0.5) * (b - a) / n, d["rho"], "o", ms=3, mfc="none", color=colour["luna"],
-                    label=f"LUNA MC, N={n}")
-        for variant in ("static", "moving"):
-            f = f"{runs}/ours_{problem}_{n}_{variant}_hllc.txt"
-            if os.path.exists(f):
-                dd = np.loadtxt(f)
-                ax.plot(dd[:, 0], dd[:, 2], "-", lw=1.5 if variant == "static" else 2.0, color=colour[variant],
-                        label=f"ours {variant}, N={n}", alpha=0.9)
-        ax.set_xlabel("x", color=muted)
-        ax.set_ylabel("density", color=muted)
-        ax.set_title(f"{problem}: density at t_end, HLLC", color=ink, loc="left")
-        ax.legend(frameon=False, fontsize=8)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-            conv.spines[side].set_visible(False)
-        for variant, key in (("static", "static"), ("moving", "moving"), ("luna", None)):
-            sel = sorted((r for r in rows if r["problem"] == problem and r["solver"] == "hllc" and r["variant"] == "static"),
-                         key=lambda r: r["N"])
-            if key:
-                sel = sorted((r for r in rows if r["problem"] == problem and r["solver"] == "hllc" and r["variant"] == key),
-                             key=lambda r: r["N"])
-            if not sel:
-                continue
-            ns = [r["N"] for r in sel]
-            err = [r["ours"][0] if key else r["luna"][0] for r in sel]
-            conv.loglog(ns, err, "o-" if key else "s--", ms=8 if not key else 5, mfc="none" if not key else None,
-                        lw=2, color=colour[variant], label=f"ours {variant}" if key else "LUNA MC")
-        conv.set_xlabel("N", color=muted)
-        conv.set_ylabel("L1 density error", color=muted)
-        conv.set_title("convergence", color=ink, loc="left")
-        conv.legend(frameon=False, fontsize=8)
-        fig.tight_layout()
-        fig.savefig(f"{reports}/dim1d_{problem}.png", dpi=130)
-        plt.close(fig)
+        print(f"| {r['problem']} | {r['series']} | {r['N']} | {r['steps']} | {r['N'] * r['steps']:.3g} | {r['wall_s']:.3g} | "
+              f"{r['N'] * r['steps'] / r['wall_s'] / 1e6:.0f} | {r.get('peak_MB', float('nan')):.3g} | "
+              + " | ".join(f"{e:.3e}" for e in r["L1"] + r["L1_mean"]) + " |")
+    print("\n## Against LUNA at the same N (ratio of field L1, reconstructed; <= 1: as good)\n")
+    print("| test | series | N | rho | v | P | rho mean | v mean | P mean |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    index = {(r["series"], r["problem"], r["N"]): r for r in rows}
+    for r in rows:
+        if r["series"].startswith("luna"):
+            continue
+        l = index.get(("luna", r["problem"], r["N"]))
+        if l:
+            ratios = [a / b for a, b in zip(r["L1"] + r["L1_mean"], l["L1"] + l["L1_mean"])]
+            print(f"| {r['problem']} | {r['series']} | {r['N']} | " + " | ".join(f"{x:.3f}" for x in ratios) + " |")
+    print("\n## GPU-seconds and cell updates to the target error (interpolated between a code's own runs)\n")
+    print("| test | variable | eps | series | T(eps) s | W(eps) cell updates |")
+    print("|---|---|---|---|---|---|")
+    for problem, targets in TARGETS.items():
+        for k, name in enumerate(VARS):
+            eps = targets[name]
+            for series in sorted({r["series"] for r in rows if r["problem"] == problem}):
+                sel = sorted((r for r in rows if r["problem"] == problem and r["series"] == series), key=lambda r: r["N"])
+                ns = [r["N"] for r in sel]
+                errors = [r["L1"][k] for r in sel]
+                t = interp(ns, errors, [r["wall_s"] for r in sel], eps)
+                w = interp(ns, errors, [float(r["N"] * r["steps"]) for r in sel], eps)
+                print(f"| {problem} | {name} | {eps:g} | {series} | {'-' if t is None else f'{t:.3g}'} | "
+                      f"{'-' if w is None else f'{w:.3g}'} |")
 
 
 if __name__ == "__main__":

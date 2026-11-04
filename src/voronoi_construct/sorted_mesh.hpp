@@ -15,16 +15,22 @@
 #endif
 
 // The 1D Voronoi mesh: generators sorted by their snapped position, faces
-// at the midpoints between neighbours. This is AREPO's 1D mesh
-// (/u/uli/codes/arepo/src/voronoi_1d.c: faces at the midpoints, :194; volume
-// the distance between the faces and centre their midpoint, :204-205), with
-// the order decided on the snapped integers and ties by particle id (the 1D
-// symbolic perturbation), so it is exact.
+// at the midpoints between neighbours, volume the distance between the faces,
+// with the order decided on the snapped integers and ties by particle id (the
+// 1D symbolic perturbation), so it is exact.
+//
+// The grid is finer than the 3D one: 2^52 steps across the line (Grid), the
+// resolution of a double position, against 2^30. A cell's volume comes from
+// the snapped points and its mass from the fluxes, so a grid step shows as
+// relative density noise step / h: 2^-12 at N = 2^18 on 2^30 steps, the size
+// of the error of that resolution (research_notes/stage1_1d_2026-11-04.md).
+// 1D needs no bounded integer predicates, so the fine grid costs only the
+// wider key.
 //
 // A periodic line [0, L) closes the order into a cycle. A line with walls
-// [0, L] puts a mirror of the end generators behind each wall (AREPO's
-// ghosts at -x_0 and 2L - x_{n-1}, voronoi_1d.c:130-133): the end cells
-// reach the walls exactly.
+// [0, L] puts a mirror of the end generators behind each wall (a generator at
+// x_0 has its mirror at -x_0, and at 2L - x_{n-1}): the end cells reach the
+// walls exactly.
 //
 // Distances are whole grid steps: gap(s) is the distance from slot s to
 // slot s + 1 (to the mirror behind a wall: twice the distance to the wall),
@@ -36,15 +42,30 @@ namespace sorted_mesh {
 namespace ep = exact_predicates;
 using i64 = ep::i64;
 
+using Key = std::uint64_t;
+
+// The grid of a line of length `side`.
+struct Grid {
+#ifndef VORONOI_1D_BITS
+#define VORONOI_1D_BITS 52
+#endif
+    static constexpr int bits = VORONOI_1D_BITS;
+    static constexpr i64 period = i64(1) << bits;
+    double side = 1, step = 1.0 / static_cast<double>(period);
+
+    Grid() = default;
+    explicit Grid(double length) : side(length), step(length / static_cast<double>(period)) {}
+};
+
 // The sorted line as kernels read it: slot s holds particle order(s) at
 // grid step key(s).
 template <class MemorySpace>
 struct Line {
     Kokkos::View<int*, MemorySpace> order;
-    Kokkos::View<std::uint32_t*, MemorySpace> key;
+    Kokkos::View<Key*, MemorySpace> key;
     int n = 0;
-    i64 period = ep::period;  // grid steps across the line
-    double step = 1 / ep::scale;
+    i64 period = Grid::period;  // grid steps across the line
+    double step = 1.0 / static_cast<double>(Grid::period);
     bool periodic = true;
 
     // Slot s + k of a periodic line, or -1 past a wall.
@@ -73,16 +94,16 @@ struct Line {
 };
 
 // (key, id) of a < (key, id) of b: the order of the line.
-KOKKOS_INLINE_FUNCTION bool before(std::uint32_t ka, int a, std::uint32_t kb, int b) {
+KOKKOS_INLINE_FUNCTION bool before(Key ka, int a, Key kb, int b) {
     return ka < kb || (ka == kb && a < b);
 }
 
 // The grid step of x on a line of `period` steps: wrapped (periodic) or
 // clamped to [0, period) (walls).
-KOKKOS_INLINE_FUNCTION std::uint32_t snap(double x, const ep::BoxN<1>& box, bool periodic) {
-    if (periodic) return static_cast<std::uint32_t>(ep::snap(x, box, 0));
-    const i64 s = static_cast<i64>(Kokkos::floor(x / box.step));
-    return static_cast<std::uint32_t>(s < 0 ? 0 : s >= box.period[0] ? box.period[0] - 1 : s);
+KOKKOS_INLINE_FUNCTION Key snap(double x, const Grid& grid, bool periodic) {
+    const double y = periodic ? x - grid.side * Kokkos::floor(x / grid.side) : x;
+    const i64 k = static_cast<i64>(Kokkos::floor(y / grid.step));
+    return static_cast<Key>(k < 0 ? 0 : k >= Grid::period ? (periodic ? 0 : Grid::period - 1) : k);
 }
 
 // Sorts the particles by (key, id): keys(i) of particle i in `keys`, the
@@ -93,7 +114,7 @@ class Sorter {
 public:
     using Memory = typename ExecSpace::memory_space;
 
-    void sort(const ExecSpace& exec, const Kokkos::View<std::uint32_t*, Memory>& keys, const Kokkos::View<int*, Memory>& ids,
+    void sort(const ExecSpace& exec, const Kokkos::View<Key*, Memory>& keys, const Kokkos::View<int*, Memory>& ids,
               const Line<Memory>& line) {
         const int n = line.n;
         const int bits = [&] {
@@ -119,7 +140,7 @@ public:
         (void)bits;  // the host sort compares whole keys
         if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, Memory>::accessible) {
             exec.fence();
-            std::uint32_t* k = keys.data();
+            Key* k = keys.data();
             int* order = line.order.data();
             std::copy(ids.data(), ids.data() + n, order);
             std::sort(order, order + n, [&](int a, int b) { return before(k[a], a, k[b], b); });
@@ -159,7 +180,7 @@ enum class Ends { periodic, walls };
 // around) and sorts again only if particles crossed. order(x) does only
 // that: the 1D hydro reads the line and needs none of the face arrays.
 template <class ExecSpace>
-class Mesh<1, ExecSpace> {
+class Mesh<1, ExecSpace, double, void> {
 public:
     static constexpr int dimensions = 1;
     using Memory = typename ExecSpace::memory_space;
@@ -169,7 +190,7 @@ public:
     using Line = sorted_mesh::Line<Memory>;
 
     Mesh(const ExecSpace& exec, const ep::BoxN<1>& box, Ends ends = Ends::periodic)
-        : exec_(exec), box_(box), periodic_(ends == Ends::periodic) {}
+        : exec_(exec), box_(box), grid_(box.side[0]), periodic_(ends == Ends::periodic) {}
     Mesh(const ExecSpace& exec, double side, Ends ends = Ends::periodic) : Mesh(exec, ep::BoxN<1>(side), ends) {}
 
     // New positions x(i, 0) in [0, L) (walls: positions outside are put
@@ -254,8 +275,8 @@ public:
             v = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), extents...);
         };
         line_.n = n;
-        line_.period = box_.period[0];
-        line_.step = box_.step;
+        line_.period = sorted_mesh::Grid::period;
+        line_.step = grid_.step;
         line_.periodic = periodic_;
         make(line_.order, "mesh1_order", n);
         make(line_.key, "mesh1_key", n);
@@ -279,11 +300,11 @@ public:
     template <class X>
     void snap_all(const X& x) {
         const auto keys = keys_;
-        const ep::BoxN<1> box = box_;
+        const sorted_mesh::Grid grid = grid_;
         const bool periodic = periodic_;
         Kokkos::parallel_for(
             "mesh1::snap", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
-            KOKKOS_LAMBDA(int i) { keys(i) = sorted_mesh::snap(x(i, 0), box, periodic); });
+            KOKKOS_LAMBDA(int i) { keys(i) = sorted_mesh::snap(x(i, 0), grid, periodic); });
     }
 
     // Snaps x into the line's slots and counts the slots out of order: a
@@ -292,18 +313,18 @@ public:
     template <class X>
     bool still_sorted(const X& x) {
         const Line line = line_;
-        const ep::BoxN<1> box = box_;
+        const sorted_mesh::Grid grid = grid_;
         const bool periodic = periodic_;
         int descents = 0;
         Kokkos::parallel_reduce(
             "mesh1::check_order", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
             KOKKOS_LAMBDA(int s, int& count) {
                 const int i = line.order(s);
-                const std::uint32_t k = sorted_mesh::snap(x(i, 0), box, periodic);
+                const sorted_mesh::Key k = sorted_mesh::snap(x(i, 0), grid, periodic);
                 line.key(s) = k;
                 if (!periodic && s == line.n - 1) return;
                 const int t = s + 1 == line.n ? 0 : s + 1, j = line.order(t);
-                count += !sorted_mesh::before(k, i, sorted_mesh::snap(x(j, 0), box, periodic), j);
+                count += !sorted_mesh::before(k, i, sorted_mesh::snap(x(j, 0), grid, periodic), j);
             },
             descents);
         return descents == (periodic ? 1 : 0);
@@ -357,12 +378,13 @@ public:
 private:
     ExecSpace exec_;
     ep::BoxN<1> box_;
+    sorted_mesh::Grid grid_;
     bool periodic_;
     int n_ = 0;
     long long sorts_ = 0;
     bool current_ = false;
     Line line_;
-    View<std::uint32_t*> keys_;
+    View<sorted_mesh::Key*> keys_;
     View<int*> ids_;
     sorted_mesh::Sorter<ExecSpace> sorter_;
     View<int*> owner_, neighbour_, cell_face_, cell_face_start_;
