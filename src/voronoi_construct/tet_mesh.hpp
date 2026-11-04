@@ -1159,7 +1159,7 @@ struct CellSortWarp {
 
     KOKKOS_FUNCTION void operator()(const typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& member) const {
         const int i = member.league_rank() * warps + member.team_rank();
-        if (i >= n || !(all || marked(i))) return;  // the whole warp
+        if (i >= n || !(all || marked(i) == 2)) return;  // the whole warp
 #if defined(__CUDA_ARCH__)
         const int begin = start(i), end = start(i + 1);
         constexpr unsigned everyone = 0xffffffffu;
@@ -1271,7 +1271,7 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
     const auto face = out.face;
     Kokkos::parallel_for(
         "tet_mesh::cell_sort", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
-            if (all || marked(i)) sort_list(face, other, owner, neighbour, i, start(i), start(i + 1));
+            if (all || marked(i) == 2) sort_list(face, other, owner, neighbour, i, start(i), start(i + 1));
         });
     Kokkos::parallel_for("tet_mesh::cell_sums", Range(exec, 0, n), KOKKOS_LAMBDA(int i) { lists.sum(i); });
 }
@@ -1414,8 +1414,11 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
         "tet_mesh::fresh_fill", Range(exec, 0, rings.dirty_count), KOKKOS_LAMBDA(int s) {
             if (dirty(s) >= 0) return;
             const int f = ~dirty(s);
-            face(Kokkos::atomic_fetch_inc(&cursor(owner(f)))) = f;
-            face(Kokkos::atomic_fetch_inc(&cursor(neighbour(f)))) = f;
+            const int o = owner(f), j = neighbour(f);
+            face(Kokkos::atomic_fetch_inc(&cursor(o))) = f;
+            face(Kokkos::atomic_fetch_inc(&cursor(j))) = f;
+            marked(o) = 2;  // to sort: its kept entries alone stand sorted
+            marked(j) = 2;
         });
     detail::sort_and_sum<3>(exec, x, box, geometry, out, old_start, old_face, renumber, owner, neighbour, other,
                             Kokkos::View<const char*, Memory, Unmanaged>(marked), false);
