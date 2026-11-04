@@ -3,7 +3,7 @@
 //   hydro_1d <sod|shu-osher|woodward-colella> <N> [--moving] [--riemann=hllc|hll] [--order=0|1]
 //            [--dt=luna|arepo|fixed] [--courant=<c>] [--fixed-dt=<dt>] [--jitter=<spacings>]
 //            [--limiter=face|cell|none] [--steps=<max>] [--repeats=<r>] [--phases] [--memory]
-//            [--no-regularise] [--out=<file.npy>] [--series=<name>]
+//            [--no-regularise] [--unfused] [--out=<file.npy>] [--series=<name>]
 //
 // Setups are LUNA's (scripts/luna_1d_run.py has the file:line of each):
 // Sod (Toro 1: (1, 0, 1) | (0.125, 0, 0.1) at 0.5 on [0, 1], t = 0.25,
@@ -21,9 +21,9 @@
 // The run is made --repeats times (default 2) in one process, from the same
 // initial state; every run is printed, and the fastest gives the summary
 // (M cell updates/s = N * steps / wall time of the stepping loop, time steps
-// included). The state hash must be the same in every run. --phases fences
-// the phases of a step and prints their rates (slower overall than the
-// unfenced loop). --memory adds the peak of the device allocations.
+// included). The state hash must be the same in every run. LUNA's rule runs
+// fused, one launch per step (--unfused: time_step() and step() apart).
+// --phases, always unfused, fences the phases of a step and prints their rates. --memory adds the peak of the device allocations.
 // --out writes an .npy of N rows (generator, centroid, V, rho, u, p) in x
 // order, x in the problem's coordinates; with --series also <file.npy>.json
 // (series, problem, N, steps, wall_s, peak_MB, file) for scripts/compare_1d.py.
@@ -96,7 +96,7 @@ struct Options {
     double jitter = 0, courant = 0.8, fixed_dt = 0;
     hydro::Limiter limiter = hydro::Limiter::face_centroid;
     hydro::Motion motion = hydro::Motion::static_mesh;
-    bool fixed = false, phases = false, regularise = true;
+    bool fixed = false, phases = false, regularise = true, fused = true;
     hydro::TimeStep rule = hydro::TimeStep::luna;
     long long max_steps = 0;
 };
@@ -165,9 +165,15 @@ Result simulate(const Problem& pb, const Options& o, const std::string& out) {
     hydro::Timings* timings = o.phases ? &r.timings : nullptr;
     Kokkos::Timer timer;
     double t = 0;
+    const bool fused = o.fused && !o.fixed && !o.phases && o.rule == hydro::TimeStep::luna;
+    double next = fused ? fv.time_step(o.courant, o.rule) : 0;
     while (t < pb.t_end * (1 - 1e-12) && (o.max_steps == 0 || r.steps < o.max_steps)) {
-        const double dt = std::min(o.fixed ? o.fixed_dt : fv.time_step(o.courant, o.rule, timings), pb.t_end - t);
-        fv.step(dt, timings);
+        double dt = fused ? next : o.fixed ? o.fixed_dt : fv.time_step(o.courant, o.rule, timings);
+        dt = std::min(dt, pb.t_end - t);
+        if (fused)
+            next = fv.step_and_time_step(dt, o.courant);
+        else
+            fv.step(dt, timings);
         t += dt;
         ++r.steps;
     }
@@ -204,7 +210,7 @@ int main(int argc, char* argv[]) {
     if (argc < 3) {
         std::cerr << "usage: hydro_1d <sod|shu-osher|woodward-colella> <N> [--moving] [--riemann=hllc|hll] [--order=0|1]"
                      " [--dt=luna|arepo|fixed] [--courant=c] [--fixed-dt=dt] [--jitter=s] [--limiter=face|cell|none]"
-                     " [--steps=max] [--repeats=r] [--phases] [--memory] [--no-regularise] [--out=file.npy] [--series=name]\n";
+                     " [--steps=max] [--repeats=r] [--phases] [--memory] [--no-regularise] [--unfused] [--out=file.npy] [--series=name]\n";
         return 1;
     }
     const std::string name = argv[1];
@@ -224,6 +230,7 @@ int main(int argc, char* argv[]) {
     o.max_steps = std::stoll(flag(argc, argv, "--steps", "0"));
     o.phases = has(argc, argv, "--phases");
     o.regularise = !has(argc, argv, "--no-regularise");
+    o.fused = !has(argc, argv, "--unfused");
     const int repeats = std::stoi(flag(argc, argv, "--repeats", "2"));
     const std::string out = flag(argc, argv, "--out", "");
     o.limiter = limit == "cell"   ? hydro::Limiter::cell_centroid

@@ -297,6 +297,54 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // The fused step: static, time_step() + step() to rounding; moving, a
+    // rough state conserved, the same bits twice, close to the separate
+    // kernels (whose time step knows the new drift).
+    for (const Motion motion : motions)
+        for (const bool periodic : {true, false}) {
+            const std::string name = std::string(motion == Motion::moving ? "moving" : "static") + (periodic ? ", periodic" : ", walls");
+            const hydro::Walls walls{hydro::Wall::reflective, hydro::Wall::reflective};
+            const auto ends = periodic ? voronoi::Ends::periodic : voronoi::Ends::walls;
+            auto rough = [&](FV<>& fv, Mesh& mesh) {
+                set(fv, mesh, [&](double a, double b) {
+                    const double m = 0.5 * (a + b);
+                    const State U = hydro::conserved(State{1.0 + 0.3 * std::sin(9 * m), 0.4 * std::cos(5 * m), std::abs(m - 1) < 0.1 ? 20.0 : 1.0}, gas);
+                    return State{U[0] * (b - a), U[1] * (b - a), U[2] * (b - a)};
+                });
+            };
+            Mesh m1(exec, 2.0, ends), m2(exec, 2.0, ends), m3(exec, 2.0, ends);
+            build(m1, points(400, 2.0, 0.5, 8));
+            build(m2, points(400, 2.0, 0.5, 8));
+            build(m3, points(400, 2.0, 0.5, 8));
+            FV<> split(exec, m1, gas, 1, hydro::Limiter::face_centroid, motion, walls);
+            FV<> fused(exec, m2, gas, 1, hydro::Limiter::face_centroid, motion, walls);
+            FV<> again(exec, m3, gas, 1, hydro::Limiter::face_centroid, motion, walls);
+            rough(split, m1);
+            rough(fused, m2);
+            rough(again, m3);
+            const auto before = totals(fused);
+            for (int k = 0; k < 60; ++k) split.step(split.time_step(0.8, hydro::TimeStep::luna));
+            for (FV<>* fv : {&fused, &again}) {
+                double dt = fv->time_step(0.8, hydro::TimeStep::luna);
+                for (int k = 0; k < 60; ++k) dt = fv->step_and_time_step(dt, 0.8);
+            }
+            const auto a = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, split.state());
+            const auto b = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, fused.state());
+            const auto c = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, again.state());
+            double difference = 0;
+            bool same = true;
+            for (std::size_t i = 0; i < a.extent(0); ++i)
+                for (int v = 0; v < 3; ++v) {
+                    difference = std::max(difference, std::abs(a(i, v) - b(i, v)));
+                    same = same && b(i, v) == c(i, v);
+                }
+            const auto after = totals(fused);
+            const double mass = double(std::abs(after[0] - before[0]) / before[0]), energy = double(std::abs(after[2] - before[2]) / before[2]);
+            check.expect(same && mass < 1e-14 && energy < 1e-14 && difference < 1e-9,
+                         "fused step, " + name + ": differs from time_step() + step() by " + sci(difference) + ", mass " + sci(mass) +
+                             ", energy " + sci(energy) + ", the same bits twice");
+        }
+
     // Shu-Osher on a moving mesh: without the regularisation the end cell,
     // grown by the inflow, runs into its neighbour; with it no points cross.
     {

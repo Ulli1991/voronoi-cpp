@@ -68,6 +68,7 @@ struct Line {
     double step = 1.0 / static_cast<double>(Grid::period);
     bool periodic = true;
 
+    KOKKOS_INLINE_FUNCTION double side() const { return static_cast<double>(period) * step; }
     // Slot s + k of a periodic line, or -1 past a wall.
     KOKKOS_INLINE_FUNCTION int slot(int s, int k) const {
         const int t = s + k;
@@ -262,6 +263,14 @@ public:
     Positions positions() const { return positions_; }
     // The sorted line (current after update() and order()).
     const Line& line() const { return line_; }
+    // For a caller that computes the keys of the next positions itself, in
+    // slot order, in a kernel of its own: it writes spare_keys(), then
+    // swap_keys() makes them the line's (order() only if the order broke).
+    View<sorted_mesh::Key*> spare_keys() const { return keys_; }
+    void swap_keys() {
+        std::swap(line_.key, keys_);
+        current_ = false;
+    }
     // How often the order had to be sorted again since the first build.
     long long sorts() const { return sorts_; }
 

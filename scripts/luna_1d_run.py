@@ -61,7 +61,7 @@ def main():
     cfg.validate()
     if problem == "sod":
         WL, WR, x0, _ = er.TORO[1]
-        rho, u, p = er.cell_average(WL, WR, G, np.linspace(0.0, 1.0, n + 1), x0, 1e-12)
+        rho, u, p = er.cell_average(WL, WR, G, np.linspace(0.0, 1.0, n + 1), x0, 1e-12, sub=256 if n <= 2**18 else 4)
         U0 = np.stack([rho, rho * u, p / (G - 1) + 0.5 * rho * u * u])
     else:
         U0 = np.asarray(initial_conditions(cfg))

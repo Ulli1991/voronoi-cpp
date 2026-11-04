@@ -14,9 +14,11 @@
 // and drifts its point). Each face is computed by both of its cells from the
 // same data in the same frame (every distance is an integer of the line,
 // sorted_mesh::Line), so both get the same bits and the update conserves to
-// rounding. A static step is two launches (time step, step), a moving one
-// four (time step, step, the mesh's order check, and a sort only when
-// points crossed).
+// rounding. step_and_time_step() fuses further, for LUNA's time step rule: one
+// launch per step, static or moving, that also finds the next time step and
+// the order of the moved points; a sort only when points crossed. The
+// separate time_step() and step() take two launches (three moving); AREPO's
+// rule needs them, its pair term reads the neighbours' next state.
 //
 // Scheme, as finite_volume.hpp unless said:
 // - gradients: AREPO-ng's least-squares fit with an intercept over the face
@@ -77,6 +79,7 @@ public:
     using Points = Kokkos::View<double* [1], Kokkos::LayoutRight, Memory>;
     using Line = typename Mesh::Line;
     using i64 = exact_predicates::i64;
+    using Keys = Kokkos::View<sorted_mesh::Key*, Memory>;
 
     // mesh: built (update()). Walls must be given exactly when the mesh has
     // them. Moving: this object owns the positions (starting from the
@@ -115,7 +118,7 @@ public:
         // generator; real = false for a ghost behind a wall.
         struct Cell {
             State W{};
-            double c = 0;
+            double c = 0, V = 0;
             bool real = true;
         };
 
@@ -160,6 +163,7 @@ public:
                 if (slot[k] >= 0) {
                     cell[k].W = primitive_of(slot[k]);
                     cell[k].c = line.centroid(slot[k]);
+                    cell[k].V = line.volume(slot[k]);
                 }
             }
             for (int k = 0; k < M; ++k) {
@@ -191,7 +195,8 @@ public:
             }
             for (int k = 0; k < M; ++k) {
                 const int i = line.order(s - R + k);
-                const double inv = 1.0 / ((steps[k] + steps[k + 1]) * (0.5 * line.step));
+                cell[k].V = (steps[k] + steps[k + 1]) * (0.5 * line.step);
+                const double inv = 1.0 / cell[k].V;
                 cell[k].W = primitive(State{q(i, 0) * inv, q(i, 1) * inv, q(i, 2) * inv}, gas);
                 cell[k].c = (steps[k + 1] - steps[k]) * (0.25 * line.step);
             }
@@ -306,6 +311,17 @@ public:
         }
     }
 
+    // One step of length dt in one launch (see the head of this file);
+    // returns the time step of the next one by LUNA's rule at this Courant
+    // number. Static: time_step(courant, luna) after step(dt), to rounding.
+    double step_and_time_step(double dt, double courant) {
+        if (x_.extent(0) > 0 && x_next_.extent(0) == 0)
+            x_next_ = Points(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("hydro_x_next")), n_);
+        const bool moving = motion_ == Motion::moving;
+        if (order_ == 1) return moving ? run_fused<1, true>(dt, courant) : run_fused<1, false>(dt, courant);
+        return moving ? run_fused<0, true>(dt, courant) : run_fused<0, false>(dt, courant);
+    }
+
     // Ends a timed phase (fenced) when timings are wanted.
     void phase_end(Timings* timings, double Timings::*part) {
         if (!timings) return;
@@ -316,12 +332,17 @@ public:
 
     // The fused step, one thread per slot: public only because CUDA device
     // lambdas may not be defined in private member functions.
-    template <int Order, bool Moving>
+    // Fused: also the next time step (LUNA's rule) from the new state, on the
+    // moved mesh, with the regularisation's |v - w| of this step, and the
+    // next keys and a count of the slots out of order (moving).
+    template <int Order, bool Moving, bool Fused>
     struct Kernel {
         Stencil st;
         Cells next;
-        Points x;
-        double dt;
+        Points x, x_next;
+        Keys keys;
+        sorted_mesh::Grid grid;
+        double dt, courant;
 
         // A cell's state at a face at offset r from its centroid (moving:
         // where the face is at the half step).
@@ -341,17 +362,28 @@ public:
         }
 
         KOKKOS_INLINE_FUNCTION void operator()(int s) const {
+            double smallest = 0;
+            int descents = 0;
+            (*this)(s, smallest, descents);
+        }
+        KOKKOS_INLINE_FUNCTION void operator()(int s, double& smallest, int& descents) const {
             if (s >= 3 && s <= st.line.n - 4)
-                body<true>(s);
+                body<true>(s, smallest, descents);
             else
-                body<false>(s);
+                body<false>(s, smallest, descents);
+        }
+
+        // The point at x0 after this step.
+        KOKKOS_INLINE_FUNCTION double moved(double x0, double velocity) const {
+            const double side = st.line.side();
+            const double y = x0 + dt * velocity;
+            return st.line.periodic ? y - side * Kokkos::floor(y / side) : Kokkos::fmin(Kokkos::fmax(y, 0.0), side);
         }
 
         // Inner: no ghost in reach, nothing to wrap.
         template <bool Inner>
-        KOKKOS_INLINE_FUNCTION void body(int s) const {
+        KOKKOS_INLINE_FUNCTION void body(int s, double& smallest, int& descents) const {
             const Line& line = st.line;
-            const bool walls = !line.periodic;
             typename Stencil::Cell cell[5];
             double gap[4];
             if constexpr (Inner)
@@ -390,12 +422,47 @@ public:
                 F[f] = Riemann::flux(L, R, Vec<1>{1.0}, Vec<1>{w}, st.gas);
             }
             const int i = line.order(s);
-            for (int v = 0; v < V; ++v) next(i, v) = st.q(i, v) - dt * (F[1][v] - F[0][v]);
-            if constexpr (Moving) {
-                const double side = static_cast<double>(line.period) * line.step;
-                const double moved = x(i, 0) + dt * point[2];
-                x(i, 0) = walls ? Kokkos::fmin(Kokkos::fmax(moved, 0.0), side)
-                                : moved - side * Kokkos::floor(moved / side);
+            State Unew;
+            for (int v = 0; v < V; ++v) {
+                Unew[v] = st.q(i, v) - dt * (F[1][v] - F[0][v]);
+                next(i, v) = Unew[v];
+            }
+            if constexpr (Moving && !Fused) x(i, 0) = moved(x(i, 0), point[2]);
+            if constexpr (Fused) {
+                double volume = cell[2].V, relative = 0;
+                if constexpr (Moving) {
+                    using Key = sorted_mesh::Key;
+                    const double here = moved(x(i, 0), point[2]);
+                    x_next(i, 0) = here;
+                    const Key key = sorted_mesh::snap(here, grid, line.periodic);
+                    keys(s) = key;
+                    const auto next_key = [&](int slot, int k) {
+                        return sorted_mesh::snap(moved(x(line.order(slot), 0), point[k]), grid, line.periodic);
+                    };
+                    double left, right;
+                    if (Inner || cell[1].real) {
+                        const Key other = next_key(Inner ? s - 1 : line.slot(s, -1), 1);
+                        const i64 d = static_cast<i64>(key) - static_cast<i64>(other);
+                        left = static_cast<double>(d < 0 && line.periodic ? d + line.period : d);
+                    } else {
+                        left = static_cast<double>(2 * static_cast<i64>(key));
+                    }
+                    if (Inner || cell[3].real) {
+                        const int t = Inner ? s + 1 : line.slot(s, 1);
+                        const Key other = next_key(t, 3);
+                        const i64 d = static_cast<i64>(other) - static_cast<i64>(key);
+                        right = static_cast<double>(d < 0 && line.periodic ? d + line.period : d);
+                        descents += !sorted_mesh::before(key, i, other, line.order(t));
+                    } else {
+                        right = static_cast<double>(2 * (line.period - static_cast<i64>(key)));
+                    }
+                    volume = (left + right) * (0.5 * line.step);
+                    relative = Kokkos::fabs(point[2] - cell[2].W[1]);
+                }
+                const double inv = 1.0 / volume;
+                const State Wnew = primitive(State{Unew[0] * inv, Unew[1] * inv, Unew[2] * inv}, st.gas);
+                if constexpr (!Moving) relative = Kokkos::fabs(Wnew[1]);
+                smallest = Kokkos::fmin(smallest, courant * volume / (relative + sound_speed(Wnew, st.gas)));
             }
         }
     };
@@ -409,8 +476,31 @@ public:
     }
     template <int Order, bool Moving>
     void run(double dt) {
-        const Kernel<Order, Moving> kernel{stencil(), next_, x_, dt};
+        const Kernel<Order, Moving, false> kernel{stencil(), next_, x_, x_next_, {}, {}, dt, 0.0};
         Kokkos::parallel_for("hydro1::step", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), kernel);
+    }
+    template <int Order, bool Moving>
+    double run_fused(double dt, double courant) {
+        const Line& line = mesh_->line();
+        sorted_mesh::Grid grid;
+        grid.side = line.side();
+        grid.step = line.step;
+        const Kernel<Order, Moving, true> kernel{stencil(), next_, x_, x_next_, mesh_->spare_keys(), grid, dt, courant};
+        double smallest = 0;
+        int descents = 0;
+        Kokkos::parallel_reduce("hydro1::step_fused", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), kernel,
+                                Kokkos::Min<double>(smallest), Kokkos::Sum<int>(descents));
+        std::swap(q_, next_);
+        if constexpr (Moving) {
+            std::swap(x_, x_next_);
+            mesh_->swap_keys();
+            mesh_stats_.updates += 1;
+            if (descents != (line.periodic ? 1 : 0)) {
+                mesh_stats_.rebuilds += mesh_->order(x_).rebuilt;
+                return time_step(courant, TimeStep::luna);
+            }
+        }
+        return smallest;
     }
 
 private:
@@ -426,7 +516,7 @@ private:
     bool regularise_;
     int n_;
     Cells q_, next_;
-    Points x_;
+    Points x_, x_next_;
     MeshStats mesh_stats_;
     Kokkos::Timer timer_;
 };
