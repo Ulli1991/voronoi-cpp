@@ -6,7 +6,7 @@
 #   ladder <problem> <b> [<b> ...]   both codes on N = 2^b: LUNA (MC, HLLC, CFL 0.8, Pallas), ours
 #                    static and moving (LUNA's rule 0.8; AREPO's rule 0.3 up to 2^16), .npy/.npz + .json
 #                    into OUT; repeats give the fastest; hashes must agree
-#   first            build, ctest, a moving Sod on 2^30 and 2^52 grids, throughput, small ladders
+#   speed            throughput, BASELINE's rates, the smallest ladders
 #   reference <problem> <N> <seconds>   LUNA MC at N for that long, resumable (state in OUT)
 #   throughput       hydro only and whole moving step at 2^12 .. 2^24, ours and LUNA
 # The clock and the node go into the log (nvidia-smi, one line per 5 s, into OUT/clock-<job>.csv).
@@ -93,23 +93,16 @@ build)
     do_build
     ctest --test-dir "$build/cuda" --output-on-failure | tail -14
     ;;
-first)  # build, ctest, the grid's bits on a moving Sod, throughput, the small ladders
-    do_build
-    ctest --test-dir "$build/cuda" --output-on-failure | tail -14
-    [[ -f "$build/cuda30/CMakeCache.txt" ]] || cmake -S "$repo" -B "$build/cuda30" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-DVORONOI_1D_BITS=30 \
-        -DCMAKE_PREFIX_PATH=/u/uli/kokkos-cuda -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper | tail -1
-    cmake --build "$build/cuda30" -j18 --target hydro_1d 2>&1 | grep -E " error |Error " | head
-    ours sod 65536 moving --moving
-    "$build/cuda30/hydro_1d" sod 65536 --moving --repeats=1 --memory --series=moving30 --out="$out/moving30_sod_65536.npy" | grep -E "^ours"
+speed)  # throughput, an older binary's rates, the grid's bits on a moving Sod, the smallest ladders
     do_throughput
-    if [[ -x "${BASELINE:-}" ]]; then  # an older binary, for the rate of a change
-        use_ours
-        for n in 4096 1048576; do
+    use_ours
+    if [[ -x "${BASELINE:-}" ]]; then
+        for n in 4096 65536 1048576; do
             "$BASELINE" sod "$n" --steps=2000 --repeats=3 | grep -E "^ours" | sed 's/^/baseline /'
             "$BASELINE" sod "$n" --steps=2000 --repeats=3 --moving | grep -E "^ours" | sed 's/^/baseline /'
         done
     fi
-    for p in sod shu-osher woodward-colella; do do_ladder "$p" 8 10 12 14; done
+    for p in sod shu-osher woodward-colella; do do_ladder "$p" 8 9 10 11 12; done
     ;;
 ladder)
     do_ladder "$2" "${@:3}"
