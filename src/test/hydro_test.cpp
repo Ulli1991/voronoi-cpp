@@ -23,6 +23,7 @@
 #include <cstring>
 #include <random>
 #include <sstream>
+#include <type_traits>
 
 namespace {
 
@@ -154,7 +155,7 @@ HostCells host_extensive(const FV& fv) {
 
 // The state per unit volume, Q / V with the mesh's current volumes.
 template <class FV>
-HostCells host_state(const FV& fv, const HydroMesh& mesh) {
+HostCells host_state(const FV& fv, const typename FV::Mesh& mesh) {
     HostCells h = host_extensive(fv);
     const auto volume = to_host(mesh.volume());
     for (std::size_t i = 0; i < h.extent(0); ++i)
@@ -164,7 +165,7 @@ HostCells host_state(const FV& fv, const HydroMesh& mesh) {
 
 // Sets Q = U V from the state per unit volume.
 template <class FV>
-void set_state(FV& fv, const HydroMesh& mesh, const HostCells& h) {
+void set_state(FV& fv, const typename FV::Mesh& mesh, const HostCells& h) {
     auto m = Kokkos::create_mirror_view(fv.state());
     const auto volume = to_host(mesh.volume());
     for (std::size_t i = 0; i < h.extent(0); ++i)
@@ -188,12 +189,14 @@ HostCells rough_state(int n, const hydro::Gas& gas) {
 
 const char* name(hydro::Update u) { return u == hydro::Update::per_cell ? "per cell" : "per face"; }
 
-template <class Riemann>
+// Precision: a hydro policy; with float face rows the areas of a cell close
+// only to float rounding, so a uniform state stays uniform to ~1e-7 only.
+template <class Riemann, class Precision = hydro::Precision<>>
 void mesh_tests(Check& check, const std::string& kind, const std::string& solver) {
-    using FV = hydro::FiniteVolume<3, Exec, Riemann>;
+    using FV = hydro::FiniteVolume<3, Exec, Riemann, Precision>;
     const hydro::Gas gas{5.0 / 3.0};
     const int n = 4096;
-    HydroMesh mesh(Exec{}, 1.0);
+    typename FV::Mesh mesh(Exec{}, 1.0);
     mesh.update(to_device(make_points_off_grid(kind, n)));
     mesh.update_cells();
     const auto volume = to_host(mesh.volume());
@@ -214,7 +217,8 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
                 double worst = 0;
                 for (int i = 0; i < n; ++i)
                     worst = std::max(worst, relative({after(i, 0), after(i, 1), after(i, 2), after(i, 3), after(i, 4)}, U));
-                check.expect(worst < 1e-13, what + ": a uniform state stays uniform over 3 steps (" + sci(worst) + ")");
+                const double tolerance = FV::Mesh::float_rows ? 1e-6 : 1e-13;
+                check.expect(worst < tolerance, what + ": a uniform state stays uniform over 3 steps (" + sci(worst) + ")");
             }
             {  // conservation, a rough state
                 set_state(fv, mesh, rough_state(n, gas));
@@ -258,7 +262,9 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
     for (int i = 0; i < n; ++i)
         loops = std::max(loops, relative({result[0][0](i, 0), result[0][0](i, 1), result[0][0](i, 2), result[0][0](i, 3), result[0][0](i, 4)},
                                          {result[1][0](i, 0), result[1][0](i, 1), result[1][0](i, 2), result[1][0](i, 3), result[1][0](i, 4)}));
-    check.expect(loops < 1e-12, solver + ", " + kind + ": the per-cell and the per-face loop agree to rounding (" + sci(loops) +
+    // Float face fluxes: the per-face loop rounds each flux to float, the per-cell loop does not.
+    const double loop_tolerance = std::is_same_v<typename Precision::flux, float> ? 1e-5 : 1e-12;
+    check.expect(loops < loop_tolerance, solver + ", " + kind + ": the per-cell and the per-face loop agree to rounding (" + sci(loops) +
                                     (same(result[0][0], result[1][0]) ? ", same bits)" : ")"));
 }
 
@@ -514,6 +520,10 @@ int main(int argc, char** argv) {
     mesh_tests<hydro::HLLC>(check, "jittered", "HLLC");
     mesh_tests<hydro::HLLC>(check, "uniform", "HLLC");
     mesh_tests<hydro::HLL>(check, "jittered", "HLL");
+    // Precision options: gradient weights from the mesh (float); everything
+    // reduced (float face rows and weights, FP16 gradients, float fluxes and Riemann).
+    mesh_tests<hydro::HLLC, hydro::Precision<double, float>>(check, "jittered", "HLLC weight32");
+    mesh_tests<hydro::HLLC, hydro::Precision<float, float, hydro::Half, float, float>>(check, "jittered", "HLLC lowweights");
     moving_tests(check);
     return check.failed() != 0;
 }
