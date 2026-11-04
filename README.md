@@ -370,10 +370,14 @@ In order (research_notes/dimension_design_2026-11-02.md):
    clustered/halo input; expected 5-10 %), and look for a cheaper exact
    certification bound than "everything within 2R" (irregular cells test ~2x
    the candidates of jittered ones).
-6. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
+6. Multi-GPU: domain decomposition by Morton ranges, ghost layers, local
+   rebuild of a boundary band, GPU-aware communication, weak and strong
+   scaling. Before refinement, so that insertion and load balance are designed
+   with the decomposition in mind; one A100 holds about 256^3.
+7. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
    by an exact local rebuild of the hole, conservative remap from the
    volumes (reports/GPU Delaunay insertion and removal.md).
-7. Self-gravity by multigrid, after the hydro suite passes at speed, starting
+8. Self-gravity by multigrid, after the hydro suite passes at speed, starting
    from LUNA's gravity solvers (same author; multigrid with coarse-grid gather):
    V-cycles warm-started from the previous step's potential (as LUNA does),
    aiming at 2-4 V-cycles per step, so the solve runs at full GPU speed.
