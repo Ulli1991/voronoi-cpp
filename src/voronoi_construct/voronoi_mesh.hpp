@@ -11,6 +11,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 // The Voronoi mesh of particles in a periodic box, kept exact as they move:
 // the interface of the hydro code to this library.
@@ -99,17 +100,33 @@ enum class Fallback { cheapest, host, rebuild };
 
 // The mesh in D dimensions: one interface, an engine per D (3D: the
 // tetrahedra below; 1D: the sorted order, sorted_mesh.hpp).
-template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace>
+// FaceReal = float adds one float row per face (face_rows(): area vector,
+// centroid, owner, neighbour in 32 bytes) for a reduced-precision hydro
+// (hydro/precision.hpp); everything else stays double. Weight = float or
+// double adds the least-squares gradient weights of every per-cell list entry
+// (gradient_weights(), tet_mesh::gradient_weights), computed by
+// update_cells(); void: none.
+template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class FaceReal = double, class Weight = void>
 class Mesh;
 
-template <class ExecSpace>
-class Mesh<3, ExecSpace> {
+template <class ExecSpace, class FaceReal, class Weight>
+class Mesh<3, ExecSpace, FaceReal, Weight> {
 public:
+    static_assert(std::is_same_v<FaceReal, double> || std::is_same_v<FaceReal, float>, "FaceReal: double or float");
+    static_assert(std::is_void_v<Weight> || std::is_same_v<Weight, double> || std::is_same_v<Weight, float>,
+                  "Weight: void, double or float");
     static constexpr int dimensions = 3;
+    static constexpr bool float_rows = std::is_same_v<FaceReal, float>;
+    static constexpr bool with_weights = !std::is_void_v<Weight>;
+    using WeightReal = std::conditional_t<with_weights, Weight, float>;
     using Memory = typename ExecSpace::memory_space;
     template <class T>
     using View = Kokkos::View<T, Memory>;
     using Positions = tet_mesh::Points4<Memory>;
+    using Rows = Kokkos::View<const double* [3], Kokkos::LayoutRight, Memory>;  // area, centroids
+    using FaceRows = Kokkos::View<const float* [8], Kokkos::LayoutRight, Memory>;
+    // Row k: the weight vector of list entry k (cell_face(k)).
+    using Weights = Kokkos::View<const WeightReal* [3], Kokkos::LayoutRight, Memory>;
 
     // A periodic box of sides box.side[a] (see exact_predicates::Box: sides
     // are rounded to whole grid steps, side[] holds them), or a cube.
@@ -188,10 +205,11 @@ public:
         tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};  // walked again below
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
         rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
-        geometry_ = {View<double* [3]>("face_area", faces), View<double* [3]>("face_centroid", faces),
-                     View<double*>("cell_volume", n_)};
+        using Areas = typename tet_mesh::Geometry<Memory>::Areas;
+        geometry_ = {Areas("face_area", faces), Areas("face_centroid", faces), View<double*>("cell_volume", n_),
+                     tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0)};
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
-                  geometry_.volume, View<double* [3]>("cell_centroid", n_)};
+                  geometry_.volume, Areas("cell_centroid", n_)};
         lap(timer, timings, &Timings::build);
         report.faces = geometry(timings);
         return report;
@@ -247,6 +265,14 @@ public:
         // Its temporaries live in the spare ring pool (see scratch).
         tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
                         scratch(tet_mesh::cells_scratch_bytes(faces())).data());
+        if constexpr (with_weights) {
+            // As many rows as list entries (2 per face), with the list's 1/32 spare.
+            const std::size_t entries = 2 * static_cast<std::size_t>(faces());
+            if (weights_.extent(0) < entries)
+                weights_ = Kokkos::View<WeightReal* [3], Kokkos::LayoutRight, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_face_weights")), entries + entries / 32);
+            tet_mesh::gradient_weights(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_, weights_);
+        }
         cells_current_ = true;
         lap(timer, timings, &Timings::cells);
     }
@@ -266,15 +292,20 @@ public:
     int faces() const { return static_cast<int>(tets_.owner.extent(0)); }
     View<const int*> owner() const { return tets_.owner; }
     View<const int*> neighbour() const { return tets_.neighbour; }
-    View<const double* [3]> area() const { return geometry_.area; }
-    View<const double* [3]> face_centroid() const { return geometry_.centroid; }
+    Rows area() const { return geometry_.area; }
+    Rows face_centroid() const { return geometry_.centroid; }
+    // FaceReal = float: the float rows of the faces (tet_mesh::FaceRows); empty otherwise.
+    FaceRows face_rows() const { return geometry_.rows; }
     // Cell volumes (see update_cells); after update_cells() also the
     // centroids (relative to the generator) and the faces of cell i,
     // cell_face(cell_face_start(i)) .. cell_face(cell_face_start(i + 1) - 1).
     View<const double*> volume() const { return geometry_.volume; }
-    View<const double* [3]> centroid() const { return cells_.centroid; }
+    Rows centroid() const { return cells_.centroid; }
     View<const int*> cell_face_start() const { return cells_.start; }
     View<const int*> cell_face() const { return cells_.face; }
+    // Weight != void, after update_cells(): the gradient weights of list
+    // entry k (tet_mesh::gradient_weights), row k for cell_face(k).
+    Weights gradient_weights() const { return weights_; }
     // The snapped positions the geometry is computed from (padded to 32 bytes).
     tet_mesh::Points4<Memory> positions() const { return positions_; }
 
@@ -324,6 +355,7 @@ private:
         if (faces > static_cast<int>(geometry_.area.extent(0))) {
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, faces + faces / 8);
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 8);
+            if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 8);
         }
         tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
@@ -346,6 +378,7 @@ private:
     tet_mesh::Geometry<Memory> geometry_;
     tet_mesh::CellFaces<Memory> cells_;
     shell_voronoi::Cells<Memory> local_;
+    Kokkos::View<WeightReal* [3], Kokkos::LayoutRight, Memory> weights_;
 };
 
 }  // namespace voronoi

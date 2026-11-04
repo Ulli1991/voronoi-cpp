@@ -489,7 +489,8 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
 using Mesh = voronoi::Mesh<3, Exec>;
 
 // A host copy of the mesh's tetrahedra.
-inline tet_flips::Mesh host_tetrahedra(const Mesh& mesh) {
+template <class M>  // any voronoi::Mesh<3, Exec, ...>
+tet_flips::Mesh host_tetrahedra(const M& mesh) {
     auto copy = [](const auto& v) {
         auto h = Kokkos::create_mirror(Kokkos::HostSpace{}, v);  // a copy even on host backends
         Kokkos::deep_copy(h, v);
@@ -523,7 +524,8 @@ inline long long failing(const tet_flips::Mesh& m) {
 
 // The mesh's face area vectors on the host, rows [0, faces()) (packed on
 // the device first: the face arrays hold more rows).
-inline Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(const Mesh& mesh) {
+template <class M>
+Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(const M& mesh) {
     Kokkos::View<double* [3], Kokkos::LayoutRight, Memory> packed("face_areas", mesh.faces());
     const auto area = mesh.area();
     Kokkos::parallel_for(
@@ -549,7 +551,8 @@ struct Comparison {
     bool pass() const { return failing == 0 && missing == 0 && extra_area < 1e-9 && volume < 1e-10; }
 };
 
-inline Comparison compare_with_rebuild(const Mesh& mesh, const Positions& x) {
+template <class M>
+Comparison compare_with_rebuild(const M& mesh, const Positions& x) {
     const int n = mesh.particles();
     const Box& box = mesh.sides();
     const double spacing = std::cbrt(box.volume() / n);

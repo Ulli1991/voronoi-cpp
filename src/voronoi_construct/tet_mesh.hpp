@@ -46,13 +46,22 @@ struct Mesh {
     Kokkos::View<std::uint8_t*, MemorySpace> edges;
 };
 
+// One float row per face, 32 bytes (one memory sector): area vector (owner
+// to neighbour) in [0, D), centroid (relative to the owner) in [3, 3 + D),
+// owner and neighbour (int bits) in 6 and 7; written only when allocated.
+template <class MemorySpace>
+using FaceRows = Kokkos::View<float* [8], Kokkos::LayoutRight, MemorySpace>;
+
 // Face area vectors (owner to neighbour), centroids (relative to the owner),
-// and cell volumes, one per particle; in D = 2 or 3 dimensions.
+// and cell volumes, one per particle; in D = 2 or 3 dimensions. Rows are
+// contiguous (LayoutRight on every backend): a random access touches one or
+// two memory sectors instead of D.
 template <class MemorySpace, int D = 3>
 struct Geometry {
-    using Areas = Kokkos::View<double* [D], MemorySpace>;
+    using Areas = Kokkos::View<double* [D], Kokkos::LayoutRight, MemorySpace>;
     Areas area, centroid;
     Kokkos::View<double*, MemorySpace> volume;
+    FaceRows<MemorySpace> rows;  // optional float copy of area and centroid
 };
 
 // The corners of local edge k: (0,1) (0,2) (0,3) (1,2) (1,3) (2,3).
@@ -905,6 +914,7 @@ template <class ExecSpace, class X>
 void faces(const ExecSpace& exec, const X& x, const Box& box,
            const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
     const bool with_volume = out.volume.extent(0) > 0;
+    const bool with_rows = out.rows.extent(0) > 0;
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
     Kokkos::parallel_for(
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f) {
@@ -942,6 +952,12 @@ void faces(const ExecSpace& exec, const X& x, const Box& box,
             out.centroid(f, 0) = centroid.x;
             out.centroid(f, 1) = centroid.y;
             out.centroid(f, 2) = centroid.z;
+            if (with_rows) {
+                const float row[8] = {float(area.x),     float(area.y),     float(area.z),
+                                      float(centroid.x), float(centroid.y), float(centroid.z),
+                                      Kokkos::bit_cast<float>(i), Kokkos::bit_cast<float>(j)};
+                for (int c = 0; c < 8; ++c) out.rows(f, c) = row[c];
+            }
             if (!with_volume) return;
             const double pyramid = projected * (1.0 / 6.0);
             Kokkos::atomic_add(&out.volume(i), pyramid);
@@ -958,7 +974,7 @@ struct CellFaces {
     Kokkos::View<int*, MemorySpace> start, face;
     Kokkos::View<int*, MemorySpace> cursor;  // fill positions while building
     Kokkos::View<double*, MemorySpace> volume;
-    Kokkos::View<double* [D], MemorySpace> centroid;
+    Kokkos::View<double* [D], Kokkos::LayoutRight, MemorySpace> centroid;
 };
 
 // Bytes of scratch cells() needs for `faces` faces: the other particle of
@@ -1138,7 +1154,7 @@ void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& b
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         using Warp = detail::CellGeometryWarp<D, X, typename Geometry<Memory, D>::Areas, Kokkos::View<int*, Memory>,
                                               decltype(other), Kokkos::View<double*, Memory>,
-                                              Kokkos::View<double* [D], Memory>>;
+                                              Kokkos::View<double* [D], Kokkos::LayoutRight, Memory>>;
         Kokkos::parallel_for("tet_mesh::cell_geometry",
                              Kokkos::TeamPolicy<ExecSpace>(exec, (n + Warp::warps - 1) / Warp::warps, Warp::warps, 32),
                              Warp{x, box, area, centroid, start, face, other, volume, cell_centroid, n});
@@ -1148,6 +1164,73 @@ void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& b
     Kokkos::parallel_for(
         "tet_mesh::cell_geometry", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
             detail::cell_geometry(x, box, area, centroid, face, other, i, start(i), start(i + 1), volume, cell_centroid);
+        });
+}
+
+// 4. Least-squares gradient weights of every per-cell list entry, as AREPO
+// next generation's prepare_gradient_operator (Arepo2-nextgeneration-SoA,
+// src/mesh/mesh_gradients.cc:150-289; stored per neighbour as gradweight,
+// src/data/sph_particle_data.h:67, after every mesh construction,
+// src/main/run.cc:158): for cell i with list entries k (face f, other cell
+// j), X_k = (1, d_k), d_k from the centroid of i to the centroid of j
+// (nearest image), w_k = |A_f|, M = sum_k w_k X_k X_k^T; entry k gets
+// weight(k) = w_k (M^-1 X_k)_{1..D}, so that sum_k weight(k) (u_j - u_i) is
+// the gradient of the area-weighted least-squares fit u_j - u_i = a + g.d_k
+// (intercept a). Computed in double (Cholesky of M), stored in the type of
+// `out` (rows of D). One thread per cell; needs cells() first.
+template <class ExecSpace, class Xs, int D, class Weights>
+void gradient_weights(const ExecSpace& exec, const Xs& x, const exact_predicates::BoxN<D>& box,
+                      const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
+                      const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
+                      const Geometry<typename ExecSpace::memory_space, D>& geometry,
+                      const CellFaces<typename ExecSpace::memory_space, D>& cells, const Weights& out) {
+    using Weight = typename Weights::value_type;
+    const int n = static_cast<int>(cells.volume.extent(0));
+    const auto start = cells.start, face = cells.face;
+    const auto centroid = cells.centroid;
+    const auto area = geometry.area;
+    Kokkos::parallel_for(
+        "tet_mesh::gradient_weights", Kokkos::RangePolicy<ExecSpace>(exec, 0, n), KOKKOS_LAMBDA(int i) {
+            constexpr int U = D + 1;
+            // Regressors (1, d) and weight of entry k.
+            auto regressors = [&](int k, double* X) {
+                const int f = face(k), o = owner(f), m = neighbour(f), j = o == i ? m : o;
+                X[0] = 1;
+                for (int a = 0; a < D; ++a)
+                    X[1 + a] = wrap(x(j, a) - x(i, a), box.side[a], box.inverse[a]) + centroid(j, a) - centroid(i, a);
+                double s = 0;
+                for (int a = 0; a < D; ++a) s += area(f, a) * area(f, a);
+                return Kokkos::sqrt(s);
+            };
+            double M[U][U] = {};
+            for (int k = start(i); k < start(i + 1); ++k) {
+                double X[U];
+                const double w = regressors(k, X);
+                for (int p = 0; p < U; ++p)
+                    for (int s = p; s < U; ++s) M[p][s] += w * X[p] * X[s];
+            }
+            double L[U][U] = {};
+            for (int p = 0; p < U; ++p)
+                for (int s = 0; s <= p; ++s) {
+                    double sum = M[s][p];
+                    for (int m = 0; m < s; ++m) sum -= L[p][m] * L[s][m];
+                    L[p][s] = p == s ? Kokkos::sqrt(sum) : sum / L[s][s];
+                }
+            for (int k = start(i); k < start(i + 1); ++k) {
+                double X[U], z[U], y[U];
+                const double w = regressors(k, X);
+                for (int p = 0; p < U; ++p) {
+                    double sum = X[p];
+                    for (int m = 0; m < p; ++m) sum -= L[p][m] * z[m];
+                    z[p] = sum / L[p][p];
+                }
+                for (int p = U - 1; p >= 0; --p) {
+                    double sum = z[p];
+                    for (int m = p + 1; m < U; ++m) sum -= L[m][p] * y[m];
+                    y[p] = sum / L[p][p];
+                }
+                for (int a = 0; a < D; ++a) out(k, a) = static_cast<Weight>(w * y[1 + a]);
+            }
         });
 }
 
