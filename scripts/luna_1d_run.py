@@ -15,8 +15,8 @@ FP64, CFL 0.8 (template_config.py:32), the last step shortened to t_end
 
 The loop is one jitted lax.while_loop around LUNA's compute_dt and step
 (create_solver_distributed, setup/hydro.py:140-202, as tests/_helpers.py
-evolve): compiled by a first call, then timed `repeats` times from the same
-initial state; the fastest counts, each is printed. kernel: LUNA's hydro_kernel
+evolve): compiled ahead, then timed `repeats` times from the same initial
+state; the fastest counts, each is printed. kernel: LUNA's hydro_kernel
 (auto: Pallas on a GPU, setup/hydro.py hydro_kernel_name). Peak memory:
 peak_bytes_in_use of the device. Writes rho, u, p (cell order), steps, wall_s,
 and <out>.json for scripts/compare_1d.py. max_s > 0: stop after about that long
@@ -69,7 +69,6 @@ def main():
     compute_dt, step, sharding = create_solver_distributed(cfg, GridParams.from_config(cfg), mesh)
     t_end = setup["t_end"]
 
-    @jax.jit
     def advance(U, t, k, cap):
         def body(s):
             U, t, k = s
@@ -87,27 +86,24 @@ def main():
         U0, t_start, k_start = d["U"], float(d["t"]), int(d["k"])
     U_start = jax.device_put(jnp.asarray(U0, dtype=jnp.float64), sharding)
     t_jnp, k_jnp = jnp.float64(t_start), jnp.int32(k_start)
+    t0 = time.perf_counter()
+    args = (U_start, t_jnp, k_jnp, jnp.int32(max_steps if max_steps > 0 else 2**31 - 1))
+    advance = jax.jit(advance).lower(*args).compile()
+    print(f"compile_s={time.perf_counter() - t0:.3f}")
     if max_s > 0:  # a very long run: chunks, stop in time, keep the state
-        chunk = jnp.int32(0)
         U, t, k = U_start, t_jnp, k_jnp
         begin, size = time.perf_counter(), 1000
         while float(t) < t_end * (1 - 1e-12) and time.perf_counter() - begin < max_s:
-            chunk = k + size
             t0 = time.perf_counter()
-            U, t, k = jax.block_until_ready(advance(U, t, k, chunk))
+            U, t, k = jax.block_until_ready(advance(U, t, k, jnp.int32(int(k) + size)))
             size = max(1000, int(size * min(4.0, 30.0 / (time.perf_counter() - t0 + 1e-3))))
         wall = time.perf_counter() - begin
         np.savez(resume, U=np.asarray(U), t=float(t), k=int(k))
     else:
-        cap = jnp.int32(max_steps if max_steps > 0 else 2**31 - 1)
-        t0 = time.perf_counter()
-        jax.block_until_ready(advance(U_start, t_jnp, k_jnp, cap))  # compile (and a first run)
-        first = time.perf_counter() - t0
-        print(f"compile_and_first_run_s={first:.3f}")
         walls = []
         for _ in range(repeats):
             t0 = time.perf_counter()
-            U, t, k = jax.block_until_ready(advance(U_start, t_jnp, k_jnp, cap))
+            U, t, k = jax.block_until_ready(advance(*args))
             walls.append(time.perf_counter() - t0)
             print(f"run: wall_s={walls[-1]:.4f} M_cell_updates_per_s={n * int(k) / walls[-1] / 1e6:.1f}")
         wall = min(walls)

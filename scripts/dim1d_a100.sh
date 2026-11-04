@@ -22,6 +22,7 @@ source /etc/profile.d/modules.sh
 repo="${REPO:-$PWD}"
 build="${BUILD:-/raven/u/uli/voronoi-cpp/build-1d}"
 out="${OUT:-/raven/u/uli/voronoi-cpp/build-1d/runs}"
+bin="${BIN:-$build/cuda}"  # a copy of the build, to keep it stable under a queue of jobs
 mode="${1:-build}"
 luna_dir="${LUNA_DIR:-/raven/u/uli/LUNA}"
 luna_env="${LUNA_ENV:-$HOME/jax-env}"
@@ -44,7 +45,7 @@ use_luna() {
 ours() {  # ours <problem> <N> <series> [flags]
     local p="$1" n="$2" s="$3"
     shift 3
-    "$build/cuda/hydro_1d" "$p" "$n" --memory --series="$s" --out="$out/${s}_${p}_${n}.npy" "$@" | grep -E "^(ours|memory|phase)"
+    "$bin/hydro_1d" "$p" "$n" --memory --series="$s" --out="$out/${s}_${p}_${n}.npy" "$@" | grep -E "^(ours|memory|phase)"
 }
 luna() {  # luna <problem> <N> [key=value ...]
     local p="$1" n="$2"
@@ -63,21 +64,22 @@ do_ladder() {
     shift
     for b in "$@"; do
         n=$((1 << b))
+        r=$((b >= 15 ? 1 : 2))  # long runs once
         use_luna
-        luna "$p" "$n"
+        luna "$p" "$n" repeats=$r
         use_ours
-        ours "$p" "$n" static
-        ours "$p" "$n" moving --moving
-        ((b <= 16)) && ours "$p" "$n" moving-arepo --moving --dt=arepo
+        ours "$p" "$n" static --repeats=$r
+        ours "$p" "$n" moving --moving --repeats=$r
+        ((b <= 15)) && ours "$p" "$n" moving-arepo --moving --dt=arepo --repeats=1
     done
 }
 do_throughput() {
     use_ours
     for n in 4096 65536 1048576 16777216; do
         s=$((n > 2000000 ? 200 : 2000))
-        "$build/cuda/hydro_1d" sod "$n" --steps=$s --repeats=3 | grep -E "^ours"
-        "$build/cuda/hydro_1d" sod "$n" --steps=$s --repeats=3 --moving | grep -E "^ours"
-        "$build/cuda/hydro_1d" sod "$n" --steps=$s --repeats=2 --moving --phases | grep -E "^(ours|phase)"
+        "$bin/hydro_1d" sod "$n" --steps=$s --repeats=3 | grep -E "^ours"
+        "$bin/hydro_1d" sod "$n" --steps=$s --repeats=3 --moving | grep -E "^ours"
+        "$bin/hydro_1d" sod "$n" --steps=$s --repeats=2 --moving --phases | grep -E "^(ours|phase)"
     done
     use_luna
     for n in 4096 65536 1048576 16777216; do
@@ -107,7 +109,9 @@ ladder)
     ;;
 reference)
     use_luna
-    luna "$2" "$3" series=reference max_s="$4" resume="$out/state_$2_$3.npz"
+    mkdir -p "$out/fine"
+    (cd "$out/fine" && "$luna_env/bin/python" -u "$repo/scripts/luna_1d_run.py" "$2" "$3" hllc "$out/fine/$2_$3.npz" \
+        series=reference max_s="$4" resume="$out/fine/state_$2_$3.npz" 2>&1 | grep -E "^luna|Error|error")
     ;;
 throughput)
     do_throughput
