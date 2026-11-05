@@ -110,13 +110,14 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
     const auto area = face_areas(mesh);
     const auto volume = to_host(mesh.volume());
     const auto& box = mesh.sides();
+    const auto face_centroid = to_host(mesh.face_centroid());
 
     std::vector<std::array<double, 3>> sum(n, {0, 0, 0});
     std::vector<double> magnitude(n, 0);
     for (int f = 0; f < mesh.faces(); ++f) {
         double m = 0;
         for (int a = 0; a < 3; ++a) {
-            r.not_finite += !std::isfinite(area(f, a));
+            r.not_finite += !std::isfinite(area(f, a)) || !std::isfinite(face_centroid(f, a));
             sum[owner(f)][a] += area(f, a);
             sum[neighbour(f)][a] -= area(f, a);
             m += area(f, a) * area(f, a);
@@ -183,7 +184,13 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
 
     if (check_fresh) {
         try {
-            const Positions p = snapped(mesh);
+            // Inside each grid cell: a position on its edge can snap to the
+            // step below when the step is not dyadic (see box.snap_twice).
+            Positions p("fresh", n);
+            auto h = Kokkos::create_mirror_view(p);
+            for (int i = 0; i < n; ++i)
+                for (int a = 0; a < 3; ++a) h(i, a) = (double(g.p[i][a]) + 0.5) * box.step;
+            Kokkos::deep_copy(p, h);
             voronoi::Mesh<3, Exec> fresh(Exec{}, box);
             fresh.update(p);
             r.fresh_differs = oracle::different_tetrahedra(t, tets_of(fresh));

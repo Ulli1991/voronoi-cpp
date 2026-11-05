@@ -472,6 +472,22 @@ void contrast_cases() {
             add_uniform(p, rng, 512);
             add_shell(p, rng, {0.3, 0.6, 0.45}, 0.1, k);
             diagnose(c, std::to_string(k) + " particles on a sphere", p);
+        }, 21);
+    // Half the particles in a ball of radius 0.05: fine at small n, the start of
+    // the `expansion` flow at 128^3. Too slow for ctest: not in a group it runs.
+    for (const int n : {524288, 1048576, 2097152})
+        add("dense_ball." + std::to_string(n), [=](Check& c) {
+            Points p = make_points("jittered", n);
+            std::mt19937_64 rng(3);
+            std::normal_distribution<double> g(0, 1);
+            std::uniform_real_distribution<double> u(0, 1);
+            for (std::size_t i = 0; i < p.size(); i += 2) {
+                const Point d{g(rng), g(rng), g(rng)};
+                const double size = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                const double r = 0.05 * std::cbrt(u(rng));
+                for (int a = 0; a < 3; ++a) p[i][a] = 0.5 + r * d[a] / size;
+            }
+            diagnose(c, "half of " + std::to_string(n) + " in a ball", p);
         });
     add("contrast.refusal_messages", [](Check& c) {
         // What each status of the clipping is reported as. Made by hand: a cell
@@ -564,6 +580,8 @@ void contrast_cases() {
 
 // ---------------------------------------------------------------------- boxes
 
+Points exact_lattice(int side, const Points& basis);
+
 void box_cases() {
     // Slabs: m cells across a side of 1/8.
     for (const int across : {1, 2, 3, 4, 5, 6, 7, 8})
@@ -616,7 +634,7 @@ void box_cases() {
         // Particles on every wrap: x = 0, side, just below 0, a period off.
         Points p = make_points("jittered", 4096);
         const double below = std::nextafter(1.0, 0.0);
-        const std::vector<Point> special{{0, 0, 0},         {1, 1, 1},           {below, 0.5, 0.5}, {-grid_step, 0.5, 0.25},
+        const std::vector<Point> special{{0, 0, 0},         {1, 1, 0.5},         {below, 0.5, 0.5}, {-grid_step, 0.5, 0.25},
                                          {1.0, 0.25, 0.75}, {-0.25, 0.25, 0.25}, {1.75, 1.75, 0.1}, {0.1, -3.5, 2.5}};
         for (std::size_t i = 0; i < special.size(); ++i) p[i * 500 + 3] = special[i];
         Mesh m(Exec{}, 1.0);
@@ -666,6 +684,30 @@ void box_cases() {
             const mc::Result r = mc::check(other);
             c.expect(r.ok(), r.text());
         });
+    for (const double side : {1.0, 3.0, 0.7, 0.1, 1e-3, 1.0 / 3, 3.086e24})
+        add("box.snap_twice." + sci(side), [=](Check& c) {
+            // Snapping a snapped position must keep it: the mesh's positions
+            // are k * step and tet_start snaps them again.
+            const Box box(side);
+            const Points p = scaled(make_points("clustered", 4096), box);
+            long long moved = 0;
+            for (const auto& q : p)
+                for (int a = 0; a < 3; ++a) {
+                    const int k = exact_predicates::snap(q[a], box, a);
+                    moved += exact_predicates::snap(k * box.step, box, a) != k;
+                }
+            c.expect(moved == 0, "side " + sci(side) + ": " + std::to_string(moved) + " of " + std::to_string(3 * p.size()) +
+                                     " coordinates move when snapped twice");
+            // On a lattice a step decides ties: the mesh of the positions the
+            // caller gave, by the oracle (no tie-break, every image).
+            Points lattice = scaled(exact_lattice(16, {{0.5, 0.5, 0.5}}), box);
+            for (auto& q : lattice)
+                for (int a = 0; a < 3; ++a) q[a] = (exact_predicates::snap(q[a], box, a) + 0.5) * box.step;
+            Mesh m(Exec{}, box);
+            m.update(to_device(lattice));
+            const auto r = oracle::check(mc::grid_of(m), mc::tets_of(m));
+            c.expect(r.ok(), "the lattice in that box: " + r.text());
+        }, side == 1e-3 ? 22 : 0);
     for (const std::string what : {"nan", "inf", "huge"})
         add("box.nonfinite." + what, [=](Check& c) {
             const Points p = make_points("jittered", 4096);
@@ -775,6 +817,35 @@ void degenerate_cases() {
                     step(c, name + " noise step " + std::to_string(s), m, p);
                 }
             });
+    }
+    for (const Layout& l : {Layout{"sc", exact_lattice(16, sc_basis)}, Layout{"bcc", exact_lattice(8, bcc_basis)},
+                            Layout{"fcc", exact_lattice(8, fcc_basis)}}) {
+        const Points start = l.points;
+        const std::string name = l.name;
+        add("degenerate.zero_area." + name, [=](Check& c) {
+            // Issue 13: the tie-break's edges are faces of zero area. Their
+            // area and centroid must stay finite, here and in a step.
+            Mesh m(Exec{}, 1.0);
+            build(c, name, m, start, Expect::exact);
+            Points p = start;
+            for (auto& q : p) q[0] = wrap(q[0] + 256 * grid_step);
+            for (int s = 0; s < 2; ++s) {
+                const auto area = face_areas(m);
+                const auto centroid = to_host(m.face_centroid());
+                long long zero = 0, bad = 0;
+                for (int f = 0; f < m.faces(); ++f) {
+                    double a2 = 0;
+                    for (int a = 0; a < 3; ++a) {
+                        a2 += area(f, a) * area(f, a);
+                        bad += !std::isfinite(centroid(f, a));
+                    }
+                    zero += a2 == 0;
+                }
+                c.expect(bad == 0, name + ": " + std::to_string(zero) + " of " + std::to_string(m.faces()) +
+                                       " faces have zero area, " + std::to_string(bad) + " non-finite centroid components");
+                if (s == 0) step(c, "rigid step", m, p);
+            }
+        });
     }
     add("degenerate.two_lattices", [](Check& c) {
         // sc lattice 2 slides through sc lattice 1 along z, shifted in x and
@@ -1003,6 +1074,54 @@ void large_cases() {
                 step(c, "random walk " + sci(d) + ", step " + std::to_string(s), m, p);
             }
         });
+    // Kicks as a fraction of the box, several seeds: the mesh is exact, or the
+    // update refuses.
+    for (const int n : {4096, 32768})
+        for (const double kick : {0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.65, 1.0})
+            add("kicks." + std::to_string(n) + "." + sci(kick), [=](Check& c) {
+                long long wrong = 0, refused_count = 0, rebuilt = 0, clean = 0;
+                std::string first;
+                for (const int seed : {1, 2, 3, 4}) {
+                    Points p = make_points("jittered", n);
+                    Mesh m(Exec{}, 1.0);
+                    m.update(to_device(p));
+                    std::mt19937_64 rng(seed);
+                    std::normal_distribution<double> g(0, kick);
+                    for (int s = 1; s <= 4; ++s) {
+                        for (auto& q : p)
+                            for (double& v : q) v = wrap(v + g(rng));
+                        to_grid(p);
+                        voronoi::Report r;
+                        try {
+                            r = m.update(to_device(p));
+                        } catch (const std::exception&) {
+                            ++refused_count;
+                            break;
+                        }
+                        rebuilt += r.rebuilt;
+                        // Cheap on a mesh of this size: volume against the box.
+                        const auto v = to_host(m.volume());
+                        double total = 0;
+                        for (std::size_t i = 0; i < p.size(); ++i) total += v(i);
+                        const auto check = oracle::check(mc::grid_of(m), mc::tets_of(m));
+                        if (check.ok() && std::abs(total - 1) < 1e-10) {
+                            clean += !r.rebuilt;
+                        } else {
+                            ++wrong;
+                            if (first.empty()) {
+                                std::ostringstream o;
+                                o << " first: seed " << seed << " step " << s << " stuck " << r.stuck << " rounds " << r.rounds
+                                  << " rebuilt " << r.rebuilt << " total volume " << total << " " << check.text();
+                                first = o.str();
+                            }
+                        }
+                    }
+                }
+                std::ostringstream what;
+                what << "n=" << n << " kicks of " << kick << " boxes, 4 seeds, 4 steps: wrong " << wrong << ", refused " << refused_count
+                     << ", rebuilt " << rebuilt << ", repaired exact " << clean << first;
+                c.expect(wrong == 0, what.str());
+            });
     add("large.shuffle", [](Check& c) {
         std::mt19937_64 rng(22);
         Points p;
@@ -1249,6 +1368,37 @@ void fallback_cases() {
             std::cout << "    faces " << double(r.faces) / n << " per cell\n";
         });
     }
+    // What one step of Fallback::host costs against the stuck entries it gets.
+    for (const int n : {1000, 1728, 4096, 8000})
+        for (const double d : {0.3, 0.5, 1.0, 2.0})
+            add("hostcost." + std::to_string(n) + "." + sci(d), [=](Check& c) {
+                Points p = make_points("jittered", n);
+                const int count = static_cast<int>(p.size());
+                Mesh m(Exec{}, 1.0);
+                m.set_fallback(voronoi::Fallback::host);
+                build(c, "start", m, p, Expect::exact, 0);
+                std::mt19937_64 rng(31);
+                std::normal_distribution<double> g(0, d * std::cbrt(1.0 / count));
+                for (auto& q : p)
+                    for (double& v : q) v = wrap(v + g(rng));
+                to_grid(p);
+                Kokkos::Timer timer;
+                voronoi::Report r;
+                try {
+                    r = m.update(to_device(p));
+                } catch (const std::exception& e) {
+                    c.expect(true, "n=" + std::to_string(count) + " kicks of " + sci(d) + " spacings: " + sci(timer.seconds()) +
+                                       " s to a refusal: " + e.what());
+                    return;
+                }
+                const double seconds = timer.seconds();
+                const mc::Result o = mc::check(m, 4);
+                std::ostringstream what;
+                what << "n=" << count << " kicks of " << d << " spacings: " << seconds << " s, stuck " << r.stuck << ", host "
+                     << r.host_flips << "/" << r.host_rebuilds << ", rebuilt " << r.rebuilt << ", " << r.stuck / seconds
+                     << " stuck entries/s";
+                c.expect(o.ok(), what.str());
+            });
     add("fallback.grow_by_steps", [](Check& c) {
         // The same growth in small steps, so that repair must grow its pools.
         Points p = make_points("lattice", 1728);
@@ -1493,8 +1643,28 @@ int main(int argc, char** argv) {
         for (const auto& c : cases()) std::cout << c.name << (c.issue ? " known" : "") << "\n";
         return 0;
     }
+    // ctest runs a subset within its time budget; MESH_CASES_FULL=1 (the A100
+    // job) runs the whole matrix, and a case asked for by its full name runs.
+    const bool full = std::getenv("MESH_CASES_FULL") != nullptr;
+    auto subset_skips = [&](const std::string& name) {
+        static const std::vector<std::string> only_full{
+            "box.void.centre.",     "box.void.empty.0.1",  "box.void.empty.0.22", "box.void.empty.0.25",
+            "box.void.empty.0.3",   "box.void.empty.0.45", "box.slab.lattice.",   "box.slab.uniform.",
+            "box.slab.jittered.7",  "box.slab.jittered.8", "box.thin.",           "contrast.ball.0.0",
+            "contrast.ball.1e-05",  "contrast.ball.1e-06", "contrast.shell.",     "contrast.shell_centre.",
+            "contrast.two_density.100",                    "contrast.two_density.1e+06",
+            "contrast.grid_scale.1024",                    "contrast.grid_scale.4096",
+            "contrast.grid_scale.16384",                   "contrast.grid_scale.65536",
+            "contrast.sphere_status.1",                    "degenerate.noise.bcc.", "degenerate.noise.fcc.",
+            "degenerate.noise.sc.16",                      "degenerate.noise.sc.1024",
+            "degenerate.shear.smooth.", "degenerate.rigid.off_grid.", "large.random_walk.1", "large.flow.20",
+            "fallback.large.", "fallback.growth.", "few.jittered.1", "few.lattice.1", "repro.dump."};
+        if (full || std::find(wanted.begin(), wanted.end(), name) != wanted.end()) return false;
+        return std::any_of(only_full.begin(), only_full.end(), [&](const std::string& p) { return name.rfind(p, 0) == 0; });
+    };
     Check check;
     for (const auto& c : cases()) {
+        if (subset_skips(c.name)) continue;
         if (!wanted.empty() &&
             std::none_of(wanted.begin(), wanted.end(), [&](const std::string& w) { return c.name.rfind(w, 0) == 0; }))
             continue;

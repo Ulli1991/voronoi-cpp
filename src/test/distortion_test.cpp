@@ -5,7 +5,7 @@
 //   distortion_test [flow ...] [--steps=N] [--n=N] [--d=spacings per step]
 //                   [--every=N oracle] [--rebuild-every=N] [--cells=N brute cells]
 //                   [--no-drift | --drift=chi] [--fallback=host|rebuild] [--print]
-//                   [--seconds=S per run] [--final-oracle] [--dump]
+//                   [--seconds=S per run] [--shape-every=N] [--final-oracle] [--dump]
 
 #include "check.hpp"
 #include "distortion.hpp"
@@ -33,6 +33,7 @@ int main(int argc, char** argv) {
         else if (a.rfind("--cells=", 0) == 0) base.oracle_cells = std::stoi(a.substr(8));
         else if (a.rfind("--drift=", 0) == 0) drifts = {std::stod(a.substr(8))};
         else if (a.rfind("--seconds=", 0) == 0) base.seconds = std::stod(a.substr(10));
+        else if (a.rfind("--shape-every=", 0) == 0) base.shape_every = std::stoi(a.substr(14));
         else if (a == "--final-oracle") base.final_oracle = true;
         else if (a == "--print") base.print = true;
         else if (a == "--dump") base.dump = true;

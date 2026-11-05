@@ -279,6 +279,7 @@ struct Options {
     double drift = 0;       // regularisation in this driver (the library has none): each step
                             // moves each generator this fraction of the way to its centroid
     voronoi::Fallback fallback = voronoi::Fallback::cheapest;
+    int shape_every = 1;    // cell shapes every this many steps (atomics over all tetrahedra: costly)
     double seconds = 0;     // stop after this much wall time; 0: run all steps
     bool final_oracle = false;  // the full oracle on the last step
     bool dump = false;      // write the grid positions of a failing step
@@ -355,9 +356,11 @@ inline Summary run(const Options& o) {
     DeviceBytes::peak = DeviceBytes::current;
     double t = 0;
     int rated = 0;
+    Shape shape;
     Kokkos::Timer wall;
     for (int step = 1; step <= o.steps; ++step) {
         if (o.seconds > 0 && wall.seconds() > o.seconds) break;
+        Kokkos::Timer advance_timer;
         advance(field, x, side, t, dt);
         t += dt;
         if (o.drift > 0) {
@@ -374,6 +377,7 @@ inline Summary run(const Options& o) {
                 });
         }
         exec.fence();
+        const double advance_ms = advance_timer.seconds() * 1e3;
         voronoi::Timings timing;
         voronoi::Report r;
         try {
@@ -397,7 +401,9 @@ inline Summary run(const Options& o) {
         s.host_rebuilds += r.host_rebuilds;
         s.rebuilds += r.rebuilt;
         s.rounds_max = std::max<long long>(s.rounds_max, r.rounds);
-        const Shape shape = shape_of(mesh, spacing);
+        Kokkos::Timer shape_timer;
+        if (step == 1 || step % o.shape_every == 0) shape = shape_of(mesh, spacing);
+        const double shape_ms = shape_timer.seconds() * 1e3;
         s.aspect = std::max(s.aspect, shape.aspect);
         s.reach = std::max(s.reach, shape.reach);
         s.max_faces = std::max(s.max_faces, shape.max_faces);
@@ -451,7 +457,7 @@ inline Summary run(const Options& o) {
                 << " faces_per_cell=" << s.faces_last << " tets_per_cell=" << double(mesh.repair_state().count) / n
                 << " B_per_cell=" << double(DeviceBytes::current) / n << " aspect=" << shape.aspect
                 << " reach=" << shape.reach << " max_faces=" << shape.max_faces << " max_corners=" << shape.max_corners
-                << " gap=" << shape.smallest_gap << verdict
+                << " gap=" << shape.smallest_gap << " advance_ms=" << advance_ms << " shape_ms=" << shape_ms << verdict
                 << "\n"
                 << std::flush;
     }
