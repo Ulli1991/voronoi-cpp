@@ -350,18 +350,22 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
   GPU in the last bits; the A100 runs are bit-identical run to run.
 - Clipping alone is not watertight on uniform random input at 2.1M cells;
   the exact start makes the mesh exact.
-- Snapped duplicates (two particles on one grid position; grid step box / 2^30):
-  a start or a rebuild refuses them with `the start is not exact`. On the host
-  fallback a duplicate arriving in a step is **not** detected: a particle
-  silently leaves the mesh, with volume 0 and no error (#17). The default
-  fallback goes there from n of about 9000, so a caller must keep particles
-  apart. After any exception the `Mesh` object must not be updated again: the
-  next `update` crashes (#19). Zero particles crash too (#20).
-- A face of more than 64 corners has wrong area, volumes and closure, with no
-  error (#18); no distorting flow has come near it (at most 19 corners).
-- A cell with more than about 128 neighbours can make the start refuse, with the
-  same message: spheres of 800+ particles, half of 512k or more particles in a
-  small ball beside a sparse background (#21).
+- Particles on one grid position (grid step box / 2^30) have no Voronoi cell, so
+  `update()` refuses them on every path, with a `std::runtime_error` that names
+  a pair by id; the library does not merge them. It takes a rebuild to find out,
+  so such a step costs one. After a refusal there is no mesh (no faces, no
+  particles), and the next `update()` builds from scratch. Zero particles are a
+  `std::invalid_argument` and change nothing.
+- `update()` does not look at its input: a NaN or infinite coordinate is snapped
+  to some grid position, with no error.
+- Faces may have any number of corners. A cell may hold up to 16000 planes and
+  32000 vertices during its exact clipping: past 128 planes or 256 vertices it is
+  built on the host, with the grid and the ring pool copied there and back. Past those limits
+  `update()` refuses, naming them. Particles around a void cost O(k^2) at the
+  start, every cell of the shell clipping all k of them: about 1 s at k = 2000,
+  2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
+- A step of order the box (random kicks of 0.6 box) can still end with nothing
+  stuck and a wrong mesh, in about 2 % of such steps on the A100 (#24, open).
 - Geometry rounds with the positions: the relative volume of a cell h grid
   steps wide is good to about 4e-8 / h. Exact down to clumps of 512 steps
   (error 8e-10), and particles one grid step apart are still exact.

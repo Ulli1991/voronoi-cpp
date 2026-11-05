@@ -51,3 +51,19 @@ build-meshfix/. Before-binaries: build-meshfix/before/.
   void's interior is in reach), so the start is O(k^2) in the particles around
   one void: k = 2000 about 1 s, k = 20000 with a hub 129 s (8 CPU threads).
   Old behaviour, now reachable. A limit, not a slowdown.
+
+- #13 moved to luna-cpp (#6) with the hydro, after the guard was committed here.
+  Commit c0b405b holds it and its hydro_test cases, for the port; its one line in
+  mesh_cases_test.cpp is the #21 tag and has nothing to do with it. Without the
+  guard the static lattice cases gave NaN, until the run aborted in the fifth.
+
+- Found while on it, not an issue: tet_repair::repair stops after 1000 rounds, and
+  with nothing listed as stuck at that moment update() returned a mesh with failing
+  triangles. Lowering the limit shows it (fallback.out_of_rounds, displacement 3e-3
+  spacings, 1 and 2 rounds). Stats::unfinished sends such a step to a rebuild.
+
+- #22: snap is the largest k with k * step <= x, the product rounded as positions
+  are. Before, in 200 boxes of random side, 221037 of 4e6 positions k * step moved
+  (5.5 %; the issue's 5 of 12288 were at side 1e-3 alone, which has its own mantissa).
+  Option not taken: a tolerance on x / step would move off-grid inputs near a grid
+  line in every box, the unit cube too, and change bits.
