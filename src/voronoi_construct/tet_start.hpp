@@ -173,14 +173,16 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
     Kokkos::parallel_for(
         "tet_start::unfinished", Range(exec, 0, n), KOKKOS_LAMBDA(int i) { marked(i) = status(i) != 0; });
     bool all = false;
+    Kokkos::View<int*, Memory> face_start;
     for (int round = 0; round < 3; ++round) {
-        tet_mesh::from_rings(exec, cells, mesh);
+        tet_mesh::assemble(exec, cells, mesh, face_start);
         const int count = static_cast<int>(mesh.vertex.extent(0));
         const Report report = check(exec, mesh, point, count, marked);
         ++stats.rounds;
         if (round == 0) stats.bad_tets = report.bad_tets;
         stats.tets = count;
         if (report.ok()) {
+            tet_mesh::represent_dropped(exec, mesh, face_start);  // walks: only on a checked mesh
             stats.exact = true;
             break;
         }

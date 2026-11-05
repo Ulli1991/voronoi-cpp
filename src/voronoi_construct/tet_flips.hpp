@@ -550,19 +550,20 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     int ka, kb;
                     tet_mesh::edge_ends(k, ka, kb);
                     const int a = vertex(t, ka), b = vertex(t, kb);
-                    int ring[tet_mesh::max_ring_length + 1];
-                    const int length = Kokkos::min(tet_mesh::walk_edge(dm, t, a, b, ring), tet_mesh::max_ring_length + 1);
-                    int lowest = t;
-                    for (int r = 0; r < length; ++r) lowest = Kokkos::min(lowest, ring[r]);
-                    for (int r = 0; r < length; ++r) {
-                        const int u = ring[r];
+                    const int lowest = tet_mesh::lowest_around_edge(dm, t, a, b);
+                    int u = t, previous = -1;
+                    do {
                         const int pa = tet_mesh::position(dm, u, a), pb = tet_mesh::position(dm, u, b);
-                        if (pa < 0 || pb < 0) continue;
-                        const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
-                        const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
-                                                       : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
-                        if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
-                    }
+                        if (pa >= 0 && pb >= 0) {
+                            const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
+                            const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
+                                                           : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
+                            if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
+                        }
+                        const int next = tet_mesh::next_around_edge(dm, u, previous, a, b);
+                        previous = u;
+                        u = next;
+                    } while (u >= 0 && u != t);
                 }
             });
         // Repair on the device from the changed ones and the stuck ones (what

@@ -875,7 +875,7 @@ void valence_cases() {
             Mesh m(Exec{}, 1.0);
             build(c, "a face of " + std::to_string(k) + " corners at the start", m,
                   ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.02, 2048), k < 1000 ? Expect::exact : Expect::exact_or_refused, 2);
-        }, k > 65 && k < 1000 ? 18 : 0);
+        });
         add("valence.ring.step." + std::to_string(k), [=](Check& c) {
             // The poles arrive during a step, from far outside the circle: the
             // start has no long edge, the repair creates it.
@@ -900,7 +900,7 @@ void valence_cases() {
                 c.expect(std::abs(volume(i) - brute) < 1e-9 * brute,
                          "pole cell volume " + sci(volume(i)) + " brute " + sci(brute));
             }
-        }, k > 64 && k < 1000 ? 18 : 0);
+        });
     }
     for (const int k : {50, 100, 200, 400, 800, 1600}) {
         add("valence.sphere." + std::to_string(k), [=](Check& c) {
