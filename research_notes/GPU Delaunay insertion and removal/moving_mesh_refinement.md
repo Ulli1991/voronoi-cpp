@@ -1,6 +1,6 @@
 # Mesh refinement and derefinement in moving-mesh / Lagrangian Voronoi hydro codes (adding and removing generators, conservative remap)
 
-Scope note: per the coordinator, depth is on (1) AREPO, (2) GIZMO MFM/MFV split/merge, (3) ALE/ReALE and remap literature (incl. r3d). Other codes are brief. No PROTEUS source was read. Where I read the public AREPO source (GPL, gitlab.mpcdf.mpg.de/vrs/arepo, files `src/mesh/criterion_refinement.c`, `criterion_derefinement.c`, `refinement.c`, `voronoi/voronoi_refinement.c`, `voronoi/voronoi_derefinement.c`, `src/main/run.c`, public release 2019/2020), it is cited as "AREPO public source".
+Scope note: per the coordinator, depth is on (1) AREPO, (2) GIZMO MFM/MFV split/merge, (3) ALE/ReALE and remap literature (incl. r3d). Other codes are brief. Where I read the public AREPO source (GPL, gitlab.mpcdf.mpg.de/vrs/arepo, files `src/mesh/criterion_refinement.c`, `criterion_derefinement.c`, `refinement.c`, `voronoi/voronoi_refinement.c`, `voronoi/voronoi_derefinement.c`, `src/main/run.c`, public release 2019/2020), it is cited as "AREPO public source".
 
 ## Q1. AREPO (Springel 2010; Vogelsberger 2012; Pakmor 2016; Weinberger 2020; AREPO-2): criteria, split, merge, remap, mesh update, restrictions
 

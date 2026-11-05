@@ -136,7 +136,7 @@ Key facts from the paper:
 6. **votess rate (0.6 vs 0.8 M/s).** Both are plot read-offs. The JOSS log-log plot gives about 0.55–0.6 M/s on an A100 at 1–8M points.
 7. **"Ray could not reach 10M" source.** It comes from the Basselin slides, not the Taveira slides.
 8. **Our own throughput.** The report says 5–7 M/s uniform at 7.4M. hidden_gems quotes the repo README: 4.2 M/s total (search plus reconstruction). construction_algorithms says "peaks at ~16 M cells/s". These are different measurements and configurations; the report should name them explicitly.
-9. **Is a GPU moving-mesh hydro code available?** The report says "No GPU Voronoi moving-mesh hydro code exists". fresh_sweep_moving_mesh lists ProteusGPU (README: 2D/3D moving-mesh generation on GPU, AREPO-like hydro, weak scaling on 1000 GH200) and peclet-voro (GPU moving Voronoi for CFD). **The report's statement is wrong as written.** Correct wording: "no peer-reviewed paper with published per-step GPU Voronoi mesh-construction rates was found".
+9. **Is a GPU moving-mesh hydro code available?** The report says "No GPU Voronoi moving-mesh hydro code exists". fresh_sweep_moving_mesh lists peclet-voro (GPU moving Voronoi for CFD). **The report's statement is wrong as written.** Correct wording: "no peer-reviewed paper with published per-step GPU Voronoi mesh-construction rates was found".
 
 ---
 
@@ -162,7 +162,6 @@ Key facts from the paper:
    - Radiant Foam does **incremental GPU (CUDA) Delaunay updates across optimiser steps** (arXiv 2502.01157).
    - peclet-voro does **GPU (Kokkos) Verlet-skin and near-miss certificate repair** of 3D Voronoi cells, reusing topology across timesteps. It is not peer-reviewed, and its numbers are self-reported.
    - cellGPU does GPU certificate testing with CPU repair (2D).
-   - ProteusGPU (README only) is a GPU moving-mesh code.
    - What remains unpublished, as far as found:
      - peer-reviewed GPU **3D Voronoi** topology reuse with timings;
      - **sharing candidate data across neighbouring cells** in a GPU per-cell clipper. The closest analogue is gStar4D's reciprocated working sets, shared via a digital Voronoi diagram (Nanjappa thesis Ch. 6, GPU, 2012). Taveira, Ray, Basselin and votess are all strictly independent per cell.
@@ -198,4 +197,3 @@ Key facts from the paper:
 - Galgoczi 2026 SER numbers (abstract only).
 - Wald 2011 and Osama 2022 full numbers.
 - Lévy 2022 step-fraction percentages: garbled extraction, flagged in the note.
-- Observation, not a note error: the session scratchpad contains a **ProteusGPU clone, build and run directory** (`scratchpad/ext/ProteusGPU`, `proteus-build`, timestamps 12:23–12:30). No note analyses ProteusGPU's algorithms beyond its README; all six mentions are disclaimers or README facts. Confirm that this build was not used as a source of ideas.

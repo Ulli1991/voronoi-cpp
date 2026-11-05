@@ -2,7 +2,7 @@
 
 Scope: GPU per-cell Voronoi, Delaunay and power diagram codes; ray and path tracing; Barnes-Hut and MD/SPH pair loops. The question is what each code did about SIMT divergence and long-tail per-item work, and what it measured. Each case is mapped to our candidate fixes: (1) persistent threads or dynamic fetching, (2) tail deferral with work caps, (3) sub-warp teams per cell, (4) stage splitting or wavefront, (5) sorting cells by predicted cost, (6) branch-free formulations.
 
-Method note: I made about 20 tool calls. Some sources were blocked. Both HAL PDFs (Ray et al. 2018 and Basselin et al. 2021) returned Anubis bot-blocks, eg.org refused the connection, and the Laine 2013 PDF could not be text-extracted on this machine. Details of those papers come from abstracts or from descriptions in later papers, and are flagged as such. ProteusGPU was not used, as requested.
+Method note: I made about 20 tool calls. Some sources were blocked. Both HAL PDFs (Ray et al. 2018 and Basselin et al. 2021) returned Anubis bot-blocks, eg.org refused the connection, and the Laine 2013 PDF could not be text-extracted on this machine. Details of those papers come from abstracts or from descriptions in later papers, and are flagged as such.
 
 ## Q1: Which techniques gave 2x or more on irregular geometric per-item work on modern GPUs, and which did not help?
 

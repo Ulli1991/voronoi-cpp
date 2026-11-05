@@ -261,7 +261,6 @@ evaluation (`domain/test/performance/sph_density_driver.cu:174-183`). It reports
 The repo contains no A100 SPH number; I found none published.
 
 Comparison points from our notes, on an A100:
-- PROTEUS Sedov: 5 M updates/s;
 - AREPO-WD: 0.59 M updates/s;
 - LUNA fixed grid: 1.1 G updates/s.
 

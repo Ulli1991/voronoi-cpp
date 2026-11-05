@@ -23,7 +23,6 @@ The GPU path is only ~2.1x (jittered) and 1.85x (uniform) faster than their own 
 Sedov (2.1M cells, 20 global steps):
 - **Everything on the GPU** (mesh plus per-cell gradients and fluxes): **3.58 s per full step = 0.585 M cell-updates/s**. The mesh is 71 % of the step.
 - Mesh on the GPU with the classic per-face hydro on 18 CPU ranks: 4.24 s per step = 0.49 M/s, with the mesh at 55 %.
-- PROTEUS: 0.422 s per step (75 % mesh). AREPO-WD is **8.5x slower per step**.
 
 Run-to-run spread: the same jittered build took 1.54 s in job 31653699 and 1.34 s in job 31654033 (`gpu_jitter128_bigmem`, and Sedov at 1.35-1.40 s). So the jittered GPU rate is **1.36-1.57 M cells/s**. The node was shared with other jobs on the other 3 GPUs.
 
@@ -219,7 +218,6 @@ total                     4.25  100.0%   0.00      76.75  100.0%
 | mesh share (`voronoi` / total) | **55 %** (2.33 s; of which `built` region 1.35 s = 32 %) |
 | hydro share (gradients + fluxes) | 36 % (1.55 s) |
 | domain + other | 9 % |
-| PROTEUS on the same A100 | 0.422 s/step, 0.005 G/s, 75 % mesh, i.e. **10x faster per step** |
 
 ### B. Mesh and per-cell hydro both on the GPU (build B)
 
@@ -255,9 +253,8 @@ total                     3.60  100.0%
 | cell updates/s | **0.585 M/s (0.0006 G/s)** |
 | mesh share (`voronoi` / total) | **71 %** (2.55 s; `built` region 1.40 s = 39 %) |
 | hydro share | 17 % (0.62 s: GPU gradients 0.20, GPU fluxes 0.36) |
-| PROTEUS on the same A100 | 0.422 s/step, i.e. **8.5x faster per step** |
 
-Moving the hydro to the GPU saves 0.92 s per step (1.55 → 0.62 s). The mesh, still ~2.5 s per step, is then 71 % of the step, close to PROTEUS's 75 % share, but at ~8x PROTEUS's absolute mesh time. Of AREPO's own mesh time, only ~1 s is the device clip; the rest is host-side work:
+Moving the hydro to the GPU saves 0.92 s per step (1.55 → 0.62 s). The mesh, still ~2.5 s per step, is then 71 % of the step. Of AREPO's mesh time, only ~1 s is the device clip; the rest is host-side work:
 - `dynamic` 0.54 s;
 - face-record resolve and commit ~0.17 s;
 - the graph CSR for the next build 0.24 s;

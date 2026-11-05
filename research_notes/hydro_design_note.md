@@ -86,7 +86,7 @@ Every stage, and every alternative inside a stage (update loop (b) vs (c), store
 gradient variants, time integrators, regularisation), is measured in **cell updates per
 second** on the A100, double, at 2.1M cells (jittered, uniform random, clustered), with the
 step split into phases: mesh (when it moves), gradients, fluxes, update, time step. Reported
-next to LUNA fixed grid (1.1 G/s), PROTEUS (5 M/s), AREPO-WD (0.59 M/s), GIZMO GPU (0.34 M/s)
+next to LUNA fixed grid (1.1 G/s), AREPO-WD (0.59 M/s), GIZMO GPU (0.34 M/s)
 on the same problem where one exists. A choice is made by these numbers; a variant that is
 slower without a measured accuracy gain is dropped. The hydro tool prints them the same way
 `voronoi_bench` does (median of repeats, one line per phase), so before/after comparisons are
@@ -120,7 +120,7 @@ than 32 slots per cell (cleanup decision D1 amended).
 - Sound wave convergence (first order: error ~ N^(-1/3)), on jittered and on uniform random
   points.
 - Sod shock tube in 3D (plane-parallel on a jittered mesh) against the exact solution.
-- Sedov 128^3 against the analytic solution and LUNA, with s/step next to PROTEUS, AREPO-WD,
+- Sedov 128^3 against the analytic solution and LUNA, with s/step next to AREPO-WD and
   GIZMO GPU (same A100).
 - Reference data: luna-reference-solutions (`reference_path`), exact Riemann solutions.
 

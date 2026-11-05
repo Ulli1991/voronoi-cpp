@@ -1,6 +1,6 @@
 # Fresh sweep: GPU neighbour search for per-point 3D Voronoi cell construction (2010 – Oct 2026)
 
-Scope note: this is an independent sweep, done after reading only the task brief (I did not read the existing `neighbour_search.md`). It is judged by what a per-cell Voronoi reconstruction for moving-mesh hydro needs: candidates delivered nearest-first, a certification/stop rule, and a memory pattern that fits a fused or split search+clip kernel. Items marked **[via construction agent, not re-verified by me]** come from agent abea32190e16c99ae's message. Items marked **[unverified]** are from memory with no source fetched in this sweep. ProteusGPU was not used.
+Scope note: this is an independent sweep, done after reading only the task brief (I did not read the existing `neighbour_search.md`). It is judged by what a per-cell Voronoi reconstruction for moving-mesh hydro needs: candidates delivered nearest-first, a certification/stop rule, and a memory pattern that fits a fused or split search+clip kernel. Items marked **[via construction agent, not re-verified by me]** come from agent abea32190e16c99ae's message. Items marked **[unverified]** are from memory with no source fetched in this sweep.
 
 Fetch failures to note: HAL (Ray et al. 2018) was blocked by bot protection, the Eurographics LBVH-kNN paper (diglib.eg.org) refused the connection, and the Wald 2022 PDF could not be rendered locally (it was read through ar5iv instead).
 

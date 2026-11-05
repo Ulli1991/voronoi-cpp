@@ -1,12 +1,11 @@
 # GPU-accelerated moving-mesh / Voronoi-based simulation codes (2015 to Oct 2026), independent sweep
 
-Scope note: this is a fresh sweep of about 20 tool calls (web search and fetch), done on 2026-10-29. Several PDFs (Zhai et al. TVCG 2020; Ray et al. 2018 on HAL) could not be text-extracted or were blocked by bot protection, so their numbers are marked as gaps. ProteusGPU appears only with its README-stated facts. Its algorithms were not analysed, as instructed.
+Scope note: this is a fresh sweep of about 20 tool calls (web search and fetch), done on 2026-10-29. Several PDFs (Zhai et al. TVCG 2020; Ray et al. 2018 on HAL) could not be text-extracted or were blocked by bot protection, so their numbers are marked as gaps.
 
 ## Which simulation codes build Voronoi/Delaunay meshes on GPUs today, and how fast?
 
 ### Takeaway
 Very few time-stepping codes build Voronoi or Delaunay meshes on the GPU, and almost none publish per-cell mesh-build rates. The verified GPU-resident examples are:
-- ProteusGPU (astro moving-mesh hydro, GH200)
 - peclet-voro (Kokkos, dynamic 3D Voronoi for CFD)
 - cellGPU (2D active-matter Voronoi model; the triangulation repair runs on the CPU)
 - graphics power-particle and optimal-transport fluid solvers (Zhai et al. 2020; Plateau Holleville and Lévy 2026)
@@ -14,11 +13,6 @@ Very few time-stepping codes build Voronoi or Delaunay meshes on the GPU, and al
 The best-documented GPU construction speeds come from static-point builders: Taveira et al. (SIGGRAPH 2026) and gDel3D. Neither has been used inside a hydro time loop. Production astro moving-mesh codes (AREPO, RICH, TESS, ChaNGa-MM) still build the mesh on CPUs.
 
 ### Cited Findings
-**ProteusGPU** (github.com/lucas56098/ProteusGPU), README-stated only:
-- It offers "2D/3D static/moving mesh generation on CPU and GPU" and is "optimized for NVIDIA's GH200 superchips". The hydro solver is "similar to" AREPO (Springel 2010), and mesh generation is credited to Ray et al. 2018 — [ProteusGPU README](https://github.com/lucas56098/ProteusGPU)
-- The README reports "Weak scaling on JUPITER booster for an acoustic wave test with up to 3600^3 and 1000 GH200 GPUs retains 75% efficiency" — [ProteusGPU README](https://github.com/lucas56098/ProteusGPU)
-- Per-step time ("Per step time for a 454^3 acoustic wave test on two GH200 chips") and a per-step breakdown appear only as figures. No numeric values or precision are given in the README text — [ProteusGPU README](https://github.com/lucas56098/ProteusGPU)
-
 **peclet-voro** (computational-chemical-engineering, Kokkos; CUDA/HIP/OpenMP; dated entries up to 2026-09-03; Zenodo DOI 10.5281/zenodo.21132443; no paper):
 - Described as a "Dynamic 3D Voronoi tessellation of moving particles (Kokkos GPU)" for compressible and incompressible CFD with surface tension — [GitHub](https://github.com/computational-chemical-engineering/peclet-voro); [PyPI](https://pypi.org/project/peclet-voro-cu13/)
 - The README lists no cells/s, ms per step or GPU model. It points to `docs/performance_report.md`, which was not retrieved — [GitHub](https://github.com/computational-chemical-engineering/peclet-voro)
@@ -62,12 +56,11 @@ The best-documented GPU construction speeds come from static-point builders: Tav
 - ChaNGa moving-mesh paper: Voro++ computes about 100K 3D Voronoi cells/s on a single core — [MNRAS 471, 3577](https://academic.oup.com/mnras/article/471/3/3577/3979023)
 
 ### Inferences
-- In astrophysics, ProteusGPU appears to be the only public code doing full 3D moving-mesh hydro with GPU mesh generation at scale. AREPO's GPU work (as far as found) covers radiative transfer, not the mesh.
+- In astrophysics, AREPO's GPU work (as far as found) covers radiative transfer, not the mesh.
 - The fastest verified 3D GPU build rate is about 7–8.5M cells/s (4.2M points in 0.570 s, and 1M in 0.118 s, on an RTX 5090, end-to-end including allocation). This is for a static point set, so it is an upper-bound reference, not a per-step rate.
 - Graphics power-particle solvers run small N (10^3–10^5) and do not report Mcells/s.
 
 ### Gaps
-- ProteusGPU per-step times and precision: the values exist only in README figures.
 - peclet-voro throughput: `docs/performance_report.md` was not retrieved.
 - Zhai et al. 2020 tables: the PDF could not be text-extracted.
 - Ray et al. 2018 "Meshless Voronoi on the GPU": the HAL page was blocked, so its numbers (cited elsewhere as a power-diagram fluid application) are unverified here.
@@ -95,7 +88,6 @@ No source found reports a GPU-resident local Delaunay flip-repair inside a 3D hy
   - Python arrays are float64 — [GitHub](https://github.com/computational-chemical-engineering/peclet-voro)
 - **Taveira et al. 2026**: the method "targets single-GPU execution and static point sets"; incremental updates are listed as future work. In the Radiant Foam experiment they "benchmark full reconstruction" every time — [arXiv HTML](https://arxiv.org/html/2605.06408)
 - **Radiant Foam**: site optimisation by gradient descent "demands the mesh to be recomputed exhaustively". A Dec 2025 follow-up notes that moving Delaunay vertices causes topological discontinuities (edge flips) — [search summary of arXiv 2605.06408](https://arxiv.org/pdf/2605.06408); [arXiv 2512.04076](https://arxiv.org/pdf/2512.04076v1)
-- **ProteusGPU**: the README mentions a "two-tier mesh generation" with "fast and slow-tier" parts. Not analysed further, per instruction — [README](https://github.com/lucas56098/ProteusGPU)
 - **CPU Lagrangian Voronoi schemes for context**: some regenerate the mesh "anew from Voronoi seeds ... at every time step" ("Lagrangian Voronoi meshes and particle dynamics with shocks") — [ResearchGate](https://www.researchgate.net/publication/377036562_Lagrangian_Voronoi_meshes_and_particle_dynamics_with_shocks). Others use direct ALE schemes on moving Voronoi meshes with topology changes (Gaburro et al.) — [ResearchGate](https://www.researchgate.net/publication/332873476_High_order_direct_Arbitrary-Lagrangian-Eulerian_schemes_on_moving_Voronoi_meshes_with_topology_changes)
 
 ### Inferences
@@ -109,10 +101,9 @@ No source found reports a GPU-resident local Delaunay flip-repair inside a 3D hy
 ## What fraction of a step is mesh construction, and what full-step cell-update rates are reported?
 
 ### Takeaway
-None of the GPU codes found publish a numeric fraction of step time spent in mesh construction, or full-step cell updates per second, in text. ProteusGPU shows them only as figures. The only numeric breakdown found is a CPU code: in Lévy 2022, Laguerre diagram construction was about 9.7% of the step, while Hessian assembly and gradient evaluation dominated. Those percentages come from a garbled extraction and are unverified.
+None of the GPU codes found publish a numeric fraction of step time spent in mesh construction, or full-step cell updates per second, in text. The only numeric breakdown found is a CPU code: in Lévy 2022, Laguerre diagram construction was about 9.7% of the step, while Hessian assembly and gradient evaluation dominated. Those percentages come from a garbled extraction and are unverified.
 
 ### Cited Findings
-- **ProteusGPU**: a "Breakdown of where the per step time is spent" figure and a per-step-time figure (454^3 on two GH200), with no numbers in the text. Weak scaling is 75% at 1000 GH200 GPUs up to 3600^3 cells — [README](https://github.com/lucas56098/ProteusGPU)
 - **Lévy 2022 (CPU, i9-9880H)**: crown splash with 500k cells takes about 98 s per step. Hessian assembly is about 41.5%, the gradient about 32.8% and the Laguerre step about 9.7% (unverified extraction) — [arXiv 2106.03936](https://arxiv.org/pdf/2106.03936)
 - **AREPO-RT on GPU**: the overall gain falls to 3x from 15x on RT benchmarks, because non-RT parts (including CPU mesh work) then dominate. No numeric mesh fraction is reported in the abstract — [arXiv 2404.17630](https://arxiv.org/abs/2404.17630)
 - **cellGPU**: no triangulation-time fraction is reported. The timing data are in figures — [arXiv 1702.02939](https://ar5iv.labs.arxiv.org/html/1702.02939)
@@ -128,4 +119,4 @@ No numeric values were found for:
 - the mesh-construction fraction on any GPU code
 - strong-scaling data for GPU Voronoi construction inside a simulation
 
-Retrieving ProteusGPU's figure data or an associated paper, peclet-voro's performance_report.md, and the Zhai et al. 2020 tables would close these.
+Retrieving peclet-voro's performance_report.md and the Zhai et al. 2020 tables would close these.

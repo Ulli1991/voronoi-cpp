@@ -2,7 +2,7 @@
 
 Scope: how a thread or warp finds the particles that can cut its cell, in what order, and how that choice drives total cost. Context: A100, FP64, uniform grid with about 1 particle per cell, distance-sorted stencil, 2R security-radius stop, nearest-first clipping through a 16-entry sorted buffer. Measured per cell: about 75-115 grid cells, 24-44 candidates and 16-17 cuts.
 
-Method note: some numbers below come from my own Monte Carlo, run with scipy Qhull Delaunay at density λ=1 (mean spacing 1). The script is `/tmp/claude-28632/-raven-u-uli-voronoi-cpp/2fada6d8-a9b5-4727-917f-6d817979c190/scratchpad/mc/pv.py`. There were about 13.9k interior cells per point set; boundary cells were excluded with a margin of 6. These numbers are marked **[own MC]**. They are derived results, not published ones. The PROTEUS/ProteusGPU code was not consulted.
+Method note: some numbers below come from my own Monte Carlo, run with scipy Qhull Delaunay at density λ=1 (mean spacing 1). The script is `/tmp/claude-28632/-raven-u-uli-voronoi-cpp/2fada6d8-a9b5-4727-917f-6d817979c190/scratchpad/mc/pv.py`. There were about 13.9k interior cells per point set; boundary cells were excluded with a margin of 6. These numbers are marked **[own MC]**. They are derived results, not published ones.
 
 ## 1. Candidate counts: what published methods need vs the theoretical minimum
 

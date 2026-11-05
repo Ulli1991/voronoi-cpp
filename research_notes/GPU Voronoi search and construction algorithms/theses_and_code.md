@@ -1,6 +1,6 @@
 # GPU Voronoi/Delaunay construction: theses, technical reports and open-source code (to Oct 2026)
 
-Scope: details that the papers leave out, taken from theses and source code: (a) how each method finds neighbours for a per-cell Voronoi cell, (b) the cell/star construction step, (c) measured throughput. The ProteusGPU code was excluded as the user asked, and was not read.
+Scope: details that the papers leave out, taken from theses and source code: (a) how each method finds neighbours for a per-cell Voronoi cell, (b) the cell/star construction step, (c) measured throughput.
 Method: full-text reading of the Nanjappa PhD thesis and the Paragram paper (arXiv 2605.06408 v1, including its appendix and supplementary tables). Source code was read from shallow clones of paragram, peclet-voro, votess, GPU-Restricted-Power-Diagrams (Basselin), 3D-Voronoi-GPU (Liu et al. 2020) and Local-DeWall (Gao & Chen 2026).
 Derived throughputs (cells/s = N / time) are my arithmetic on the quoted times and are labelled "derived".
 

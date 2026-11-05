@@ -1,6 +1,6 @@
 # Fastest GPU 3D Voronoi / Delaunay construction methods (2015 – Oct 2026), independent sweep
 
-Scope note: these are notes from an independent sweep (web search, arXiv full texts where text extraction worked). ScienceDirect (Gao & Chen 2025/2026), HAL (Ray et al. 2018) and the Semantic Scholar API refused access (403, Anubis bot wall, 429), so those papers are covered only from abstracts, highlights and search snippets. ProteusGPU was deliberately not used. Throughput figures labelled "derived" are my own arithmetic (N / reported seconds) and are not quoted from the papers.
+Scope note: these are notes from an independent sweep (web search, arXiv full texts where text extraction worked). ScienceDirect (Gao & Chen 2025/2026), HAL (Ray et al. 2018) and the Semantic Scholar API refused access (403, Anubis bot wall, 429), so those papers are covered only from abstracts, highlights and search snippets. Throughput figures labelled "derived" are my own arithmetic (N / reported seconds) and are not quoted from the papers.
 
 ## Which methods report the highest 3D throughput, and under what conditions?
 

@@ -1,6 +1,6 @@
-# plume's local Voronoi build vs ours, PROTEUS and voro++ (2026-10-31)
+# plume's local Voronoi build vs ours and voro++ (2026-10-31)
 
-Benchmark only. No plume, PROTEUS or voro++ code or algorithm went into
+Benchmark only. No plume or voro++ code or algorithm went into
 voronoi-cpp; nothing was pushed or changed in the plume repo (a local copy
 took a timing harness, see below).
 
@@ -10,7 +10,6 @@ took a timing harness, see below).
 |---|---|---|
 | plume | rennehan/plume main `cf55509a` (2026-10-30), local copy `/raven/u/uli/plume-bench/plume-work` | cuda-oxide `6921d3ee`, rustup nightly-2026-08-28 in ~/.rustup, ~/.cargo (user space), `cargo oxide build --release`, kernels to PTX by the nightly's llc, `default-arch = sm_80`; CUDA 13.2 (module cuda/13.2: plume's CUB wrappers need CCCL's `cuda/iterator`, absent in 13.0; README asks 13.1), clang/21 for bindgen, hdf5-serial/1.14.1 |
 | ours | voronoi-cpp main `77a903b` (git archive in build-plumecmp/src-tree) | gcc/14 cuda/13.0, Kokkos /u/uli/kokkos-cuda, nvcc_wrapper; build job 31699972 |
-| PROTEUS | /raven/u/uli/proteus-bench/ProteusGPU (not re-run) | numbers of job 31694621 (cleanup2_2026-10-31.md) |
 | voro++ | chr1shr/voro master `b0dac57` (2026-03-04), /raven/u/uli/plume-bench/voro | gcc/15, `-O3 -march=icelake-server`, static lib; harness tools/voro_bench.cc |
 
 GPU: A100-SXM4-40GB, driver 580.178.04 (jobs 31700277, 31700427). CPU:
@@ -49,8 +48,6 @@ Sedov start) for the README comparison. All codes see the same positions
   the cell list (shell search), clipping, the certificate, volume, centroid
   and faces (neighbour, area vector, face centroid), double precision;
   build_ms = the cell list (0.2-1 ms). The table uses construct_ms.
-- **PROTEUS**: not re-run; mesh time per step from job 31694621 (its whole
-  mesh step including its own search and data movement).
 - **voro++**: `container_periodic`, the unit box scaled to 2^16 (exact) because
   `put()` aborts on two particles closer than 1e-5 absolute units ("Duplicate"),
   which clustered and halo have in the unit box; `nx=ny=nz=75` (4.97 per
@@ -66,19 +63,19 @@ Sedov start) for the README comparison. All codes see the same positions
 
 ## Results, M cells/s (2,097,152 cells, A100 for GPU codes)
 
-| input | plume build (search+tree+build) | ours construct (incl. search) | PROTEUS mesh/step | voro++ 72 cores, cells (with setup) | voro++ 1 core |
-|---|---|---|---|---|---|
-| jittered | **7.17** (6.12) | **34.7** | 6.81 | 2.58 (0.93) | 0.039 |
-| uniform | fails: "needs more than 64 vertices" | **16.5** | 4.10 | 2.34 (0.87) | 0.035 |
-| clustered | no number (see below) | **13.0** | 2.00 | 0.81 (0.46) | 0.014 |
-| halo | fails: "needs more than 64 vertices" | **12.1** | 1.57 | 0.080 (0.070) | 0.009 |
+| input | plume build (search+tree+build) | ours construct (incl. search) | voro++ 72 cores, cells (with setup) | voro++ 1 core |
+|---|---|---|---|---|
+| jittered | **7.17** (6.12) | **34.7** | 2.58 (0.93) | 0.039 |
+| uniform | fails: "needs more than 64 vertices" | **16.5** | 2.34 (0.87) | 0.035 |
+| clustered | no number (see below) | **13.0** | 0.81 (0.46) | 0.014 |
+| halo | fails: "needs more than 64 vertices" | **12.1** | 0.080 (0.070) | 0.009 |
 
 plume jittered 2.1M in ms: tree 1.6, search 48.2, build 292.4, no row left
 uncertified (volume sum 1 - 3e-15). Its build is 4.8x slower than ours, and
 4.2x slower if its search is counted too.
 
 Jobs: plume and ours 31700277 and 31700427 (A100, driver 580.178.04); voro++
-31700541 (72 threads), 31700542 and 31700543 (1 core); PROTEUS 31694621.
+31700541 (72 threads), 31700542 and 31700543 (1 core).
 
 ### 262,144 cells (and the README's 64^3 Sedov figure)
 
@@ -130,8 +127,6 @@ per the README).
   include the exactness step: exact topology comes from the exact start and
   repair (`tet_start`, predicates on the 2^30 grid, about 2x the rebuild cost,
   120 ms at 2.1M jittered).
-- **PROTEUS**: per-step mesh time of its own pipeline; its exactness wasn't
-  examined (source not read).
 - **voro++**: double precision, its own tolerances (`tolerance =
   10 eps x max_len_sq`), no exact predicates and no cross-cell consistency
   guarantee. Its fixed block grid makes dense regions costly: per-cell cost grows

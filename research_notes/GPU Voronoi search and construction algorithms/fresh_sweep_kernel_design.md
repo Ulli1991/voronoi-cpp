@@ -1,6 +1,6 @@
 # GPU kernel design for many small independent geometric problems (2010 to Oct 2026): fresh independent sweep
 
-Scope note: this sweep ran about 20 tool calls. Several primary PDFs could not be rendered (EG digital library refused the connection, HAL blocked by bot protection). Where a number comes from an abstract or a search snippet rather than the full text, it is marked "(abstract)" or "(unverified, secondary)". ProteusGPU was not used as a source.
+Scope note: this sweep ran about 20 tool calls. Several primary PDFs could not be rendered (EG digital library refused the connection, HAL blocked by bot protection). Where a number comes from an abstract or a search snippet rather than the full text, it is marked "(abstract)" or "(unverified, secondary)".
 
 ## Q1. Which mappings and state layouts gave the largest measured speedups for batched small geometric problems?
 

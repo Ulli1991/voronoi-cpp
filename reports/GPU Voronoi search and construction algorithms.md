@@ -14,9 +14,8 @@ Once the numbers are taken from the right tables, the published state of the art
 | Xiao et al. 2025/26 | 10.2 WN / 19.2 blue noise | RTX 3080 | fp32 | cells and centroids, kernel only |
 | peclet-voro (self-reported) | 3.6 cold; 8.5 construct-only | RTX 5080 | FP64 | cells and geometry |
 | gDel3D | 3.4–4.7 | H200 / RTX 5090 | double | Delaunay topology only |
-| ProteusGPU (benchmark, same A100) | 1.6–6 mesh-only | A100 40 GB | — | — |
 
-The same-GPU comparisons pin down where we stand. On our A100, our clipping is **2.7–4× faster than ProteusGPU's mesh construction**. ProteusGPU is the one public GPU moving-mesh hydro code, and its full Sedov step on 2.1M cells takes 0.422 s, or **0.005 G cell updates/s**, with 75% of the step spent on the mesh. At 7.4M cells it does about 5.2 M updates/s. On the same card, our fixed-grid JAX code LUNA does a full FP64 3D hydro step at **716 M cell updates/s at 128³ and 1,104 M at 256³**. A moving-mesh code is therefore 140–220× behind a Cartesian one on identical hardware. The 100 M/s target sits between them, roughly 7–11× below LUNA. Elsewhere, Cartesian GPU hydro exceeds 1e9 cell updates/s on one GH200 ([AthenaK, Stone et al. 2024](https://arxiv.org/abs/2409.16053)).
+On our A100, our fixed-grid JAX code LUNA does a full FP64 3D hydro step at **716 M cell updates/s at 128³ and 1,104 M at 256³**. The 100 M/s target sits roughly 7–11× below LUNA. Elsewhere, Cartesian GPU hydro exceeds 1e9 cell updates/s on one GH200 ([AthenaK, Stone et al. 2024](https://arxiv.org/abs/2409.16053)).
 
 Several earlier claims in our notes do not survive checking and are not used here. These include the "8 M/s" paragram figure (a power-diagram table), a 12.5 M/s V100 rate for Ray et al. 2018 (an unverifiable snippet), a 33 M/s rate for Basselin et al. (contradicted by the authors' own slides, which give about 4.3 M seeds/s, [Basselin D1-Days slides](https://members.loria.fr/Olivier.Devillers/seminaires/Slides/2021-D1-Days/Basselin.pdf)), and the description of paragram's termination as an exact certificate. The paragram code caps its traversal stack at 64 entries and **silently drops the farthest node on overflow** ([paragram source](https://github.com/zenseact/paragram)). With fp32 arithmetic and post-hoc symmetrisation on top, the fastest published method certifies nothing. Our walk does.
 
@@ -104,13 +103,12 @@ A 100 M cells/s full step means 10 ns per cell, or 21 ms per step at 2.1M cells 
 | **Left for topology repair** | **~2–4** | difference |
 | Full re-clip of every cell today | 90–330 | measured: 3–11 M/s |
 | Full re-clip at the A100 issue cap | ~19 | arithmetic: 53 M/s |
-| ProteusGPU full step (benchmark) | ~200 | measured: 0.005 G/s, 75% mesh |
 
 **100 M/s is plausible** when four conditions hold together. Topology is maintained rather than rebuilt. Geometry and the exact certificate run as one dense pass. The unstructured hydro kernel stays within about 3–4× of LUNA's per-cell cost. And topology repair fits in the remaining 2–4 ns per cell. With repair by re-clipping at today's ~10 M/s, that last condition allows **about 2–4% of cells per step**, or 7–11% if directions 3 and 4 bring repair clipping to ~30 M/s. Repair by local flips would allow more. These conditions fit near-uniform and moderately clustered flows with subsonic or Courant-limited motion. They fit especially well under hierarchical local timestepping, where only active cells move at all.
 
 **100 M/s is not plausible** in four cases. The first is any design that re-clips every cell every step: even a perfect kernel at the issue cap spends ~19 ns on the mesh alone, and no published kernel comes within 5× of that cap. The second is regimes in which most cells change neighbours every step. If true topology churn tracks peclet-voro's flag rates (47–72% at δ/h of 5e-3 to 1e-2), repair costs more than a rebuild. The third is tolerance-based arithmetic, which our degeneracy tests show fails. The fourth is memory designs built around a 250-candidate table, which caps the A100 near 8M cells.
 
-The hydro side is a separate risk. LUNA shows FP64 hydro at 1.1 G updates/s on this card, but the non-mesh quarter of ProteusGPU's step alone runs at about 20 M updates/s. An unstructured hydro kernel at 250–400 M/s is a target, not a measurement. Moving to an H100 adds about 1.2× in SMs and doubles FP64 per SM, but the register file per SM is unchanged, so it helps a latency-bound kernel by roughly the SM-and-clock ratio rather than 3× ([NVIDIA Hopper blog](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/)).
+The hydro side is a separate risk. LUNA shows FP64 hydro at 1.1 G updates/s on this card, but LUNA is a fixed-grid code. An unstructured hydro kernel at 250–400 M/s is a target, not a measurement. Moving to an H100 adds about 1.2× in SMs and doubles FP64 per SM, but the register file per SM is unchanged, so it helps a latency-bound kernel by roughly the SM-and-clock ratio rather than 3× ([NVIDIA Hopper blog](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/)).
 
 ## Conclusion
 

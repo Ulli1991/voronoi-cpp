@@ -21,11 +21,10 @@ Comparison on the same A100 (2.1M cells, Sedov 128^3):
 | Code | s/step | updates/s |
 |---|---|---|
 | LUNA, fixed grid | - | 1,100 M/s |
-| PROTEUS | 0.422 | 5 M/s |
 | AREPO-WD GPU | 3.58 | 0.59 M/s |
 | GIZMO GPU MFM | 6.23 | 0.34 M/s |
 
-So GIZMO GPU is **15x slower than PROTEUS** and **1.7x slower than AREPO-WD** per step, even though GIZMO has no mesh construction. On this x86 + A100 node the GPU build is **slower than the same code on 18 CPU cores** (3.96 s with 18 MPI ranks).
+So GIZMO GPU is **1.7x slower than AREPO-WD** per step, even though GIZMO has no mesh construction. On this x86 + A100 node the GPU build is **slower than the same code on 18 CPU cores** (3.96 s with 18 MPI ranks).
 
 The nsys profile shows why:
 - **GPU kernels run only ~23 % of the wall time.**
