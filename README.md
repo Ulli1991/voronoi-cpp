@@ -369,6 +369,8 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
   it in the total volume of the cells, off the box by more than 1e-6, and rebuilds
   (`Report::overlapped`). That check is on the volume alone: a wrong mesh whose
   volumes still add up to the box within 1e-6 would pass it.
+- On CUDA a build in a cube of side 3.086e24 aborts with an illegal device
+  address (#26, open); the other sides tested and OpenMP do not.
 - `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries
   (10 at 2.1M cells, none below 200000), the rest is a rebuild, which needs the
   memory of a start.

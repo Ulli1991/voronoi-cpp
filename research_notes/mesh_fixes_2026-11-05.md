@@ -92,9 +92,22 @@ build-meshfix/. Before-binaries: build-meshfix/before/.
   with stuck 0, all rebuilt through Stats::unfinished, 0 wrong. Same loop with that
   guard off (31926798), 375 runs, 1500 steps: 26 such steps, all 26 caught by the
   volume check alone, 0 wrong. So each guard closes it by itself.
-- A race of mine, from the #18 commit: represent_dropped became the last asynchronous
-  kernel of the start, and rebuild() drops the views it reads next. Illegal device
-  address, at random, in box.snap_twice.3 and 3.09e+24 (0.05 s cases). A fence there,
-  and one in forget().
+- A hazard of mine, from the #18 commit, read from the code: represent_dropped became
+  the last asynchronous kernel of the start, and rebuild() drops the views it reads
+  next. A fence there, and one in forget(). No failure has been traced to it: the
+  illegal address I first took for it is box.snap_twice.3.09e+24, which aborts on
+  every run with the fences in (job 31928593, 30 of 30), so that is something else.
 - The reduction inside tet_mesh::faces cost 867 -> 624 M cells/s in that kernel,
   mesh step 0.940/0.957/0.975 of main. Moved to a kernel of its own over the cells.
+- Final, commit 9e95e40, job 31928593, one node: mesh step 0.997 / 0.996 / 1.001 of
+  main at 0.03 / 0.1 / 0.3 spacings (136.9, 84.6, 46.2 M cells/s), moving hydro 74.8
+  against 74.4 M cell updates/s, tet_mesh::faces 787 against 786 M cells/s,
+  voronoi::total_volume 49 G cells/s (0.043 ms per step at 2.1M), peak B/cell equal.
+  Unit box checksums equal main at all three spacings. OpenMP ctest 18/18.
+- box.snap_twice.3.09e+24 aborts on the mesh-tests binary too (job 31928812, 3 of 3):
+  old, filed as #26. repro.serial (Serial against CUDA bits) fails there as well.
+  CUDA ctest at 9e95e40: 16 of 18, those two groups.
+- The five hash paths were last run at 6b6ee92; 240045d and 9e95e40 add fences and move
+  the volume sum, and the unit box checksums were rerun on them, the hashes were not.
+- #23, noh at 128^3 (job 31926464): rebuilds at 4-9 M cells/s through step 40 of the
+  flow, where the host path took 0.057 M cells/s at step 10.
