@@ -246,7 +246,7 @@ inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets)
 // fresh Delaunay tetrahedralization of the particles two rings around, if
 // the new stars fit the old boundary exactly; otherwise add the particles of
 // the faces that did not fit to the stars and retry. Returns the new
-// tetrahedra, or nothing after eight tries.
+// tetrahedra, or nothing after eight tries or if a particle would be lost.
 inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     std::vector<int> seeds = vertices_of(m, u < 0 ? std::vector<int>{t} : std::vector<int>{t, u});
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -291,7 +291,17 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
             }
         const bool fits = !fresh.empty() && !reaches_corner &&
                           std::all_of(boundary.begin(), boundary.end(), [](const auto& b) { return b.second == 0; });
-        if (fits) return replace(m, old, fresh);
+        if (fits) {
+            // A particle the new stars lack would leave the mesh (it shares a
+            // grid position with another: no tetrahedron holds both, and flips
+            // never bring it back). No wider region helps; stuck, so a rebuild
+            // refuses the input.
+            std::vector<int> corners;
+            for (const Tet& s : fresh) corners.insert(corners.end(), s.begin(), s.end());
+            std::sort(corners.begin(), corners.end());
+            if (!std::includes(corners.begin(), corners.end(), ring.begin(), ring.end())) return {};
+            return replace(m, old, fresh);
+        }
         // Widen the stars over the particles of the faces that did not fit
         // (over the whole ring if that adds none).
         const std::size_t before = seeds.size();
@@ -540,19 +550,20 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     int ka, kb;
                     tet_mesh::edge_ends(k, ka, kb);
                     const int a = vertex(t, ka), b = vertex(t, kb);
-                    int ring[tet_mesh::max_ring_length + 1];
-                    const int length = Kokkos::min(tet_mesh::walk_edge(dm, t, a, b, ring), tet_mesh::max_ring_length + 1);
-                    int lowest = t;
-                    for (int r = 0; r < length; ++r) lowest = Kokkos::min(lowest, ring[r]);
-                    for (int r = 0; r < length; ++r) {
-                        const int u = ring[r];
+                    const int lowest = tet_mesh::lowest_around_edge(dm, t, a, b);
+                    int u = t, previous = -1;
+                    do {
                         const int pa = tet_mesh::position(dm, u, a), pb = tet_mesh::position(dm, u, b);
-                        if (pa < 0 || pb < 0) continue;
-                        const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
-                        const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
-                                                       : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
-                        if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
-                    }
+                        if (pa >= 0 && pb >= 0) {
+                            const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
+                            const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
+                                                           : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
+                            if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
+                        }
+                        const int next = tet_mesh::next_around_edge(dm, u, previous, a, b);
+                        previous = u;
+                        u = next;
+                    } while (u >= 0 && u != t);
                 }
             });
         // Repair on the device from the changed ones and the stuck ones (what
@@ -569,7 +580,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const tet_repair::Stats device = tet_repair::repair(exec, dm, state);
         total.flips23 += device.flips23;
         total.flips32 += device.flips32;
-        total.stuck = device.stuck;
+        total.stuck = device.unfinished ? Kokkos::max(device.stuck, 1) : device.stuck;
     }
     return total;
 }

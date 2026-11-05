@@ -748,6 +748,7 @@ public:
             const int o = geo.owner_of(f), j = geo.neighbour_of(f);
             const Vec a = geo.area_of(f);
             const double magnitude = Kokkos::sqrt(dot(a, a));
+            if (magnitude == 0) return State{};  // cospherical corners (an exact lattice): no normal, no flux
             Vec wf{};
             if constexpr (Moving) wf = face_velocity(f, o, j);
             State L, R;

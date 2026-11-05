@@ -8,10 +8,15 @@
 #include "tet_repair.hpp"
 #include "tet_start.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 // The Voronoi mesh of particles in a periodic box, kept exact as they move:
 // the interface of the hydro code to this library.
@@ -55,19 +60,64 @@ void snap_positions(const ExecSpace& exec, const X& x, const ep::Box& box,
         });
 }
 
-// Why a start failed: cells the clipping could not certify (in one periodic
-// image, see shell_voronoi::level_reach), or else not exact.
-template <class ExecSpace>
-std::string not_exact(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells) {
-    int uncertified = 0;
-    const auto status = cells.status;
+// The sum of the cell volumes.
+template <class ExecSpace, class Volume>
+double total_volume(const ExecSpace& exec, const Volume& volume) {
+    double total = 0;
     Kokkos::parallel_reduce(
-        "voronoi::uncertified", Kokkos::RangePolicy<ExecSpace>(exec, 0, status.extent(0)),
-        KOKKOS_LAMBDA(int i, int& count) { count += status(i) == shell_voronoi::uncertified; }, uncertified);
-    if (uncertified == 0) return "voronoi::Mesh: the start is not exact";
-    return "voronoi::Mesh: " + std::to_string(uncertified) +
-           " cells reach too far to be certified in one periodic image (a cell's radius must stay below about 3/16 "
-           "of the shortest box side): too few particles across the box";
+        "voronoi::total_volume", Kokkos::RangePolicy<ExecSpace>(exec, 0, volume.extent(0)),
+        KOKKOS_LAMBDA(int i, double& sum) { sum += volume(i); }, total);
+    return total;
+}
+
+// Particles on one position of the 2^30 grid, found by sorting on the host
+// (a refusal only): "" if there are none, else the error naming a pair. Two
+// such particles have no bisector between them, so no Voronoi cell, and
+// voronoi::Mesh refuses them.
+template <class Positions>
+std::string coincident(const Positions& positions) {
+    const auto x = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, positions);
+    std::vector<int> id(x.extent(0));
+    std::iota(id.begin(), id.end(), 0);
+    auto key = [&](int i) { return std::array<double, 3>{x(i, 0), x(i, 1), x(i, 2)}; };
+    std::sort(id.begin(), id.end(), [&](int a, int b) { return std::make_pair(key(a), a) < std::make_pair(key(b), b); });
+    long long extra = 0;
+    int first = -1, second = -1;
+    for (std::size_t i = 1; i < id.size(); ++i) {
+        if (key(id[i]) != key(id[i - 1])) continue;
+        if (extra++ == 0) {
+            first = id[i - 1];
+            second = id[i];
+        }
+    }
+    if (extra == 0) return "";
+    return "voronoi::Mesh: particles " + std::to_string(first) + " and " + std::to_string(second) +
+           " are on one position of the snapping grid (" + std::to_string(extra) + " coincident in all" +
+           "): a doubled particle has no Voronoi cell; move or merge them";
+}
+
+// Why a start failed: coincident particles, cells the clipping could not
+// certify (in one periodic image, see shell_voronoi::level_reach), or else
+// not exact.
+template <class Cells, class Positions>
+std::string not_exact(const Cells& cells, const Positions& positions) {
+    const std::string pair = coincident(positions);
+    if (!pair.empty()) return pair;
+    const auto status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.status);
+    long long count[shell_voronoi::status_count] = {};
+    for (std::size_t i = 0; i < status.extent(0); ++i) ++count[status(i)];
+    if (count[shell_voronoi::uncertified] > 0)
+        return "voronoi::Mesh: " + std::to_string(count[shell_voronoi::uncertified]) +
+               " cells reach too far to be certified in one periodic image (a cell's radius must stay below about 3/16 "
+               "of the shortest box side): too few particles across the box";
+    const long long overflow = count[shell_voronoi::plane_overflow] + count[shell_voronoi::vertex_overflow];
+    if (overflow > 0)
+        return "voronoi::Mesh: " + std::to_string(overflow) + " cells need more than the clipping's " +
+               std::to_string(shell_voronoi::huge_planes) + " planes or " + std::to_string(shell_voronoi::huge_vertices) +
+               " vertices (too many particles around one cell)";
+    return "voronoi::Mesh: the start is not exact (clipping statuses: " + std::to_string(count[0]) + " ok, " +
+           std::to_string(count[shell_voronoi::face_overflow]) + " out of pool room, " +
+           std::to_string(count[shell_voronoi::degenerate]) + " degenerate)";
 }
 }  // namespace detail
 
@@ -78,6 +128,7 @@ struct Report {
     long long flips = 0;           // device flips
     int rounds = 0;                // device repair rounds
     int stuck = 0;                 // triangles the device repair could not repair
+    bool overlapped = false;       // the repair's mesh did not fill the box once: rebuilt
     long long host_flips = 0;      // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
     int faces = 0;
@@ -92,10 +143,13 @@ struct Timings {
 // What update() does when the device repair leaves triangles it cannot
 // repair: repair the region around them on the host (tet_flips; a rebuild
 // if that does not finish either), build the mesh again from scratch on the
-// device, or (cheapest) choose by the number of stuck entries. Measured on an A100 at 2.1M cells: the host
-// takes about 2-5 ms for a handful of stuck triangles and 0.12 ms per
-// stuck entry beyond (20.8 s for the 178k of a wave lattice's first step),
-// a rebuild 0.17-0.25 s; so rebuild when more than n / 1000 are stuck.
+// device, or (cheapest) choose by the number of stuck entries. Measured on an
+// A100 at 2.1M cells: a rebuild 0.17-0.5 s (about 0.24 us per cell); the host
+// 0.12 ms per stuck entry on a wave lattice (20.8 s for 178k) but 37-54 ms in a
+// converging flow, where the neighbourhoods are dense and stuck entries come
+// from. So the cheapest plans for the dear case: the host only up to
+// n / 200000 entries, 10 at 2.1M, none below 200000 cells. No clock decides:
+// the same input takes the same path.
 enum class Fallback { cheapest, host, rebuild };
 
 // The mesh in D dimensions: one interface, an engine per D (3D: the
@@ -136,8 +190,12 @@ public:
     // New positions of all particles, x(i, a) in [0, side[a]) for particle i
     // (any view on the device). Repairs the mesh, or builds it on the first
     // call or when the number of particles changed; exact on return either
-    // way. `active` (particle ids) is accepted for a later repair limited
-    // to an active region; today every particle is repaired.
+    // way, or a std::runtime_error saying what is wrong with the positions.
+    // After such a refusal there is no mesh (no faces, no particles) and
+    // the next update() builds from scratch. No particles at all are a
+    // std::invalid_argument, and leave the object as it was. `active` (particle ids) is
+    // accepted for a later repair limited to an active region; today every
+    // particle is repaired.
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -146,42 +204,55 @@ public:
         Kokkos::Timer timer;
         snap(x);
         tet_repair::move_screened(exec_, positions_, box_, tets_, state_);
-        const tet_repair::Stats device = tet_repair::repair(exec_, tets_, state_);
+        const tet_repair::Stats device = tet_repair::repair(exec_, tets_, state_, repair_rounds_);
         report.flips = device.flips23 + device.flips32;
         report.rounds = static_cast<int>(device.rounds);
         report.stuck = device.stuck;
         lap(timer, timings, &Timings::repair);
-        bool stuck = device.stuck > 0;
-        if (stuck && fallback_ != Fallback::rebuild &&
-            (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 1000 <= n_)) {
-            const tet_flips::Stats host = tet_flips::finish(exec_, tets_, state_);
+        bool stuck = device.stuck > 0 || device.unfinished;
+        if (stuck && !device.unfinished && fallback_ != Fallback::rebuild &&
+            (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 200000 <= n_)) {
+            tet_flips::Stats host;
+            try {
+                host = tet_flips::finish(exec_, tets_, state_);
+            } catch (const std::exception&) {  // out of local room: the rebuild decides
+                host.stuck = 1;
+            }
             report.host_flips = host.flips23 + host.flips32;
             report.host_rebuilds = host.rebuilt;
             stuck = host.stuck > 0;
             lap(timer, timings, &Timings::fallback);
         }
-        if (stuck) {  // a rebuild, also for what the host left
-            Report rebuilt = rebuild(x, timings);
-            rebuilt.flips = report.flips;
-            rebuilt.rounds = report.rounds;
-            rebuilt.stuck = report.stuck;
-            rebuilt.host_flips = report.host_flips;
-            rebuilt.host_rebuilds = report.host_rebuilds;
-            return rebuilt;
+        if (!stuck) {
+            report.faces = geometry(timings);
+            // A step of order the box leaves tetrahedra whose corners see each
+            // other through different images: every local test passes and the
+            // mesh covers the torus many times. Their volumes do not add up.
+            report.overlapped = !(Kokkos::abs(total_volume_ / box_.volume() - 1) < 1e-6);
+            if (!report.overlapped) return report;
         }
-        report.faces = geometry(timings);
-        return report;
+        // A rebuild, also for what the host left.
+        Report rebuilt = rebuild(x, timings);
+        rebuilt.flips = report.flips;
+        rebuilt.rounds = report.rounds;
+        rebuilt.stuck = report.stuck;
+        rebuilt.host_flips = report.host_flips;
+        rebuilt.host_rebuilds = report.host_rebuilds;
+        rebuilt.overlapped = report.overlapped;
+        return rebuilt;
     }
 
     // The exact mesh of positions x from scratch: clipping with face rings,
     // the exact start (tet_start), then faces and cells.
     template <class X>
     Report rebuild(const X& x, Timings* timings = nullptr) {
+        if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh: no particles");
         Kokkos::Timer timer;
         Report report;
         report.rebuilt = true;
-        rings_ = {};  // the old mesh's pools make room for the build
-        n_ = static_cast<int>(x.extent(0));
+        const int particles = static_cast<int>(x.extent(0));
+        forget();  // the old mesh's pools make room for the build
+        n_ = particles;
         snap(x);
         {
             index(positions_);
@@ -195,7 +266,11 @@ public:
                 report.start = tet_start::build(exec_, grid, cells, tets_);
             }
             ring_entries_ = cells.capacity();
-            if (!report.start.exact) throw std::runtime_error(detail::not_exact(exec_, cells));
+            if (!report.start.exact) {
+                const std::string why = detail::not_exact(cells, positions_);
+                forget();
+                throw std::runtime_error(why);
+            }
         }
         // Capacities: 1/8 more tetrahedra and 1/32 more faces than the
         // starting mesh has (ring pools 1/2 more: room to append between
@@ -224,6 +299,7 @@ public:
     // particle, neighbour ids, area vectors, centroids relative to it).
     template <class X>
     const shell_voronoi::Cells<Memory>& clip(const X& x, const View<const int*>& cells) {
+        if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh::clip: no particles");
         n_ = n_ > 0 ? n_ : static_cast<int>(x.extent(0));
         if (static_cast<int>(x.extent(0)) != n_) throw std::invalid_argument("voronoi::Mesh::clip: other particles");
         snap(x);
@@ -263,6 +339,7 @@ public:
     // nothing if they are current.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
+        if (!built()) throw std::logic_error("voronoi::Mesh::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
         // Its temporaries live in the spare ring pool (see scratch).
         // After few flips from the last step's lists (with the spare pool, see
@@ -295,6 +372,8 @@ public:
 
     bool cells_current() const { return cells_current_; }
     void set_fallback(Fallback f) { fallback_ = f; }
+    // The most rounds of the device repair in one update; for tests.
+    void set_repair_rounds(int rounds) { repair_rounds_ = rounds; }
 
     int particles() const { return n_; }
     // The box; box() is the side of a cubic one.
@@ -332,6 +411,21 @@ public:
 
 private:
     bool built() const { return state_.alive.extent(0) > 0; }
+
+    // No mesh any more: the next update() builds from scratch.
+    void forget() {
+        exec_.fence();  // kernels in flight may still read what goes here
+        tets_ = tet_mesh::Mesh<Memory>{};
+        state_ = tet_repair::State<Memory>{};
+        rings_ = tet_mesh::FaceRings<Memory>{};
+        geometry_ = tet_mesh::Geometry<Memory>{};
+        cells_ = tet_mesh::CellFaces<Memory>{};
+        weights_ = {};
+        n_ = 0;
+        cells_current_ = false;
+        updates_since_lists_ = 1;
+        lists_of_last_update_ = false;
+    }
 
     // With timings: fence, add the time since `timer` started to the phase
     // `field`, restart the timer.
@@ -377,6 +471,7 @@ private:
             if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 32);
         }
         tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        total_volume_ = detail::total_volume(exec_, geometry_.volume);
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
@@ -388,6 +483,8 @@ private:
     int n_ = 0;
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
+    int repair_rounds_ = 1000;
+    double total_volume_ = 0;  // of the cells, from the last geometry()
     bool cells_current_ = false;
     int updates_since_lists_ = 1;       // updates since the last update_cells()
     bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last

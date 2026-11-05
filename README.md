@@ -261,6 +261,8 @@ what PASS means are in [TESTING.md](TESTING.md).
 | `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and boxes of side 1, 2, 3, a 1:1:0.125 slab and a 1:2:3 box |
 | `repair` | after every step of a flow the mesh equals an exact rebuild (lattice, wave, shells, jittered; box 2, a 1:2:3 box, a 1:1:0.125 slab) |
 | `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
+| `mesh_cases.*` | 3D special cases against an oracle that shares no code with the library: coincident points, few points, extreme contrast, thin and long boxes, degeneracy in motion, high valence, large motion, fallbacks, predicates on real point sets, bits across backends |
+| `distortion` | flows that wind the mesh up, no hydro: shear, vortex, Taylor-Green, turbulence, collapse, expansion, sheets, interpenetrating streams, long thin cells |
 | `hydro` | HLLC and HLL against reference fluxes and under rotation; uniform states stay uniform, conservation to rounding, bit-identical runs, the two update loops agree to rounding on jittered and uniform meshes; moving mesh: uniform state with a bulk velocity, conservation, Galilean invariance of a moving blast |
 
 ```sh
@@ -376,8 +378,33 @@ research_notes/stage1_1d_2026-11-04.md.
   GPU in the last bits; the A100 runs are bit-identical run to run.
 - Clipping alone is not watertight on uniform random input at 2.1M cells;
   the exact start makes the mesh exact.
-- Snapped duplicates (two particles in one grid cell) make every predicate
-  flat; nothing repairs them.
+- Particles on one grid position (grid step box / 2^30) have no Voronoi cell, so
+  `update()` refuses them on every path, with a `std::runtime_error` that names
+  a pair by id; the library does not merge them. It takes a rebuild to find out,
+  so such a step costs one. After a refusal there is no mesh (no faces, no
+  particles), and the next `update()` builds from scratch. Zero particles are a
+  `std::invalid_argument` and change nothing.
+- `update()` does not look at its input: a NaN or infinite coordinate is snapped
+  to some grid position, with no error.
+- Faces may have any number of corners. A cell may hold up to 16000 planes and
+  32000 vertices during its exact clipping: past 128 planes or 256 vertices it is
+  built on the host, with the grid and the ring pool copied there and back. Past those limits
+  `update()` refuses, naming them. Particles around a void cost O(k^2) at the
+  start, every cell of the shell clipping all k of them: about 1 s at k = 2000,
+  2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
+- A step of order the box (random kicks of 0.6 box) can end the device repair
+  with nothing stuck on a mesh that covers the torus many times. `update()` sees
+  it in the total volume of the cells, off the box by more than 1e-6, and rebuilds
+  (`Report::overlapped`). That check is on the volume alone: a wrong mesh whose
+  volumes still add up to the box within 1e-6 would pass it.
+- On CUDA a build in a cube of side 3.086e24 aborts with an illegal device
+  address (#26, open); the other sides tested and OpenMP do not.
+- `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries
+  (10 at 2.1M cells, none below 200000), the rest is a rebuild, which needs the
+  memory of a start.
+- Geometry rounds with the positions: the relative volume of a cell h grid
+  steps wide is good to about 4e-8 / h. Exact down to clumps of 512 steps
+  (error 8e-10), and particles one grid step apart are still exact.
 - The device repair breaks down near one spacing of motion per step
   (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU), repair limited to active regions, and

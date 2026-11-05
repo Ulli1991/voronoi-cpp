@@ -115,8 +115,11 @@ KOKKOS_INLINE_FUNCTION int opposite(const M& m, int t, const int* f) {
     return 3;
 }
 
-// The longest ring of tetrahedra around an edge that the walks follow.
-constexpr int max_ring_length = 64;
+// A bound on the walks around an edge, not a limit on faces: every walk runs
+// on a checked mesh (consistent adjacency), where a ring closes after at most
+// n - 2 tetrahedra, and takes no memory of its own. It only stops a walk on
+// broken adjacency, whose ring then fails to fit the pool (a Kokkos::abort).
+constexpr int max_ring_length = 1 << 30;
 
 // The tetrahedron after `current` around edge i-j (particles of current),
 // away from `before`; -1 at an open face.
@@ -131,9 +134,9 @@ KOKKOS_INLINE_FUNCTION int next_around_edge(const M& m, int current, int before,
     return -1;
 }
 
-// Tetrahedra around edge i-j from t, in order and t first, written to
-// ring[0, max_ring_length] unless it is null. Returns the number of steps (the ring
-// length when it closes).
+// Tetrahedra around edge i-j from t, in order and t first, written to ring[]
+// unless it is null. Returns the number of steps (the ring length when it
+// closes).
 template <class M>
 KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring = nullptr) {
     int current = t, before = -1, steps = 0;
@@ -147,13 +150,27 @@ KOKKOS_INLINE_FUNCTION int walk_edge(const M& m, int t, int i, int j, int* ring 
     return steps;
 }
 
+// The lowest-numbered tetrahedron around edge i-j of t.
+template <class M>
+KOKKOS_INLINE_FUNCTION int lowest_around_edge(const M& m, int t, int i, int j) {
+    int lowest = t, current = t, before = -1;
+    for (int steps = 0; steps <= max_ring_length; ++steps) {
+        lowest = Kokkos::min(lowest, current);
+        const int next = next_around_edge(m, current, before, i, j);
+        if (next < 0 || next == t) break;
+        before = current;
+        current = next;
+    }
+    return lowest;
+}
+
 // The ring of edge i-j from t written to ring[] in a canonical order: from
 // the tetrahedron whose two other particles (ids, smaller first) are least,
 // towards the smaller of its two ring neighbours. Every ring is stored this
 // way (update_face_rings), so the face geometry (tet_mesh::faces) is summed
 // in the same order whichever tetrahedron the racy repair left as the
-// face's representative. Open or overlong rings: walk_edge from t. Returns
-// the number of steps, as walk_edge.
+// face's representative. Open rings: walk_edge from t. Returns the number of
+// steps, as walk_edge.
 template <class M, class Ring>
 KOKKOS_INLINE_FUNCTION int walk_edge_canonical(const M& m, int t, int i, int j, Ring ring) {
     auto key = [&](int u) {  // the other two particles of u, packed
@@ -309,22 +326,26 @@ KOKKOS_INLINE_FUNCTION bool sliver(const Vec3* d, double& volume6, double& shape
 // particles, and each triangle's two tetrahedra sit next to each other in
 // the ring of its two smallest particles' face. Returns the number of ring
 // slots or adjacencies that could not be resolved (0 for a consistent build).
+// Faces in CSR come back in face_start: cell t owns faces [face_start(t),
+// face_start(t + 1)). The edges without a face have no representative yet:
+// represent_dropped, once the adjacency is known to be consistent.
 template <class ExecSpace>
-int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
-               Mesh<typename ExecSpace::memory_space>& mesh) {
+int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
+             Mesh<typename ExecSpace::memory_space>& mesh,
+             Kokkos::View<int*, typename ExecSpace::memory_space>& face_start) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(cells.owned_count.extent(0));
 
-    // Faces in CSR: cell t owns faces [face_start(t), face_start(t + 1)).
-    Kokkos::View<int*, Memory> face_start("face_start", n + 1);
+    face_start = Kokkos::View<int*, Memory>("face_start", n + 1);
     int faces = 0;
+    const auto starts = face_start;
     Kokkos::parallel_scan(
         "tet_mesh::face_start", Range(exec, 0, n),
         KOKKOS_LAMBDA(int t, int& sum, bool last) {
-            if (last) face_start(t) = sum;
+            if (last) starts(t) = sum;
             sum += cells.owned_count(t);
-            if (last && t == n - 1) face_start(n) = sum;
+            if (last && t == n - 1) starts(n) = sum;
         },
         faces);
     Kokkos::View<int*, Memory> owner("face_owner", faces), neighbour("face_neighbour", faces),
@@ -334,7 +355,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
         "tet_mesh::face_lengths", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
             long long at = cells.ring_start(t);
             for (int f = 0; f < cells.owned_count(t); ++f) {
-                const int g = face_start(t) + f, k = rings(at + 1);
+                const int g = starts(t) + f, k = rings(at + 1);
                 owner(g) = t;
                 neighbour(g) = rings(at);
                 length(g) = k;
@@ -342,7 +363,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
             }
         });
     auto face_of = KOKKOS_LAMBDA(int a, int b) {  // a < b
-        for (int g = face_start(a); g < face_start(a + 1); ++g)
+        for (int g = starts(a); g < starts(a + 1); ++g)
             if (neighbour(g) == b) return g;
         return -1;
     };
@@ -364,7 +385,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
         "tet_mesh::face_particles", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
             long long at = cells.ring_start(t);
             for (int f = 0; f < cells.owned_count(t); ++f) {
-                const int g = face_start(t) + f, k = length(g);
+                const int g = starts(t) + f, k = length(g);
                 for (int m = 0; m < k; ++m) particles(ring_start(g) + m) = rings(at + 2 + m);
                 at += 2 + k;
             }
@@ -480,30 +501,50 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
             }
             if (a >= 0 && b >= 0) Kokkos::atomic_or(&bits(e), 1 << edge_index(a, b));
         });
-    // Edges without such a face (the owner's cell dropped a rounding-level
-    // face its neighbour kept): the lowest-numbered tetrahedron around the
-    // edge represents it, so every edge has exactly one representative.
-    Kokkos::parallel_for(
-        "tet_mesh::represent_dropped", Range(exec, 0, tets), KOKKOS_LAMBDA(int e) {
-            for (int k = 0; k < 6; ++k) {
-                int ka, kb;
-                edge_ends(k, ka, kb);
-                const int a = vertex(e, ka), b = vertex(e, kb);
-                const int g = face_of(Kokkos::min(a, b), Kokkos::max(a, b));
-                const int first = g < 0 ? -1 : ring(ring_start(g));
-                if (first >= 0 && position(mesh, first, a) >= 0 && position(mesh, first, b) >= 0) continue;
-                int around[max_ring_length + 1];
-                const int length = Kokkos::min(walk_edge(mesh, e, a, b, around), max_ring_length + 1);
-                int lowest = e;
-                for (int r = 0; r < length; ++r) lowest = Kokkos::min(lowest, around[r]);
-                if (lowest == e) Kokkos::atomic_or(&bits(e), 1 << k);
-            }
-        });
     const auto edges = mesh.edges;
     Kokkos::parallel_for(
         "tet_mesh::edge_bytes", Range(exec, 0, tets),
         KOKKOS_LAMBDA(int e) { edges(e) = static_cast<std::uint8_t>(bits(e)); });
     return unresolved + open;
+}
+
+// After assemble, on a consistent mesh: edges without a face (the owner's cell
+// dropped a rounding-level face its neighbour kept) are represented by the
+// lowest-numbered tetrahedron around them, so every edge has exactly one
+// representative.
+template <class ExecSpace>
+void represent_dropped(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_space>& mesh,
+                       const Kokkos::View<int*, typename ExecSpace::memory_space>& face_start) {
+    const auto vertex = mesh.vertex;
+    const auto neighbour = mesh.neighbour;
+    const auto ring_start = mesh.ring_start;
+    const auto ring = mesh.ring;
+    const auto edges = mesh.edges;
+    Kokkos::parallel_for(
+        "tet_mesh::represent_dropped",
+        Kokkos::RangePolicy<ExecSpace>(exec, 0, static_cast<int>(vertex.extent(0))), KOKKOS_LAMBDA(int e) {
+            for (int k = 0; k < 6; ++k) {
+                int ka, kb;
+                edge_ends(k, ka, kb);
+                const int a = vertex(e, ka), b = vertex(e, kb), low = Kokkos::min(a, b), high = Kokkos::max(a, b);
+                int first = -1;
+                for (int g = face_start(low); g < face_start(low + 1); ++g)
+                    if (neighbour(g) == high) first = ring(ring_start(g));
+                if (first >= 0 && position(mesh, first, a) >= 0 && position(mesh, first, b) >= 0) continue;
+                if (lowest_around_edge(mesh, e, a, b) == e) edges(e) |= static_cast<std::uint8_t>(1 << k);
+            }
+        });
+    exec.fence();  // the caller drops these views next
+}
+
+// assemble and represent_dropped of a consistent build.
+template <class ExecSpace>
+int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
+               Mesh<typename ExecSpace::memory_space>& mesh) {
+    Kokkos::View<int*, typename ExecSpace::memory_space> face_start;
+    const int unresolved = assemble(exec, cells, mesh, face_start);
+    if (unresolved == 0) represent_dropped(exec, mesh, face_start);
+    return unresolved;
 }
 
 // Face rings kept from step to step. Face start(t) + rank is the rank-th

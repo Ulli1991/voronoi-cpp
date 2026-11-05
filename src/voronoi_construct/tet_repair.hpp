@@ -75,6 +75,7 @@ struct State {
 struct Stats {
     long long rounds = 0, checked = 0, flips23 = 0, flips32 = 0;
     int stuck = 0;  // entries listed in State::stuck
+    bool unfinished = false;  // out of rounds with triangles left: the mesh may fail anywhere
 };
 
 // The outer faces of the cavity of tetrahedra old[0, olds): the sorted
@@ -445,10 +446,10 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
 }
 
 // Flip until no dirty tetrahedron fails or no plan can proceed; what is left
-// is listed in s.stuck (stats.stuck entries).
+// is listed in s.stuck (stats.stuck entries). At most `rounds` rounds.
 template <class ExecSpace>
 Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
-             State<typename ExecSpace::memory_space>& s) {
+             State<typename ExecSpace::memory_space>& s, int rounds = 1000) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
     Stats stats;
     auto work = s.work;
@@ -487,8 +488,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
     read();
     int dirty_count = host(counter::listed);
     long long flips_at_last_retry = -1;
+    bool finished = false;
 
-    for (int round = 0; round < 1000; ++round) {
+    for (int round = 0; round < rounds; ++round) {
         // The tetrahedra may have grown in the last round (reserve below).
         const int capacity = static_cast<int>(s.alive.extent(0));
         const auto listed = s.listed;
@@ -544,7 +546,8 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
             // A triangle stuck earlier may have become flippable since: look
             // at the stuck ones again while that still makes progress.
             const long long flips = stats.flips23 + stats.flips32;
-            if (host(counter::stuck) == 0 || flips == flips_at_last_retry) break;
+            finished = host(counter::stuck) == 0 || flips == flips_at_last_retry;
+            if (finished) break;
             flips_at_last_retry = flips;
             const int listed_stuck = Kokkos::min(host(counter::stuck), static_cast<int>(stuck.extent(0)));
             Kokkos::parallel_for(
@@ -721,6 +724,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         // Flips that found no slot retry next round with 1/8 more room.
         if (count + host(counter::growth) > capacity) reserve(m, s, capacity + Kokkos::max(capacity / 8, count + host(counter::growth) - capacity));
     }
+    stats.unfinished = !finished;
     stats.stuck = Kokkos::min(host(counter::stuck), static_cast<int>(s.stuck.extent(0)));
     s.touched_entries = host(counter::created) <= static_cast<int>(s.touched_list.extent(0)) ? host(counter::created) : -1;
     // The created tetrahedra did not fit their list (this step updates all
