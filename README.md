@@ -7,7 +7,7 @@ moving-mesh finite-volume hydro solver on top. The solver hands over
 particle positions and gets back faces (owner, neighbour, area vector,
 centroid), cell volumes and centroids, and per-cell face lists; the mesh is
 kept exact as the particles move. The library is templated on the dimension
-(`voronoi::Mesh<D, Exec>`); the 3D mesh is complete, 1D and 2D are in
+(`voronoi::Mesh<D, Exec>`); the 3D and 1D meshes are complete, 2D is in
 progress (see "Roadmap").
 
 The hydro (`src/hydro/`): MUSCL-Hancock with HLLC or HLL, AREPO-style
@@ -117,7 +117,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
   pool).
 - The dimension is a template parameter, `voronoi::Mesh<D, Exec>`
   (`exact_predicates::BoxN<D>`, `hydro::FiniteVolume<D, Exec, Riemann>`,
-  `hydro::State<D>`); D = 3 is implemented, 1D and 2D engines follow
+  `hydro::State<D>`); D = 3 and D = 1 are implemented, the 2D engine follows
   (research_notes/dimension_design_2026-11-02.md). `Box` is `BoxN<3>`.
 
 ## How it works
@@ -133,6 +133,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
 | `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the pipeline below behind one interface |
+| `sorted_mesh.hpp` | `voronoi::Mesh<1>`: generators sorted on a 2^52 grid, ties by id, periodic or with walls; the order is checked every step and sorted only when points crossed |
 
 **Clipping.** Each cell is built by walking the grid cells of its level
 around its generator, nearest first, clipping with every particle that
@@ -332,6 +333,33 @@ of |rho_h - rho| dV) is the fair norm and is what the test suite will report
 (research_notes/accuracy_score_exploration_2026-11-04.md). Details:
 research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
+### 1D (`hydro_1d`, `finite_volume_1d.hpp`)
+
+`hydro::FiniteVolume<1, Exec, Riemann>` on `voronoi::Mesh<1>`, static or
+moving, with walls (reflective, zero gradient, inflow). The whole step is one
+kernel. Defaults: a static run uses Courant x V / (|v| + c) at 0.8, one launch
+per step that also finds the next time step (`step_and_time_step`); a moving
+run uses AREPO next generation's rule with its pair term at 0.4 (r = V / 2 in
+1D), three launches (time step, step, order check). 3D stays at 0.3. On a
+uniform static line the scheme is second-order MUSCL-Hancock with the MC
+limiter. Points are regularised as
+AREPO next generation does without a face angle: a drift towards the
+density-displaced centroid when it is more than 0.75 cell radii away.
+
+M cell updates/s, one A100 40 GB at 1305 MHz (ravg1002, job 31917211, Sod,
+HLLC, 2000 steps, 200 at 2^24; hydro only is a static step, whole step a
+moving one at its defaults with the order check):
+
+| cells | 4,096 | 65,536 | 1,048,576 | 16,777,216 |
+|---|---|---|---|---|
+| hydro only | 81 | 948 | 2810 | 3226 |
+| whole moving step | 48 | 636 | 1872 | 2297 |
+
+Below ~1e5 cells a step is bound by launch latency (~60 us), not by the
+kernel. Peak device memory: 144 B/cell static, 152 B/cell moving. Runs are
+bit-reproducible (the hash of the final state and positions). Field accuracy on Sod, Shu-Osher and Woodward-Colella:
+research_notes/stage1_1d_2026-11-04.md.
+
 ## Limitations and open items
 
 - The hydro step is not yet at its target (~300 M cell updates/s): on the
@@ -356,7 +384,13 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
   refinement/derefinement are not implemented yet; `update()` takes an
   `active` list for later.
 - Periodic boxes only (any three sides; see the certification limit
-  above for thin slabs); 1D gets wall boundaries with the 1D mesh.
+  above for thin slabs); only 1D has walls.
+- 1D moving mesh, inflow: no refinement, so the gas that enters from an
+  inflow wall fills a few grown cells. That gas is not uniform in general
+  (Shu-Osher: acoustic waves cross it), so the error there does not converge.
+- 1D moving mesh: the error of Woodward-Colella stops falling near
+  N = 2^15, at every Courant number tried
+  (research_notes/stage1_1d_2026-11-04.md).
 
 ## Roadmap
 
@@ -411,8 +445,8 @@ a fixed grid would need to match that time).
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests, `support.hpp` (inputs, references, the
   comparison with an exact rebuild), `check.hpp`.
-- `src/hydro/`: the hydro (header-only). `src/bench/`: `voronoi_bench`, `hydro_sedov`.
-- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `hydro_a100.sh`, `hydro_sedov_compare.py`.
+- `src/hydro/`: the hydro (header-only). `src/bench/`: `voronoi_bench`, `hydro_sedov`, `hydro_1d`.
+- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `hydro_a100.sh`, `hydro_sedov_compare.py`, `dim1d_a100.sh`, `compare_1d.py`.
 - `research_notes/`, `reports/`: status notes and surveys.
 
 CI (`.github/workflows/checks.yml`) runs clang-tidy and the CPU tests in
