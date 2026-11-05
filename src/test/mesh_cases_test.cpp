@@ -854,22 +854,22 @@ void valence_cases() {
         add("valence.ring.start." + std::to_string(k), [=](Check& c) {
             Mesh m(Exec{}, 1.0);
             build(c, "a face of " + std::to_string(k) + " corners at the start", m,
-                  ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.02, 2048), Expect::exact_or_refused, 2);
+                  ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.02, 2048), k < 1000 ? Expect::exact : Expect::exact_or_refused, 2);
         }, k > 65 && k < 1000 ? 18 : 0);
         add("valence.ring.step." + std::to_string(k), [=](Check& c) {
             // The poles arrive during a step, from far outside the circle: the
             // start has no long edge, the repair creates it.
             Mesh m(Exec{}, 1.0);
             const Points far = ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.19, 2048);
-            if (!build(c, "start, poles apart", m, far, Expect::exact_or_refused, 2)) return;
+            if (!build(c, "start, poles apart", m, far, k < 1000 ? Expect::exact : Expect::exact_or_refused, 2)) return;
             Points p = far;
             const int n = static_cast<int>(p.size());
             bool refused = false;
             for (const double h : {0.15, 0.12, 0.1, 0.08, 0.06, 0.04, 0.02}) {
                 p[n - 2][2] = 0.5 + h;
                 p[n - 1][2] = 0.5 - h;
-                const auto r = step_or_refused(c, "poles at " + sci(h), m, p, refused, 2);
-                (void)r;
+                step_or_refused(c, "poles at " + sci(h), m, p, refused, 2);
+                c.expect(!refused, "not refused: every face has its corners, however many");
                 if (refused) return;
             }
             // Directly: the pole cells against brute clipping, whatever the sample.
