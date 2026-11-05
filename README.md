@@ -382,7 +382,9 @@ In order (research_notes/dimension_design_2026-11-02.md):
    the candidates of jittered ones).
 6. Multi-GPU: domain decomposition by Morton ranges, ghost layers, local
    rebuild of a boundary band, GPU-aware communication, weak and strong
-   scaling. Before refinement, so that insertion and load balance are designed
+   scaling. Measure overlapped against blocking communication across two nodes
+   before fixing the design; a task runtime gains little on one GPU or inside
+   a node. Before refinement, so that insertion and load balance are designed
    with the decomposition in mind; one A100 holds about 256^3.
 7. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
    by an exact local rebuild of the hole, conservative remap from the
