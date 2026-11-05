@@ -335,27 +335,27 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
 `hydro::FiniteVolume<1, Exec, Riemann>` on `voronoi::Mesh<1>`, static or
 moving, with walls (reflective, zero gradient, inflow). The whole step is one
-kernel, one launch per step, that also finds the next time step and whether
-the moved points are still in order (`step_and_time_step`, LUNA-style rule
-Courant x V / (|v - w| + c)); AREPO's rule with its pair term takes the
-separate `time_step()` and `step()`. On a uniform static line the scheme is
-second-order MUSCL-Hancock with the MC limiter. Points are regularised as
+kernel. Defaults: a static run uses Courant x V / (|v| + c) at 0.8, one launch
+per step that also finds the next time step (`step_and_time_step`); a moving
+run uses AREPO next generation's rule with its pair term at 0.4 (r = V / 2 in
+1D), three launches (time step, step, order check). 3D stays at 0.3. On a
+uniform static line the scheme is second-order MUSCL-Hancock with the MC
+limiter. Points are regularised as
 AREPO next generation does without a face angle: a drift towards the
 density-displaced centroid when it is more than 0.75 cell radii away.
 
-M cell updates/s, one A100 40 GB at 1095 MHz (ravg1002, job 31888427, Sod,
+M cell updates/s, one A100 40 GB at 1305 MHz (ravg1002, job 31917211, Sod,
 HLLC, 2000 steps, 200 at 2^24; hydro only is a static step, whole step a
-moving one with the order check):
+moving one at its defaults with the order check):
 
 | cells | 4,096 | 65,536 | 1,048,576 | 16,777,216 |
 |---|---|---|---|---|
-| hydro only | 73 | 837 | 2394 | 2736 |
-| whole moving step | 63 | 727 | 1964 | 2330 |
+| hydro only | 81 | 948 | 2810 | 3226 |
+| whole moving step | 48 | 636 | 1872 | 2297 |
 
 Below ~1e5 cells a step is bound by launch latency (~60 us), not by the
-kernel. Peak device memory: 144 B/cell static, 160 B/cell moving. Runs are
-bit-reproducible (the hash of the final state and positions over 102 repeated
-GPU runs). Field accuracy on Sod, Shu-Osher and Woodward-Colella:
+kernel. Peak device memory: 144 B/cell static, 152 B/cell moving. Runs are
+bit-reproducible (the hash of the final state and positions). Field accuracy on Sod, Shu-Osher and Woodward-Colella:
 research_notes/stage1_1d_2026-11-04.md.
 
 ## Limitations and open items
@@ -389,8 +389,9 @@ research_notes/stage1_1d_2026-11-04.md.
 - 1D moving mesh, inflow: no refinement, so the gas that enters from an
   inflow wall fills a few grown cells. That gas is not uniform in general
   (Shu-Osher: acoustic waves cross it), so the error there does not converge.
-- 1D moving mesh: at Courant 0.8 the error of Sod and Woodward-Colella stops
-  falling at high resolution (research_notes/stage1_1d_2026-11-04.md).
+- 1D moving mesh: the error of Woodward-Colella stops falling near
+  N = 2^15, at every Courant number tried
+  (research_notes/stage1_1d_2026-11-04.md).
 
 ## Roadmap
 
