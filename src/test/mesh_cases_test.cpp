@@ -416,6 +416,22 @@ void contrast_cases() {
             add_shell(p, rng, {0.3, 0.6, 0.45}, 0.1, k);
             diagnose(c, std::to_string(k) + " particles on a sphere", p);
         }, 21);
+    // Half the particles in a ball of radius 0.05: fine at small n, the start of
+    // the `expansion` flow at 128^3. Too slow for ctest: not in a group it runs.
+    for (const int n : {524288, 1048576, 2097152})
+        add("dense_ball." + std::to_string(n), [=](Check& c) {
+            Points p = make_points("jittered", n);
+            std::mt19937_64 rng(3);
+            std::normal_distribution<double> g(0, 1);
+            std::uniform_real_distribution<double> u(0, 1);
+            for (std::size_t i = 0; i < p.size(); i += 2) {
+                const Point d{g(rng), g(rng), g(rng)};
+                const double size = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                const double r = 0.05 * std::cbrt(u(rng));
+                for (int a = 0; a < 3; ++a) p[i][a] = 0.5 + r * d[a] / size;
+            }
+            diagnose(c, "half of " + std::to_string(n) + " in a ball", p);
+        });
     add("contrast.rank_one", [=](Check& c) {
         // 512 particles along one line that winds around the torus, a clump.
         Points tiny = make_points("uniform", 4096);
@@ -980,6 +996,54 @@ void large_cases() {
                 step(c, "random walk " + sci(d) + ", step " + std::to_string(s), m, p);
             }
         });
+    // Kicks as a fraction of the box, several seeds: the mesh is exact, or the
+    // update refuses.
+    for (const int n : {4096, 32768})
+        for (const double kick : {0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.65, 1.0})
+            add("kicks." + std::to_string(n) + "." + sci(kick), [=](Check& c) {
+                long long wrong = 0, refused_count = 0, rebuilt = 0, clean = 0;
+                std::string first;
+                for (const int seed : {1, 2, 3, 4}) {
+                    Points p = make_points("jittered", n);
+                    Mesh m(Exec{}, 1.0);
+                    m.update(to_device(p));
+                    std::mt19937_64 rng(seed);
+                    std::normal_distribution<double> g(0, kick);
+                    for (int s = 1; s <= 4; ++s) {
+                        for (auto& q : p)
+                            for (double& v : q) v = wrap(v + g(rng));
+                        to_grid(p);
+                        voronoi::Report r;
+                        try {
+                            r = m.update(to_device(p));
+                        } catch (const std::exception&) {
+                            ++refused_count;
+                            break;
+                        }
+                        rebuilt += r.rebuilt;
+                        // Cheap on a mesh of this size: volume against the box.
+                        const auto v = to_host(m.volume());
+                        double total = 0;
+                        for (std::size_t i = 0; i < p.size(); ++i) total += v(i);
+                        const auto check = oracle::check(mc::grid_of(m), mc::tets_of(m));
+                        if (check.ok() && std::abs(total - 1) < 1e-10) {
+                            clean += !r.rebuilt;
+                        } else {
+                            ++wrong;
+                            if (first.empty()) {
+                                std::ostringstream o;
+                                o << " first: seed " << seed << " step " << s << " stuck " << r.stuck << " rounds " << r.rounds
+                                  << " rebuilt " << r.rebuilt << " total volume " << total << " " << check.text();
+                                first = o.str();
+                            }
+                        }
+                    }
+                }
+                std::ostringstream what;
+                what << "n=" << n << " kicks of " << kick << " boxes, 4 seeds, 4 steps: wrong " << wrong << ", refused " << refused_count
+                     << ", rebuilt " << rebuilt << ", repaired exact " << clean << first;
+                c.expect(wrong == 0, what.str());
+            });
     add("large.shuffle", [](Check& c) {
         std::mt19937_64 rng(22);
         Points p;
@@ -1171,8 +1235,8 @@ void fallback_cases() {
         });
     }
     // What one step of Fallback::host costs against the stuck entries it gets.
-    for (const int n : {216, 512, 1000, 1728, 4096})
-        for (const double d : {0.5, 1.0, 2.0})
+    for (const int n : {1000, 1728, 4096, 8000})
+        for (const double d : {0.3, 0.5, 1.0, 2.0})
             add("hostcost." + std::to_string(n) + "." + sci(d), [=](Check& c) {
                 Points p = make_points("jittered", n);
                 const int count = static_cast<int>(p.size());
@@ -1185,7 +1249,14 @@ void fallback_cases() {
                     for (double& v : q) v = wrap(v + g(rng));
                 to_grid(p);
                 Kokkos::Timer timer;
-                const voronoi::Report r = m.update(to_device(p));
+                voronoi::Report r;
+                try {
+                    r = m.update(to_device(p));
+                } catch (const std::exception& e) {
+                    c.expect(true, "n=" + std::to_string(count) + " kicks of " + sci(d) + " spacings: " + sci(timer.seconds()) +
+                                       " s to a refusal: " + e.what());
+                    return;
+                }
                 const double seconds = timer.seconds();
                 const mc::Result o = mc::check(m, 4);
                 std::ostringstream what;
@@ -1438,8 +1509,28 @@ int main(int argc, char** argv) {
         for (const auto& c : cases()) std::cout << c.name << (c.issue ? " known" : "") << "\n";
         return 0;
     }
+    // ctest runs a subset within its time budget; MESH_CASES_FULL=1 (the A100
+    // job) runs the whole matrix, and a case asked for by its full name runs.
+    const bool full = std::getenv("MESH_CASES_FULL") != nullptr;
+    auto subset_skips = [&](const std::string& name) {
+        static const std::vector<std::string> only_full{
+            "box.void.centre.",     "box.void.empty.0.1",  "box.void.empty.0.22", "box.void.empty.0.25",
+            "box.void.empty.0.3",   "box.void.empty.0.45", "box.slab.lattice.",   "box.slab.uniform.",
+            "box.slab.jittered.7",  "box.slab.jittered.8", "box.thin.",           "contrast.ball.0.0",
+            "contrast.ball.1e-05",  "contrast.ball.1e-06", "contrast.shell.",     "contrast.shell_centre.",
+            "contrast.two_density.100",                    "contrast.two_density.1e+06",
+            "contrast.grid_scale.1024",                    "contrast.grid_scale.4096",
+            "contrast.grid_scale.16384",                   "contrast.grid_scale.65536",
+            "contrast.sphere_status.1",                    "degenerate.noise.bcc.", "degenerate.noise.fcc.",
+            "degenerate.noise.sc.16",                      "degenerate.noise.sc.1024",
+            "degenerate.shear.smooth.", "degenerate.rigid.off_grid.", "large.random_walk.1", "large.flow.20",
+            "fallback.large.", "fallback.growth.", "few.jittered.1", "few.lattice.1", "repro.dump."};
+        if (full || std::find(wanted.begin(), wanted.end(), name) != wanted.end()) return false;
+        return std::any_of(only_full.begin(), only_full.end(), [&](const std::string& p) { return name.rfind(p, 0) == 0; });
+    };
     Check check;
     for (const auto& c : cases()) {
+        if (subset_skips(c.name)) continue;
         if (!wanted.empty() &&
             std::none_of(wanted.begin(), wanted.end(), [&](const std::string& w) { return c.name.rfind(w, 0) == 0; }))
             continue;

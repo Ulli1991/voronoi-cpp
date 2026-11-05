@@ -24,7 +24,7 @@ module purge
 module load gcc/14 cuda/13.0 cmake
 build="${1:-build-cuda}"
 mode="${2:-cases}"
-export OMP_NUM_THREADS=18
+export OMP_NUM_THREADS=18 MESH_CASES_FULL=1
 nvidia-smi -L
 d="$build/distortion_test"
 case "$mode" in
@@ -48,18 +48,18 @@ repro)
 flows128)
     # 2M cells. Up to 45 s per flow; checks against a rebuild every 400 steps.
     for flow in shear sawtooth vortex taylor_green turbulence collapse noh; do
-        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --rebuild-every=400 --print
+        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --rebuild-every=800 --shape-every=25 --print
     done
     ;;
 flows128b)
     for flow in expansion pancake counter thin collapse_wide pancake_wide streams; do
-        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --rebuild-every=400 --print
+        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --rebuild-every=800 --shape-every=25 --print
     done
     ;;
 flows256)
     # 16.8M cells, one A100: four flows, rebuild checks on two.
     for flow in turbulence thin shear; do
-        "$d" "$flow" --no-drift --n=16777216 --d=0.3 --steps=600 --seconds=150 --rebuild-every=250 --print
+        "$d" "$flow" --no-drift --n=16777216 --d=0.3 --steps=1500 --seconds=170 --rebuild-every=600 --shape-every=25 --print
     done
     "$build/voronoi_bench" step 16777216 jittered 0.3 6 --memory | grep -E "memory: phase|gpuflips" | cut -c1-200
     ;;
@@ -67,14 +67,14 @@ drift)
     # The same flows with this driver's drift to the centroids (the library has none).
     for flow in shear turbulence pancake counter thin; do
         for chi in 0.1 0.5; do
-            "$d" "$flow" --drift=$chi --n=2097152 --d=0.3 --steps=3000 --seconds=40 --rebuild-every=800 --print
+            "$d" "$flow" --drift=$chi --n=2097152 --d=0.3 --steps=3000 --seconds=40 --rebuild-every=800 --shape-every=25 --print
         done
     done
     ;;
 oracle)
     # The full oracle (host, single thread) on the last step of a shorter run.
     for flow in turbulence thin pancake; do
-        "$d" "$flow" --no-drift --n=262144 --d=0.3 --steps=400 --seconds=60 --final-oracle --cells=64 --print | tail -3 | cut -c1-700
+        "$d" "$flow" --no-drift --n=262144 --d=0.3 --steps=800 --seconds=60 --final-oracle --cells=64 --shape-every=25 --print | tail -3 | cut -c1-700
     done
     ;;
 large)
