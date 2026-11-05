@@ -14,11 +14,12 @@
 // and drifts its point). Each face is computed by both of its cells from the
 // same data in the same frame (every distance is an integer of the line,
 // sorted_mesh::Line), so both get the same bits and the update conserves to
-// rounding. A step is two launches, time_step() and step(), which on a moving
-// mesh also finds the order of the moved points, so a sort runs only when
-// points crossed. step_and_time_step() fuses the two for LUNA's rule, the
-// static default; AREPO's rule, the moving default, cannot be fused: its pair
-// term reads the neighbours' next state.
+// rounding. A static step is two launches, time_step() and step(), a moving one
+// three with the mesh's order check; a sort runs only when points crossed.
+// step_and_time_step() fuses them into one for LUNA's rule, the static default.
+// AREPO's rule, the moving default, cannot be fused: its pair term reads the
+// neighbours' next state. Fusing only the order check into step() was
+// measured and is 2-6 % slower (research_notes/stage1_1d_2026-11-04.md).
 //
 // Scheme, as finite_volume.hpp unless said:
 // - gradients: AREPO-ng's least-squares fit with an intercept over the face
@@ -308,18 +309,9 @@ public:
     }
 
     // One step of length dt (moving: the points then drift and the mesh's
-    // order is updated, in the step's kernel; with timings in a kernel of its
-    // own, to time the phases).
+    // order is updated).
     void step(double dt, Timings* timings = nullptr) {
         timer_.reset();
-        if (motion_ == Motion::moving && !timings) {
-            need_next_positions();
-            if (order_ == 1)
-                run_fused<1, true, false>(dt, 0.0);
-            else
-                run_fused<0, true, false>(dt, 0.0);
-            return;
-        }
         if (order_ == 1)
             advance<1>(dt);
         else
@@ -338,15 +330,11 @@ public:
     // returns the time step of the next one by LUNA's rule at this Courant
     // number. Static: time_step(courant, luna) after step(dt), to rounding.
     double step_and_time_step(double dt, double courant) {
-        need_next_positions();
+        if (x_.extent(0) > 0 && x_next_.extent(0) == 0)
+            x_next_ = Points(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("hydro_x_next")), n_);
         const bool moving = motion_ == Motion::moving;
         if (order_ == 1) return moving ? run_fused<1, true>(dt, courant) : run_fused<1, false>(dt, courant);
         return moving ? run_fused<0, true>(dt, courant) : run_fused<0, false>(dt, courant);
-    }
-
-    void need_next_positions() {
-        if (x_.extent(0) > 0 && x_next_.extent(0) == 0)
-            x_next_ = Points(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("hydro_x_next")), n_);
     }
 
     // Ends a timed phase (fenced) when timings are wanted.
@@ -359,10 +347,10 @@ public:
 
     // The fused step, one thread per slot: public only because CUDA device
     // lambdas may not be defined in private member functions.
-    // Fused: also the next keys and a count of the slots out of order
-    // (moving). NextDt: also the next time step (LUNA's rule) from the new
-    // state, on the moved mesh, with the regularisation's |v - w| of this step.
-    template <int Order, bool Moving, bool Fused, bool NextDt>
+    // Fused: also the next time step (LUNA's rule) from the new state, on the
+    // moved mesh, with the regularisation's |v - w| of this step, and the
+    // next keys and a count of the slots out of order (moving).
+    template <int Order, bool Moving, bool Fused>
     struct Kernel {
         Stencil st;
         Cells next;
@@ -456,7 +444,7 @@ public:
             }
             if constexpr (Moving && !Fused) x(i, 0) = moved(x(i, 0), point[2]);
             if constexpr (Fused) {
-                [[maybe_unused]] double volume = cell[2].V, relative = 0;
+                double volume = cell[2].V, relative = 0;
                 if constexpr (Moving) {
                     using Key = sorted_mesh::Key;
                     const double here = moved(x(i, 0), point[2]);
@@ -466,15 +454,13 @@ public:
                     const auto next_key = [&](int slot, int k) {
                         return sorted_mesh::snap(moved(x(line.order(slot), 0), point[k]), grid, line.periodic);
                     };
-                    double left = 0, right;
-                    if constexpr (NextDt) {
-                        if (Inner || cell[1].real) {
-                            const Key other = next_key(Inner ? s - 1 : line.slot(s, -1), 1);
-                            const i64 d = static_cast<i64>(key) - static_cast<i64>(other);
-                            left = static_cast<double>(d < 0 && line.periodic ? d + line.period : d);
-                        } else {
-                            left = static_cast<double>(2 * static_cast<i64>(key));
-                        }
+                    double left, right;
+                    if (Inner || cell[1].real) {
+                        const Key other = next_key(Inner ? s - 1 : line.slot(s, -1), 1);
+                        const i64 d = static_cast<i64>(key) - static_cast<i64>(other);
+                        left = static_cast<double>(d < 0 && line.periodic ? d + line.period : d);
+                    } else {
+                        left = static_cast<double>(2 * static_cast<i64>(key));
                     }
                     if (Inner || cell[3].real) {
                         const int t = Inner ? s + 1 : line.slot(s, 1);
@@ -488,12 +474,10 @@ public:
                     volume = (left + right) * (0.5 * line.step);
                     relative = Kokkos::fabs(point[2] - cell[2].W[1]);
                 }
-                if constexpr (NextDt) {
-                    const double inv = 1.0 / volume;
-                    const State Wnew = primitive(State{Unew[0] * inv, Unew[1] * inv, Unew[2] * inv}, st.gas);
-                    if constexpr (!Moving) relative = Kokkos::fabs(Wnew[1]);
-                    smallest = Kokkos::fmin(smallest, courant * volume / (relative + sound_speed(Wnew, st.gas)));
-                }
+                const double inv = 1.0 / volume;
+                const State Wnew = primitive(State{Unew[0] * inv, Unew[1] * inv, Unew[2] * inv}, st.gas);
+                if constexpr (!Moving) relative = Kokkos::fabs(Wnew[1]);
+                smallest = Kokkos::fmin(smallest, courant * volume / (relative + sound_speed(Wnew, st.gas)));
             }
         }
     };
@@ -507,16 +491,16 @@ public:
     }
     template <int Order, bool Moving>
     void run(double dt) {
-        const Kernel<Order, Moving, false, false> kernel{stencil(), next_, x_, x_next_, {}, {}, dt, 0.0};
+        const Kernel<Order, Moving, false> kernel{stencil(), next_, x_, x_next_, {}, {}, dt, 0.0};
         Kokkos::parallel_for("hydro1::step", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), kernel);
     }
-    template <int Order, bool Moving, bool NextDt = true>
+    template <int Order, bool Moving>
     double run_fused(double dt, double courant) {
         const Line& line = mesh_->line();
         sorted_mesh::Grid grid;
         grid.side = line.side();
         grid.step = line.step;
-        const Kernel<Order, Moving, true, NextDt> kernel{stencil(), next_, x_, x_next_, mesh_->spare_keys(), grid, dt, courant};
+        const Kernel<Order, Moving, true> kernel{stencil(), next_, x_, x_next_, mesh_->spare_keys(), grid, dt, courant};
         double smallest = 0;
         int descents = 0;
         Kokkos::parallel_reduce("hydro1::step_fused", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), kernel,
@@ -528,7 +512,7 @@ public:
             mesh_stats_.updates += 1;
             if (descents != (line.periodic ? 1 : 0)) {
                 mesh_stats_.rebuilds += mesh_->order(x_).rebuilt;
-                return NextDt ? time_step(courant, TimeStep::luna) : 0.0;
+                return time_step(courant, TimeStep::luna);
             }
         }
         return smallest;

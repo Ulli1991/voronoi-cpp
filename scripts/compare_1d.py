@@ -211,7 +211,7 @@ def main():
         if problem not in refs:
             continue
         if (series, problem, n) in done:
-            rows.append(done[(series, problem, n)])
+            rows.append({**done[(series, problem, n)], **meta})  # the same bits, new timing
             continue
         path = os.path.join(runs, meta["file"])
         rec, mean = (luna if series.startswith("luna") else ours)(path, problem)

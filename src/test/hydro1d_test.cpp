@@ -346,41 +346,6 @@ int main(int argc, char* argv[]) {
                              ", energy " + sci(energy) + ", the same bits twice");
         }
 
-    // A moving step with the order check in its kernel gives the bits of
-    // the separate check.
-    for (const bool periodic : {true, false}) {
-        const hydro::Walls walls{hydro::Wall::reflective, hydro::Wall::reflective};
-        const auto ends = periodic ? voronoi::Ends::periodic : voronoi::Ends::walls;
-        Mesh m1(exec, 2.0, ends), m2(exec, 2.0, ends);
-        build(m1, points(400, 2.0, 0.5, 9));
-        build(m2, points(400, 2.0, 0.5, 9));
-        FV<> together(exec, m1, gas, 1, hydro::Limiter::face_centroid, Motion::moving, walls);
-        FV<> apart(exec, m2, gas, 1, hydro::Limiter::face_centroid, Motion::moving, walls);
-        for (auto* pair : {&together, &apart}) {
-            Mesh& mesh = pair == &together ? m1 : m2;
-            set(*pair, mesh, [&](double a, double b) {
-                const double m = 0.5 * (a + b);
-                const State U = hydro::conserved(State{1.0 + 0.3 * std::sin(9 * m), 0.4 * std::cos(5 * m), std::abs(m - 1) < 0.1 ? 20.0 : 1.0}, gas);
-                return State{U[0] * (b - a), U[1] * (b - a), U[2] * (b - a)};
-            });
-        }
-        hydro::Timings timed;
-        for (int k = 0; k < 60; ++k) {
-            together.step(together.time_step(hydro::courant_moving_1d));
-            apart.step(apart.time_step(hydro::courant_moving_1d), &timed);
-        }
-        const auto a = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, together.state());
-        const auto b = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, apart.state());
-        const auto xa = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, together.positions());
-        const auto xb = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, apart.positions());
-        bool same = true;
-        for (std::size_t i = 0; i < a.extent(0); ++i) {
-            for (int v = 0; v < 3; ++v) same = same && a(i, v) == b(i, v);
-            same = same && xa(i, 0) == xb(i, 0);
-        }
-        check.expect(same, std::string("moving step, order check in the kernel or apart, ") + (periodic ? "periodic" : "walls") + ": the same bits");
-    }
-
     // Shu-Osher on a moving mesh: without the regularisation the end cell,
     // grown by the inflow, runs into its neighbour; with it no points cross.
     {
