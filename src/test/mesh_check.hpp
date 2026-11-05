@@ -67,10 +67,11 @@ struct Result {
     long long own_image = 0;      // sampled cells with a face on their own image
     long long two_images = 0;     // neighbours sharing faces through several images
     long long negative = 0;       // cells of volume <= 0
+    long long duplicates = 0;     // particles on the grid position of another: no mesh should come back
     double closure = 0, total = 0, brute_volume = 0, brute_area = 0, fresh_volume = 0;
     bool ok() const {
         return tets.ok() && not_finite == 0 && fresh_differs <= 0 && brute_missing == 0 && brute_extra == 0 &&
-               negative == 0 && closure < 1e-11 && std::abs(total - 1) < 1e-11 && brute_volume < 1e-9 &&
+               negative == 0 && duplicates == 0 && closure < 1e-11 && std::abs(total - 1) < 1e-11 && brute_volume < 1e-9 &&
                brute_area < 1e-9 && fresh_volume < 1e-10;
     }
     std::string text() const {
@@ -78,7 +79,7 @@ struct Result {
         o << tets.text() << " not_finite=" << not_finite << " fresh_differs=" << fresh_differs << fresh_error
           << " brute(cells=" << sampled << " missing=" << brute_missing << " extra=" << brute_extra
           << " volume=" << brute_volume << " area=" << brute_area << " own_image=" << own_image
-          << " two_images=" << two_images << ") negative=" << negative << " closure=" << closure
+          << " two_images=" << two_images << ") negative=" << negative << " duplicates=" << duplicates << " closure=" << closure
           << " total-1=" << total - 1 << " fresh_volume=" << fresh_volume;
         return o.str();
     }
@@ -93,6 +94,11 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
     const auto g = grid_of(mesh);
     const auto t = tets_of(mesh);
     r.tets = oracle::check(g, t);
+    {
+        std::vector<oracle::Offset> sorted = g.p;
+        std::sort(sorted.begin(), sorted.end());
+        for (std::size_t i = 1; i < sorted.size(); ++i) r.duplicates += sorted[i] == sorted[i - 1];
+    }
     const auto owner = to_host(mesh.owner());
     const auto neighbour = to_host(mesh.neighbour());
     const auto area = face_areas(mesh);

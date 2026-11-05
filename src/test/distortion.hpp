@@ -13,6 +13,7 @@
 #include "mesh_check.hpp"
 
 #include <cstdint>
+#include <fstream>
 #include <map>
 #include <random>
 #include <string>
@@ -27,12 +28,17 @@ enum class Kind {
     vortex,       // differential rotation around z, winding up
     taylor_green,
     turbulence,   // random-phase solenoidal modes with k^(-5/6) amplitudes, drifting phases
-    collapse,     // converging to a point, homologous inside r0 (Sedov reversed)
-    noh,          // converging at constant speed, through the centre (Noh reversed)
+    collapse,     // converging to a point, homologous near it (Sedov reversed), within radius 0.16
+    noh,          // converging at constant speed, through the centre (Noh reversed), within 0.16
     expansion,    // the reverse of collapse, from a dense ball
-    pancake,      // a layer collapses onto a plane, shock-like
-    streams,      // two interpenetrating streams, no interaction
-    thin,         // compression onto planes plus shear: long thin cells
+    pancake,      // a layer of half thickness 0.16 collapses onto a plane, shock-like
+    counter,      // every other particle streams against the rest: all interpenetrate
+    thin,         // compression onto four planes plus shear: long thin cells
+    // The same with room for a void as wide as the box: these end in the
+    // refusal of a cell that reaches too far.
+    collapse_wide,
+    pancake_wide,
+    streams,      // two halves of the box stream against each other
 };
 
 inline Kind kind_of(const std::string& name) {
@@ -41,13 +47,16 @@ inline Kind kind_of(const std::string& name) {
                                             {"turbulence", Kind::turbulence}, {"collapse", Kind::collapse},
                                             {"noh", Kind::noh},           {"expansion", Kind::expansion},
                                             {"pancake", Kind::pancake},   {"streams", Kind::streams},
-                                            {"thin", Kind::thin}};
+                                            {"thin", Kind::thin},         {"counter", Kind::counter},
+                                            {"collapse_wide", Kind::collapse_wide},
+                                            {"pancake_wide", Kind::pancake_wide}};
     return names.at(name);
 }
 
 inline const std::vector<std::string>& all_flows() {
-    static const std::vector<std::string> names{"shear",   "sawtooth", "vortex",  "taylor_green", "turbulence", "collapse",
-                                                "noh",     "expansion", "pancake", "streams",      "thin"};
+    static const std::vector<std::string> names{"shear",  "sawtooth",  "vortex",  "taylor_green", "turbulence",
+                                                "collapse", "noh",     "expansion", "pancake",    "counter",
+                                                "thin",   "collapse_wide", "pancake_wide", "streams"};
     return names;
 }
 
@@ -114,11 +123,13 @@ struct Field {
                 }
                 break;
             case Kind::collapse:
+            case Kind::collapse_wide:
             case Kind::expansion:
             case Kind::noh: {
                 const double r = Kokkos::sqrt(dx * dx + dy * dy + dz * dz);
-                if (r > 0 && r < 0.45) {
-                    const double taper = r < 0.35 ? 1.0 : (0.45 - r) / 0.1;
+                const double outer = kind == Kind::collapse_wide ? 0.45 : 0.16;
+                if (r > 0 && r < outer) {
+                    const double taper = Kokkos::min(1.0, (outer - r) / 0.04);
                     double speed = taper;
                     if (kind != Kind::noh) speed *= Kokkos::min(1.0, r / 0.02);
                     if (kind != Kind::expansion) speed = -speed;
@@ -129,15 +140,19 @@ struct Field {
                 break;
             }
             case Kind::pancake:
-                if (Kokkos::abs(dz) < 0.45)
-                    v[2] = -Kokkos::tanh(dz / 1e-3) * Kokkos::min(1.0, (0.45 - Kokkos::abs(dz)) / 0.05);
+            case Kind::pancake_wide: {
+                const double outer = kind == Kind::pancake ? 0.16 : 0.45;
+                if (Kokkos::abs(dz) < outer)
+                    v[2] = -Kokkos::tanh(dz / 1e-4) * Kokkos::min(1.0, (outer - Kokkos::abs(dz)) / 0.04);
                 break;
+            }
             case Kind::streams:
+            case Kind::counter:
                 v[0] = side;
                 break;
             case Kind::thin:
                 v[0] = Kokkos::sin(two_pi * y);
-                v[2] = -0.5 * Kokkos::sin(2 * two_pi * z);
+                v[2] = -0.25 * Kokkos::sin(4 * two_pi * z);
                 break;
         }
     }
@@ -188,6 +203,7 @@ struct Shape {
     double reach = 0;         // largest 2R of any cell / the side of the box (3/8 is the limit of a build)
     int max_faces = 0;        // most faces of a cell
     double smallest_gap = 0;  // the smallest distance between neighbours, in initial spacings
+    int max_corners = 0;      // most corners of a face (tet_mesh::max_ring_length caps the walk)
 };
 
 template <class M>
@@ -241,7 +257,15 @@ Shape shape_of(const M& mesh, double spacing) {
             if (c > most) most = c;
         },
         Kokkos::Max<int>(faces));
-    return {aspect, 2 * std::sqrt(largest) / box.shortest(), faces, std::sqrt(smallest) / spacing};
+    int corners = 0;
+    const auto length = tets.ring_length;
+    Kokkos::parallel_reduce(
+        "distortion::corners", Kokkos::RangePolicy<Exec>(0, mesh.faces()),
+        KOKKOS_LAMBDA(int f, int& most) {
+            if (length(f) > most) most = length(f);
+        },
+        Kokkos::Max<int>(corners));
+    return {aspect, 2 * std::sqrt(largest) / box.shortest(), faces, std::sqrt(smallest) / spacing, corners};
 }
 
 struct Options {
@@ -254,6 +278,8 @@ struct Options {
     int oracle_cells = 16;
     double drift = 0;       // regularisation in this driver (the library has none): each step
                             // moves each generator this fraction of the way to its centroid
+    voronoi::Fallback fallback = voronoi::Fallback::cheapest;
+    bool dump = false;      // write the grid positions of a failing step
     bool print = true;      // one line per step
     std::ostream* out = &std::cout;
 };
@@ -268,7 +294,7 @@ struct Summary {
     long long stuck = 0, host_flips = 0, host_rebuilds = 0, rebuilds = 0, flips = 0;
     long long rounds_max = 0;
     double aspect = 0, reach = 0, gap = 1e300;
-    int max_faces = 0;
+    int max_faces = 0, max_corners = 0;
     double faces_first = 0, faces_last = 0, faces_max = 0;
     double bytes_first = 0, bytes_peak = 0;  // B/cell
     double rate_first = 0, rate_worst = 1e300, rate_mean = 0;  // M cells/s of the mesh step
@@ -305,11 +331,13 @@ inline Summary run(const Options& o) {
     Kokkos::View<int*, Memory> side("side", n);
     {
         auto h = Kokkos::create_mirror_view(side);
-        for (int i = 0; i < n; ++i) h(i) = points[i][0] < 0.5 ? 1 : -1;
+        const bool mixed = kind_of(o.flow) == Kind::counter;
+        for (int i = 0; i < n; ++i) h(i) = mixed ? (i % 2 ? 1 : -1) : points[i][0] < 0.5 ? 1 : -1;
         Kokkos::deep_copy(side, h);
     }
     const Field field(kind_of(o.flow));
     Mesh mesh(exec, 1.0);
+    mesh.set_fallback(o.fallback);
     std::ostream& out = *o.out;
     try {
         mesh.update(x);
@@ -369,6 +397,7 @@ inline Summary run(const Options& o) {
         s.aspect = std::max(s.aspect, shape.aspect);
         s.reach = std::max(s.reach, shape.reach);
         s.max_faces = std::max(s.max_faces, shape.max_faces);
+        s.max_corners = std::max(s.max_corners, shape.max_corners);
         s.gap = std::min(s.gap, shape.smallest_gap);
         s.faces_last = double(mesh.faces()) / n;
         s.faces_max = std::max(s.faces_max, s.faces_last);
@@ -386,7 +415,13 @@ inline Summary run(const Options& o) {
             const mesh_check::Result c = mesh_check::check(mesh, o.oracle_cells);
             s.closure = std::max(s.closure, c.closure);
             s.volume = std::max(s.volume, c.fresh_volume);
-            verdict = c.ok() ? " oracle=PASS" : " oracle=FAIL " + c.text();
+            verdict = c.ok() ? " oracle=PASS radius=" + sci(double(c.tets.radius)) : " oracle=FAIL " + c.text();
+            if (!c.ok() && o.dump) {
+                const auto g = mesh_check::grid_of(mesh);
+                std::ofstream file("oracle_fail_" + o.flow + "_" + std::to_string(step) + ".txt");
+                file << g.period[0] << " " << g.period[1] << " " << g.period[2] << "\n";
+                for (const auto& q : g.p) file << q[0] << " " << q[1] << " " << q[2] << "\n";
+            }
             if (!c.ok() && s.wrong_step < 0) {
                 s.wrong_step = step;
                 s.wrong = c.text();
@@ -411,7 +446,8 @@ inline Summary run(const Options& o) {
                 << " cells_ms=" << timing.cells << " fallback_ms=" << timing.fallback << " build_ms=" << timing.build
                 << " faces_per_cell=" << s.faces_last << " tets_per_cell=" << double(mesh.repair_state().count) / n
                 << " B_per_cell=" << double(DeviceBytes::current) / n << " aspect=" << shape.aspect
-                << " reach=" << shape.reach << " max_faces=" << shape.max_faces << " gap=" << shape.smallest_gap << verdict
+                << " reach=" << shape.reach << " max_faces=" << shape.max_faces << " max_corners=" << shape.max_corners
+                << " gap=" << shape.smallest_gap << verdict
                 << "\n"
                 << std::flush;
     }
@@ -425,7 +461,7 @@ inline std::string text(const Options& o, const Summary& s) {
       << " t=" << s.strain << (s.refused ? " REFUSED at " + std::to_string(s.refused_step) + " (" + s.refusal + ")" : "")
       << " flips=" << s.flips << " max_rounds=" << s.rounds_max << " stuck=" << s.stuck << " host=" << s.host_flips << "/"
       << s.host_rebuilds << " rebuilds=" << s.rebuilds << " aspect=" << s.aspect << " reach=" << s.reach
-      << " max_faces=" << s.max_faces << " gap=" << s.gap << " faces_per_cell=" << s.faces_first << "->" << s.faces_last
+      << " max_faces=" << s.max_faces << " max_corners=" << s.max_corners << " gap=" << s.gap << " faces_per_cell=" << s.faces_first << "->" << s.faces_last
       << " (max " << s.faces_max << ") B_per_cell=" << s.bytes_first << " peak " << s.bytes_peak
       << " Mcells_s first=" << s.rate_first << " mean=" << s.rate_mean << " worst=" << s.rate_worst
       << " closure=" << s.closure << " volume=" << s.volume;

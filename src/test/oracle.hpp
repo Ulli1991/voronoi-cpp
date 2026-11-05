@@ -106,6 +106,9 @@ struct Verdict {
     long long tets = 0, ambiguous = 0, flat = 0, inverted = 0, unpaired = 0, folded = 0, wrong_adjacency = 0, unused = 0,
               not_empty = 0, oversized = 0;
     bool box_volume = false;
+    long double radius = 0;           // largest circumradius / shortest side
+    std::array<int, 5> witness{-1, -1, -1, -1, -1};  // the first failing tetrahedron and particle
+    Offset witness_image{};           // that particle's image, in grid steps
     bool ok() const {
         return ambiguous + flat + inverted + unpaired + folded + wrong_adjacency + unused + not_empty + oversized == 0 &&
                box_volume;
@@ -114,7 +117,11 @@ struct Verdict {
         std::ostringstream o;
         o << "tets=" << tets << " ambiguous=" << ambiguous << " flat=" << flat << " inverted=" << inverted
           << " unpaired=" << unpaired << " folded=" << folded << " adjacency=" << wrong_adjacency << " unused=" << unused
-          << " box_volume=" << (box_volume ? "yes" : "NO") << " not_empty=" << not_empty << " oversized=" << oversized;
+          << " box_volume=" << (box_volume ? "yes" : "NO") << " not_empty=" << not_empty << " oversized=" << oversized
+          << " radius=" << double(radius);
+        if (witness[0] >= 0)
+            o << " witness=" << witness[0] << "," << witness[1] << "," << witness[2] << "," << witness[3] << ":" << witness[4]
+              << "@" << witness_image[0] << "," << witness_image[1] << "," << witness_image[2];
         return o.str();
     }
 };
@@ -230,6 +237,7 @@ inline Verdict check(const Grid& g, const Tets& m) {
                          lc * (A[i] * B[j] - A[j] * B[i])) / (2 * dd);
             r2 += centre[k] * centre[k];
         }
+        v.radius = std::max(v.radius, std::sqrt(r2) / (long double)(std::min({g.period[0], g.period[1], g.period[2]})));
         if (!(r2 <= covering2 * (1 + 1e-12L))) {
             ++v.oversized;
             continue;
@@ -241,12 +249,18 @@ inline Verdict check(const Grid& g, const Tets& m) {
             hi[k] = (long double)(g.p[w[0]][k]) + centre[k] + radius;
         }
         bool empty = true;
-        bins.visit(lo, hi, [&](int, const Offset& image) {
+        bins.visit(lo, hi, [&](int particle, const Offset& image) {
             const Offset e{image[0] - g.p[w[0]][0], image[1] - g.p[w[0]][1], image[2] - g.p[w[0]][2]};
             long double d2 = 0;
             for (int k = 0; k < 3; ++k) d2 += ((long double)e[k] - centre[k]) * ((long double)e[k] - centre[k]);
             if (d2 > r2 * (1 + 1e-12L) + 1) return true;
-            if (in_sphere(a, b, c, e) > 0) empty = false;
+            if (in_sphere(a, b, c, e) > 0) {
+                empty = false;
+                if (v.witness[0] < 0) {
+                    v.witness = {w[0], w[1], w[2], w[3], particle};
+                    v.witness_image = image;
+                }
+            }
             return empty;
         });
         v.not_empty += !empty;

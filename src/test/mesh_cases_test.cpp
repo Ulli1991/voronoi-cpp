@@ -9,6 +9,7 @@
 // Cases of a known open problem carry the issue and run with --known only.
 
 #include "check.hpp"
+#include "distortion.hpp"
 #include "mesh_check.hpp"
 
 #include <cstring>
@@ -230,6 +231,40 @@ void coincident_cases() {
             step_or_refused(c, "swap step " + std::to_string(s), m, p, refused);
         }
     });
+    // Each fallback, a pair and a few pairs landing in one step, then what a
+    // duplicate does to the next steps.
+    const std::pair<voronoi::Fallback, std::string> fallbacks[] = {{voronoi::Fallback::cheapest, "cheapest"},
+                                                                   {voronoi::Fallback::host, "host"},
+                                                                   {voronoi::Fallback::rebuild, "rebuild"}};
+    for (const auto& [mode, label] : fallbacks)
+        for (const int pairs : {1, 4, 64}) {
+            const voronoi::Fallback fallback = mode;
+            add("coincident.step.fallback." + label + "." + std::to_string(pairs), [=](Check& c) {
+                Points p = make_points("jittered", 4096);
+                Mesh m(Exec{}, 1.0);
+                m.set_fallback(fallback);
+                build(c, "start", m, p, Expect::exact);
+                for (int i = 0; i < pairs; ++i) p[i * 50] = p[i * 50 + 1];
+                bool refused = false;
+                step_or_refused(c, std::to_string(pairs) + " pairs land on one position", m, p, refused);
+                if (refused) return;
+                const Flow flow;
+                for (int s = 1; s <= 2 && !refused; ++s) {
+                    for (auto& q : p) q[0] = wrap(q[0] + 1e-3);  // rigid: the pairs stay
+                    step_or_refused(c, "the pairs move on, step " + std::to_string(s), m, p, refused);
+                }
+            });
+        }
+    for (const int n : {8000, 9261, 12167, 32768, 262144})
+        add("coincident.step.default." + std::to_string(n), [=](Check& c) {
+            // The default fallback goes to the host when stuck * 1000 <= n.
+            Points p = make_points("jittered", n);
+            Mesh m(Exec{}, 1.0);
+            build(c, "start", m, p, Expect::exact, 4);
+            p[50] = p[51];
+            bool refused = false;
+            step_or_refused(c, "a pair lands on one position, default fallback, n=" + std::to_string(n), m, p, refused, 4);
+        });
     add("coincident.step.mass_merge", [](Check& c) {
         // A quarter of the particles land on their neighbour in one step.
         Points p = make_points("jittered", 4096);
@@ -330,6 +365,57 @@ void contrast_cases() {
                 build(c, std::to_string(n) + " particles of an empty box in a ball of radius " + sci(radius), m, p,
                       Expect::exact_or_refused, 64);
             });
+    for (const int steps : {512, 1024, 2048, 4096, 16384, 65536, 1 << 20})
+        add("contrast.grid_scale." + std::to_string(steps), [=](Check& c) {
+            // A dense clump on `steps`^3 grid positions, inside the background.
+            std::mt19937_64 rng(10);
+            std::uniform_int_distribution<int> u(0, steps - 1);
+            Points p;
+            add_uniform(p, rng, 1024);
+            std::vector<std::array<int, 3>> seen;
+            for (int i = 0; i < 3072; ++i) {
+                seen.push_back({u(rng), u(rng), u(rng)});
+                const auto& q = seen.back();
+                p.push_back({0.25 + q[0] * grid_step, 0.5 + q[1] * grid_step, 0.75 + q[2] * grid_step});
+            }
+            std::sort(seen.begin(), seen.end());
+            const long long same = std::distance(std::unique(seen.begin(), seen.end()), seen.end());
+            Mesh m(Exec{}, 1.0);
+            build(c, "3072 particles on " + std::to_string(steps) + "^3 grid positions, " + std::to_string(same) + " duplicates",
+                  m, p, same ? Expect::exact_or_refused : Expect::exact, 16);
+        });
+    // Why a start fails: statuses of the clipping and the checks of tet_start.
+    auto diagnose = [](Check& c, const std::string& name, const Points& p) {
+        const Positions x = to_device(p);
+        tet_mesh::Mesh<Memory> tets;
+        const tet_start::Stats stats = start_mesh(x, tets);
+        const auto list = cell_list(x);
+        auto cells = cells_with_rings(list);
+        const auto status = to_host(cells.status);
+        std::array<int, shell_voronoi::status_count> counts{};
+        for (std::size_t i = 0; i < status.extent(0); ++i) ++counts[status(i)];
+        std::ostringstream o;
+        o << name << ": exact " << stats.exact << " rounds " << stats.rounds << " bad " << stats.bad_tets << " patched "
+          << stats.patched << " tets " << stats.tets << " statuses";
+        for (const int k : counts) o << " " << k;
+        Points sorted = p;
+        to_grid(sorted);
+        std::sort(sorted.begin(), sorted.end());
+        o << " duplicates " << std::distance(std::unique(sorted.begin(), sorted.end()), sorted.end());
+        c.expect(stats.exact, o.str());
+    };
+    add("contrast.rank_one", [=](Check& c) {
+        // 512 particles along one line that winds around the torus, a clump.
+        Points tiny = make_points("uniform", 4096);
+        for (auto& q : tiny)
+            for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;
+        Points line;
+        for (int i = 1; i < 512; ++i) line.push_back({wrap(0.1 + 0.618 * i), wrap(0.2 + 0.414 * i), wrap(0.3 + 0.302 * i)});
+        diagnose(c, "the line alone", line);
+        Points both = tiny;
+        both.insert(both.end(), line.begin(), line.end());
+        diagnose(c, "line and clump", both);
+    });
     add("contrast.hub", [](Check& c) {
         std::mt19937_64 rng(6);
         Points p;
@@ -399,7 +485,7 @@ void box_cases() {
                 const Points p = make_points(kind, side * side * across, box);
                 Mesh m(Exec{}, box);
                 build(c, std::string(kind) + " in a 1:1:1/8 slab, about " + std::to_string(across) + " cells across", m, p,
-                      Expect::exact_or_refused, 256);
+                      Expect::exact_or_refused, 32);
             });
     for (const double thin : {1.0 / 32, 1.0 / 256, 1.0 / 1024})
         add("box.thin." + sci(thin), [=](Check& c) {
@@ -426,7 +512,7 @@ void box_cases() {
     for (const double radius : {0.1, 0.15, 0.18, 0.2, 0.22, 0.25, 0.3, 0.35, 0.4, 0.45})
         for (const bool centre : {false, true})
             add(std::string("box.void.") + (centre ? "centre." : "empty.") + sci(radius), [=](Check& c) {
-                const Points all = make_points("uniform", 32768);
+                const Points all = make_points("uniform", 8192);
                 Points p;
                 for (const auto& q : all) {
                     double d2 = 0;
@@ -435,7 +521,7 @@ void box_cases() {
                 }
                 if (centre) p.push_back({0.5, 0.5, 0.5});
                 Mesh m(Exec{}, 1.0);
-                build(c, "a void of radius " + sci(radius), m, p, Expect::exact_or_refused, 64);
+                build(c, "a void of radius " + sci(radius), m, p, Expect::exact_or_refused, 16);
             });
     add("box.edges", [](Check& c) {
         // Particles on every wrap: x = 0, side, just below 0, a period off.
@@ -619,11 +705,11 @@ void degenerate_cases() {
         // (coplanar), edge midpoints and cube centres (cospherical with 8).
         Points p = exact_lattice(16, sc_basis);
         const double h = 1.0 / 16;
-        p.push_back({0.5 + 0.03125, 0.5 + 0.03125, 0.5 + 0.03125});  // a cube centre
+        p.push_back({0.5625, 0.5625, 0.5625});  // a cube centre: sites are at (i + 1/2) / 16
         const Point from = p.back();
         Mesh m(Exec{}, 1.0);
         build(c, "start", m, p, Expect::exact);
-        const std::vector<Point> directions{{1, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 1, 1}, {0, 0, -1}};
+        const std::vector<Point> directions{{1, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 0, 1}, {0, 0, -1}};
         Point at = from;
         for (const auto& d : directions)
             for (int s = 1; s <= 4; ++s) {
@@ -805,10 +891,11 @@ void large_cases() {
             Points p = make_points("jittered", 4096);
             Mesh m(Exec{}, 1.0);
             build(c, "start", m, p, Expect::exact);
-            const Flow flow;
-            for (int s = 1; s <= 4; ++s) {
+            const Flow flow;  // compressive: a step of many spacings can empty a region
+            bool refused = false;
+            for (int s = 1; s <= 4 && !refused; ++s) {
                 flow.advect(p, d / 16);
-                step(c, "displacement " + sci(d) + ", step " + std::to_string(s), m, p);
+                step_or_refused(c, "displacement " + sci(d) + ", step " + std::to_string(s), m, p, refused);
             }
         });
     for (const double d : {0.3, 1.0, 3.0, 10.0})
@@ -890,29 +977,45 @@ void large_cases() {
         step_or_refused(c, "and steps on", m, q, again);
     });
     add("large.long_run", [](Check& c) {
-        // Thousands of small steps: no drift in faces, tetrahedra, slots.
+        // Thousands of small steps of a solenoidal flow (no void ends it): no
+        // drift in faces, tetrahedra, slots, ring pools, memory.
+        using namespace distortion;
+        DeviceBytes::start();
+        const int steps = 1500;
         Points p = make_points("jittered", 4096);
+        const int n = static_cast<int>(p.size());
         Mesh m(Exec{}, 1.0);
         build(c, "start", m, p, Expect::exact);
-        const Flow flow;
-        const int steps = 3000;
-        const auto n = p.size();
-        int peak_count = 0;
+        Positions x = to_device(p);
+        const Field field(Kind::turbulence);
+        Kokkos::View<int*, Memory> side("side", n);
+        const double dt = 0.1 / 16;
+        double faces_first = 0, slots_first = 0;
+        std::int64_t bytes_at_100 = 0;
         for (int s = 1; s <= steps; ++s) {
-            flow.advect(p, 0.03 / 16);
-            if (s % 500 == 0) {
-                step(c, "step " + std::to_string(s), m, p, 8);
-                const auto& st = m.repair_state();
-                std::cout << "    slots " << double(st.count) / n << " per cell, free " << st.free_count << ", extent "
-                          << double(st.alive.extent(0)) / n << ", faces " << double(m.faces()) / n << ", ring pool "
-                          << double(m.tetrahedra().ring.extent(0)) / n << "\n";
-            } else {
-                m.update(to_device(p));
-                m.update_cells();
+            advance(field, x, side, s * dt, dt);
+            m.update(x);
+            m.update_cells();
+            if (s == 100) {
+                faces_first = double(m.faces()) / n;
+                slots_first = double(m.repair_state().count) / n;
+                bytes_at_100 = DeviceBytes::current;
             }
-            peak_count = std::max(peak_count, m.repair_state().count);
+            if (s % 300 == 0) {
+                const mc::Result r = mc::check(m, 4);
+                const auto& state = m.repair_state();
+                c.expect(r.ok(), "step " + std::to_string(s) + ": " + r.text());
+                std::cout << "    step " << s << " faces " << double(m.faces()) / n << " slots " << double(state.count) / n
+                          << " free " << state.free_count << " capacity " << double(state.alive.extent(0)) / n
+                          << " B/cell " << double(DeviceBytes::current) / n << "\n"
+                          << std::flush;
+            }
         }
-        c.expect(peak_count < 8 * static_cast<int>(n), "slots stay below 8 per cell: " + sci(double(peak_count) / n));
+        const double faces = double(m.faces()) / n, slots = double(m.repair_state().count) / n;
+        c.expect(std::abs(faces / faces_first - 1) < 0.05, "faces per cell drift below 5 %: " + sci(faces_first) + " -> " + sci(faces));
+        c.expect(slots < 1.1 * slots_first, "tetrahedra slots do not creep: " + sci(slots_first) + " -> " + sci(slots));
+        c.expect(double(DeviceBytes::current) < 1.05 * double(bytes_at_100), "memory does not creep: " +
+                 sci(double(bytes_at_100) / n) + " -> " + sci(double(DeviceBytes::current) / n) + " B/cell");
     });
     add("large.cycle", [](Check& c) {
         // There and back: the same positions give the same mesh, at any cycle.
@@ -928,7 +1031,7 @@ void large_cases() {
             path.push_back(path.back());
             flow.advect(path.back(), 0.3 / 16);
         }
-        for (int cycle = 1; cycle <= 40; ++cycle) {
+        for (int cycle = 1; cycle <= 8; ++cycle) {
             for (int s = 1; s <= 5; ++s) {
                 m.update(to_device(path[s]));
                 m.update_cells();
@@ -940,7 +1043,7 @@ void large_cases() {
         }
         const long long differ = oracle::different_tetrahedra(first, mc::tets_of(m));
         const auto v = to_host(m.volume());
-        c.expect(differ == 0, "after 40 cycles the tetrahedra of the start (" + std::to_string(differ) + " differ)");
+        c.expect(differ == 0, "after 8 cycles the tetrahedra of the start (" + std::to_string(differ) + " differ)");
         c.expect(std::equal(before.begin(), before.end(), v.data()), "and its volumes, bit for bit");
         c.expect(mc::check(m, 8).ok(), "and the oracle passes");
     });

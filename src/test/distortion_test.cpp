@@ -2,7 +2,9 @@
 // hydro, no regularisation, then with a drift to the centroids in this driver
 // (the library layer has none). A run may end in a refusal; every mesh it
 // returns must pass the oracle (sampled steps).
-//   distortion_test [flow ...] [--steps=N] [--n=N] [--d=spacings] [--every=N]
+//   distortion_test [flow ...] [--steps=N] [--n=N] [--d=spacings per step]
+//                   [--every=N oracle] [--rebuild-every=N] [--cells=N brute cells]
+//                   [--no-drift | --drift=chi] [--fallback=host|rebuild] [--print]
 
 #include "check.hpp"
 #include "distortion.hpp"
@@ -26,7 +28,13 @@ int main(int argc, char** argv) {
         else if (a.rfind("--n=", 0) == 0) base.n = std::stoi(a.substr(4));
         else if (a.rfind("--d=", 0) == 0) base.displacement = std::stod(a.substr(4));
         else if (a.rfind("--every=", 0) == 0) base.oracle_every = std::stoi(a.substr(8));
+        else if (a.rfind("--rebuild-every=", 0) == 0) base.rebuild_every = std::stoi(a.substr(16));
+        else if (a.rfind("--cells=", 0) == 0) base.oracle_cells = std::stoi(a.substr(8));
+        else if (a.rfind("--drift=", 0) == 0) drifts = {std::stod(a.substr(8))};
         else if (a == "--print") base.print = true;
+        else if (a == "--dump") base.dump = true;
+        else if (a == "--fallback=host") base.fallback = voronoi::Fallback::host;
+        else if (a == "--fallback=rebuild") base.fallback = voronoi::Fallback::rebuild;
         else if (a == "--no-drift") drifts = {0};
         else flows.push_back(a);
     }
