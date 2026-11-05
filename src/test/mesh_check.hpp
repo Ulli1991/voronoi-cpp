@@ -206,8 +206,11 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
 
 // A mesh and the clipping disagree on faces: who is right? The largest faces
 // the clipping lacks, each against brute-force clipping of its owner cell.
+// True when brute force sides with the mesh on all of them: the plain clipping
+// is the one wrong (a cell of aspect ratio 1e5 can come back `degenerate`
+// with volume 0; the start patches such cells, this reference does not).
 template <class M>
-void arbitrate(const M& mesh, std::ostream& out, int faces = 8) {
+bool arbitrate(const M& mesh, std::ostream& out, int faces = 8) {
     const Positions x = snapped(mesh);
     const Reference reference = clipped(x, mesh.sides());
     long long bad_status = 0;
@@ -226,17 +229,21 @@ void arbitrate(const M& mesh, std::ostream& out, int faces = 8) {
     out << "arbitrate: extra faces " << extra.size() << ", cells of the clipping not ok " << bad_status << "\n";
     const auto g = grid_of(mesh);
     const long double step2 = g.step * g.step, step3 = step2 * g.step;
+    bool mesh_right = true;
     for (int k = 0; k < std::min<int>(faces, extra.size()); ++k) {
         const int f = extra[k].second, i = owner(f), j = neighbour(f);
         const oracle::Cell cell = oracle::voronoi_cell(g, i);
         const auto it = cell.area.find(j);
+        const double brute_volume = double(cell.volume * step3);
+        mesh_right = mesh_right && it != cell.area.end() && std::abs(volume(i) / brute_volume - 1) < 1e-9;
         out << "  face " << f << " (" << i << "," << j << ") area " << extra[k].first << " status " << reference.status[i] << ","
             << reference.status[j] << " brute "
             << (it == cell.area.end() ? std::string("has no such face")
                                       : "has it, area " + sci(double(std::sqrt(oracle::dot(it->second, it->second)) * step2)))
             << "; volume of i: mesh " << volume(i) << " clipping " << reference.volume[i] << " brute "
-            << double(cell.volume * step3) << "\n";
+            << brute_volume << "\n";
     }
+    return mesh_right;
 }
 
 }  // namespace mesh_check

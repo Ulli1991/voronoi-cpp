@@ -439,10 +439,11 @@ inline Summary run(const Options& o) {
         }
         if (rebuild) {
             const Comparison c = compare_with_rebuild(mesh, mesh_check::snapped(mesh));
-            if (!c.pass()) mesh_check::arbitrate(mesh, out);
+            const bool mesh_right = !c.pass() && c.failing == 0 && mesh_check::arbitrate(mesh, out);
             s.volume = std::max(s.volume, c.volume);
-            verdict += c.pass() && std::abs(c.total - 1) < 1e-11 ? " rebuild=PASS" : " rebuild=FAIL";
-            if ((!c.pass() || std::abs(c.total - 1) >= 1e-11) && s.wrong_step < 0) {
+            const bool passed = (c.pass() || mesh_right) && std::abs(c.total - 1) < 1e-11;
+            verdict += mesh_right ? " rebuild=PASS_BRUTE" : passed ? " rebuild=PASS" : " rebuild=FAIL";
+            if (!passed && s.wrong_step < 0) {
                 s.wrong_step = step;
                 std::ostringstream text;
                 text << c;

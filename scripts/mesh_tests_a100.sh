@@ -73,6 +73,10 @@ thin128)
     # and the full oracle on that mesh (host, single thread).
     "$d" thin --no-drift --n=2097152 --d=0.3 --steps=800 --every=0 --rebuild-every=800 --shape-every=25 --final-oracle --cells=64 --print
     ;;
+thin64)
+    # The same strain at 64^3, where the arbiter takes seconds.
+    "$d" thin --no-drift --n=262144 --d=0.3 --steps=400 --every=0 --rebuild-every=400 --shape-every=25 --print
+    ;;
 void128)
     for flow in collapse_wide streams; do
         "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=120 --every=0 --rebuild-every=0 --shape-every=25 --print
