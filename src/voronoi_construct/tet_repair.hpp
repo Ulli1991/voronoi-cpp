@@ -423,7 +423,9 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);
-                if (u < 0) continue;
+                // A triangle fails from both sides or from neither: the
+                // side with the lower index decides.
+                if (u < t) continue;
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
                 const Vec3 e = from(at, far);

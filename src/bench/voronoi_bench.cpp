@@ -15,6 +15,11 @@
 //       adds adjacency and stuck details.
 //   --memory (both modes): device memory per phase (Kokkos allocations:
 //       current, peak, and the live allocations at the peak by label).
+//   --kernels (step): time per kernel label, mean over the steps after the
+//       first (run with CUDA_LAUNCH_BLOCKING=1 on CUDA, else launches only).
+//   --touched (step): per step, the cells at a corner of a tetrahedron created
+//       by flips and the cells whose set of faces changed (host, slow).
+//   --checksum (step): per step, a checksum of the volume and centroid bits.
 //   --box=<Lx>,<Ly>,<Lz> (both modes; default 1,1,1): a periodic box of
 //       these sides; lattices get about equal spacings along every axis
 //       (e.g. --box=2,2,0.0625 with 4194304 jittered points is a
@@ -90,6 +95,46 @@ struct DeviceMemory {
         peak = current;
         at_peak.clear();
         for (const auto& [p, entry] : live) at_peak[entry.first] += entry.second;
+    }
+};
+
+// Time per kernel label through the Kokkos Tools callbacks.
+struct KernelTimes {
+    static inline bool on = false;
+    static inline std::map<std::string, double> total;  // ms over the sampled steps
+    static inline std::string running;
+    static inline Kokkos::Timer timer;
+
+    static void begin(const char* label, std::uint32_t, std::uint64_t*) {
+        running = label;
+        timer.reset();
+    }
+    static void end(std::uint64_t) { total[running] += timer.seconds() * 1e3; }
+    static void begin_copy(Kokkos_Profiling_SpaceHandle, const char*, const void*, Kokkos_Profiling_SpaceHandle, const char*,
+                           const void*, std::uint64_t) {
+        running = "deep_copy";
+        timer.reset();
+    }
+    static void end_copy() { total[running] += timer.seconds() * 1e3; }
+    static void start() {
+        on = true;
+        namespace E = Kokkos::Tools::Experimental;
+        E::set_begin_parallel_for_callback(begin);
+        E::set_end_parallel_for_callback(end);
+        E::set_begin_parallel_scan_callback(begin);
+        E::set_end_parallel_scan_callback(end);
+        E::set_begin_parallel_reduce_callback(begin);
+        E::set_end_parallel_reduce_callback(end);
+        E::set_begin_deep_copy_callback(begin_copy);
+        E::set_end_deep_copy_callback(end_copy);
+    }
+    static void report(int steps, int n) {
+        if (!on) return;
+        std::vector<std::pair<double, std::string>> rows;
+        for (const auto& [label, ms] : total) rows.push_back({ms / steps, label});
+        std::sort(rows.rbegin(), rows.rend());
+        for (const auto& [ms, label] : rows)
+            std::cout << "kernel: " << label << " ms_per_step=" << ms << " Mcells_s=" << n / ms / 1e3 << "\n";
     }
 };
 
@@ -243,7 +288,63 @@ std::uint64_t cells_checksum(const Mesh& mesh) {
     return h;
 }
 
-int step(const std::vector<std::string>& args, const Box& box, bool verify, bool debug, voronoi::Fallback fallback) {
+// Cells at a corner of a live tetrahedron created since the last move, and
+// cells whose set of other particles differs from `before` (updated).
+void report_touched(const Mesh& mesh, std::vector<std::vector<int>>& before) {
+    const int n = mesh.particles();
+    const auto start = to_host(mesh.cell_face_start());
+    const auto face = to_host(mesh.cell_face());
+    const auto owner = to_host(mesh.owner());
+    const auto neighbour = to_host(mesh.neighbour());
+    std::vector<std::vector<int>> now(n);
+    for (int i = 0; i < n; ++i) {
+        now[i].reserve(start(i + 1) - start(i));
+        for (int a = start(i); a < start(i + 1); ++a) {
+            const int f = face(a);
+            now[i].push_back(owner(f) == i ? neighbour(f) : owner(f));
+        }
+        std::sort(now[i].begin(), now[i].end());
+    }
+    long long changed = 0;
+    if (!before.empty())
+        for (int i = 0; i < n; ++i) changed += now[i] != before[i];
+    const auto& state = mesh.repair_state();
+    long long touched = n;
+    if (state.touched_entries >= 0) {
+        const auto list = to_host(state.touched_list);
+        const auto alive = to_host(state.alive);
+        const auto vertex = to_host(mesh.tetrahedra().vertex);
+        std::vector<char> mark(n, 0);
+        for (int e = 0; e < state.touched_entries; ++e)
+            if (alive(list(e)))
+                for (int c = 0; c < 4; ++c) mark[vertex(list(e), c)] = 1;
+        touched = std::count(mark.begin(), mark.end(), 1);
+    }
+    std::cout << "touched: created_tets=" << state.touched_entries << " cells_at_created=" << touched
+              << " fraction=" << double(touched) / n << " cells_faces_changed=" << changed
+              << " fraction_changed=" << double(changed) / n << "\n";
+    before = std::move(now);
+}
+
+// A checksum of the bits of the cell volumes and centroids.
+std::uint64_t geometry_checksum(const Mesh& mesh) {
+    const auto volume = to_host(mesh.volume());
+    const auto centroid = to_host(mesh.centroid());
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](double d) {
+        std::uint64_t u;
+        std::memcpy(&u, &d, sizeof u);
+        h = (h ^ u) * 1099511628211ull;
+    };
+    for (int i = 0; i < mesh.particles(); ++i) {
+        mix(volume(i));
+        for (int a = 0; a < 3; ++a) mix(centroid(i, a));
+    }
+    return h;
+}
+
+int step(const std::vector<std::string>& args, const Box& box, bool verify, bool debug, bool touched, bool checksum,
+         voronoi::Fallback fallback) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -299,10 +400,13 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     DeviceMemory::phase("start_and_prepare", n);
     const Flow flow;
     int failures = 0;
+    std::vector<std::vector<int>> faces_before;
+    if (touched) report_touched(mesh, faces_before);
     for (int s = 1; s <= steps; ++s) {
         flow.advect(points, displacement * spacing, box);
         x = to_device(points);
         exec.fence();
+        if (s == 2) KernelTimes::total.clear();
         voronoi::Timings t;
         const voronoi::Report r = mesh.update(x, {}, &t);
         mesh.update_cells(&t);
@@ -314,6 +418,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " host_rebuilt=" << r.host_rebuilds << " rebuilt=" << r.rebuilt << " rebuild_ms=" << t.build
                   << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
                   << " cells_ms=" << t.cells << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3 << "\n";
+        if (touched) report_touched(mesh, faces_before);
+        if (checksum) std::cout << "geometry_checksum: step=" << s << " " << geometry_checksum(mesh) << "\n";
         if (debug) {
             report_stuck(mesh.repair_state());
             report_adjacency(host_tetrahedra(mesh), "after step");
@@ -324,6 +430,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         std::cout << "verify: step=" << s << " " << c << (c.pass() ? "  PASS" : "  FAIL") << "\n";
     }
     DeviceMemory::phase("steps", n);
+    KernelTimes::report(steps - 1, n);
     return failures;
 }
 
@@ -332,18 +439,20 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     if (has_flag(argc, argv, "--memory")) DeviceMemory::start();
+    if (has_flag(argc, argv, "--kernels")) KernelTimes::start();
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
         return rebuild(args, box_flag(argc, argv), flag_value(argc, argv, "--width", 1.0),
                        !has_flag(argc, argv, "--no-check")) != 0;
     if (args.size() >= 4 && args[0] == "step")
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug"),
+                    has_flag(argc, argv, "--touched"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--fallback=rebuild") ? voronoi::Fallback::rebuild
                     : has_flag(argc, argv, "--fallback=host")  ? voronoi::Fallback::host
                                                                : voronoi::Fallback::cheapest) != 0;
     std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
-                 "                          [--fallback=host|rebuild] [--memory]\n"
+                 "                          [--fallback=host|rebuild] [--memory] [--kernels] [--touched]\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }

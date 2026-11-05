@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
         Positions x = to_device(cube ? scaled(points, c.box) : points);
         Mesh mesh(Exec{}, c.box);
         check.expect(mesh.update(x).start.exact, "exact starting mesh");
+        mesh.update_cells();
         for (int step = 1; step <= steps; ++step) {
             if (cube)
                 flow.advect(points, displacement * spacing);
@@ -53,11 +54,12 @@ int main(int argc, char** argv) {
                 flow.advect(points, displacement * spacing, c.box);
             x = to_device(cube ? scaled(points, c.box) : points);
             const voronoi::Report report = mesh.update(x);
+            mesh.update_cells();
             const Comparison d = compare_with_rebuild(mesh, x);
             std::ostringstream what;
             what << "step " << step << ": flips " << report.flips << " stuck " << report.stuck << " host flips "
                  << report.host_flips << " rebuilt " << report.host_rebuilds << "; " << d;
-            check.expect(d.failing == 0 && d.mismatched == 0 && d.faces == d.clipped_faces && d.volume < 1e-10 &&
+            check.expect(d.failing == 0 && d.mismatched == 0 && d.faces == d.clipped_faces && d.volume < 1e-10 && d.wrong_lists == 0 &&
                              std::abs(d.total - 1.0) < 1e-12,
                          what.str());
         }

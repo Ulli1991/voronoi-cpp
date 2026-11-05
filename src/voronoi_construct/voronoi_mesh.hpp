@@ -180,6 +180,7 @@ public:
         Kokkos::Timer timer;
         Report report;
         report.rebuilt = true;
+        rings_ = {};  // the old mesh's pools make room for the build
         n_ = static_cast<int>(x.extent(0));
         snap(x);
         {
@@ -196,11 +197,12 @@ public:
             ring_entries_ = cells.capacity();
             if (!report.start.exact) throw std::runtime_error(detail::not_exact(exec_, cells));
         }
-        // Capacities: 1/8 more than the starting mesh needs (ring pools
-        // 1/2 more: room to append between compactions); the repair and
-        // the face rings grow them when a step needs more.
+        // Capacities: 1/8 more tetrahedra and 1/32 more faces than the
+        // starting mesh has (ring pools 1/2 more: room to append between
+        // compactions); the repair and the face rings grow them when a step
+        // needs more.
         const int tets = static_cast<int>(tets_.vertex.extent(0));
-        const int faces = static_cast<int>(tets_.owner.extent(0)) + static_cast<int>(tets_.owner.extent(0)) / 8;
+        const int faces = static_cast<int>(tets_.owner.extent(0)) + static_cast<int>(tets_.owner.extent(0)) / 32;
         const int entries = static_cast<int>(tets_.ring.extent(0));
         tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};  // walked again below
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
@@ -251,8 +253,8 @@ public:
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         auto& spare = rings_.pool[1 - rings_.in_use];
-        if (spare.extent(0) * sizeof(int) < bytes)
-            Kokkos::realloc(Kokkos::WithoutInitializing, spare, (bytes + sizeof(int) - 1) / sizeof(int));
+        if (spare.extent(0) * sizeof(int) < bytes)  // with room for the faces to grow, so not every step
+            Kokkos::realloc(Kokkos::WithoutInitializing, spare, (bytes + bytes / 64) / sizeof(int) + 1);
         return Scratch(reinterpret_cast<char*>(spare.data()), bytes);
     }
 
@@ -263,8 +265,22 @@ public:
         if (cells_current_) return;
         Kokkos::Timer timer;
         // Its temporaries live in the spare ring pool (see scratch).
-        tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
-                        scratch(tet_mesh::cells_scratch_bytes(faces())).data());
+        // After few flips from the last step's lists (with the spare pool, see
+        // tet_mesh::cells_incremental); beyond about one tetrahedron created
+        // per five cells rebuilding them is as fast (measured at 2.1M).
+        const auto& spare = rings_.pool[1 - rings_.in_use];
+        const std::size_t table = sizeof(int) * (static_cast<std::size_t>(rings_.renumbered) + rings_.dirty_count);
+        if (lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
+            state_.touched_entries <= n_ / 5 &&
+            table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <= spare.extent(0) * sizeof(int)) {
+            tet_mesh::cells_incremental(exec_, positions_, box_, owner(), neighbour(), tets_, state_.alive,
+                                        Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries)),
+                                        rings_, geometry_, cells_, reinterpret_cast<char*>(spare.data()));
+        } else {
+            tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
+                            scratch(tet_mesh::cells_scratch_bytes(faces())).data());
+        }
+        updates_since_lists_ = 0;
         if constexpr (with_weights) {
             // As many rows as list entries (2 per face), with the list's 1/32 spare.
             const std::size_t entries = 2 * static_cast<std::size_t>(faces());
@@ -277,6 +293,7 @@ public:
         lap(timer, timings, &Timings::cells);
     }
 
+    bool cells_current() const { return cells_current_; }
     void set_fallback(Fallback f) { fallback_ = f; }
 
     int particles() const { return n_; }
@@ -344,6 +361,8 @@ private:
     // Circumcentres of the created tetrahedra, face rings, faces and cells.
     int geometry(Timings* timings) {
         Kokkos::Timer timer;
+        lists_of_last_update_ = updates_since_lists_ == 0;
+        ++updates_since_lists_;
         const Kokkos::View<const int*, Memory> created =
             state_.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
                                        : Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries));
@@ -353,9 +372,9 @@ private:
             tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count, created);
         const int faces = tet_mesh::update_face_rings(exec_, tets_, state_.count, state_.touched, created, rings_);
         if (faces > static_cast<int>(geometry_.area.extent(0))) {
-            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, faces + faces / 8);
-            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 8);
-            if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 8);
+            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, faces + faces / 32);
+            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 32);
+            if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 32);
         }
         tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
@@ -370,6 +389,8 @@ private:
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
     bool cells_current_ = false;
+    int updates_since_lists_ = 1;       // updates since the last update_cells()
+    bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last
     tet_mesh::Points4<Memory> positions_;
     neighbor_search::CellList<ExecSpace> list_;
     tet_mesh::Mesh<Memory> tets_;
