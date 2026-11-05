@@ -1005,15 +1005,17 @@ void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
 
 // 2. Face area vectors (owner to neighbour), centroids (relative to the
 // owner) and, if out.volume is allocated, cell volumes (summed by atomics),
-// one thread per owned face.
+// one thread per owned face. Returns the sum of the cell volumes (0 without
+// them): a mesh that covers the box once gives the box, up to rounding.
 template <class ExecSpace, class X>
-void faces(const ExecSpace& exec, const X& x, const Box& box,
-           const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
+double faces(const ExecSpace& exec, const X& x, const Box& box,
+             const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
     const bool with_volume = out.volume.extent(0) > 0;
     const bool with_rows = out.rows.extent(0) > 0;
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
-    Kokkos::parallel_for(
-        "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f) {
+    double total = 0;
+    Kokkos::parallel_reduce(
+        "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f, double& sum) {
             const int i = mesh.owner(f), j = mesh.neighbour(f);
             const int begin = mesh.ring_start(f), end = begin + mesh.ring_length(f);
             const Vec3 p = row(x, i);
@@ -1058,7 +1060,10 @@ void faces(const ExecSpace& exec, const X& x, const Box& box,
             const double pyramid = projected * (1.0 / 6.0);
             Kokkos::atomic_add(&out.volume(i), pyramid);
             Kokkos::atomic_add(&out.volume(j), pyramid);
-        });
+            sum += 2 * pyramid;
+        },
+        total);
+    return total;
 }
 
 // Per-cell face lists (CSR) and cell geometry: cell i's faces are

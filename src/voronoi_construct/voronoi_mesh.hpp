@@ -118,6 +118,7 @@ struct Report {
     long long flips = 0;           // device flips
     int rounds = 0;                // device repair rounds
     int stuck = 0;                 // triangles the device repair could not repair
+    bool overlapped = false;       // the repair's mesh did not fill the box once: rebuilt
     long long host_flips = 0;      // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
     int faces = 0;
@@ -209,17 +210,23 @@ public:
             stuck = host.stuck > 0;
             lap(timer, timings, &Timings::fallback);
         }
-        if (stuck) {  // a rebuild, also for what the host left
-            Report rebuilt = rebuild(x, timings);
-            rebuilt.flips = report.flips;
-            rebuilt.rounds = report.rounds;
-            rebuilt.stuck = report.stuck;
-            rebuilt.host_flips = report.host_flips;
-            rebuilt.host_rebuilds = report.host_rebuilds;
-            return rebuilt;
+        if (!stuck) {
+            report.faces = geometry(timings);
+            // A step of order the box leaves tetrahedra whose corners see each
+            // other through different images: every local test passes and the
+            // mesh covers the torus many times. Their volumes do not add up.
+            report.overlapped = !(Kokkos::abs(total_volume_ / box_.volume() - 1) < 1e-6);
+            if (!report.overlapped) return report;
         }
-        report.faces = geometry(timings);
-        return report;
+        // A rebuild, also for what the host left.
+        Report rebuilt = rebuild(x, timings);
+        rebuilt.flips = report.flips;
+        rebuilt.rounds = report.rounds;
+        rebuilt.stuck = report.stuck;
+        rebuilt.host_flips = report.host_flips;
+        rebuilt.host_rebuilds = report.host_rebuilds;
+        rebuilt.overlapped = report.overlapped;
+        return rebuilt;
     }
 
     // The exact mesh of positions x from scratch: clipping with face rings,
@@ -449,7 +456,7 @@ private:
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 32);
             if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 32);
         }
-        tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        total_volume_ = tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
@@ -462,6 +469,7 @@ private:
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
     int repair_rounds_ = 1000;
+    double total_volume_ = 0;  // of the cells, from the last geometry()
     bool cells_current_ = false;
     int updates_since_lists_ = 1;       // updates since the last update_cells()
     bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last

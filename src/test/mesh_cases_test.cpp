@@ -62,7 +62,7 @@ voronoi::Report step(Check& check, const std::string& name, Mesh& mesh, const Po
     const mc::Result c = mc::check(mesh, cells);
     std::ostringstream what;
     what << name << ": flips " << r.flips << " rounds " << r.rounds << " stuck " << r.stuck << " host " << r.host_flips
-         << "/" << r.host_rebuilds << " rebuilt " << r.rebuilt << ": " << c.text();
+         << "/" << r.host_rebuilds << " rebuilt " << r.rebuilt << " overlapped " << r.overlapped << ": " << c.text();
     check.expect(c.ok(), what.str());
     return r;
 }
@@ -1073,7 +1073,7 @@ void large_cases() {
                 to_grid(p);
                 step(c, "random walk " + sci(d) + ", step " + std::to_string(s), m, p);
             }
-        }, d == 10.0 ? 24 : 0);
+        });
     // Kicks as a fraction of the box, several seeds: the mesh is exact, or the
     // update refuses.
     for (const int n : {4096, 32768})
