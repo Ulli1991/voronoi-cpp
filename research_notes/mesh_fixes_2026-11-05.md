@@ -31,3 +31,23 @@ build-meshfix/. Before-binaries: build-meshfix/before/.
   usual length; (b) 256 or 1024 with fixed arrays: 1-4 KB of GPU stack per
   thread in two kernels and still a limit; (c) an overflow pass on the host:
   a report path for nothing, since nothing needs the arrays. Speed: see the job.
+
+- Correction, #18: commit 79c8de2 has the message of the fix but only its notes
+  and test expectations: the edit of the sources was refused with the command
+  that held it, and the check I then ran skipped the cases (still tagged known),
+  so it passed for nothing. The fix itself is commit 9bdca28. Found through
+  contrast.skew_segments: after the #21 fix that input built, with closure 0.97
+  and rings of exactly 65. Rings of 1000 corners run in valence.ring now (294
+  checks, none skipped).
+
+- #21: a third tier of exact cells, huge_planes = 16000, huge_vertices = 32000,
+  on the host for the few cells that overflow big ones (16-bit indices, 1.9 MB
+  each, on the heap). Options: big_planes up to 255 (the byte limit): 3 cells of
+  k = 800 might fit, 20 of k = 2000 perhaps not, and every device thread of the
+  big pass pays the stack; a host tier: nothing on the common path (one more
+  reduce only after an overflow), grid and pools copied to the host and back
+  once in that rare path. Chosen: the host tier.
+  Cost that stays: every shell cell clips all k particles of the shell (the
+  void's interior is in reach), so the start is O(k^2) in the particles around
+  one void: k = 2000 about 1 s, k = 20000 with a hub 129 s (8 CPU threads).
+  Old behaviour, now reachable. A limit, not a slowdown.

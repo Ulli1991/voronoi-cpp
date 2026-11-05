@@ -89,20 +89,25 @@ std::string coincident(const Positions& positions) {
 // Why a start failed: coincident particles, cells the clipping could not
 // certify (in one periodic image, see shell_voronoi::level_reach), or else
 // not exact.
-template <class ExecSpace, class Positions>
-std::string not_exact(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
-                      const Positions& positions) {
+template <class Cells, class Positions>
+std::string not_exact(const Cells& cells, const Positions& positions) {
     const std::string pair = coincident(positions);
     if (!pair.empty()) return pair;
-    int uncertified = 0;
-    const auto status = cells.status;
-    Kokkos::parallel_reduce(
-        "voronoi::uncertified", Kokkos::RangePolicy<ExecSpace>(exec, 0, status.extent(0)),
-        KOKKOS_LAMBDA(int i, int& count) { count += status(i) == shell_voronoi::uncertified; }, uncertified);
-    if (uncertified == 0) return "voronoi::Mesh: the start is not exact";
-    return "voronoi::Mesh: " + std::to_string(uncertified) +
-           " cells reach too far to be certified in one periodic image (a cell's radius must stay below about 3/16 "
-           "of the shortest box side): too few particles across the box";
+    const auto status = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, cells.status);
+    long long count[shell_voronoi::status_count] = {};
+    for (std::size_t i = 0; i < status.extent(0); ++i) ++count[status(i)];
+    if (count[shell_voronoi::uncertified] > 0)
+        return "voronoi::Mesh: " + std::to_string(count[shell_voronoi::uncertified]) +
+               " cells reach too far to be certified in one periodic image (a cell's radius must stay below about 3/16 "
+               "of the shortest box side): too few particles across the box";
+    const long long overflow = count[shell_voronoi::plane_overflow] + count[shell_voronoi::vertex_overflow];
+    if (overflow > 0)
+        return "voronoi::Mesh: " + std::to_string(overflow) + " cells need more than the clipping's " +
+               std::to_string(shell_voronoi::huge_planes) + " planes or " + std::to_string(shell_voronoi::huge_vertices) +
+               " vertices (too many particles around one cell)";
+    return "voronoi::Mesh: the start is not exact (clipping statuses: " + std::to_string(count[0]) + " ok, " +
+           std::to_string(count[shell_voronoi::face_overflow]) + " out of pool room, " +
+           std::to_string(count[shell_voronoi::degenerate]) + " degenerate)";
 }
 }  // namespace detail
 
@@ -242,7 +247,7 @@ public:
             }
             ring_entries_ = cells.capacity();
             if (!report.start.exact) {
-                const std::string why = detail::not_exact(exec_, cells, positions_);
+                const std::string why = detail::not_exact(cells, positions_);
                 forget();
                 throw std::runtime_error(why);
             }

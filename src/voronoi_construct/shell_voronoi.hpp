@@ -42,6 +42,7 @@ constexpr int status_count = 6;
 constexpr int max_planes = 48;    // cutting planes, including the 6 box planes
 constexpr int max_vertices = 64;  // one 64-bit mask marks vertices to remove
 constexpr int big_planes = 128, big_vertices = 256;  // for the rare cells that overflow those
+constexpr int huge_planes = 16000, huge_vertices = 32000;  // exact, on the host: the few that overflow those
 constexpr int ring_buffer = 32;
 constexpr int box_planes = 6;
 constexpr int face_block = 256;  // face pool entries a warp claims at a time (shell_voronoi_warp.hpp)
@@ -445,15 +446,17 @@ inline double start_half_width(const ep::Box& box) { return 0.25 * box.shortest(
 template <int Planes, int Vertices>
 struct RoundedCell {
     static_assert(Planes <= 255, "plane indices are bytes");
+    using Index = std::uint8_t;
     static constexpr int planes_capacity = Planes, vertices_capacity = Vertices;
     static constexpr bool exact = false;
+    static constexpr Index removed = 255;  // corner[v][0] of a removed vertex: no plane index reaches it
     Vec3 normal[Planes];  // the cell is {x : normal . x <= offset}
     double offset[Planes];
     int id[Planes];
     Vec3 vertex[Vertices];
-    std::uint8_t corner[Vertices][3], adjacent[Vertices][3];
-    std::uint8_t free_slot[Vertices];           // stack of the removed vertices' slots
-    std::uint8_t starts[Planes], ends[Planes];  // a cut's new vertex whose hole edge starts / ends at a plane
+    Index corner[Vertices][3], adjacent[Vertices][3];
+    Index free_slot[Vertices];           // stack of the removed vertices' slots
+    Index starts[Planes], ends[Planes];  // a cut's new vertex whose hole edge starts / ends at a plane
     int planes = 0, vertices = 0, free_count = 0;  // vertices: slots ever used, free_count of them on the stack
     double radius2 = 0;  // largest squared vertex distance from the generator
 
@@ -470,14 +473,16 @@ struct RoundedCell {
 
 template <int Planes, int Vertices>
 struct ExactCell {
-    static_assert(Planes <= 255, "plane indices are bytes");
+    using Index = std::conditional_t<(Planes <= 255 && Vertices <= 256), std::uint8_t, std::uint16_t>;
+    static_assert(Planes < 65535 && Vertices <= 32767, "plane indices fit an Index, vertex numbers an int16");
     static constexpr int planes_capacity = Planes, vertices_capacity = Vertices;
     static constexpr bool exact = true;
+    static constexpr Index removed = static_cast<Index>(-1);  // no plane index reaches it
     ep::Offset offset[Planes];  // generator to the plane's particle
     int id[Planes];
-    std::uint8_t corner[Vertices][3], adjacent[Vertices][3];
-    std::uint8_t free_slot[Vertices];
-    std::uint8_t starts[Planes], ends[Planes];
+    Index corner[Vertices][3], adjacent[Vertices][3];
+    Index free_slot[Vertices];
+    Index starts[Planes], ends[Planes];
     double w[Vertices][3], o[Vertices];
     double r2[Vertices];  // bound on the squared distance of each vertex
     int planes = 0, vertices = 0, free_count = 0;
@@ -514,9 +519,10 @@ KOKKOS_INLINE_FUNCTION bool set_vertex(C& cell, int v, int a, int b, int c) {
     cell.o[v] = double(o);
     const double* w = cell.w[v];
     cell.r2[v] = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]) / (4 * cell.o[v] * cell.o[v]) * (1 + 1e-12);
-    cell.corner[v][0] = static_cast<std::uint8_t>(a);
-    cell.corner[v][1] = static_cast<std::uint8_t>(b);
-    cell.corner[v][2] = static_cast<std::uint8_t>(c);
+    using Index = typename C::Index;
+    cell.corner[v][0] = static_cast<Index>(a);
+    cell.corner[v][1] = static_cast<Index>(b);
+    cell.corner[v][2] = static_cast<Index>(c);
     return true;
 }
 
@@ -552,11 +558,9 @@ KOKKOS_INLINE_FUNCTION bool inside(const C& cell, int v, const ep::Offset& e, in
     return ep::in_sphere(p, ids);
 }
 
-// corner[v][0] of a removed vertex (no plane index reaches it).
-constexpr std::uint8_t removed = 255;
 template <class C>
 KOKKOS_INLINE_FUNCTION bool live(const C& cell, int v) {
-    return cell.corner[v][0] != removed;
+    return cell.corner[v][0] != C::removed;
 }
 
 // The cube of half-width h (box units) around the generator, bounded by six
@@ -564,6 +568,7 @@ KOKKOS_INLINE_FUNCTION bool live(const C& cell, int v) {
 // corners of odd parity, so that every face is walked the same way round.
 template <class C>
 KOKKOS_INLINE_FUNCTION void start_cube(C& cell, double h, double unit, int n) {
+    using Index = typename C::Index;
     for (int a = 0; a < 3; ++a)
         for (int s = 0; s < 2; ++s) {
             const int plane = 2 * a + s;
@@ -587,9 +592,9 @@ KOKKOS_INLINE_FUNCTION void start_cube(C& cell, double h, double unit, int n) {
             set_vertex(cell, c, a, b, d);
             cell.radius2 = Kokkos::max(cell.radius2, cell.r2[c]);
         } else {
-            cell.corner[c][0] = static_cast<std::uint8_t>(a);
-            cell.corner[c][1] = static_cast<std::uint8_t>(b);
-            cell.corner[c][2] = static_cast<std::uint8_t>(d);
+            cell.corner[c][0] = static_cast<Index>(a);
+            cell.corner[c][1] = static_cast<Index>(b);
+            cell.corner[c][2] = static_cast<Index>(d);
             cell.vertex[c] = {sx ? -h : h, sy ? -h : h, sz ? -h : h};
         }
     }
@@ -597,7 +602,7 @@ KOKKOS_INLINE_FUNCTION void start_cube(C& cell, double h, double unit, int n) {
     // along the axis of corner k + 2.
     for (int c = 0; c < 8; ++c)
         for (int k = 0; k < 3; ++k)
-            cell.adjacent[c][k] = static_cast<std::uint8_t>(c ^ (1 << (cell.corner[c][(k + 2) % 3] / 2)));
+            cell.adjacent[c][k] = static_cast<Index>(c ^ (1 << (cell.corner[c][(k + 2) % 3] / 2)));
     for (int p = 0; p < C::planes_capacity; ++p) cell.starts[p] = cell.ends[p] = 0;
     if constexpr (!C::exact) cell.radius2 = 3 * h * h;
     cell.vertices = 8;
@@ -614,11 +619,11 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
     for (int v = 0; v < cell.vertices; ++v)
         if (live(cell, v))
             for (int k = 0; k < 3; ++k) used[cell.corner[v][k]] = true;
-    std::uint8_t renumber[capacity];
+    typename C::Index renumber[capacity];
     int planes = 0;
     for (int p = 0; p < cell.planes; ++p) {
         if (!used[p]) continue;
-        renumber[p] = static_cast<std::uint8_t>(planes);
+        renumber[p] = static_cast<typename C::Index>(planes);
         cell.move_plane(planes, p);
         ++planes;
     }
@@ -636,6 +641,7 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
 // Returns ok when the plane does not cut, or after the cut.
 template <class C>
 KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int id, int self) {
+    using Index = typename C::Index;
     constexpr int max_holes = C::vertices_capacity / 2;
     bool cut[C::vertices_capacity];
     int cuts = 0;
@@ -660,19 +666,19 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
     // face closes: edge (a, b) of a removed vertex, with kept u across it,
     // whose edge `back` leads back. Slot s will hold its new vertex.
     struct Hole {
-        std::uint8_t a, b, u, back, s;
+        Index a, b, u, back, s;
     };
     Hole hole[max_holes];
     int holes = 0;
     for (int w = 0; w < cell.vertices; ++w) {
         if (!cut[w]) continue;
         for (int k = 0; k < 3; ++k) {
-            const std::uint8_t u = cell.adjacent[w][k];
+            const Index u = cell.adjacent[w][k];
             if (cut[u]) continue;
             if (holes == max_holes) return vertex_overflow;
-            const std::uint8_t* across = cell.adjacent[u];
+            const Index* across = cell.adjacent[u];
             hole[holes++] = {cell.corner[w][k], cell.corner[w][(k + 1) % 3], u,
-                             static_cast<std::uint8_t>(across[0] == w ? 0 : across[1] == w ? 1 : 2), 0};
+                             static_cast<Index>(across[0] == w ? 0 : across[1] == w ? 1 : 2), 0};
         }
     }
     const int kept = cell.vertices - cell.free_count - cuts;
@@ -691,8 +697,8 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
     double r2 = 0;
     for (int w = 0; w < cell.vertices; ++w) {
         if (cut[w]) {
-            cell.corner[w][0] = removed;
-            cell.free_slot[cell.free_count++] = static_cast<std::uint8_t>(w);
+            cell.corner[w][0] = C::removed;
+            cell.free_slot[cell.free_count++] = static_cast<Index>(w);
             if constexpr (C::exact)
                 cell.r2[w] = 0;
             else
@@ -716,15 +722,15 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             Vec3 x;
             if (!intersect(cell, a, b, plane, x)) return degenerate;
             cell.vertex[s] = x;
-            cell.corner[s][0] = static_cast<std::uint8_t>(a);
-            cell.corner[s][1] = static_cast<std::uint8_t>(b);
-            cell.corner[s][2] = static_cast<std::uint8_t>(plane);
+            cell.corner[s][0] = static_cast<Index>(a);
+            cell.corner[s][1] = static_cast<Index>(b);
+            cell.corner[s][2] = static_cast<Index>(plane);
             r2 = Kokkos::max(r2, dot(x, x));
         }
-        cell.adjacent[u][hole[h].back] = static_cast<std::uint8_t>(s);
-        cell.adjacent[s][0] = static_cast<std::uint8_t>(u);
-        cell.starts[a] = cell.ends[b] = static_cast<std::uint8_t>(s);
-        hole[h].s = static_cast<std::uint8_t>(s);
+        cell.adjacent[u][hole[h].back] = static_cast<Index>(s);
+        cell.adjacent[s][0] = static_cast<Index>(u);
+        cell.starts[a] = cell.ends[b] = static_cast<Index>(s);
+        hole[h].s = static_cast<Index>(s);
     }
     // Across (b, plane) lies the new vertex whose hole edge starts at b,
     // across (plane, a) the one whose hole edge ends at a. Rounding can make
@@ -737,8 +743,8 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             cell.corner[next][2] != plane || !live(cell, previous) || cell.corner[previous][1] != a ||
             cell.corner[previous][2] != plane)
             return degenerate;
-        cell.adjacent[s][1] = static_cast<std::uint8_t>(next);
-        cell.adjacent[s][2] = static_cast<std::uint8_t>(previous);
+        cell.adjacent[s][1] = static_cast<Index>(next);
+        cell.adjacent[s][2] = static_cast<Index>(previous);
     }
     cell.radius2 = r2;
     return ok;
@@ -753,6 +759,27 @@ struct Candidate {
 // Which of the selected cells a pass builds: all, those not ok, or those
 // that overflowed the usual capacities.
 enum class Pass { all, failed, overflowed };
+
+// A thread's cell: on its stack, the host's huge ones (over a megabyte) on
+// the heap, as an OpenMP thread may have little more than that.
+template <class Cell, bool on_heap = (sizeof(Cell) > (1 << 20))>
+struct Held {
+    Cell cell;
+};
+template <class Cell>
+struct Held<Cell, true> {
+    Cell* held;
+    Cell& cell;
+    KOKKOS_FUNCTION static Cell* make() {
+        Cell* made = nullptr;
+        KOKKOS_IF_ON_HOST((made = new Cell;))
+        return made;
+    }
+    KOKKOS_FUNCTION Held() : held(make()), cell(*held) {}
+    KOKKOS_FUNCTION ~Held() { KOKKOS_IF_ON_HOST((delete held;)) }
+    Held(const Held&) = delete;
+    Held& operator=(const Held&) = delete;
+};
 
 // The per-thread kernel, with cells of type Cell (RoundedCell or
 // ExactCell): the walk (see Stencil), then the face walk that writes the
@@ -786,7 +813,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if (Cell::exact)
                 for (int k = 0; k < 3; ++k) self[k] = ep::snap(positions(t, k), box, k);
 
-            Cell cell;
+            Held<Cell> holder;
+            Cell& cell = holder.cell;
             start_cube(cell, half, unit, n);
             double reach2 = cell.reach2(unit);
             int status = ok;
@@ -991,27 +1019,114 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         });
 }
 
+// A host copy of view `from`, of type To (the host's layout); an empty view
+// stays empty.
+template <class To, class From>
+To host_copy(const From& from) {
+    if (from.data() == nullptr) return To{};
+    const auto mirror = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, from);
+    To to(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(from.label())), from.extent(0));
+    Kokkos::deep_copy(to, mirror);
+    return to;
+}
+
+// Device view `to` = host view `from`.
+template <class From, class To>
+void copy_back(const From& from, const To& to) {
+    if (to.data() == nullptr) return;
+    const auto mirror = Kokkos::create_mirror_view(Kokkos::HostSpace{}, to);
+    Kokkos::deep_copy(mirror, from);
+    Kokkos::deep_copy(to, mirror);
+}
+
+// The cells that overflowed big exact cells: exact cells of huge capacity, on
+// the host, with the grid and the results copied there and back unless they
+// are there already. A rare path: its cost per cell grows as faces x vertices.
+template <class ExecSpace>
+void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
+                    const Cells<typename ExecSpace::memory_space>& out,
+                    const Selection<typename ExecSpace::memory_space>& selection) {
+    using Memory = typename ExecSpace::memory_space;
+    using Host = Kokkos::DefaultHostExecutionSpace;
+    using HostMemory = typename Host::memory_space;
+    using Huge = ExactCell<huge_planes, huge_vertices>;
+    if constexpr (std::is_same_v<Memory, HostMemory>) {
+        construct_pass<Huge>(Host{}, grid, make_stencil(Host{}), out, Pass::overflowed, selection);
+    } else {
+        Grid<HostMemory> g;
+        g.positions = host_copy<decltype(g.positions)>(grid.positions);
+        g.order = host_copy<decltype(g.order)>(grid.order);
+        g.cell_offsets = host_copy<decltype(g.cell_offsets)>(grid.cell_offsets);
+        g.fine = host_copy<decltype(g.fine)>(grid.fine);
+        g.level = host_copy<decltype(g.level)>(grid.level);
+        g.n = grid.n;
+        g.levels = grid.levels;
+        g.box = grid.box;
+        g.narrowest = grid.narrowest;
+        g.fewest = grid.fewest;
+        for (int a = 0; a < 3; ++a) {
+            g.tiles[a] = grid.tiles[a];
+            g.width[a] = grid.width[a];
+        }
+        Cells<HostMemory> c;
+        c.status = host_copy<decltype(c.status)>(out.status);
+        c.face_count = host_copy<decltype(c.face_count)>(out.face_count);
+        c.owned_count = host_copy<decltype(c.owned_count)>(out.owned_count);
+        c.volume = host_copy<decltype(c.volume)>(out.volume);
+        c.centroid = host_copy<decltype(c.centroid)>(out.centroid);
+        c.face_start = host_copy<decltype(c.face_start)>(out.face_start);
+        c.neighbour = host_copy<decltype(c.neighbour)>(out.neighbour);
+        c.area = host_copy<decltype(c.area)>(out.area);
+        c.face_centroid = host_copy<decltype(c.face_centroid)>(out.face_centroid);
+        c.face_used = host_copy<decltype(c.face_used)>(out.face_used);
+        c.rings = host_copy<decltype(c.rings)>(out.rings);
+        c.ring_start = host_copy<decltype(c.ring_start)>(out.ring_start);
+        c.ring_used = host_copy<decltype(c.ring_used)>(out.ring_used);
+        const Selection<HostMemory> s{host_copy<Kokkos::View<int*, HostMemory>>(selection.slots),
+                                      host_copy<Kokkos::View<char*, HostMemory>>(selection.listed)};
+        construct_pass<Huge>(Host{}, g, make_stencil(Host{}), c, Pass::overflowed, s);
+        copy_back(c.status, out.status);
+        copy_back(c.face_count, out.face_count);
+        copy_back(c.owned_count, out.owned_count);
+        copy_back(c.volume, out.volume);
+        copy_back(c.centroid, out.centroid);
+        copy_back(c.face_start, out.face_start);
+        copy_back(c.neighbour, out.neighbour);
+        copy_back(c.area, out.area);
+        copy_back(c.face_centroid, out.face_centroid);
+        copy_back(c.face_used, out.face_used);
+        copy_back(c.rings, out.rings);
+        copy_back(c.ring_start, out.ring_start);
+        copy_back(c.ring_used, out.ring_used);
+    }
+}
+
 // Build the cells of `pass` with cells of kind Cell (RoundedCell or
 // ExactCell), then those that overflowed the usual capacities once more
-// with big ones.
+// with big ones, and exact cells that overflowed those with huge ones.
 template <template <int, int> class Cell, class ExecSpace>
 void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                      const Stencil<typename ExecSpace::memory_space>& stencil,
                      const Cells<typename ExecSpace::memory_space>& out, Pass pass,
                      const Selection<typename ExecSpace::memory_space>& selection = {}) {
     construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection);
-    int overflowed = 0;
     const auto status = out.status;
     const auto order = grid.order;
-    Kokkos::parallel_reduce(
-        "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
-        KOKKOS_LAMBDA(int i, int& sum) {
-            const int s = status(order(selection.slot(i)));
-            sum += s == vertex_overflow || s == plane_overflow;
-        },
-        overflowed);
-    if (overflowed > 0)
-        construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
+    auto overflowed = [&] {
+        int count = 0;
+        Kokkos::parallel_reduce(
+            "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
+            KOKKOS_LAMBDA(int i, int& sum) {
+                const int s = status(order(selection.slot(i)));
+                sum += s == vertex_overflow || s == plane_overflow;
+            },
+            count);
+        return count > 0;
+    };
+    if (!overflowed()) return;
+    construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
+    if constexpr (Cell<big_planes, big_vertices>::exact)
+        if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
 }
 
 // Run build() on an empty pool; if the pool turned out too small (cells

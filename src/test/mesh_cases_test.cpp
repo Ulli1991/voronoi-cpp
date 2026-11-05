@@ -402,7 +402,9 @@ void contrast_cases() {
             add_uniform(p, rng, 512);
             add_shell(p, rng, {0.3, 0.6, 0.45}, radius, 2000);
             Mesh m(Exec{}, 1.0);
-            build(c, "2000 particles on a sphere of radius " + sci(radius), m, p, Expect::exact_or_refused);
+            // Below 1e-6 the sphere has particles on one grid position.
+            build(c, "2000 particles on a sphere of radius " + sci(radius), m, p,
+                  radius >= 1e-6 ? Expect::exact : Expect::exact_or_refused);
         });
         add("contrast.shell_centre." + sci(radius), [=](Check& c) {
             std::mt19937_64 rng(4);
@@ -471,6 +473,26 @@ void contrast_cases() {
             add_shell(p, rng, {0.3, 0.6, 0.45}, 0.1, k);
             diagnose(c, std::to_string(k) + " particles on a sphere", p);
         });
+    add("contrast.refusal_messages", [](Check& c) {
+        // What each status of the clipping is reported as. Made by hand: a cell
+        // of more planes than the exact clipping holds costs minutes to reach.
+        const Positions x = to_device(make_points("jittered", 64));
+        tet_mesh::Points4<Memory> snapped("snapped", 64);
+        Kokkos::parallel_for("snapped", Kokkos::RangePolicy<Exec>(0, 64), KOKKOS_LAMBDA(int i) {
+            for (int a = 0; a < 3; ++a) snapped(i, a) = x(i, a);
+        });
+        auto says = [&](int status, const std::string& word) {
+            auto cells = shell_voronoi::Cells<Memory>::with_rings(64, 1024);
+            Kokkos::deep_copy(Kokkos::subview(cells.status, 3), status);
+            const std::string what = voronoi::detail::not_exact(cells, snapped);
+            c.expect(what.find(word) != std::string::npos, "status " + std::to_string(status) + ": " + what);
+        };
+        says(shell_voronoi::uncertified, "too few particles");
+        says(shell_voronoi::plane_overflow, "16000 planes");
+        says(shell_voronoi::vertex_overflow, "32000 vertices");
+        says(shell_voronoi::face_overflow, "1 out of pool room");
+        says(shell_voronoi::degenerate, "1 degenerate");
+    });
     add("contrast.rank_one", [=](Check& c) {
         // 512 particles along one line that winds around the torus, a clump.
         Points tiny = make_points("uniform", 4096);
@@ -490,7 +512,7 @@ void contrast_cases() {
         add_shell(p, rng, {0.5, 0.5, 0.5}, 0.1, 2000);
         p.push_back({0.5, 0.5, 0.5});
         Mesh m(Exec{}, 1.0);
-        build(c, "a cell of about 2000 faces", m, p, Expect::exact_or_refused);
+        build(c, "a cell of about 2000 faces", m, p, Expect::exact);
     });
     add("contrast.line", [](Check& c) {
         Points p;
@@ -522,7 +544,7 @@ void contrast_cases() {
         std::mt19937_64 rng(8);
         add_uniform(p, rng, 512);
         Mesh m(Exec{}, 1.0);
-        build(c, "two short skew segments of 256 particles", m, p, Expect::exact_or_refused, 64);
+        build(c, "two short skew segments of 256 particles", m, p, Expect::exact, 64);
     });
     add("contrast.halo_core", [](Check& c) {
         // A cusp: log-uniform in radius down to about 1e-7.
@@ -874,14 +896,14 @@ void valence_cases() {
         add("valence.ring.start." + std::to_string(k), [=](Check& c) {
             Mesh m(Exec{}, 1.0);
             build(c, "a face of " + std::to_string(k) + " corners at the start", m,
-                  ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.02, 2048), k < 1000 ? Expect::exact : Expect::exact_or_refused, 2);
+                  ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.02, 2048), Expect::exact, 2);
         });
         add("valence.ring.step." + std::to_string(k), [=](Check& c) {
             // The poles arrive during a step, from far outside the circle: the
             // start has no long edge, the repair creates it.
             Mesh m(Exec{}, 1.0);
             const Points far = ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.19, 2048);
-            if (!build(c, "start, poles apart", m, far, k < 1000 ? Expect::exact : Expect::exact_or_refused, 2)) return;
+            if (!build(c, "start, poles apart", m, far, Expect::exact, 2)) return;
             Points p = far;
             const int n = static_cast<int>(p.size());
             bool refused = false;
@@ -909,7 +931,7 @@ void valence_cases() {
             add_uniform(p, rng, 512);
             add_shell(p, rng, {0.5, 0.5, 0.5}, 0.1, k);
             Mesh m(Exec{}, 1.0);
-            build(c, std::to_string(k) + " particles on a sphere", m, p, Expect::exact_or_refused, 16);
+            build(c, std::to_string(k) + " particles on a sphere", m, p, Expect::exact, 16);
         });
         for (const double thickness : {1e-3, 1e-1})
             add("valence.thick_sphere." + std::to_string(k) + "." + sci(thickness), [=](Check& c) {
@@ -923,7 +945,7 @@ void valence_cases() {
                     p.push_back({0.5 + r * d[0], 0.5 + r * d[1], 0.5 + r * d[2]});
                 }
                 Mesh m(Exec{}, 1.0);
-                build(c, "a shell of relative thickness " + sci(thickness), m, p, Expect::exact_or_refused, 16);
+                build(c, "a shell of relative thickness " + sci(thickness), m, p, Expect::exact, 16);
             });
         add("valence.hub.step." + std::to_string(k), [=](Check& c) {
             // A particle moves into the centre of a shell: a cell of k faces
@@ -939,11 +961,12 @@ void valence_cases() {
             }
             p.push_back({0.5, 0.5, 0.7});
             Mesh m(Exec{}, 1.0);
-            if (!build(c, "start, outside the shell", m, p, Expect::exact_or_refused, 2)) return;
+            if (!build(c, "start, outside the shell", m, p, Expect::exact, 2)) return;
             bool refused = false;
             for (const double z : {0.65, 0.61, 0.59, 0.55, 0.52, 0.5}) {
                 p.back()[2] = z;
                 step_or_refused(c, "hub at z=" + sci(z), m, p, refused, 2);
+                c.expect(!refused, "not refused");
                 if (refused) return;
             }
         });
