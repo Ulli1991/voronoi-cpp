@@ -153,7 +153,8 @@ struct Timings {
 enum class Fallback { cheapest, host, rebuild };
 
 // The mesh in D dimensions: one interface, an engine per D (3D: the
-// tetrahedra below; 1D: the sorted order, sorted_mesh.hpp).
+// tetrahedra below; 2D: triangles, voronoi_mesh_2d.hpp; 1D: the sorted order,
+// sorted_mesh.hpp).
 // FaceReal = float adds one float row per face (face_rows(): area vector,
 // centroid, owner, neighbour in 32 bytes) for a reduced-precision hydro
 // (hydro/precision.hpp); everything else stays double. Weight = float or
@@ -501,3 +502,4 @@ private:
 
 }  // namespace voronoi
 #include "sorted_mesh.hpp"  // Mesh<1>
+#include "voronoi_mesh_2d.hpp"  // Mesh<2>

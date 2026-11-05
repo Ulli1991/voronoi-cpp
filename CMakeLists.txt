@@ -24,6 +24,7 @@ function(voronoi_program name source)
 endfunction()
 
 voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
+voronoi_program(mesh2d_bench src/bench/mesh2d_bench.cpp)
 
 # The finite-volume hydro on the mesh (header-only); snapshots need HDF5.
 add_library(hydro_library INTERFACE)
@@ -41,7 +42,7 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
-    foreach(test exact_predicates clipping mesh start repair voronoi_mesh hydro mesh1d hydro1d distortion)
+    foreach(test exact_predicates clipping mesh start repair voronoi_mesh hydro mesh1d hydro1d mesh2d distortion)
         voronoi_program(${test}_test src/test/${test}_test.cpp)
         add_test(NAME ${test} COMMAND ${test}_test)
         set_tests_properties(${test} PROPERTIES TIMEOUT 600)
