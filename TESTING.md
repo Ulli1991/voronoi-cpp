@@ -107,6 +107,11 @@ Brute force exists only in tests and the benchmark, never in the library:
   bisectors within 1e-9 (relative). Uniform random input at 2.1M fails
   "faces = 2 x owned" by a handful of faces: the double-precision clipping
   alone is not watertight there (the start repairs it; known, expected).
+- Wound-up meshes: past aspect ratios of about 1e5 the plain clipping can return
+  cells `degenerate` with volume 0 (125 of 262144 in `thin` at t = 1.9), and
+  `compare_with_rebuild` reports faces the reference lacks, up to 18 spacings^2,
+  while brute force agrees with the mesh to every digit. `distortion_test`
+  then asks `mesh_check::arbitrate` (`rebuild=PASS_BRUTE`).
 - `voronoi_bench step ... --verify` (`support::compare_with_rebuild`):
   no failing triangle, no clipping face the mesh lacks, mesh faces the
   clipping lacks only below 1e-9 spacings^2 (clipping drops rounding-level
