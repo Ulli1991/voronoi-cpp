@@ -178,11 +178,11 @@ Throughput in million cells per second (cells processed per second of GPU time).
 | Full rebuild, halo (1:10^4 core to edge) | **14.3** | |
 | Full rebuild, lattice / wave | **50.2 / 38.5** | |
 | Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
-| Moving-mesh update, 0.03 spacings per step | **201** | 262 |
-| Moving-mesh update, 0.1 spacings per step | 115 | |
-| Moving-mesh update, 0.3 spacings per step | 57 | 93 |
-| `update_cells()` alone (face lists, ordered volumes and centroids) | 326 | 311 |
-| Moving-mesh update + `update_cells()`, 0.03 spacings (bit-reproducible) | **124** | |
+| Moving-mesh update, 0.03 spacings per step | **210** | 291 |
+| Moving-mesh update, 0.1 spacings per step | 119 | 188 |
+| Moving-mesh update, 0.3 spacings per step | 58 | 98 |
+| `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 574 / 448 / 436 | 666 / 543 / 458 |
+| Moving-mesh update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | **154** / 94 / 51 | 202 / 140 / 81 |
 
 Inputs (all in the periodic unit box, `src/test/support.hpp`):
 
@@ -201,7 +201,8 @@ points by the given number of mean interparticle spacings per step
 step, 0.3 a very large one (more flips per step, lower throughput).
 
 Device memory: plain warp rebuild 701 B/cell (656 at 256^3); peak during
-start and steps, with face lists, 2221 B/cell (2200 at 256^3, 37.9 GB in use).
+start and steps, with face lists, 2028 B/cell (2007 at 256^3, 34.8 GB in use).
+Moving-mesh rows: jobs 31886231, 31886232 (research_notes/mesh_speed_2026-11-04.md).
 
 Non-cubic: a Kelvin-Helmholtz-like slab (Lx = Ly = 2, Lz = 16 spacings,
 `--box=2,2,0.0625`, 512 x 512 x 16 = 4.2M, and `--box=2,2,0.03125`,
@@ -271,7 +272,7 @@ sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A
 
 ```text
 voronoi_bench rebuild <n> <distribution> [variants=thread,exact,warp] [repeats=5] [--width=f] [--no-check] [--memory] [--box=Lx,Ly,Lz]
-voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=host|rebuild] [--memory] [--box=Lx,Ly,Lz]
+voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=host|rebuild] [--memory] [--kernels] [--touched] [--checksum] [--box=Lx,Ly,Lz]
 ```
 
 `--box` (default 1,1,1) sets the periodic box; lattices get about equal
@@ -314,14 +315,14 @@ jittered points in Morton order, median of 40 steps:
 | static mesh, MUSCL-Hancock HLL, per-face loop | 116 | 114 |
 | static mesh, first order HLLC, per-cell loop | 288 | 290 |
 | device memory, mesh + hydro (static, per-face, second order) | 2370 B/cell | 2371 B/cell (41.2 GB in use) |
-| device memory, moving mesh + hydro (per-face) | 2418 B/cell | 2419 B/cell (42.2 GB in use, whole run, job 31702077) |
+| device memory, moving mesh + hydro (per-face) | 2298 B/cell | 2298 B/cell (40.1 GB in use, whole run, job 31885794); `--precision=mixed` 2334 B/cell (40.7 GB, job 31885795) |
 
 Sedov at 128^3 (job 31699863), HLLC: shock radius 0.978 of the
 Sedov-Taylor value at 1e4 yr, L1 density error 0.075 rho0 (first order:
 0.104); mass and energy conserved to 2e-16. On the moving mesh (jobs
 31700850-51): 354 steps instead of 1642, L1 density error 0.058 rho0, the
 same numbers with the whole box moving at 500 km/s; at 256^3 L1 0.034 in
-288 s of GPU time (job 31702077). Details:
+288 s of GPU time (job 31702077; now 177 s, job 31885794). Details:
 research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 
 ## Limitations and open items
@@ -329,7 +330,7 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
 - The hydro step is not yet at its target (~300 M cell updates/s): on the
   A100 at 128^3 double precision runs at 152 M cell updates/s static, its
   hydro part at 140 M cells/s on a moving mesh, the whole moving step at
-  73 M cell updates/s; the mesh step alone at ~155 M cells/s. Compile-time
+  73 M cell updates/s; the mesh step alone at ~210 M cells/s. Compile-time
   precision options (`--precision=`, default double, main's bits): mixed
   +10 %, low +19 % on the hydro static, +4 % / +7 % on the whole moving step
   (research_notes/hydro_speed_2026-11-04.md).
@@ -358,8 +359,8 @@ In order (research_notes/dimension_design_2026-11-02.md):
    fluxes, Riemann; default all-double). Target: a fixed-grid code's rate per
    face, ~300 M cell updates/s for the hydro step (a Voronoi cell has ~16
    faces against 6).
-2. Mesh-step speed: incremental per-cell face lists, fused
-   circumcentre/ring/face passes, cheaper repair rounds.
+2. Mesh-step speed: incremental per-cell face lists and shared cell sums done
+   (research_notes/mesh_speed_2026-11-04.md); next: `faces`, the screening, face numbers.
 3. 1D mesh and hydro with walls; Sod, Shu-Osher and Woodward-Colella against
    the references and the fixed-grid code LUNA (a first CPU version gives
    LUNA's results to ~1e-14 on a static mesh).
