@@ -1022,7 +1022,63 @@ void large_cases() {
         const Flow flow;
         flow.advect(q, 0.01);
         step_or_refused(c, "and steps on", m, q, again);
-    }, 19);
+    });
+    add("large.after_refusal.empty_object", [](Check& c) {
+        // What a refused object offers: nothing, and no crash.
+        Points p = make_points("jittered", 4096);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        Points bad = p;
+        bad[7] = bad[1000];
+        bool refused = false;
+        step_or_refused(c, "a coincident pair", m, bad, refused);
+        c.expect(refused && m.faces() == 0 && m.particles() == 0, "no mesh after a refusal");
+        bool threw = false;
+        try {
+            m.update_cells();
+        } catch (const std::logic_error&) {
+            threw = true;
+        }
+        c.expect(threw, "update_cells has no mesh to work on and says so");
+        build(c, "another number of particles builds", m, make_points("jittered", 1000), Expect::exact);
+        refused = false;
+        Points few = make_points("jittered", 1000);
+        few[3] = few[4];
+        step_or_refused(c, "refused again", m, few, refused);
+        step_or_refused(c, "a second refusal in a row", m, few, refused);
+        c.expect(refused, "refused");
+        build(c, "and it builds again", m, make_points("jittered", 1000), Expect::exact);
+    });
+    for (const auto& [mode, label] : {std::pair{voronoi::Fallback::cheapest, "cheapest"}, std::pair{voronoi::Fallback::host, "host"}})
+        add(std::string("large.after_refusal.step.") + label, [fallback = mode](Check& c) {
+            // Refused at the end of a step that went through the repair and the host.
+            Points p = make_points("jittered", 12167);
+            Mesh m(Exec{}, 1.0);
+            m.set_fallback(fallback);
+            build(c, "start", m, p, Expect::exact, 4);
+            Points bad = p;
+            bad[50] = bad[51];
+            bool refused = false;
+            step_or_refused(c, "a coincident pair", m, bad, refused, 4);
+            c.expect(refused, "refused");
+            bool again = false;
+            step_or_refused(c, "the good positions again", m, p, again, 4);
+            c.expect(!again, "works again after the refusal");
+            const Flow flow;
+            flow.advect(p, 0.01);
+            step_or_refused(c, "and steps on", m, p, again, 4);
+            c.expect(!again, "steps on");
+        });
+    add("large.no_mesh_yet", [](Check& c) {
+        Mesh m(Exec{}, 1.0);
+        bool threw = false;
+        try {
+            m.update_cells();
+        } catch (const std::logic_error&) {
+            threw = true;
+        }
+        c.expect(threw && m.faces() == 0, "update_cells before any update says so");
+    });
     add("large.long_run", [](Check& c) {
         // Thousands of small steps of a solenoidal flow (no void ends it): no
         // drift in faces, tetrahedra, slots, ring pools, memory.

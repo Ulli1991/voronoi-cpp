@@ -82,7 +82,7 @@ std::string coincident(const Positions& positions) {
     }
     if (extra == 0) return "";
     return "voronoi::Mesh: particles " + std::to_string(first) + " and " + std::to_string(second) +
-           " are on one position of the snapping grid (" + std::to_string(extra) + " such particles in all" +
+           " are on one position of the snapping grid (" + std::to_string(extra) + " coincident in all" +
            "): a doubled particle has no Voronoi cell; move or merge them";
 }
 
@@ -171,8 +171,11 @@ public:
     // New positions of all particles, x(i, a) in [0, side[a]) for particle i
     // (any view on the device). Repairs the mesh, or builds it on the first
     // call or when the number of particles changed; exact on return either
-    // way. `active` (particle ids) is accepted for a later repair limited
-    // to an active region; today every particle is repaired.
+    // way, or a std::runtime_error saying what is wrong with the positions.
+    // After such a refusal there is no mesh (no faces, no particles) and
+    // the next update() builds from scratch. `active` (particle ids) is
+    // accepted for a later repair limited to an active region; today every
+    // particle is repaired.
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -189,7 +192,12 @@ public:
         bool stuck = device.stuck > 0;
         if (stuck && fallback_ != Fallback::rebuild &&
             (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 1000 <= n_)) {
-            const tet_flips::Stats host = tet_flips::finish(exec_, tets_, state_);
+            tet_flips::Stats host;
+            try {
+                host = tet_flips::finish(exec_, tets_, state_);
+            } catch (const std::exception&) {  // out of local room: the rebuild decides
+                host.stuck = 1;
+            }
             report.host_flips = host.flips23 + host.flips32;
             report.host_rebuilds = host.rebuilt;
             stuck = host.stuck > 0;
@@ -215,8 +223,9 @@ public:
         Kokkos::Timer timer;
         Report report;
         report.rebuilt = true;
-        rings_ = {};  // the old mesh's pools make room for the build
-        n_ = static_cast<int>(x.extent(0));
+        const int particles = static_cast<int>(x.extent(0));
+        forget();  // the old mesh's pools make room for the build
+        n_ = particles;
         snap(x);
         {
             index(positions_);
@@ -230,7 +239,11 @@ public:
                 report.start = tet_start::build(exec_, grid, cells, tets_);
             }
             ring_entries_ = cells.capacity();
-            if (!report.start.exact) throw std::runtime_error(detail::not_exact(exec_, cells, positions_));
+            if (!report.start.exact) {
+                const std::string why = detail::not_exact(exec_, cells, positions_);
+                forget();
+                throw std::runtime_error(why);
+            }
         }
         // Capacities: 1/8 more tetrahedra and 1/32 more faces than the
         // starting mesh has (ring pools 1/2 more: room to append between
@@ -298,6 +311,7 @@ public:
     // nothing if they are current.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
+        if (!built()) throw std::logic_error("voronoi::Mesh::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
         // Its temporaries live in the spare ring pool (see scratch).
         // After few flips from the last step's lists (with the spare pool, see
@@ -367,6 +381,20 @@ public:
 
 private:
     bool built() const { return state_.alive.extent(0) > 0; }
+
+    // No mesh any more: the next update() builds from scratch.
+    void forget() {
+        tets_ = tet_mesh::Mesh<Memory>{};
+        state_ = tet_repair::State<Memory>{};
+        rings_ = tet_mesh::FaceRings<Memory>{};
+        geometry_ = tet_mesh::Geometry<Memory>{};
+        cells_ = tet_mesh::CellFaces<Memory>{};
+        weights_ = {};
+        n_ = 0;
+        cells_current_ = false;
+        updates_since_lists_ = 1;
+        lists_of_last_update_ = false;
+    }
 
     // With timings: fence, add the time since `timer` started to the phase
     // `field`, restart the timer.
