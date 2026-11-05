@@ -364,8 +364,14 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
   `update()` refuses, naming them. Particles around a void cost O(k^2) at the
   start, every cell of the shell clipping all k of them: about 1 s at k = 2000,
   2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
-- A step of order the box (random kicks of 0.6 box) can still end with nothing
-  stuck and a wrong mesh, in about 2 % of such steps on the A100 (#24, open).
+- A step of order the box (random kicks of 0.6 box) can end the device repair
+  with nothing stuck on a mesh that covers the torus many times. `update()` sees
+  it in the total volume of the cells, off the box by more than 1e-6, and rebuilds
+  (`Report::overlapped`). That check is on the volume alone: a wrong mesh whose
+  volumes still add up to the box within 1e-6 would pass it.
+- `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries
+  (10 at 2.1M cells, none below 200000), the rest is a rebuild, which needs the
+  memory of a start.
 - Geometry rounds with the positions: the relative volume of a cell h grid
   steps wide is good to about 4e-8 / h. Exact down to clumps of 512 steps
   (error 8e-10), and particles one grid step apart are still exact.

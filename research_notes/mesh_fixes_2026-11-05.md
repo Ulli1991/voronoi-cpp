@@ -67,3 +67,18 @@ build-meshfix/. Before-binaries: build-meshfix/before/.
   (5.5 %; the issue's 5 of 12288 were at side 1e-3 alone, which has its own mantissa).
   Option not taken: a tolerance on x / step would move off-grid inputs near a grid
   line in every box, the unit cube too, and change bits.
+
+- Hashes, job 31924558 (main against mesh-fixes with the snap change): all five
+  paths differ, x the same on the static paths, volume not. hydro_sedov's box is
+  0.05, a long mantissa, where main's own snap moves positions k * step (#22). To
+  isolate it: the same code with the old snap, build-meshfix/nosnap.
+
+- #24: the sum of the cell volumes comes out of tet_mesh::faces (a reduction in
+  place of a parallel_for, no new kernel), compared with the box to 1e-6. Not
+  reachable on OpenMP, where that case ends at the round limit: only an A100 loop
+  shows it. Options: exact sum of |det| per tetrahedron (an exact covering test,
+  about one screening kernel per step, not tried); the cell sum, chosen.
+
+- #23: rule stuck * 200000 <= n from the issue's 50 ms per entry and 0.24 us per
+  cell for a rebuild. No timer: path and bits stay the same run to run. A
+  deterministic rule stays a guess at a cost that varies 400 times by input.

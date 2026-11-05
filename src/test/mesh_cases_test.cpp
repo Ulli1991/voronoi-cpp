@@ -257,7 +257,7 @@ void coincident_cases() {
         }
     for (const int n : {8000, 9261, 12167, 32768, 262144})
         add("coincident.step.default." + std::to_string(n), [=](Check& c) {
-            // The default fallback goes to the host when stuck * 1000 <= n.
+            // The default fallback goes to the host only when stuck * 200000 <= n.
             Points p = make_points("jittered", n);
             Mesh m(Exec{}, 1.0);
             build(c, "start", m, p, Expect::exact, 4);
@@ -1317,6 +1317,29 @@ void large_cases() {
 // ------------------------------------------------------------------ fallbacks
 
 void fallback_cases() {
+    add("fallback.cheapest.small_n", [](Check& c) {
+        // The cheapest fallback at small n is a rebuild: the host costs up to
+        // 50 ms per stuck entry, a rebuild of 32768 cells far less than one.
+        int stuck_steps = 0;
+        for (const double d : {2.0, 4.0})  // a few particles jump: a few stuck entries
+            for (int seed = 0; seed < 2; ++seed) {
+                Points p = make_points("jittered", 32768);
+                Mesh m(Exec{}, 1.0);
+                build(c, "start", m, p, Expect::exact, 2);
+                std::mt19937_64 rng(100 + seed);
+                std::normal_distribution<double> g(0, d / 32);
+                std::uniform_int_distribution<int> any(0, 32767);
+                for (int k = 0; k < 2; ++k) {
+                    auto& q = p[any(rng)];
+                    for (double& v : q) v = wrap(v + g(rng));
+                }
+                to_grid(p);
+                const auto r = step(c, "kicks of " + sci(d) + " spacings", m, p, 2);
+                stuck_steps += r.stuck > 0;
+                c.expect(r.host_flips == 0 && r.host_rebuilds == 0, "no host work");
+            }
+        c.expect(stuck_steps > 0, std::to_string(stuck_steps) + " steps with stuck entries");
+    });
     for (const int rounds : {1, 2})
         for (const double d : {1e-4, 1e-3, 3e-3, 1e-2})
             add("fallback.out_of_rounds." + std::to_string(rounds) + "." + sci(d), [=](Check& c) {

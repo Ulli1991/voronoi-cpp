@@ -38,9 +38,9 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 `mesh_cases_test` names every case (`mesh_cases_test list`) and runs those
 whose name starts with a given prefix; ctest runs one group per prefix. A case
 requires the exact mesh, or accepts a refusal (an exception) in its place; it
-never accepts a wrong mesh without an error. A case of an open problem carries
-its issue, is skipped by default and runs with `--known`
-(`large.random_walk.10` #24). ctest runs a subset within its time budget;
+never accepts a wrong mesh without an error. A case of an open problem would
+carry its issue, be skipped by default and run with `--known`; none does now.
+ctest runs a subset within its time budget;
 `MESH_CASES_FULL=1` runs the whole matrix, as the A100 job does. On the A100 a
 failing case of a rare outcome needs repeats: `large.random_walk.10` is wrong
 in about 2 % of steps, and rounds vary from run to run on that path.
@@ -54,7 +54,7 @@ in about 2 % of steps, and rounds vary from run to run on that path.
 | `degenerate` | sc, bcc, fcc: rigid motion in whole grid steps (no flip) and in doubles, shear by layers that recurs as an exact lattice, smooth shear, fresh noise of 1, 16, 1024 grid steps every step; zero-area faces finite (#13); two lattices sliding through each other, coplanar every 8 steps; one particle walking through face centres and edge midpoints; octahedra pulsing through exact cospherical; 1014 grid points exactly on one sphere |
 | `valence` | a face of 16 to 1000 corners at the start and created by the repair; spheres and shells of 50 to 1600 particles; a particle moved into a shell, a cell of up to 1600 faces no build saw; all must be exact, none refused |
 | `large` | displacements of 0.5 to 20 spacings, random walks of 0.3 to 10, every particle somewhere else, permuted ids, no motion (no flip, the same bits), another n, 1000 steps of a solenoidal flow without drift in faces, slots or memory, there and back 8 times to the same tetrahedra and the same bits; a refused update leaves no mesh, no crash, and the next update builds, at the start and after the repair and the host (`large.after_refusal.*`); `update_cells()` without a mesh says so |
-| `fallback` | a repair out of rounds (limit lowered to 1 and 2) never returns as a mesh; all three fallbacks on shells, kicks of 2 spacings, and a jump from a lattice to two skew segments; growth in small steps; `clip()` of a hub with its pool of 10 faces per cell |
+| `fallback` | a repair out of rounds (limit lowered to 1 and 2) never returns as a mesh; the cheapest fallback does no host work at 32768 cells (`fallback.cheapest.small_n`); all three fallbacks on shells, kicks of 2 spacings, and a jump from a lattice to two skew segments; growth in small steps; `clip()` of a hub with its pool of 10 faces per cell |
 | `predicates` | the library's orient and in-sphere on the quintuples real meshes ask about (eight point sets, lattices with +-1 and +-3 grid steps of noise, a clump on 2048^3 positions) equal the oracle's integers |
 | `repro` | two runs give the same bits, the default space and Serial the same bits; `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds (measured: Serial, OpenMP at 1 and 8 threads and CUDA agree on every hash of faces, volumes and centroids, 4 inputs, 21 steps) |
 

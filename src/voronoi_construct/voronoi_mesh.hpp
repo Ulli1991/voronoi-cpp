@@ -133,10 +133,13 @@ struct Timings {
 // What update() does when the device repair leaves triangles it cannot
 // repair: repair the region around them on the host (tet_flips; a rebuild
 // if that does not finish either), build the mesh again from scratch on the
-// device, or (cheapest) choose by the number of stuck entries. Measured on an A100 at 2.1M cells: the host
-// takes about 2-5 ms for a handful of stuck triangles and 0.12 ms per
-// stuck entry beyond (20.8 s for the 178k of a wave lattice's first step),
-// a rebuild 0.17-0.25 s; so rebuild when more than n / 1000 are stuck.
+// device, or (cheapest) choose by the number of stuck entries. Measured on an
+// A100 at 2.1M cells: a rebuild 0.17-0.5 s (about 0.24 us per cell); the host
+// 0.12 ms per stuck entry on a wave lattice (20.8 s for 178k) but 37-54 ms in a
+// converging flow, where the neighbourhoods are dense and stuck entries come
+// from. So the cheapest plans for the dear case: the host only up to
+// n / 200000 entries, 10 at 2.1M, none below 200000 cells. No clock decides:
+// the same input takes the same path.
 enum class Fallback { cheapest, host, rebuild };
 
 // The mesh in D dimensions: one interface, an engine per D (3D: the
@@ -198,7 +201,7 @@ public:
         lap(timer, timings, &Timings::repair);
         bool stuck = device.stuck > 0 || device.unfinished;
         if (stuck && !device.unfinished && fallback_ != Fallback::rebuild &&
-            (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 1000 <= n_)) {
+            (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 200000 <= n_)) {
             tet_flips::Stats host;
             try {
                 host = tet_flips::finish(exec_, tets_, state_);
