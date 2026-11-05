@@ -1253,7 +1253,8 @@ void large_cases() {
         // drift in faces, tetrahedra, slots, ring pools, memory.
         using namespace distortion;
         DeviceBytes::start();
-        const int steps = std::getenv("MESH_LONG_RUN") ? std::atoi(std::getenv("MESH_LONG_RUN")) : 1000;
+        const char* const long_run = std::getenv("MESH_LONG_RUN");
+        const int steps = long_run ? std::atoi(long_run) : 1000;
         Points p = make_points("jittered", 4096);
         const int n = static_cast<int>(p.size());
         Mesh m(Exec{}, 1.0);
