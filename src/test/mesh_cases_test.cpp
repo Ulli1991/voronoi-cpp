@@ -472,7 +472,7 @@ void contrast_cases() {
             add_uniform(p, rng, 512);
             add_shell(p, rng, {0.3, 0.6, 0.45}, 0.1, k);
             diagnose(c, std::to_string(k) + " particles on a sphere", p);
-        }, 21);
+        });
     // Half the particles in a ball of radius 0.05: fine at small n, the start of
     // the `expansion` flow at 128^3. Too slow for ctest: not in a group it runs.
     for (const int n : {524288, 1048576, 2097152})
