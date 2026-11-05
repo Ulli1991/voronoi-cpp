@@ -148,7 +148,7 @@ TESS seeds candidates with neighbours-of-neighbours ([Duffell & MacFadyen 2011](
 
 Update-versus-rebuild studies from computational geometry agree with peclet-voro. Flip repair is up to ~20× faster than rebuilding for tiny 3D motions ([Schaller & Meyer-Hermann 2003](https://ar5iv.arxiv.org/html/physics/0302018)). Yet rebuilding from scratch is "surprisingly a very viable option" unless points move only slightly ([Manhães de Castro et al. 2009](https://hal-univ-tlse3.archives-ouvertes.fr/INRIA/inria-00413344)).
 
-No GPU Voronoi moving-mesh hydro code exists. AREPO's GPU port covers radiative transfer only ([Zier et al. 2024](https://arxiv.org/abs/2404.17630)). The GPU-hydro reference remains Cartesian: AthenaK exceeds 1e9 cell updates/s on one GH200 ([Stone et al. 2024](https://arxiv.org/abs/2409.16053)).
+AREPO's GPU port covers radiative transfer only ([Zier et al. 2024](https://arxiv.org/abs/2404.17630)). The GPU-hydro reference remains Cartesian: AthenaK exceeds 1e9 cell updates/s on one GH200 ([Stone et al. 2024](https://arxiv.org/abs/2409.16053)).
 
 ## Conclusion
 
