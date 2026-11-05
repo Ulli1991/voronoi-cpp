@@ -6,6 +6,7 @@
 #   ladder <problem> <b> [<b> ...]   both codes on N = 2^b: LUNA (MC, HLLC, CFL 0.8, Pallas), ours
 #                    static and moving (LUNA's rule 0.8; AREPO's rule 0.3 up to 2^16), .npy/.npz + .json
 #                    into OUT; repeats give the fastest; hashes must agree
+#   gaps <problem> <b ...> -- <b ...>   moving with AREPO's rule, then LUNA's rule at 0.4, repeats 1
 #   speed            throughput, BASELINE's rates, the smallest ladders
 #   reference <problem> <N> <seconds>   LUNA MC at N for that long, resumable (state in OUT)
 #   throughput       hydro only and whole moving step at 2^12 .. 2^24, ours and LUNA
@@ -106,6 +107,17 @@ speed)  # throughput, an older binary's rates, the grid's bits on a moving Sod, 
     ;;
 ladder)
     do_ladder "$2" "${@:3}"
+    ;;
+gaps)  # moving at lower Courant numbers, above the ladders' sizes: gaps <problem> <arepo b ...> -- <0.4 b ...>
+    use_ours
+    p="$2"
+    shift 2
+    while [[ $# -gt 0 && "$1" != "--" ]]; do
+        ours "$p" "$((1 << $1))" moving-arepo --moving --dt=arepo --repeats=1
+        shift
+    done
+    shift
+    for b in "$@"; do ours "$p" "$((1 << b))" moving-c04 --moving --courant=0.4 --repeats=1; done
     ;;
 reference)
     use_luna

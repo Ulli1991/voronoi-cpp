@@ -34,8 +34,10 @@ SUB = 4
 VARS = ("rho", "v", "P")
 # Shu-Osher, moving: the region all generators still cover at t_end; to its left is the inflowing gas of the grown end cell.
 REGION = {"shu-osher": (0.0, 5.0)}
-TARGETS = {"sod": {"rho": 3e-5, "v": 1e-5, "P": 1e-5}, "shu-osher": {"rho": 1e-3, "v": 3e-4, "P": 3e-4},
-           "woodward-colella": {"rho": 5e-3, "v": 2e-3, "P": 2e-2}}
+# Two targets per test and variable: one every series reaches if it can, one near the end of the ladders.
+TARGETS = {"sod": {"rho": (3e-5, 1.2e-5), "v": (3e-5, 1e-5), "P": (1.3e-5, 5e-6)},
+           "shu-osher": {"rho": (1e-3, 1e-4), "v": (3e-4, 3e-5), "P": (1e-3, 1e-4)},
+           "woodward-colella": {"rho": (5e-3, 1e-3), "v": (2e-3, 1e-3), "P": (5e-2, 2.5e-2)}}
 
 
 def ghosts(W, boundary):
@@ -194,7 +196,12 @@ def main():
     timing = {}
     for path in sorted(glob.glob(f"{runs}/*.json")):  # one JSON per run: series, problem, N, steps, wall_s, peak_bytes, ...
         meta = json.load(open(path))
+        if os.path.basename(path).startswith("luna_rate_"):  # a throughput run, stopped after some steps
+            continue
         timing[(meta["series"], meta["problem"], meta["N"])] = meta
+    done = {}
+    if os.path.exists(f"{reports}/dim1d_errors.json"):  # the integrals are slow: keep those of runs already compared
+        done = {(r["series"], r["problem"], r["N"]): r for r in json.load(open(f"{reports}/dim1d_errors.json"))}
     refs = {"sod": Exact()}
     for p in ("shu-osher", "woodward-colella"):
         f = f"{refs_dir}/ref_{p}.npz"
@@ -202,6 +209,9 @@ def main():
             refs[p] = Reference(f)
     for (series, problem, n), meta in sorted(timing.items()):
         if problem not in refs:
+            continue
+        if (series, problem, n) in done:
+            rows.append(done[(series, problem, n)])
             continue
         path = os.path.join(runs, meta["file"])
         rec, mean = (luna if series.startswith("luna") else ours)(path, problem)
@@ -247,8 +257,8 @@ def main():
     print("| test | variable | eps | series | T(eps) s | W(eps) cell updates |")
     print("|---|---|---|---|---|---|")
     for problem, targets in TARGETS.items():
-        for k, name in enumerate(VARS):
-            eps = targets[name]
+        for k, eps in ((k, e) for k, name in enumerate(VARS) for e in targets[name]):
+            name = VARS[k]
             for series in sorted({r["series"] for r in rows if r["problem"] == problem}):
                 sel = sorted((r for r in rows if r["problem"] == problem and r["series"] == series), key=lambda r: r["N"])
                 ns = [r["N"] for r in sel]
@@ -257,6 +267,37 @@ def main():
                 w = interp(ns, errors, [float(r["N"] * r["steps"]) for r in sel], eps)
                 print(f"| {problem} | {name} | {eps:g} | {series} | {'-' if t is None else f'{t:.3g}'} | "
                       f"{'-' if w is None else f'{w:.3g}'} |")
+    scores(rows)
+
+
+def scores(rows):
+    """The score of research_notes/accuracy_score_exploration_2026-11-04.md, S = 1 / (cost L1^x), x = (d + 1) / p, d = 1.
+
+    Per test, series and variable: the order p fitted over the top of the ladder and the local one at its ends; then
+    max / min of W L1^x and T L1^x over N, for p = 1 (x = 2), the card's choice, and p = the fitted order. W = cell updates
+    (all N >= 2^10), T = GPU-seconds (N >= 2^16 only: below ~1e5 cells T is latency).
+    """
+    print("\n## Score flatness: max / min of cost L1^x over N; p fit over N >= 2^12\n")
+    print("| test | variable | series | p fit | p first | p last | W, p=1 | W, p fit | T, p=1 | T, p fit | N range W |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    spread = lambda v: float(np.max(v) / np.min(v)) if len(v) > 1 else float("nan")
+    for problem in DOMAIN:
+        for series in sorted({r["series"] for r in rows if r["problem"] == problem}):
+            sel = sorted((r for r in rows if r["problem"] == problem and r["series"] == series and r["N"] >= 1024), key=lambda r: r["N"])
+            if len(sel) < 3:
+                continue
+            n = np.array([float(r["N"]) for r in sel])
+            w = np.array([r["N"] * float(r["steps"]) for r in sel])
+            t = np.array([r["wall_s"] for r in sel])
+            for k, name in enumerate(VARS):
+                e = np.array([r["L1"][k] for r in sel])
+                top = n >= 4096
+                fit = max(-np.polyfit(np.log(n[top]), np.log(e[top]), 1)[0], 0.01)
+                local = -np.diff(np.log(e)) / np.diff(np.log(n))
+                big = n >= 65536
+                tspread = lambda x: spread(t[big] * e[big] ** x) if big.sum() >= 2 else float("nan")
+                print(f"| {problem} | {name} | {series} | {fit:.2f} | {local[0]:.2f} | {local[-1]:.2f} | {spread(w * e ** 2):.3g} | "
+                      f"{spread(w * e ** (2 / fit)):.3g} | {tspread(2.0):.3g} | {tspread(2 / fit):.3g} | {int(n[0])}-{int(n[-1])} |")
 
 
 if __name__ == "__main__":
