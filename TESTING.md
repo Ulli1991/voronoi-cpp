@@ -42,7 +42,11 @@ never accepts a wrong mesh without an error. A case of an open problem carries
 its issue, is skipped by default and runs with `--known` (`few.empty` #20,
 `large.after_refusal` #19, `coincident.step.fallback.host.*` and
 `coincident.step.default.<n>`, n >= 9000, #17, `valence.ring.*` between 65 and
-300 corners #18).
+300 corners #18, `contrast.sphere_status.*` #21, `box.snap_twice.1e-3` #22,
+`large.random_walk.10` #24). ctest runs a subset within its time budget;
+`MESH_CASES_FULL=1` runs the whole matrix, as the A100 job does. On the A100 a
+failing case of a rare outcome needs repeats: `large.random_walk.10` is wrong
+in about 2 % of steps, and rounds vary from run to run on that path.
 
 | Group | What it specifies |
 |---|---|
@@ -55,7 +59,7 @@ its issue, is skipped by default and runs with `--known` (`few.empty` #20,
 | `large` | displacements of 0.5 to 20 spacings, random walks of 0.3 to 10, every particle somewhere else, permuted ids, no motion (no flip, the same bits), another n, 1000 steps of a solenoidal flow without drift in faces, slots or memory, there and back 8 times to the same tetrahedra and the same bits |
 | `fallback` | all three fallbacks on shells, kicks of 2 spacings, and a jump from a lattice to two skew segments; growth in small steps; `clip()` of a hub with its pool of 10 faces per cell |
 | `predicates` | the library's orient and in-sphere on the quintuples real meshes ask about (eight point sets, lattices with +-1 and +-3 grid steps of noise, a clump on 2048^3 positions) equal the oracle's integers |
-| `repro` | two runs give the same bits, the default space and Serial the same bits; `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds |
+| `repro` | two runs give the same bits, the default space and Serial the same bits; `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds (measured: Serial, OpenMP at 1 and 8 threads and CUDA agree on every hash of faces, volumes and centroids, 4 inputs, 21 steps) |
 
 `hostcost.*` (not in ctest) measures one step of `Fallback::host` against the
 stuck entries it gets.

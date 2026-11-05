@@ -995,7 +995,7 @@ void large_cases() {
                 to_grid(p);
                 step(c, "random walk " + sci(d) + ", step " + std::to_string(s), m, p);
             }
-        });
+        }, d == 10.0 ? 24 : 0);
     // Kicks as a fraction of the box, several seeds: the mesh is exact, or the
     // update refuses.
     for (const int n : {4096, 32768})
