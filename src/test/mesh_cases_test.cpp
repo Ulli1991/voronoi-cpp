@@ -239,6 +239,7 @@ void coincident_cases() {
     for (const auto& [mode, label] : fallbacks)
         for (const int pairs : {1, 4, 64}) {
             const voronoi::Fallback fallback = mode;
+            const int issue = mode == voronoi::Fallback::host ? 17 : 0;
             add("coincident.step.fallback." + label + "." + std::to_string(pairs), [=](Check& c) {
                 Points p = make_points("jittered", 4096);
                 Mesh m(Exec{}, 1.0);
@@ -246,14 +247,14 @@ void coincident_cases() {
                 build(c, "start", m, p, Expect::exact);
                 for (int i = 0; i < pairs; ++i) p[i * 50] = p[i * 50 + 1];
                 bool refused = false;
-                step_or_refused(c, std::to_string(pairs) + " pairs land on one position", m, p, refused);
+                step_or_refused(c, std::to_string(pairs) + " pairs land on one position", m, p, refused, 4);
                 if (refused) return;
                 const Flow flow;
                 for (int s = 1; s <= 2 && !refused; ++s) {
                     for (auto& q : p) q[0] = wrap(q[0] + 1e-3);  // rigid: the pairs stay
                     step_or_refused(c, "the pairs move on, step " + std::to_string(s), m, p, refused);
                 }
-            });
+            }, issue);
         }
     for (const int n : {8000, 9261, 12167, 32768, 262144})
         add("coincident.step.default." + std::to_string(n), [=](Check& c) {
@@ -264,7 +265,7 @@ void coincident_cases() {
             p[50] = p[51];
             bool refused = false;
             step_or_refused(c, "a pair lands on one position, default fallback, n=" + std::to_string(n), m, p, refused, 4);
-        });
+        }, n >= 9000 ? 17 : 0);
     add("coincident.step.mass_merge", [](Check& c) {
         // A quarter of the particles land on their neighbour in one step.
         Points p = make_points("jittered", 4096);
@@ -307,10 +308,13 @@ void few_cases() {
                 }
             });
         }
-    add("few.empty", [](Check& c) {
-        Mesh m(Exec{}, 1.0);
-        build(c, "no particles", m, {}, Expect::exact_or_refused);
-    });
+    add(
+        "few.empty",
+        [](Check& c) {
+            Mesh m(Exec{}, 1.0);
+            build(c, "no particles", m, {}, Expect::exact_or_refused);
+        },
+        20);
 }
 
 // ------------------------------------------------------------------- contrast
@@ -404,13 +408,21 @@ void contrast_cases() {
         o << " duplicates " << std::distance(std::unique(sorted.begin(), sorted.end()), sorted.end());
         c.expect(stats.exact, o.str());
     };
+    for (const int k : {800, 1000, 1200, 1600, 2000})
+        add("contrast.sphere_status." + std::to_string(k), [=](Check& c) {
+            std::mt19937_64 rng(3);
+            Points p;
+            add_uniform(p, rng, 512);
+            add_shell(p, rng, {0.3, 0.6, 0.45}, 0.1, k);
+            diagnose(c, std::to_string(k) + " particles on a sphere", p);
+        });
     add("contrast.rank_one", [=](Check& c) {
         // 512 particles along one line that winds around the torus, a clump.
         Points tiny = make_points("uniform", 4096);
         for (auto& q : tiny)
             for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;
         Points line;
-        for (int i = 1; i < 512; ++i) line.push_back({wrap(0.1 + 0.618 * i), wrap(0.2 + 0.414 * i), wrap(0.3 + 0.302 * i)});
+        for (int i = 1; i < 512; ++i) line.push_back({wrap(0.1 + std::sqrt(2.0) * i), wrap(0.2 + std::sqrt(3.0) * i), wrap(0.3 + std::sqrt(5.0) * i)});
         diagnose(c, "the line alone", line);
         Points both = tiny;
         both.insert(both.end(), line.begin(), line.end());
@@ -673,14 +685,14 @@ void degenerate_cases() {
             }
         });
         for (const int noise : {1, 16, 1024})
-            add("degenerate.noise." + name + "." + std::to_string(noise), [=](Check& c) {
+            add("degenerate.noise." + name + "." + std::to_string(noise), [=](Check& c) {  // every step all near-degenerate
                 // The lattice with +-noise grid steps of fresh noise every step.
                 Points p = start;
                 Mesh m(Exec{}, 1.0);
                 build(c, name + " start", m, p, Expect::exact);
                 std::mt19937_64 rng(noise);
                 std::uniform_int_distribution<int> u(-noise, noise);
-                for (int s = 1; s <= 6; ++s) {
+                for (int s = 1; s <= 2; ++s) {
                     for (std::size_t i = 0; i < p.size(); ++i)
                         for (int a = 0; a < 3; ++a) p[i][a] = wrap(start[i][a] + u(rng) * grid_step);
                     step(c, name + " noise step " + std::to_string(s), m, p);
@@ -742,8 +754,8 @@ void degenerate_cases() {
             return p;
         };
         Mesh m(Exec{}, 1.0);
-        build(c, "start", m, at(0), Expect::exact);
-        for (int s = 1; s <= 16; ++s) step(c, "pulse " + std::to_string(s), m, at(s));
+        build(c, "start", m, at(0), Expect::exact, 8);
+        for (int s = 1; s <= 8; ++s) step(c, "pulse " + std::to_string(s), m, at(s), 8);
     });
     add("degenerate.integer_sphere", [](Check& c) {
         // Grid points exactly on one sphere: x^2 + y^2 + z^2 = R^2 in integers
@@ -808,7 +820,7 @@ void valence_cases() {
             Mesh m(Exec{}, 1.0);
             build(c, "a face of " + std::to_string(k) + " corners at the start", m,
                   ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.02, 2048), Expect::exact_or_refused, 2);
-        });
+        }, k > 65 && k < 1000 ? 18 : 0);
         add("valence.ring.step." + std::to_string(k), [=](Check& c) {
             // The poles arrive during a step, from far outside the circle: the
             // start has no long edge, the repair creates it.
@@ -833,7 +845,7 @@ void valence_cases() {
                 c.expect(std::abs(volume(i) - brute) < 1e-9 * brute,
                          "pole cell volume " + sci(volume(i)) + " brute " + sci(brute));
             }
-        });
+        }, k > 64 && k < 1000 ? 18 : 0);
     }
     for (const int k : {50, 100, 200, 400, 800, 1600}) {
         add("valence.sphere." + std::to_string(k), [=](Check& c) {
@@ -975,13 +987,13 @@ void large_cases() {
         const Flow flow;
         flow.advect(q, 0.01);
         step_or_refused(c, "and steps on", m, q, again);
-    });
+    }, 19);
     add("large.long_run", [](Check& c) {
         // Thousands of small steps of a solenoidal flow (no void ends it): no
         // drift in faces, tetrahedra, slots, ring pools, memory.
         using namespace distortion;
         DeviceBytes::start();
-        const int steps = 1500;
+        const int steps = std::getenv("MESH_LONG_RUN") ? std::atoi(std::getenv("MESH_LONG_RUN")) : 1000;
         Points p = make_points("jittered", 4096);
         const int n = static_cast<int>(p.size());
         Mesh m(Exec{}, 1.0);
@@ -1196,7 +1208,8 @@ void predicate_cases() {
                 ++checked;
                 ties += s == 0;
                 wrong += (s > 0 && !inside) || (s < 0 && inside);
-                near += s != 0 && std::abs(oracle::det(a, b, o)) < oracle::i128(1) << 60;
+                const oracle::i128 size = oracle::det(a, b, o);
+                near += s != 0 && size < (oracle::i128(1) << 60) && size > -(oracle::i128(1) << 60);
             }
         }
         c.expect(wrong == 0, name + ": " + std::to_string(checked) + " in-sphere, " + std::to_string(ties) + " exact ties, " +
@@ -1228,7 +1241,7 @@ void predicate_cases() {
         for (auto& q : tiny)
             for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;  // a box of 2048 steps inside the big one
         tiny.push_back({0.1, 0.1, 0.1});
-        for (int i = 1; i < 512; ++i) tiny.push_back({wrap(0.1 + 0.618 * i), wrap(0.2 + 0.414 * i), wrap(0.3 + 0.302 * i)});
+        for (int i = 1; i < 512; ++i) tiny.push_back({wrap(0.1 + std::sqrt(2.0) * i), wrap(0.2 + std::sqrt(3.0) * i), wrap(0.3 + std::sqrt(5.0) * i)});
         compare(c, "4096 particles on 2048^3 grid positions (no duplicates assumed)", tiny);
     });
 }

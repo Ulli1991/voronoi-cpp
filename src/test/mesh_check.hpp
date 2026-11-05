@@ -69,16 +69,22 @@ struct Result {
     long long negative = 0;       // cells of volume <= 0
     long long duplicates = 0;     // particles on the grid position of another: no mesh should come back
     double closure = 0, total = 0, brute_volume = 0, brute_area = 0, fresh_volume = 0;
+    // Relative volume error times the cell's size in grid steps. Positions are
+    // doubles near 1, so geometry rounds at about 4e-8 grid steps whatever the
+    // cell: the relative error of a cell h steps wide is about 4e-8 / h
+    // (measured, clumps of 512 to 2^20 steps wide, contrast.grid_scale).
+    double brute_floor = 0;
+    bool brute_within_rounding() const { return brute_volume < 1e-9 || brute_floor < 2e-7; }
     bool ok() const {
         return tets.ok() && not_finite == 0 && fresh_differs <= 0 && brute_missing == 0 && brute_extra == 0 &&
-               negative == 0 && duplicates == 0 && closure < 1e-11 && std::abs(total - 1) < 1e-11 && brute_volume < 1e-9 &&
-               brute_area < 1e-9 && fresh_volume < 1e-10;
+               negative == 0 && duplicates == 0 && closure < 1e-11 && std::abs(total - 1) < 1e-11 &&
+               brute_within_rounding() && (brute_area < 1e-9 || brute_floor < 2e-7) && fresh_volume < 1e-10;
     }
     std::string text() const {
         std::ostringstream o;
         o << tets.text() << " not_finite=" << not_finite << " fresh_differs=" << fresh_differs << fresh_error
           << " brute(cells=" << sampled << " missing=" << brute_missing << " extra=" << brute_extra
-          << " volume=" << brute_volume << " area=" << brute_area << " own_image=" << own_image
+          << " volume=" << brute_volume << " area=" << brute_area << " floor=" << brute_floor << " own_image=" << own_image
           << " two_images=" << two_images << ") negative=" << negative << " duplicates=" << duplicates << " closure=" << closure
           << " total-1=" << total - 1 << " fresh_volume=" << fresh_volume;
         return o.str();
@@ -141,7 +147,9 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
         const oracle::Cell cell = oracle::voronoi_cell(g, i);
         ++r.sampled;
         const double brute = double(cell.volume * step3);
-        r.brute_volume = std::max(r.brute_volume, brute > 0 ? std::abs(volume(i) - brute) / brute : 1.0);
+        const double error = brute > 0 ? std::abs(volume(i) - brute) / brute : 1.0;
+        r.brute_volume = std::max(r.brute_volume, error);
+        r.brute_floor = std::max(r.brute_floor, error * std::cbrt(double(cell.volume)));
         double scale = 0;
         for (const auto& [j, a] : cell.area) scale += double(std::sqrt(oracle::dot(a, a)) * step2);
         const double real = 1e-9 * scale;

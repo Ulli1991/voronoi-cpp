@@ -279,6 +279,8 @@ struct Options {
     double drift = 0;       // regularisation in this driver (the library has none): each step
                             // moves each generator this fraction of the way to its centroid
     voronoi::Fallback fallback = voronoi::Fallback::cheapest;
+    double seconds = 0;     // stop after this much wall time; 0: run all steps
+    bool final_oracle = false;  // the full oracle on the last step
     bool dump = false;      // write the grid positions of a failing step
     bool print = true;      // one line per step
     std::ostream* out = &std::cout;
@@ -353,7 +355,9 @@ inline Summary run(const Options& o) {
     DeviceBytes::peak = DeviceBytes::current;
     double t = 0;
     int rated = 0;
+    Kokkos::Timer wall;
     for (int step = 1; step <= o.steps; ++step) {
+        if (o.seconds > 0 && wall.seconds() > o.seconds) break;
         advance(field, x, side, t, dt);
         t += dt;
         if (o.drift > 0) {
@@ -452,6 +456,16 @@ inline Summary run(const Options& o) {
                 << std::flush;
     }
     if (rated > 0) s.rate_mean /= rated;
+    if (o.final_oracle && !s.refused) {
+        const mesh_check::Result c = mesh_check::check(mesh, o.oracle_cells);
+        s.closure = std::max(s.closure, c.closure);
+        s.volume = std::max(s.volume, c.fresh_volume);
+        out << "final oracle: " << (c.ok() ? "PASS " : "FAIL ") << c.text() << "\n" << std::flush;
+        if (!c.ok() && s.wrong_step < 0) {
+            s.wrong_step = s.steps_done;
+            s.wrong = c.text();
+        }
+    }
     return s;
 }
 
