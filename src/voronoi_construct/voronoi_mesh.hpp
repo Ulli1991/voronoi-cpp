@@ -60,6 +60,16 @@ void snap_positions(const ExecSpace& exec, const X& x, const ep::Box& box,
         });
 }
 
+// The sum of the cell volumes.
+template <class ExecSpace, class Volume>
+double total_volume(const ExecSpace& exec, const Volume& volume) {
+    double total = 0;
+    Kokkos::parallel_reduce(
+        "voronoi::total_volume", Kokkos::RangePolicy<ExecSpace>(exec, 0, volume.extent(0)),
+        KOKKOS_LAMBDA(int i, double& sum) { sum += volume(i); }, total);
+    return total;
+}
+
 // Particles on one position of the 2^30 grid, found by sorting on the host
 // (a refusal only): "" if there are none, else the error naming a pair. Two
 // such particles have no bisector between them, so no Voronoi cell, and
@@ -461,10 +471,7 @@ private:
             if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 32);
         }
         tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
-        const auto volume = geometry_.volume;
-        Kokkos::parallel_reduce(
-            "voronoi::total_volume", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
-            KOKKOS_LAMBDA(int i, double& sum) { sum += volume(i); }, total_volume_);
+        total_volume_ = detail::total_volume(exec_, geometry_.volume);
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
