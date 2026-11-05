@@ -7,8 +7,8 @@ moving-mesh finite-volume hydro solver on top. The solver hands over
 particle positions and gets back faces (owner, neighbour, area vector,
 centroid), cell volumes and centroids, and per-cell face lists; the mesh is
 kept exact as the particles move. The library is templated on the dimension
-(`voronoi::Mesh<D, Exec>`); the 3D and 1D meshes are complete, 2D is in
-progress (see "Roadmap").
+(`voronoi::Mesh<D, Exec>`); the 3D, 2D and 1D meshes are complete
+(see "Roadmap").
 
 The hydro (`src/hydro/`): MUSCL-Hancock with HLLC or HLL, AREPO-style
 least-squares gradients and mesh regularisation, on a static or moving mesh,
@@ -117,8 +117,14 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
   pool).
 - The dimension is a template parameter, `voronoi::Mesh<D, Exec>`
   (`exact_predicates::BoxN<D>`, `hydro::FiniteVolume<D, Exec, Riemann>`,
-  `hydro::State<D>`); D = 3 and D = 1 are implemented, the 2D engine follows
+  `hydro::State<D>`); D = 3, 2 and 1 are implemented
   (research_notes/dimension_design_2026-11-02.md). `Box` is `BoxN<3>`.
+- `voronoi::Mesh<2>` has the contract of `Mesh<3>`, on triangles
+  (`voronoi_mesh_2d.hpp`, `exact_predicates::BoxN<2>`), with two differences:
+  `volume()` is current after `update_cells()` only, and there are always exactly
+  3n faces, numbered for good (a flip gives its face new particles, and a face can
+  have zero length on a lattice). The geometry is a function of the positions
+  alone: a repaired mesh equals a fresh build bit for bit.
 
 ## How it works
 
@@ -250,7 +256,7 @@ clipping, no hand vectorisation), so a CPU-tuned code would narrow the gap.
 
 ## Tests
 
-Seven CTest programs specify the library and the hydro; details, oracles, run times and
+Twelve CTest programs specify the library and the hydro; details, oracles, run times and
 what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
@@ -263,6 +269,7 @@ what PASS means are in [TESTING.md](TESTING.md).
 | `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
 | `mesh_cases.*` | 3D special cases against an oracle that shares no code with the library: coincident points, few points, extreme contrast, thin and long boxes, degeneracy in motion, high valence, large motion, fallbacks, predicates on real point sets, bits across backends |
 | `distortion` | flows that wind the mesh up, no hydro: shear, vortex, Taylor-Green, turbulence, collapse, expansion, sheets, interpenetrating streams, long thin cells |
+| `mesh2d` | the 2D mesh against oracles that share no code with it: predicates against an integer determinant, on six inputs in four boxes empty circumcircles in exact integers, areas summing to the box exactly, every cell clipped in long double against all particles; a repaired mesh equals a fresh build bit for bit, with both fallbacks |
 | `hydro` | HLLC and HLL against reference fluxes and under rotation; uniform states stay uniform, conservation to rounding, bit-identical runs, the two update loops agree to rounding on jittered and uniform meshes; moving mesh: uniform state with a bulk velocity, conservation, Galilean invariance of a moving blast |
 
 ```sh
@@ -434,8 +441,9 @@ In order (research_notes/dimension_design_2026-11-02.md):
 3. 1D mesh and hydro with walls; Sod, Shu-Osher and Woodward-Colella against
    the references and the fixed-grid code LUNA (a first CPU version gives
    LUNA's results to ~1e-14 on a static mesh).
-4. 2D mesh (polygon clipping, triangles with 2-2 flips) and hydro;
-   Kelvin-Helmholtz after McNally, Lyra & Passy (2012).
+4. 2D mesh done (polygon clipping, triangles with 2-2 flips;
+   research_notes/mesh_2d_2026-11-05.md). 2D hydro and Kelvin-Helmholtz after
+   McNally, Lyra & Passy (2012): in luna-cpp.
 5. Rebuild on clustered input: tune the per-particle level choice at density
    jumps (12-13 % of tested candidates lie outside the needed 2R radius on
    clustered/halo input; expected 5-10 %), and look for a cheaper exact
@@ -472,8 +480,8 @@ a fixed grid would need to match that time).
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests, `support.hpp` (inputs, references, the
   comparison with an exact rebuild), `check.hpp`.
-- `src/hydro/`: the hydro (header-only). `src/bench/`: `voronoi_bench`, `hydro_sedov`, `hydro_1d`.
-- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `hydro_a100.sh`, `hydro_sedov_compare.py`, `dim1d_a100.sh`, `compare_1d.py`.
+- `src/hydro/`: the hydro (header-only). `src/bench/`: `voronoi_bench`, `mesh2d_bench`, `hydro_sedov`, `hydro_1d`.
+- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `hydro_a100.sh`, `hydro_sedov_compare.py`, `dim1d_a100.sh`, `compare_1d.py`, `dim2d_a100.sh`.
 - `research_notes/`, `reports/`: status notes and surveys.
 
 CI (`.github/workflows/checks.yml`) runs clang-tidy and the CPU tests in
