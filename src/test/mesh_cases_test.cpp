@@ -1317,6 +1317,19 @@ void large_cases() {
 // ------------------------------------------------------------------ fallbacks
 
 void fallback_cases() {
+    for (const int rounds : {1, 2})
+        for (const double d : {1e-4, 1e-3, 3e-3, 1e-2})
+            add("fallback.out_of_rounds." + std::to_string(rounds) + "." + sci(d), [=](Check& c) {
+                // A repair stopped with triangles left never returns as a mesh.
+                // Small steps: few flips, often none stuck when the rounds end.
+                Points p = make_points("jittered", 4096);
+                Mesh m(Exec{}, 1.0);
+                build(c, "start", m, p, Expect::exact);
+                m.set_repair_rounds(rounds);
+                const Flow flow;
+                flow.advect(p, d / 16);
+                step(c, "at most " + std::to_string(rounds) + " rounds", m, p);
+            });
     const std::pair<voronoi::Fallback, std::string> modes[] = {{voronoi::Fallback::cheapest, "cheapest"},
                                                                {voronoi::Fallback::host, "host"},
                                                                {voronoi::Fallback::rebuild, "rebuild"}};

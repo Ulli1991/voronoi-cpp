@@ -580,7 +580,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const tet_repair::Stats device = tet_repair::repair(exec, dm, state);
         total.flips23 += device.flips23;
         total.flips32 += device.flips32;
-        total.stuck = device.stuck;
+        total.stuck = device.unfinished ? Kokkos::max(device.stuck, 1) : device.stuck;
     }
     return total;
 }

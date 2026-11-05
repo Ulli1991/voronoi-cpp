@@ -190,13 +190,13 @@ public:
         Kokkos::Timer timer;
         snap(x);
         tet_repair::move_screened(exec_, positions_, box_, tets_, state_);
-        const tet_repair::Stats device = tet_repair::repair(exec_, tets_, state_);
+        const tet_repair::Stats device = tet_repair::repair(exec_, tets_, state_, repair_rounds_);
         report.flips = device.flips23 + device.flips32;
         report.rounds = static_cast<int>(device.rounds);
         report.stuck = device.stuck;
         lap(timer, timings, &Timings::repair);
-        bool stuck = device.stuck > 0;
-        if (stuck && fallback_ != Fallback::rebuild &&
+        bool stuck = device.stuck > 0 || device.unfinished;
+        if (stuck && !device.unfinished && fallback_ != Fallback::rebuild &&
             (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 1000 <= n_)) {
             tet_flips::Stats host;
             try {
@@ -352,6 +352,8 @@ public:
 
     bool cells_current() const { return cells_current_; }
     void set_fallback(Fallback f) { fallback_ = f; }
+    // The most rounds of the device repair in one update; for tests.
+    void set_repair_rounds(int rounds) { repair_rounds_ = rounds; }
 
     int particles() const { return n_; }
     // The box; box() is the side of a cubic one.
@@ -459,6 +461,7 @@ private:
     int n_ = 0;
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
+    int repair_rounds_ = 1000;
     bool cells_current_ = false;
     int updates_since_lists_ = 1;       // updates since the last update_cells()
     bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last
