@@ -2,7 +2,7 @@
 # The mesh's special cases and distorting flows on one A100 (TESTING.md).
 # Submit from the repository root with a built CUDA directory and a mode;
 # logs must be on a shared file system:
-#   sbatch -o <dir>/cases-%j.out scripts/mesh_tests_a100.sh <build-cuda> cases
+#   sbatch -o <dir>/cases-%j.out scripts/mesh_tests_a100.sh <build-cuda> cases "coincident|few"   # a filter of names
 #   sbatch -o <dir>/flows128-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows128
 #   sbatch -o <dir>/flows128b-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows128b
 #   sbatch -o <dir>/flows256-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows256
@@ -30,7 +30,7 @@ d="$build/distortion_test"
 case "$mode" in
 cases)
     # Every case, each in its process, the known ones too.
-    for name in $("$build/mesh_cases_test" list | awk '{print $1}'); do
+    for name in $("$build/mesh_cases_test" list | awk '{print $1}' | grep -E "^(${3:-.*})"); do
         timeout -k 5 60 "$build/mesh_cases_test" --known "$name" > /tmp/case.$$ 2>&1
         status=$?
         printf "case=%s exit=%s fail=%s refused=%s\n" "$name" "$status" "$(grep -c '^  FAIL' /tmp/case.$$)" "$(grep -c 'refused:' /tmp/case.$$)"

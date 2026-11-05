@@ -1,6 +1,7 @@
 # Testing voronoi-cpp
 
-Seven CTest programs in `src/test/` specify the library and the hydro; `voronoi_bench`
+Nine CTest programs in `src/test/` specify the library and the hydro (`mesh_cases`
+runs as ten groups, each case also on its own by name); `voronoi_bench`
 (`src/bench/`) adds the large-scale checks that are too slow for CTest.
 Every test prints one `ok` or `FAIL` line per expectation and exits non-zero
 on any failure. All tests run on the default Kokkos execution space, so a
@@ -10,7 +11,7 @@ code.
 ## Running them
 
 ```sh
-ctest --test-dir <build> --output-on-failure            # all seven
+ctest --test-dir <build> --output-on-failure            # all of them
 OMP_NUM_THREADS=1 ctest --test-dir <build-omp>          # CPU, one thread
 ```
 
@@ -32,6 +33,46 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 | `voronoi_mesh` | 4096 | 2 s | the hydro contract of `voronoi::Mesh` on off-grid positions in a box of side 2: the first update builds an exact mesh; faces once with owner < neighbour, closing every cell; volumes fill the box; per-cell face lists name each face twice, in increasing id of the other particle; cell centroids equal clipping's; the same input gives the same volumes and centroids bit for bit; a permuted input gives the permuted faces; a local rebuild returns each face of the listed cells once with the mesh's area; updates repair and stay exact; on icosahedral shells@1e-9, where the device repair leaves stuck triangles, the step is exact with `Fallback::host` (local rebuilds on the host) and with `Fallback::rebuild`; in a 1:2:3 box the mesh is exact, its volumes fill the box and `box()` refuses it; a slab 4 cells thin is refused with the "cannot certify" error |
 | `hydro` | 4096 (jittered, uniform) | 8.0 s | the finite-volume hydro (`src/hydro/`): HLLC and HLL equal LUNA's `hllc_flux_primitive` / `hll_flux_primitive` on 15 / 12 sample faces (values printed by LUNA, float64; within 1e-14), equal states give the exact flux, also through a moving face (F(U) - (w.n) U), swapping states and normal flips the flux, rotating states, normal and face velocity rotates the flux (1000 random rotations, 1e-13); HLLC on jittered and uniform random meshes, HLL on jittered, HLLC with stored float gradient weights (`weight32`) and with everything reduced (`lowweights`: float face rows and weights, FP16 gradients, float fluxes and Riemann; uniform within 1e-6, loops within 1e-5, float rows), first and second order, per-cell and per-face loops: a uniform moving state stays uniform to rounding (3 steps, within 1e-13), mass, momentum and energy of a rough state (a blast plus 30 % random perturbations) are conserved over 10 steps within 1e-14 (long double sums); two runs give the same bits; the two loops agree within 1e-12 (measured 4e-16 with HLLC, the same bits with HLL); moving mesh (points on the snapping grid, steps whose displacement is a multiple of a grid step): a uniform state with a bulk velocity stays uniform over 5 steps (1e-13; measured 5e-16), mass, momentum and energy are conserved over 10 steps with moving cells (1e-14), a blast moving with the box at Mach 12 equals the blast at rest cell by cell after 40 steps (1e-6; measured 7e-8, rounding grown through the blast) and in its radial density profile (1e-10; measured 1e-13), while on a static mesh the profiles differ by more than 1000 times that (measured 7e-2); two identical moving runs (a blast, 15 steps) give the same bits in time steps, point velocities, positions, volumes, centroids, state and face count, and every stored circumcentre equals a fresh `tet_mesh::circumcentres` computation bit for bit (the repair's flip order does not reach the geometry; the price, accepted by the owner: mesh step 2.4/2.5/4.7 % slower at spacings 0.03/0.1/0.3, research_notes/hydro_stage3_2026-10-31.md); in a (2, 1, 1) box a uniform state with bulk velocity (1, 0.5, -0.25) stays uniform on the moving mesh (1e-13; measured 5e-16), is conserved over 10 moving steps and the mesh equals an exact rebuild |
 
+### Special cases of the mesh
+
+`mesh_cases_test` names every case (`mesh_cases_test list`) and runs those
+whose name starts with a given prefix; ctest runs one group per prefix. A case
+requires the exact mesh, or accepts a refusal (an exception) in its place; it
+never accepts a wrong mesh without an error. A case of an open problem carries
+its issue, is skipped by default and runs with `--known` (`few.empty` #20,
+`large.after_refusal` #19, `coincident.step.fallback.host.*` and
+`coincident.step.default.<n>`, n >= 9000, #17, `valence.ring.*` between 65 and
+300 corners #18).
+
+| Group | What it specifies |
+|---|---|
+| `coincident` | two, three, 1 % and all particles on one grid position at the start (exact doubles and doubles apart inside one grid step, random and lattice): refused; one grid step apart: exact; a pair, 40 pairs and a quarter of the particles landing on one position during a step, separations from 1e-3 to below a grid step, two particles swapping through one point, every other particle at one grid step from a neighbour; each fallback with 1, 4 and 64 pairs |
+| `few` | n from 0 to 512, uniform, jittered, lattice: built and exact, or refused, three steps after a build; every cell against brute clipping |
+| `contrast` | density ratios 1e2 to 1e8, balls and shells of radius 1e-2 to 1e-8, with and without a centre particle, clumps on 512^3 to 2^60 grid positions, 5 to 1000 particles in an empty box, a line, a plane, two skew lines, a line winding around the torus, a log-uniform cusp over 6 decades |
+| `box` | slabs 1 to 8 cells thin, 1:1:1/32 to 1:1:1/1024, long boxes to 1:1:65536, voids of radius 0.1 to 0.45, empty or with a centre particle, particles on and across every boundary (snapping equal to floor(x / step) mod period), positions run past the side, cubes of side 1e-9 to 1e9 give the same tetrahedra and scaled volumes, NaN, infinity and 1e300 at the start and in a step |
+| `degenerate` | sc, bcc, fcc: rigid motion in whole grid steps (no flip) and in doubles, shear by layers that recurs as an exact lattice, smooth shear, fresh noise of 1, 16, 1024 grid steps every step; zero-area faces finite (#13); two lattices sliding through each other, coplanar every 8 steps; one particle walking through face centres and edge midpoints; octahedra pulsing through exact cospherical; 1014 grid points exactly on one sphere |
+| `valence` | a face of 16 to 1000 corners at the start and created by the repair; spheres and shells of 50 to 1600 particles; a particle moved into a shell, a cell of up to 1600 faces no build saw |
+| `large` | displacements of 0.5 to 20 spacings, random walks of 0.3 to 10, every particle somewhere else, permuted ids, no motion (no flip, the same bits), another n, 1000 steps of a solenoidal flow without drift in faces, slots or memory, there and back 8 times to the same tetrahedra and the same bits |
+| `fallback` | all three fallbacks on shells, kicks of 2 spacings, and a jump from a lattice to two skew segments; growth in small steps; `clip()` of a hub with its pool of 10 faces per cell |
+| `predicates` | the library's orient and in-sphere on the quintuples real meshes ask about (eight point sets, lattices with +-1 and +-3 grid steps of noise, a clump on 2048^3 positions) equal the oracle's integers |
+| `repro` | two runs give the same bits, the default space and Serial the same bits; `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds |
+
+`hostcost.*` (not in ctest) measures one step of `Fallback::host` against the
+stuck entries it gets.
+
+`distortion_test` drives `voronoi::Mesh` with prescribed velocity fields, no
+hydro (`src/test/distortion.hpp`): shear, sawtooth, vortex, taylor_green,
+turbulence, collapse, noh, expansion, pancake, counter (interpenetrating), thin
+(long thin cells), and collapse_wide, pancake_wide, streams, which empty a
+region as wide as the box and end in a refusal. Without regularisation, then on
+three flows with a drift to the centroids in the driver: the library layer has
+none. Every sampled step passes the oracle, or the run ends in a refusal. It
+prints per step flips, rounds, stuck entries, fallbacks, M cells/s, faces,
+B/cell, worst aspect ratio (largest circumradius at a cell over half the
+distance to its nearest neighbour), reach, faces per cell and corners per face.
+`scripts/mesh_tests_a100.sh` runs the cases on the A100, the flows at 128^3 and
+256^3, the drift, and the full oracle at 262144.
+
 ### Oracles
 
 Brute force exists only in tests and the benchmark, never in the library:
@@ -45,6 +86,14 @@ Brute force exists only in tests and the benchmark, never in the library:
 - `support::failing`: every shared triangle of the whole mesh, exact.
 - `support::clipped` (the reference of `compare_with_rebuild`): an
   independent build of the same positions by clipping.
+- `oracle.hpp`, through `mesh_check::check`: shares no code with the library.
+  Every periodic image, not only the nearest; orientation and in-sphere signs
+  in its own 128-bit arithmetic, no tie-break (points on a sphere are allowed);
+  corners that agree on each other's images; a closed cover with exact volumes;
+  cells by half-space clipping in long double against every image of every
+  generator (a sample of cells). Ties are compared with a fresh build:
+  the tetrahedra must be equal as sets, since the perturbation makes them
+  unique. Volumes of a cell h grid steps wide round at about 4e-8 / h.
 
 ### What PASS means
 

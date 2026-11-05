@@ -415,7 +415,7 @@ void contrast_cases() {
             add_uniform(p, rng, 512);
             add_shell(p, rng, {0.3, 0.6, 0.45}, 0.1, k);
             diagnose(c, std::to_string(k) + " particles on a sphere", p);
-        });
+        }, 21);
     add("contrast.rank_one", [=](Check& c) {
         // 512 particles along one line that winds around the torus, a clump.
         Points tiny = make_points("uniform", 4096);
@@ -487,6 +487,8 @@ void contrast_cases() {
 
 // ---------------------------------------------------------------------- boxes
 
+Points exact_lattice(int side, const Points& basis);
+
 void box_cases() {
     // Slabs: m cells across a side of 1/8.
     for (const int across : {1, 2, 3, 4, 5, 6, 7, 8})
@@ -539,7 +541,7 @@ void box_cases() {
         // Particles on every wrap: x = 0, side, just below 0, a period off.
         Points p = make_points("jittered", 4096);
         const double below = std::nextafter(1.0, 0.0);
-        const std::vector<Point> special{{0, 0, 0},         {1, 1, 1},           {below, 0.5, 0.5}, {-grid_step, 0.5, 0.25},
+        const std::vector<Point> special{{0, 0, 0},         {1, 1, 0.5},         {below, 0.5, 0.5}, {-grid_step, 0.5, 0.25},
                                          {1.0, 0.25, 0.75}, {-0.25, 0.25, 0.25}, {1.75, 1.75, 0.1}, {0.1, -3.5, 2.5}};
         for (std::size_t i = 0; i < special.size(); ++i) p[i * 500 + 3] = special[i];
         Mesh m(Exec{}, 1.0);
@@ -589,6 +591,30 @@ void box_cases() {
             const mc::Result r = mc::check(other);
             c.expect(r.ok(), r.text());
         });
+    for (const double side : {1.0, 3.0, 0.7, 0.1, 1e-3, 1.0 / 3, 3.086e24})
+        add("box.snap_twice." + sci(side), [=](Check& c) {
+            // Snapping a snapped position must keep it: the mesh's positions
+            // are k * step and tet_start snaps them again.
+            const Box box(side);
+            const Points p = scaled(make_points("clustered", 4096), box);
+            long long moved = 0;
+            for (const auto& q : p)
+                for (int a = 0; a < 3; ++a) {
+                    const int k = exact_predicates::snap(q[a], box, a);
+                    moved += exact_predicates::snap(k * box.step, box, a) != k;
+                }
+            c.expect(moved == 0, "side " + sci(side) + ": " + std::to_string(moved) + " of " + std::to_string(3 * p.size()) +
+                                     " coordinates move when snapped twice");
+            // On a lattice a step decides ties: the mesh of the positions the
+            // caller gave, by the oracle (no tie-break, every image).
+            Points lattice = scaled(exact_lattice(16, {{0.5, 0.5, 0.5}}), box);
+            for (auto& q : lattice)
+                for (int a = 0; a < 3; ++a) q[a] = (exact_predicates::snap(q[a], box, a) + 0.5) * box.step;
+            Mesh m(Exec{}, box);
+            m.update(to_device(lattice));
+            const auto r = oracle::check(mc::grid_of(m), mc::tets_of(m));
+            c.expect(r.ok(), "the lattice in that box: " + r.text());
+        }, side == 1e-3 ? 22 : 0);
     for (const std::string what : {"nan", "inf", "huge"})
         add("box.nonfinite." + what, [=](Check& c) {
             const Points p = make_points("jittered", 4096);
@@ -698,6 +724,35 @@ void degenerate_cases() {
                     step(c, name + " noise step " + std::to_string(s), m, p);
                 }
             });
+    }
+    for (const Layout& l : {Layout{"sc", exact_lattice(16, sc_basis)}, Layout{"bcc", exact_lattice(8, bcc_basis)},
+                            Layout{"fcc", exact_lattice(8, fcc_basis)}}) {
+        const Points start = l.points;
+        const std::string name = l.name;
+        add("degenerate.zero_area." + name, [=](Check& c) {
+            // Issue 13: the tie-break's edges are faces of zero area. Their
+            // area and centroid must stay finite, here and in a step.
+            Mesh m(Exec{}, 1.0);
+            build(c, name, m, start, Expect::exact);
+            Points p = start;
+            for (auto& q : p) q[0] = wrap(q[0] + 256 * grid_step);
+            for (int s = 0; s < 2; ++s) {
+                const auto area = face_areas(m);
+                const auto centroid = to_host(m.face_centroid());
+                long long zero = 0, bad = 0;
+                for (int f = 0; f < m.faces(); ++f) {
+                    double a2 = 0;
+                    for (int a = 0; a < 3; ++a) {
+                        a2 += area(f, a) * area(f, a);
+                        bad += !std::isfinite(centroid(f, a));
+                    }
+                    zero += a2 == 0;
+                }
+                c.expect(bad == 0, name + ": " + std::to_string(zero) + " of " + std::to_string(m.faces()) +
+                                       " faces have zero area, " + std::to_string(bad) + " non-finite centroid components");
+                if (s == 0) step(c, "rigid step", m, p);
+            }
+        });
     }
     add("degenerate.two_lattices", [](Check& c) {
         // sc lattice 2 slides through sc lattice 1 along z, shifted in x and
@@ -1115,6 +1170,30 @@ void fallback_cases() {
             std::cout << "    faces " << double(r.faces) / n << " per cell\n";
         });
     }
+    // What one step of Fallback::host costs against the stuck entries it gets.
+    for (const int n : {216, 512, 1000, 1728, 4096})
+        for (const double d : {0.5, 1.0, 2.0})
+            add("hostcost." + std::to_string(n) + "." + sci(d), [=](Check& c) {
+                Points p = make_points("jittered", n);
+                const int count = static_cast<int>(p.size());
+                Mesh m(Exec{}, 1.0);
+                m.set_fallback(voronoi::Fallback::host);
+                build(c, "start", m, p, Expect::exact, 0);
+                std::mt19937_64 rng(31);
+                std::normal_distribution<double> g(0, d * std::cbrt(1.0 / count));
+                for (auto& q : p)
+                    for (double& v : q) v = wrap(v + g(rng));
+                to_grid(p);
+                Kokkos::Timer timer;
+                const voronoi::Report r = m.update(to_device(p));
+                const double seconds = timer.seconds();
+                const mc::Result o = mc::check(m, 4);
+                std::ostringstream what;
+                what << "n=" << count << " kicks of " << d << " spacings: " << seconds << " s, stuck " << r.stuck << ", host "
+                     << r.host_flips << "/" << r.host_rebuilds << ", rebuilt " << r.rebuilt << ", " << r.stuck / seconds
+                     << " stuck entries/s";
+                c.expect(o.ok(), what.str());
+            });
     add("fallback.grow_by_steps", [](Check& c) {
         // The same growth in small steps, so that repair must grow its pools.
         Points p = make_points("lattice", 1728);
