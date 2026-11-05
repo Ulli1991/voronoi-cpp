@@ -173,7 +173,8 @@ public:
     // call or when the number of particles changed; exact on return either
     // way, or a std::runtime_error saying what is wrong with the positions.
     // After such a refusal there is no mesh (no faces, no particles) and
-    // the next update() builds from scratch. `active` (particle ids) is
+    // the next update() builds from scratch. No particles at all are a
+    // std::invalid_argument, and leave the object as it was. `active` (particle ids) is
     // accepted for a later repair limited to an active region; today every
     // particle is repaired.
     template <class X>
@@ -220,6 +221,7 @@ public:
     // the exact start (tet_start), then faces and cells.
     template <class X>
     Report rebuild(const X& x, Timings* timings = nullptr) {
+        if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh: no particles");
         Kokkos::Timer timer;
         Report report;
         report.rebuilt = true;
@@ -272,6 +274,7 @@ public:
     // particle, neighbour ids, area vectors, centroids relative to it).
     template <class X>
     const shell_voronoi::Cells<Memory>& clip(const X& x, const View<const int*>& cells) {
+        if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh::clip: no particles");
         n_ = n_ > 0 ? n_ : static_cast<int>(x.extent(0));
         if (static_cast<int>(x.extent(0)) != n_) throw std::invalid_argument("voronoi::Mesh::clip: other particles");
         snap(x);

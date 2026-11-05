@@ -347,9 +347,29 @@ void few_cases() {
         "few.empty",
         [](Check& c) {
             Mesh m(Exec{}, 1.0);
-            build(c, "no particles", m, {}, Expect::exact_or_refused);
-        },
-        20);
+            build(c, "no particles", m, {}, Expect::refused);
+        });
+    add("few.empty_after_a_mesh", [](Check& c) {
+        // Nothing to mesh changes nothing: the mesh stays and steps on.
+        Points p = make_points("jittered", 1000);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        build(c, "no particles", m, {}, Expect::refused);
+        c.expect(m.particles() == static_cast<int>(p.size()), "the mesh stays");
+        const Flow flow;
+        flow.advect(p, 0.01);
+        step(c, "a step after", m, p);
+    });
+    add("few.single_message", [](Check& c) {
+        Mesh m(Exec{}, 1.0);
+        try {
+            m.update(to_device(Points{{0.5, 0.5, 0.5}}));
+            c.expect(false, "one particle refused");
+        } catch (const std::exception& e) {
+            const std::string what = e.what();
+            c.expect(what.find("too few particles") != std::string::npos, "one particle: too few: " + what);
+        }
+    });
 }
 
 // ------------------------------------------------------------------- contrast
