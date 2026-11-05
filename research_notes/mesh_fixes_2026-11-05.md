@@ -82,3 +82,19 @@ build-meshfix/. Before-binaries: build-meshfix/before/.
 - #23: rule stuck * 200000 <= n from the issue's 50 ms per entry and 0.24 us per
   cell for a rebuild. No timer: path and bits stay the same run to run. A
   deterministic rule stays a guess at a cost that varies 400 times by input.
+
+- Results of the first final jobs (commit 6b6ee92). Hashes, 31926462: main and
+  fix-without-the-new-snap equal on all five paths, so #22 alone changes bits, in
+  hydro_sedov's box of 0.05. Unit box checksums main = fix (31926463).
+- #24: every wrong step of the issue ends at the 1000-iteration cap. `rounds` counts
+  only rounds with work, so 776-916 of them can fill it, and a retry has just
+  cleared the stuck list: stuck 0. Loop on the A100, 399 runs, 1596 steps: 33 steps
+  with stuck 0, all rebuilt through Stats::unfinished, 0 wrong. Same loop with that
+  guard off (31926798), 375 runs, 1500 steps: 26 such steps, all 26 caught by the
+  volume check alone, 0 wrong. So each guard closes it by itself.
+- A race of mine, from the #18 commit: represent_dropped became the last asynchronous
+  kernel of the start, and rebuild() drops the views it reads next. Illegal device
+  address, at random, in box.snap_twice.3 and 3.09e+24 (0.05 s cases). A fence there,
+  and one in forget().
+- The reduction inside tet_mesh::faces cost 867 -> 624 M cells/s in that kernel,
+  mesh step 0.940/0.957/0.975 of main. Moved to a kernel of its own over the cells.

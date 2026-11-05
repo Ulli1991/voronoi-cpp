@@ -404,6 +404,7 @@ private:
 
     // No mesh any more: the next update() builds from scratch.
     void forget() {
+        exec_.fence();  // kernels in flight may still read what goes here
         tets_ = tet_mesh::Mesh<Memory>{};
         state_ = tet_repair::State<Memory>{};
         rings_ = tet_mesh::FaceRings<Memory>{};
@@ -459,7 +460,11 @@ private:
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 32);
             if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 32);
         }
-        total_volume_ = tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        const auto volume = geometry_.volume;
+        Kokkos::parallel_reduce(
+            "voronoi::total_volume", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
+            KOKKOS_LAMBDA(int i, double& sum) { sum += volume(i); }, total_volume_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
