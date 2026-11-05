@@ -707,7 +707,7 @@ void box_cases() {
             m.update(to_device(lattice));
             const auto r = oracle::check(mc::grid_of(m), mc::tets_of(m));
             c.expect(r.ok(), "the lattice in that box: " + r.text());
-        }, side == 1e-3 ? 22 : 0);
+        });
     for (const std::string what : {"nan", "inf", "huge"})
         add("box.nonfinite." + what, [=](Check& c) {
             const Points p = make_points("jittered", 4096);

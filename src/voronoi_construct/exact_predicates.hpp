@@ -97,11 +97,17 @@ private:
 using Box = BoxN<3>;
 
 // The grid step of coordinate x along `axis` of `box`, in [0, period[axis]):
-// the one definition of "on the grid" every caller uses. In a cube, x / step
-// is x / side * 2^30 to the bit (scaling by 2^30 is exact).
+// the one definition of "on the grid" every caller uses, the largest k with
+// k * step <= x, the product rounded as the mesh's positions k * step are, so
+// that snapping such a position gives k back. The quotient can round to just
+// below k when the step has a long mantissa; where the step is a power of two
+// or k * step is exact it never does, and in a cube x / step is
+// x / side * 2^30 to the bit (scaling by 2^30 is exact).
 template <int D>
 KOKKOS_INLINE_FUNCTION int snap(double x, const BoxN<D>& box, int axis) {
-    const i64 s = static_cast<i64>(Kokkos::floor(x / box.step)), steps = box.period[axis];
+    i64 s = static_cast<i64>(Kokkos::floor(x / box.step));
+    const i64 steps = box.period[axis];
+    s += static_cast<double>(s + 1) * box.step <= x;
     if ((steps & (steps - 1)) == 0) return static_cast<int>(s & (steps - 1));  // a power of two
     const i64 r = s % steps;
     return static_cast<int>(r < 0 ? r + steps : r);

@@ -59,6 +59,24 @@ int main(int argc, char** argv) {
     check.expect(ep::snap(0.5, 1.0) == period / 2 && ep::snap(0.0, 1.0) == 0 && ep::snap(1.0, 2.0) == period / 2 &&
                      ep::snap(3.0 * 0.75, 3.0) == 3 * period / 4,
                  "snap maps the box [0, box) onto [0, 2^30) for any box");
+    {  // a position k * step snaps back to k, whatever the mantissa of the step
+        std::mt19937_64 rng(22);
+        std::uniform_real_distribution<double> mantissa(1.0, 2.0);
+        std::uniform_int_distribution<int> exponent(-40, 40);
+        long long moved = 0, tried = 0;
+        for (int b = 0; b < 200; ++b) {
+            const double side = std::ldexp(mantissa(rng), exponent(rng));
+            const ep::Box box(side);
+            std::uniform_int_distribution<int> grid(0, static_cast<int>(box.period[0]) - 1);
+            for (int i = 0; i < 20000; ++i) {
+                const int k = grid(rng);
+                moved += ep::snap(k * box.step, box, 0) != k;
+                ++tried;
+            }
+        }
+        check.expect(moved == 0, "snapping k * step gives k back in boxes of any side (" + std::to_string(moved) + " of " +
+                                     std::to_string(tried) + " move)");
+    }
     check.expect(ep::snap(2.0, 2.0) == 0 && ep::snap(-0.5 / ep::scale, 1.0) == period - 1,
                  "snap wraps positions on or just outside the box edge");
     check.expect(ep::delta(0, period - 1) == -1 && ep::delta(period - 1, 0) == 1 && ep::delta(5, 9) == 4,
