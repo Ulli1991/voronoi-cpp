@@ -14,9 +14,9 @@
 // gamma 1.4. Every cell starts from the exact average of the initial state
 // over its own interval (LUNA's: cell averages over its uniform cells;
 // equal on a uniform line). N points on a uniform lattice, or moved by up to
-// --jitter / 2 spacings. --dt: LUNA's rule at --courant (default 0.8),
-// AREPO's (default 0.3), or a constant --fixed-dt; the last step lands on
-// t_end. --steps stops after that many steps (throughput).
+// --jitter / 2 spacings. --dt: LUNA's rule, the default of a static run
+// (--courant default 0.8), AREPO's, the default of a moving run (default
+// 0.4), or a constant --fixed-dt; the last step lands on t_end. --steps stops after that many steps (throughput).
 //
 // The run is made --repeats times (default 2) in one process, from the same
 // initial state; every run is printed, and the fastest gives the summary
@@ -218,14 +218,15 @@ int main(int argc, char* argv[]) {
     o.n = std::stoi(argv[2]);
     const bool moving = has(argc, argv, "--moving");
     o.motion = moving ? hydro::Motion::moving : hydro::Motion::static_mesh;
-    const std::string riemann = flag(argc, argv, "--riemann", "hllc"), rule_name = flag(argc, argv, "--dt", "luna");
+    const std::string riemann = flag(argc, argv, "--riemann", "hllc"), rule_name = flag(argc, argv, "--dt", moving ? "arepo" : "luna");
     const std::string limit = flag(argc, argv, "--limiter", "face");
     o.order = std::stoi(flag(argc, argv, "--order", "1"));
     o.rule = rule_name == "arepo" ? hydro::TimeStep::arepo : hydro::TimeStep::luna;
     o.fixed = rule_name == "fixed";
     o.fixed_dt = std::stod(flag(argc, argv, "--fixed-dt", "0"));
     if (o.fixed && !(o.fixed_dt > 0)) throw std::invalid_argument("hydro_1d: --dt=fixed needs --fixed-dt > 0");
-    o.courant = std::stod(flag(argc, argv, "--courant", o.rule == hydro::TimeStep::arepo ? "0.3" : "0.8"));
+    const std::string courant_default = std::to_string(o.rule == hydro::TimeStep::arepo ? hydro::courant_moving_1d : hydro::courant_static_1d);
+    o.courant = std::stod(flag(argc, argv, "--courant", courant_default.c_str()));
     o.jitter = std::stod(flag(argc, argv, "--jitter", "0"));
     o.max_steps = std::stoll(flag(argc, argv, "--steps", "0"));
     o.phases = has(argc, argv, "--phases");

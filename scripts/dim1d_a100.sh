@@ -6,6 +6,7 @@
 #   ladder <problem> <b> [<b> ...]   both codes on N = 2^b: LUNA (MC, HLLC, CFL 0.8, Pallas), ours
 #                    static and moving (LUNA's rule 0.8; AREPO's rule 0.3 up to 2^16), .npy/.npz + .json
 #                    into OUT; repeats give the fastest; hashes must agree
+#   set <problem> <b ...>   LUNA, static and the moving default at each 2^b, in one job at one clock (give it its own OUT)
 #   gaps <problem> <b ...> -- <b ...>   moving with AREPO's rule, then LUNA's rule at 0.4, repeats 1
 #   speed            throughput, BASELINE's rates, the smallest ladders
 #   reference <problem> <N> <seconds>   LUNA MC at N for that long, resumable (state in OUT)
@@ -80,6 +81,7 @@ do_throughput() {
         s=$((n > 2000000 ? 200 : 2000))
         "$bin/hydro_1d" sod "$n" --steps=$s --repeats=3 | grep -E "^ours"
         "$bin/hydro_1d" sod "$n" --steps=$s --repeats=3 --moving | grep -E "^ours"
+        [[ -x "${BASELINE:-}" ]] && "$BASELINE" sod "$n" --steps=$s --repeats=3 --moving --dt=arepo --courant=0.4 | grep -E "^ours" | sed 's/^/baseline /'
         "$bin/hydro_1d" sod "$n" --steps=$s --repeats=2 --moving --phases | grep -E "^(ours|phase)"
     done
     use_luna
@@ -93,6 +95,19 @@ case "$mode" in
 build)
     do_build
     ctest --test-dir "$build/cuda" --output-on-failure | tail -14
+    ;;
+set)  # set <problem> <b ...>: LUNA, static and the moving default, all in this job, at one clock
+    p="$2"
+    shift 2
+    for b in "$@"; do
+        n=$((1 << b))
+        r=$((b >= 15 ? 1 : 2))
+        use_luna
+        luna "$p" "$n" repeats=$r
+        use_ours
+        ours "$p" "$n" static --repeats=$r
+        ours "$p" "$n" moving-a04 --moving --repeats=$r
+    done
     ;;
 speed)  # throughput, an older binary's rates, the grid's bits on a moving Sod, the smallest ladders
     do_throughput
