@@ -5,7 +5,8 @@
 #   sbatch -o <dir>/cases-%j.out scripts/mesh_tests_a100.sh <build-cuda> cases "coincident|few"   # a filter of names
 #   sbatch -o <dir>/flows128-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows128
 #   sbatch -o <dir>/flows128b-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows128b
-#   sbatch -o <dir>/flows256-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows256
+#   sbatch -o <dir>/flows256-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows256   # also flows256b
+#   sbatch -o <dir>/smooth-%j.out scripts/mesh_tests_a100.sh <build-cuda> smooth
 #   sbatch -o <dir>/drift-%j.out scripts/mesh_tests_a100.sh <build-cuda> drift
 #   sbatch -o <dir>/oracle-%j.out scripts/mesh_tests_a100.sh <build-cuda> oracle
 #   sbatch -o <dir>/reach-%j.out scripts/mesh_tests_a100.sh <build-cuda> large
@@ -48,33 +49,58 @@ repro)
 flows128)
     # 2M cells. Up to 45 s per flow; checks against a rebuild every 400 steps.
     for flow in shear sawtooth vortex taylor_green turbulence collapse noh; do
-        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --rebuild-every=800 --shape-every=25 --print
+        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --every=0 --rebuild-every=800 --shape-every=25 --print
     done
     ;;
 flows128b)
     for flow in expansion pancake counter thin collapse_wide pancake_wide streams; do
-        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --rebuild-every=800 --shape-every=25 --print
+        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=45 --every=0 --rebuild-every=800 --shape-every=25 --print
     done
     ;;
 flows256)
-    # 16.8M cells, one A100: four flows, rebuild checks on two.
-    for flow in turbulence thin shear; do
-        "$d" "$flow" --no-drift --n=16777216 --d=0.3 --steps=1500 --seconds=170 --rebuild-every=600 --shape-every=25 --print
+    # 16.8M cells, one A100; setting up takes about 200 s per flow.
+    for flow in turbulence thin; do
+        "$d" "$flow" --no-drift --n=16777216 --d=0.3 --steps=1500 --seconds=220 --every=0 --rebuild-every=600 --shape-every=25 --print
     done
-    "$build/voronoi_bench" step 16777216 jittered 0.3 6 --memory | grep -E "memory: phase|gpuflips" | cut -c1-200
+    ;;
+flows256b)
+    for flow in shear pancake; do
+        "$d" "$flow" --no-drift --n=16777216 --d=0.3 --steps=1500 --seconds=220 --every=0 --rebuild-every=600 --shape-every=25 --print
+    done
+    ;;
+thin128)
+    # The rebuild check of thin at step 800, with the arbiter on what differs,
+    # and the full oracle on that mesh (host, single thread).
+    "$d" thin --no-drift --n=2097152 --d=0.3 --steps=800 --every=0 --rebuild-every=800 --shape-every=25 --final-oracle --cells=64 --print
+    ;;
+void128)
+    for flow in collapse_wide streams; do
+        "$d" "$flow" --no-drift --n=2097152 --d=0.3 --steps=3000 --seconds=120 --every=0 --rebuild-every=0 --shape-every=25 --print
+    done
+    ;;
+wind256)
+    # Without the rebuild check, which does not fit beside a 256^3 mesh on 40 GB.
+    for flow in thin shear; do
+        "$d" "$flow" --no-drift --n=16777216 --d=0.3 --steps=1500 --seconds=240 --every=0 --rebuild-every=0 --shape-every=25 --print
+    done
+    ;;
+smooth)
+    # The smooth reference of the flows' rates.
+    "$build/voronoi_bench" step 2097152 jittered 0.3 10 --memory | grep -E "memory: phase|gpuflips" | cut -c1-230
+    "$build/voronoi_bench" step 16777216 jittered 0.3 6 --memory | grep -E "memory: phase|gpuflips" | cut -c1-230
     ;;
 drift)
     # The same flows with this driver's drift to the centroids (the library has none).
     for flow in shear turbulence pancake counter thin; do
         for chi in 0.1 0.5; do
-            "$d" "$flow" --drift=$chi --n=2097152 --d=0.3 --steps=3000 --seconds=40 --rebuild-every=800 --shape-every=25 --print
+            "$d" "$flow" --drift=$chi --n=2097152 --d=0.3 --steps=3000 --seconds=40 --every=0 --rebuild-every=800 --shape-every=25 --print
         done
     done
     ;;
 oracle)
     # The full oracle (host, single thread) on the last step of a shorter run.
     for flow in turbulence thin pancake; do
-        "$d" "$flow" --no-drift --n=262144 --d=0.3 --steps=800 --seconds=60 --final-oracle --cells=64 --shape-every=25 --print | tail -3 | cut -c1-700
+        "$d" "$flow" --no-drift --n=262144 --d=0.3 --every=0 --steps=800 --seconds=60 --final-oracle --cells=64 --shape-every=25 --print | tail -3 | cut -c1-700
     done
     ;;
 large)

@@ -260,6 +260,8 @@ what PASS means are in [TESTING.md](TESTING.md).
 | `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and boxes of side 1, 2, 3, a 1:1:0.125 slab and a 1:2:3 box |
 | `repair` | after every step of a flow the mesh equals an exact rebuild (lattice, wave, shells, jittered; box 2, a 1:2:3 box, a 1:1:0.125 slab) |
 | `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
+| `mesh_cases.*` | 3D special cases against an oracle that shares no code with the library: coincident points, few points, extreme contrast, thin and long boxes, degeneracy in motion, high valence, large motion, fallbacks, predicates on real point sets, bits across backends |
+| `distortion` | flows that wind the mesh up, no hydro: shear, vortex, Taylor-Green, turbulence, collapse, expansion, sheets, interpenetrating streams, long thin cells |
 | `hydro` | HLLC and HLL against reference fluxes and under rotation; uniform states stay uniform, conservation to rounding, bit-identical runs, the two update loops agree to rounding on jittered and uniform meshes; moving mesh: uniform state with a bulk velocity, conservation, Galilean invariance of a moving blast |
 
 ```sh
@@ -348,8 +350,21 @@ research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
   GPU in the last bits; the A100 runs are bit-identical run to run.
 - Clipping alone is not watertight on uniform random input at 2.1M cells;
   the exact start makes the mesh exact.
-- Snapped duplicates (two particles in one grid cell) make every predicate
-  flat; nothing repairs them.
+- Snapped duplicates (two particles on one grid position; grid step box / 2^30):
+  a start or a rebuild refuses them with `the start is not exact`. On the host
+  fallback a duplicate arriving in a step is **not** detected: a particle
+  silently leaves the mesh, with volume 0 and no error (#17). The default
+  fallback goes there from n of about 9000, so a caller must keep particles
+  apart. After any exception the `Mesh` object must not be updated again: the
+  next `update` crashes (#19). Zero particles crash too (#20).
+- A face of more than 64 corners has wrong area, volumes and closure, with no
+  error (#18); no distorting flow has come near it (at most 19 corners).
+- A cell with more than about 128 neighbours can make the start refuse, with the
+  same message: spheres of 800+ particles, half of 512k or more particles in a
+  small ball beside a sparse background (#21).
+- Geometry rounds with the positions: the relative volume of a cell h grid
+  steps wide is good to about 4e-8 / h. Exact down to clumps of 512 steps
+  (error 8e-10), and particles one grid step apart are still exact.
 - The device repair breaks down near one spacing of motion per step
   (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU), repair limited to active regions, and

@@ -204,4 +204,39 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
     return r;
 }
 
+// A mesh and the clipping disagree on faces: who is right? The largest faces
+// the clipping lacks, each against brute-force clipping of its owner cell.
+template <class M>
+void arbitrate(const M& mesh, std::ostream& out, int faces = 8) {
+    const Positions x = snapped(mesh);
+    const Reference reference = clipped(x, mesh.sides());
+    long long bad_status = 0;
+    for (const int s : reference.status) bad_status += s != shell_voronoi::ok;
+    const auto owner = to_host(mesh.owner());
+    const auto neighbour = to_host(mesh.neighbour());
+    const auto area = face_areas(mesh);
+    const auto volume = to_host(mesh.volume());
+    std::vector<std::pair<double, int>> extra;
+    for (int f = 0; f < mesh.faces(); ++f) {
+        const auto& n = reference.neighbours[owner(f)];
+        if (std::binary_search(n.begin(), n.end(), neighbour(f))) continue;
+        extra.push_back({std::sqrt(area(f, 0) * area(f, 0) + area(f, 1) * area(f, 1) + area(f, 2) * area(f, 2)), f});
+    }
+    std::sort(extra.rbegin(), extra.rend());
+    out << "arbitrate: extra faces " << extra.size() << ", cells of the clipping not ok " << bad_status << "\n";
+    const auto g = grid_of(mesh);
+    const long double step2 = g.step * g.step, step3 = step2 * g.step;
+    for (int k = 0; k < std::min<int>(faces, extra.size()); ++k) {
+        const int f = extra[k].second, i = owner(f), j = neighbour(f);
+        const oracle::Cell cell = oracle::voronoi_cell(g, i);
+        const auto it = cell.area.find(j);
+        out << "  face " << f << " (" << i << "," << j << ") area " << extra[k].first << " status " << reference.status[i] << ","
+            << reference.status[j] << " brute "
+            << (it == cell.area.end() ? std::string("has no such face")
+                                      : "has it, area " + sci(double(std::sqrt(oracle::dot(it->second, it->second)) * step2)))
+            << "; volume of i: mesh " << volume(i) << " clipping " << reference.volume[i] << " brute "
+            << double(cell.volume * step3) << "\n";
+    }
+}
+
 }  // namespace mesh_check

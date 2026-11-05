@@ -439,6 +439,7 @@ inline Summary run(const Options& o) {
         }
         if (rebuild) {
             const Comparison c = compare_with_rebuild(mesh, mesh_check::snapped(mesh));
+            if (!c.pass()) mesh_check::arbitrate(mesh, out);
             s.volume = std::max(s.volume, c.volume);
             verdict += c.pass() && std::abs(c.total - 1) < 1e-11 ? " rebuild=PASS" : " rebuild=FAIL";
             if ((!c.pass() || std::abs(c.total - 1) >= 1e-11) && s.wrong_step < 0) {
