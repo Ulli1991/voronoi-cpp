@@ -343,7 +343,7 @@ second-order MUSCL-Hancock with the MC limiter. Points are regularised as
 AREPO next generation does without a face angle: a drift towards the
 density-displaced centroid when it is more than 0.75 cell radii away.
 
-M cell updates/s, one A100 40 GB at 1305 MHz (ravg1002, job 31888427, Sod,
+M cell updates/s, one A100 40 GB at 1095 MHz (ravg1002, job 31888427, Sod,
 HLLC, 2000 steps, 200 at 2^24; hydro only is a static step, whole step a
 moving one with the order check):
 
