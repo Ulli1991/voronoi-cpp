@@ -8,10 +8,15 @@
 #include "tet_repair.hpp"
 #include "tet_start.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 // The Voronoi mesh of particles in a periodic box, kept exact as they move:
 // the interface of the hydro code to this library.
@@ -55,10 +60,40 @@ void snap_positions(const ExecSpace& exec, const X& x, const ep::Box& box,
         });
 }
 
-// Why a start failed: cells the clipping could not certify (in one periodic
-// image, see shell_voronoi::level_reach), or else not exact.
-template <class ExecSpace>
-std::string not_exact(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells) {
+// Particles on one position of the 2^30 grid, found by sorting on the host
+// (a refusal only): "" if there are none, else the error naming a pair. Two
+// such particles have no bisector between them, so no Voronoi cell, and
+// voronoi::Mesh refuses them.
+template <class Positions>
+std::string coincident(const Positions& positions) {
+    const auto x = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, positions);
+    std::vector<int> id(x.extent(0));
+    std::iota(id.begin(), id.end(), 0);
+    auto key = [&](int i) { return std::array<double, 3>{x(i, 0), x(i, 1), x(i, 2)}; };
+    std::sort(id.begin(), id.end(), [&](int a, int b) { return std::make_pair(key(a), a) < std::make_pair(key(b), b); });
+    long long extra = 0;
+    int first = -1, second = -1;
+    for (std::size_t i = 1; i < id.size(); ++i) {
+        if (key(id[i]) != key(id[i - 1])) continue;
+        if (extra++ == 0) {
+            first = id[i - 1];
+            second = id[i];
+        }
+    }
+    if (extra == 0) return "";
+    return "voronoi::Mesh: particles " + std::to_string(first) + " and " + std::to_string(second) +
+           " are on one position of the snapping grid (" + std::to_string(extra) + " such particles in all" +
+           "): a doubled particle has no Voronoi cell; move or merge them";
+}
+
+// Why a start failed: coincident particles, cells the clipping could not
+// certify (in one periodic image, see shell_voronoi::level_reach), or else
+// not exact.
+template <class ExecSpace, class Positions>
+std::string not_exact(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
+                      const Positions& positions) {
+    const std::string pair = coincident(positions);
+    if (!pair.empty()) return pair;
     int uncertified = 0;
     const auto status = cells.status;
     Kokkos::parallel_reduce(
@@ -195,7 +230,7 @@ public:
                 report.start = tet_start::build(exec_, grid, cells, tets_);
             }
             ring_entries_ = cells.capacity();
-            if (!report.start.exact) throw std::runtime_error(detail::not_exact(exec_, cells));
+            if (!report.start.exact) throw std::runtime_error(detail::not_exact(exec_, cells, positions_));
         }
         // Capacities: 1/8 more tetrahedra and 1/32 more faces than the
         // starting mesh has (ring pools 1/2 more: room to append between

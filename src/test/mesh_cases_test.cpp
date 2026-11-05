@@ -239,7 +239,6 @@ void coincident_cases() {
     for (const auto& [mode, label] : fallbacks)
         for (const int pairs : {1, 4, 64}) {
             const voronoi::Fallback fallback = mode;
-            const int issue = mode == voronoi::Fallback::host ? 17 : 0;
             add("coincident.step.fallback." + label + "." + std::to_string(pairs), [=](Check& c) {
                 Points p = make_points("jittered", 4096);
                 Mesh m(Exec{}, 1.0);
@@ -254,7 +253,7 @@ void coincident_cases() {
                     for (auto& q : p) q[0] = wrap(q[0] + 1e-3);  // rigid: the pairs stay
                     step_or_refused(c, "the pairs move on, step " + std::to_string(s), m, p, refused);
                 }
-            }, issue);
+            });
         }
     for (const int n : {8000, 9261, 12167, 32768, 262144})
         add("coincident.step.default." + std::to_string(n), [=](Check& c) {
@@ -265,7 +264,43 @@ void coincident_cases() {
             p[50] = p[51];
             bool refused = false;
             step_or_refused(c, "a pair lands on one position, default fallback, n=" + std::to_string(n), m, p, refused, 4);
-        }, n >= 9000 ? 17 : 0);
+            c.expect(refused, "refused");
+        });
+    // The refusal says what is wrong: the pair, by id. At the start, at each
+    // fallback during a step, and with the pair apart in double.
+    auto names_pair = [](Check& c, const std::string& name, Mesh& m, const Points& p, int a, int b) {
+        const std::string pa = std::to_string(a), pb = std::to_string(b);
+        try {
+            m.update(to_device(p));
+            c.expect(false, name + ": refused");
+        } catch (const std::exception& e) {
+            const std::string what = e.what();
+            c.expect(what.find("particles " + pa + " and " + pb + " ") != std::string::npos, name + ": names the pair: " + what);
+        }
+    };
+    add("coincident.message.start", [=](Check& c) {
+        Points p = make_points("jittered", 4096);
+        p[7] = p[1000];
+        Mesh m(Exec{}, 1.0);
+        names_pair(c, "at the start", m, p, 7, 1000);
+    });
+    add("coincident.message.snapped", [=](Check& c) {
+        Points p = make_points("jittered", 4096);
+        p[7] = p[1000];
+        p[7][0] += 0.25 * grid_step;
+        Mesh m(Exec{}, 1.0);
+        names_pair(c, "apart in double, one grid position", m, p, 7, 1000);
+    });
+    for (const auto& [mode, label] : fallbacks)
+        for (const int n : {4096, 12167})
+            add("coincident.message.step." + label + "." + std::to_string(n), [=, fallback = mode](Check& c) {
+                Points p = make_points("jittered", n);
+                Mesh m(Exec{}, 1.0);
+                m.set_fallback(fallback);
+                build(c, "start", m, p, Expect::exact, 4);
+                p[50] = p[51];
+                names_pair(c, "during a step", m, p, 50, 51);
+            });
     add("coincident.step.mass_merge", [](Check& c) {
         // A quarter of the particles land on their neighbour in one step.
         Points p = make_points("jittered", 4096);

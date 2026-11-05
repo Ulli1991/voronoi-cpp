@@ -246,7 +246,7 @@ inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets)
 // fresh Delaunay tetrahedralization of the particles two rings around, if
 // the new stars fit the old boundary exactly; otherwise add the particles of
 // the faces that did not fit to the stars and retry. Returns the new
-// tetrahedra, or nothing after eight tries.
+// tetrahedra, or nothing after eight tries or if a particle would be lost.
 inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     std::vector<int> seeds = vertices_of(m, u < 0 ? std::vector<int>{t} : std::vector<int>{t, u});
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -291,7 +291,17 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
             }
         const bool fits = !fresh.empty() && !reaches_corner &&
                           std::all_of(boundary.begin(), boundary.end(), [](const auto& b) { return b.second == 0; });
-        if (fits) return replace(m, old, fresh);
+        if (fits) {
+            // A particle the new stars lack would leave the mesh (it shares a
+            // grid position with another: no tetrahedron holds both, and flips
+            // never bring it back). No wider region helps; stuck, so a rebuild
+            // refuses the input.
+            std::vector<int> corners;
+            for (const Tet& s : fresh) corners.insert(corners.end(), s.begin(), s.end());
+            std::sort(corners.begin(), corners.end());
+            if (!std::includes(corners.begin(), corners.end(), ring.begin(), ring.end())) return {};
+            return replace(m, old, fresh);
+        }
         // Widen the stars over the particles of the faces that did not fit
         // (over the whole ring if that adds none).
         const std::size_t before = seeds.size();
