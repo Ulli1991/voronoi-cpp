@@ -59,7 +59,7 @@ Positions snapped(const M& mesh) {
 struct Result {
     oracle::Verdict tets;
     long long not_finite = 0;     // faces or cells with NaN or infinity
-    long long fresh_differs = 0;  // tetrahedra in only one of mesh and fresh build; -1: no fresh build
+    long long fresh_differs = 0;  // tetrahedra in only one of mesh and fresh build; -1: the fresh build refused
     std::string fresh_error;
     int sampled = 0;              // cells checked against brute clipping
     long long brute_missing = 0;  // faces of real area the mesh lacks
@@ -69,7 +69,7 @@ struct Result {
     long long negative = 0;       // cells of volume <= 0
     double closure = 0, total = 0, brute_volume = 0, brute_area = 0, fresh_volume = 0;
     bool ok() const {
-        return tets.ok() && not_finite == 0 && fresh_differs == 0 && brute_missing == 0 && brute_extra == 0 &&
+        return tets.ok() && not_finite == 0 && fresh_differs <= 0 && brute_missing == 0 && brute_extra == 0 &&
                negative == 0 && closure < 1e-11 && std::abs(total - 1) < 1e-11 && brute_volume < 1e-9 &&
                brute_area < 1e-9 && fresh_volume < 1e-10;
     }

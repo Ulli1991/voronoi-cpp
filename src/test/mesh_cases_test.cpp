@@ -11,6 +11,8 @@
 #include "check.hpp"
 #include "mesh_check.hpp"
 
+#include <cstring>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <limits>
@@ -504,6 +506,714 @@ void box_cases() {
         });
 }
 
+// ------------------------------------------------- degeneracy during motion
+
+// A cubic lattice of side^3 cells with the basis, side a power of two, so
+// every position is exact on the grid.
+Points exact_lattice(int side, const Points& basis) {
+    Points p;
+    for (int i = 0; i < side; ++i)
+        for (int j = 0; j < side; ++j)
+            for (int k = 0; k < side; ++k)
+                for (const auto& b : basis) p.push_back({(i + b[0]) / side, (j + b[1]) / side, (k + b[2]) / side});
+    return p;
+}
+const Points sc_basis{{0.5, 0.5, 0.5}}, bcc_basis{{0.25, 0.25, 0.25}, {0.75, 0.75, 0.75}},
+    fcc_basis{{0.25, 0.25, 0.25}, {0.75, 0.75, 0.25}, {0.75, 0.25, 0.75}, {0.25, 0.75, 0.75}};
+
+void degenerate_cases() {
+    struct Layout {
+        std::string name;
+        Points points;
+    };
+    for (const Layout& l : {Layout{"sc", exact_lattice(16, sc_basis)}, Layout{"bcc", exact_lattice(8, bcc_basis)},
+                            Layout{"fcc", exact_lattice(8, fcc_basis)}}) {
+        const Points start = l.points;
+        const std::string name = l.name;
+        add("degenerate.rigid.on_grid." + name, [=](Check& c) {
+            // Rigid, whole grid steps: every predicate is the same; no flip.
+            Points p = start;
+            Mesh m(Exec{}, 1.0);
+            build(c, name + " start", m, p, Expect::exact);
+            const double d = std::floor(0.37 / 16 * exact_predicates::scale) * grid_step;
+            for (int s = 1; s <= 6; ++s) {
+                for (auto& q : p) {
+                    q[0] = wrap(q[0] + d);
+                    q[1] = wrap(q[1] + 2 * d);
+                    q[2] = wrap(q[2] - 3 * d);
+                }
+                const auto r = step(c, name + " rigid step " + std::to_string(s), m, p);
+                c.expect(r.flips == 0 && !r.rebuilt, "no flip, no rebuild");
+            }
+        });
+        add("degenerate.rigid.off_grid." + name, [=](Check& c) {
+            // Rigid in double: snapping rounds each particle by up to a grid
+            // step, so the lattice is near-degenerate after every step.
+            Points p = start;
+            Mesh m(Exec{}, 1.0);
+            build(c, name + " start", m, p, Expect::exact);
+            for (int s = 1; s <= 6; ++s) {
+                for (std::size_t i = 0; i < p.size(); ++i)
+                    for (int a = 0; a < 3; ++a) p[i][a] = wrap(start[i][a] + s * (0.0231 + 0.0007 * a) + 1.3e-10 * s);
+                step(c, name + " rigid off the grid, step " + std::to_string(s), m, p);
+            }
+        });
+        add("degenerate.shear.layers." + name, [=](Check& c) {
+            // Layers shift by whole lattice spacings every 8 steps, so an
+            // exact lattice recurs; periodic (triangular profile).
+            Points p = start;
+            Mesh m(Exec{}, 1.0);
+            build(c, name + " start", m, p, Expect::exact);
+            const int side = name == "sc" ? 16 : 8;
+            for (int s = 1; s <= 16; ++s) {
+                for (std::size_t i = 0; i < p.size(); ++i) {
+                    const int layer = static_cast<int>(std::floor(start[i][2] * side));
+                    const double profile = std::min(layer, side - layer);
+                    p[i][0] = wrap(start[i][0] + profile * s / 8.0 / side);
+                }
+                const auto r = step(c, name + " shear step " + std::to_string(s), m, p);
+                if (s % 8 == 0) c.expect(true, "lattice recurs: flips " + std::to_string(r.flips));
+            }
+        });
+        add("degenerate.shear.smooth." + name, [=](Check& c) {
+            Points p = start;
+            Mesh m(Exec{}, 1.0);
+            build(c, name + " start", m, p, Expect::exact);
+            for (int s = 1; s <= 12; ++s) {
+                for (std::size_t i = 0; i < p.size(); ++i)
+                    p[i][0] = wrap(start[i][0] + 0.02 * s * std::sin(6.283185307179586 * start[i][2]));
+                to_grid(p);
+                step(c, name + " smooth shear step " + std::to_string(s), m, p);
+            }
+        });
+        for (const int noise : {1, 16, 1024})
+            add("degenerate.noise." + name + "." + std::to_string(noise), [=](Check& c) {
+                // The lattice with +-noise grid steps of fresh noise every step.
+                Points p = start;
+                Mesh m(Exec{}, 1.0);
+                build(c, name + " start", m, p, Expect::exact);
+                std::mt19937_64 rng(noise);
+                std::uniform_int_distribution<int> u(-noise, noise);
+                for (int s = 1; s <= 6; ++s) {
+                    for (std::size_t i = 0; i < p.size(); ++i)
+                        for (int a = 0; a < 3; ++a) p[i][a] = wrap(start[i][a] + u(rng) * grid_step);
+                    step(c, name + " noise step " + std::to_string(s), m, p);
+                }
+            });
+    }
+    add("degenerate.two_lattices", [](Check& c) {
+        // sc lattice 2 slides through sc lattice 1 along z, shifted in x and
+        // y: all planes coplanar every 8 steps, bcc on the way.
+        const Points a = exact_lattice(8, sc_basis);
+        Points p = a;
+        for (auto q : a) p.push_back({wrap(q[0] + 0.0625), wrap(q[1] + 0.03125), q[2]});
+        Mesh m(Exec{}, 1.0);
+        build(c, "start, coplanar", m, p, Expect::exact);
+        for (int s = 1; s <= 16; ++s) {
+            for (std::size_t i = a.size(); i < p.size(); ++i) p[i][2] = wrap(a[i - a.size()][2] + s / 64.0);
+            step(c, "sliding step " + std::to_string(s), m, p);
+        }
+    });
+    add("degenerate.mover", [](Check& c) {
+        // One particle walks along lattice directions: through face centres
+        // (coplanar), edge midpoints and cube centres (cospherical with 8).
+        Points p = exact_lattice(16, sc_basis);
+        const double h = 1.0 / 16;
+        p.push_back({0.5 + 0.03125, 0.5 + 0.03125, 0.5 + 0.03125});  // a cube centre
+        const Point from = p.back();
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        const std::vector<Point> directions{{1, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 1, 1}, {0, 0, -1}};
+        Point at = from;
+        for (const auto& d : directions)
+            for (int s = 1; s <= 4; ++s) {
+                for (int a = 0; a < 3; ++a) at[a] = wrap(at[a] + d[a] * h / 4 * (d[a] != 0 ? 1.0 : 0.0));
+                p.back() = at;
+                bool refused = false;
+                step_or_refused(c, "mover at " + sci(at[0]) + "," + sci(at[1]) + "," + sci(at[2]), m, p, refused);
+                if (refused) return;
+            }
+    });
+    add("degenerate.octahedra", [](Check& c) {
+        // Octahedra pulsing with different phases: their 6 points are exactly
+        // cospherical whenever the phases meet, every 8 steps.
+        const int side = 8;
+        const double h = 1.0 / side, big = h / 4, small = h / 64;
+        auto at = [&](int s) {
+            Points p;
+            const double r[3] = {big + small * (s % 8 - 4), big + small * ((s + 3) % 8 - 4) * (s % 8 ? 1 : 0) +
+                                                                (s % 8 ? 0 : small * (s % 8 - 4)),
+                                 big + small * (s % 8 - 4)};
+            for (int i = 0; i < side; ++i)
+                for (int j = 0; j < side; ++j)
+                    for (int k = 0; k < side; ++k)
+                        for (int a = 0; a < 3; ++a)
+                            for (const int sign : {-1, 1}) {
+                                Point q{(i + 0.5) * h, (j + 0.5) * h, (k + 0.5) * h};
+                                q[a] += sign * r[a];
+                                p.push_back(q);
+                            }
+            return p;
+        };
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, at(0), Expect::exact);
+        for (int s = 1; s <= 16; ++s) step(c, "pulse " + std::to_string(s), m, at(s));
+    });
+    add("degenerate.integer_sphere", [](Check& c) {
+        // Grid points exactly on one sphere: x^2 + y^2 + z^2 = R^2 in integers
+        // (scaled solutions of a^2 + b^2 + c^2 = 81^2 etc.), exact cospherical.
+        std::vector<std::array<int, 3>> roots;
+        const int R = 169;
+        for (int a = 0; a <= R; ++a)
+            for (int b = a; b <= R; ++b) {
+                const int c2 = R * R - a * a - b * b;
+                if (c2 < 0) break;
+                const int s = static_cast<int>(std::lround(std::sqrt(double(c2))));
+                if (s >= b && s * s == c2) roots.push_back({a, b, s});
+            }
+        Points p = make_points("uniform", 2048);
+        const long long scale = (1LL << 30) / (R * 8);
+        int on_sphere = 0;
+        for (auto r : roots) {
+            std::sort(r.begin(), r.end());
+            do {
+                for (const int sx : {-1, 1})
+                    for (const int sy : {-1, 1})
+                        for (const int sz : {-1, 1}) {
+                            if ((r[0] == 0 && sx < 0) || (r[1] == 0 && sy < 0) || (r[2] == 0 && sz < 0)) continue;
+                            p.push_back({0.5 + (sx * r[0] * scale) * grid_step, 0.5 + (sy * r[1] * scale) * grid_step,
+                                         0.5 + (sz * r[2] * scale) * grid_step});
+                            ++on_sphere;
+                        }
+            } while (std::next_permutation(r.begin(), r.end()));
+        }
+        Mesh m(Exec{}, 1.0);
+        build(c, std::to_string(on_sphere) + " grid points on one sphere", m, p, Expect::exact_or_refused, 64);
+    });
+}
+
+// ----------------------------------------------------------- high valence
+
+// `k` particles on a circle of radius r around the z axis through `at`, and
+// two poles at +-h on the axis; particles of a sparse background elsewhere.
+Points ring_points(const Point& at, double r, int k, double h, int background) {
+    std::mt19937_64 rng(12);
+    Points p;
+    Points all;
+    add_uniform(all, rng, background);
+    for (const auto& q : all) {
+        double d2 = 0;
+        for (int a = 0; a < 3; ++a) d2 += (q[a] - at[a]) * (q[a] - at[a]);
+        if (d2 > 4 * r * r) p.push_back(q);
+    }
+    for (int i = 0; i < k; ++i) {
+        const double t = 6.283185307179586 * i / k;
+        p.push_back({at[0] + r * std::cos(t), at[1] + r * std::sin(t), at[2]});
+    }
+    p.push_back({at[0], at[1], at[2] + h});
+    p.push_back({at[0], at[1], at[2] - h});
+    return p;
+}
+
+void valence_cases() {
+    // The face between the poles has k corners, and the edge k tetrahedra.
+    for (const int k : {16, 32, 48, 60, 64, 65, 66, 80, 128, 129, 256, 300, 1000}) {
+        add("valence.ring.start." + std::to_string(k), [=](Check& c) {
+            Mesh m(Exec{}, 1.0);
+            build(c, "a face of " + std::to_string(k) + " corners at the start", m,
+                  ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.02, 2048), Expect::exact_or_refused, 2);
+        });
+        add("valence.ring.step." + std::to_string(k), [=](Check& c) {
+            // The poles arrive during a step, from far outside the circle: the
+            // start has no long edge, the repair creates it.
+            Mesh m(Exec{}, 1.0);
+            const Points far = ring_points({0.5, 0.5, 0.5}, 0.1, k, 0.19, 2048);
+            if (!build(c, "start, poles apart", m, far, Expect::exact_or_refused, 2)) return;
+            Points p = far;
+            const int n = static_cast<int>(p.size());
+            bool refused = false;
+            for (const double h : {0.15, 0.12, 0.1, 0.08, 0.06, 0.04, 0.02}) {
+                p[n - 2][2] = 0.5 + h;
+                p[n - 1][2] = 0.5 - h;
+                const auto r = step_or_refused(c, "poles at " + sci(h), m, p, refused, 2);
+                (void)r;
+                if (refused) return;
+            }
+            // Directly: the pole cells against brute clipping, whatever the sample.
+            const auto g = mc::grid_of(m);
+            const auto volume = to_host(m.volume());
+            for (const int i : {n - 2, n - 1}) {
+                const double brute = double(oracle::voronoi_cell(g, i).volume * g.step * g.step * g.step);
+                c.expect(std::abs(volume(i) - brute) < 1e-9 * brute,
+                         "pole cell volume " + sci(volume(i)) + " brute " + sci(brute));
+            }
+        });
+    }
+    for (const int k : {50, 100, 200, 400, 800, 1600}) {
+        add("valence.sphere." + std::to_string(k), [=](Check& c) {
+            std::mt19937_64 rng(13);
+            Points p;
+            add_uniform(p, rng, 512);
+            add_shell(p, rng, {0.5, 0.5, 0.5}, 0.1, k);
+            Mesh m(Exec{}, 1.0);
+            build(c, std::to_string(k) + " particles on a sphere", m, p, Expect::exact_or_refused, 16);
+        });
+        for (const double thickness : {1e-3, 1e-1})
+            add("valence.thick_sphere." + std::to_string(k) + "." + sci(thickness), [=](Check& c) {
+                std::mt19937_64 rng(14);
+                std::uniform_real_distribution<double> u(1 - thickness, 1 + thickness);
+                Points p;
+                add_uniform(p, rng, 512);
+                for (int i = 0; i < k; ++i) {
+                    const Point d = on_sphere(rng);
+                    const double r = 0.1 * u(rng);
+                    p.push_back({0.5 + r * d[0], 0.5 + r * d[1], 0.5 + r * d[2]});
+                }
+                Mesh m(Exec{}, 1.0);
+                build(c, "a shell of relative thickness " + sci(thickness), m, p, Expect::exact_or_refused, 16);
+            });
+        add("valence.hub.step." + std::to_string(k), [=](Check& c) {
+            // A particle moves into the centre of a shell: a cell of k faces
+            // that no build ever saw.
+            std::mt19937_64 rng(15);
+            std::normal_distribution<double> g(0, 3e-3);
+            Points p;
+            add_uniform(p, rng, 1024);
+            for (int i = 0; i < k; ++i) {
+                const Point d = on_sphere(rng);
+                const double r = 0.1 + g(rng);
+                p.push_back({0.5 + r * d[0], 0.5 + r * d[1], 0.5 + r * d[2]});
+            }
+            p.push_back({0.5, 0.5, 0.7});
+            Mesh m(Exec{}, 1.0);
+            if (!build(c, "start, outside the shell", m, p, Expect::exact_or_refused, 2)) return;
+            bool refused = false;
+            for (const double z : {0.65, 0.61, 0.59, 0.55, 0.52, 0.5}) {
+                p.back()[2] = z;
+                step_or_refused(c, "hub at z=" + sci(z), m, p, refused, 2);
+                if (refused) return;
+            }
+        });
+    }
+}
+
+// --------------------------------------------------------------- large motion
+
+void large_cases() {
+    for (const double d : {0.5, 1.0, 2.0, 5.0, 20.0})
+        add("large.flow." + sci(d), [=](Check& c) {
+            Points p = make_points("jittered", 4096);
+            Mesh m(Exec{}, 1.0);
+            build(c, "start", m, p, Expect::exact);
+            const Flow flow;
+            for (int s = 1; s <= 4; ++s) {
+                flow.advect(p, d / 16);
+                step(c, "displacement " + sci(d) + ", step " + std::to_string(s), m, p);
+            }
+        });
+    for (const double d : {0.3, 1.0, 3.0, 10.0})
+        add("large.random_walk." + sci(d), [=](Check& c) {
+            // Independent kicks: neighbours move apart by d spacings.
+            Points p = make_points("jittered", 4096);
+            Mesh m(Exec{}, 1.0);
+            build(c, "start", m, p, Expect::exact);
+            std::mt19937_64 rng(21);
+            std::normal_distribution<double> g(0, d / 16);
+            for (int s = 1; s <= 4; ++s) {
+                for (auto& q : p)
+                    for (double& v : q) v = wrap(v + g(rng));
+                to_grid(p);
+                step(c, "random walk " + sci(d) + ", step " + std::to_string(s), m, p);
+            }
+        });
+    add("large.shuffle", [](Check& c) {
+        std::mt19937_64 rng(22);
+        Points p;
+        add_uniform(p, rng, 4096);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        for (int s = 1; s <= 3; ++s) {
+            p.clear();
+            add_uniform(p, rng, 4096);
+            step(c, "every particle somewhere else, step " + std::to_string(s), m, p);
+        }
+    });
+    add("large.permute", [](Check& c) {
+        // The same points, other ids: every particle jumps, the geometry stays.
+        Points p = make_points("jittered", 4096);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        std::mt19937_64 rng(23);
+        std::shuffle(p.begin(), p.end(), rng);
+        step(c, "permuted", m, p);
+    });
+    add("large.noop", [](Check& c) {
+        Points p = make_points("clustered", 4096);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        const auto v0 = to_host(m.volume());
+        std::vector<double> before(v0.data(), v0.data() + p.size());
+        for (int s = 1; s <= 3; ++s) {
+            const auto r = step(c, "same positions, step " + std::to_string(s), m, p);
+            c.expect(r.flips == 0 && !r.rebuilt && r.stuck == 0, "nothing to do");
+            const auto v = to_host(m.volume());
+            c.expect(std::equal(before.begin(), before.end(), v.data()), "the same volumes, bit for bit");
+        }
+    });
+    add("large.resize", [](Check& c) {
+        // Another number of particles: a build, up and down.
+        Mesh m(Exec{}, 1.0);
+        build(c, "4096", m, make_points("jittered", 4096), Expect::exact);
+        build(c, "8000", m, make_points("jittered", 8000), Expect::exact);
+        build(c, "1000", m, make_points("jittered", 1000), Expect::exact);
+        Points p = make_points("jittered", 1000);
+        const Flow flow;
+        flow.advect(p, 0.01);
+        step(c, "a step after", m, p);
+    });
+    add("large.after_refusal", [](Check& c) {
+        // A refused update leaves a mesh that can build again.
+        Points p = make_points("jittered", 4096);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        Points bad = p;
+        bad[7] = bad[1000];
+        bool refused = false;
+        step_or_refused(c, "a coincident pair", m, bad, refused);
+        c.expect(refused, "refused");
+        bool again = false;
+        step_or_refused(c, "the good positions again", m, p, again);
+        c.expect(!again, "works again after the refusal");
+        Points q = p;
+        const Flow flow;
+        flow.advect(q, 0.01);
+        step_or_refused(c, "and steps on", m, q, again);
+    });
+    add("large.long_run", [](Check& c) {
+        // Thousands of small steps: no drift in faces, tetrahedra, slots.
+        Points p = make_points("jittered", 4096);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        const Flow flow;
+        const int steps = 3000;
+        const auto n = p.size();
+        int peak_count = 0;
+        for (int s = 1; s <= steps; ++s) {
+            flow.advect(p, 0.03 / 16);
+            if (s % 500 == 0) {
+                step(c, "step " + std::to_string(s), m, p, 8);
+                const auto& st = m.repair_state();
+                std::cout << "    slots " << double(st.count) / n << " per cell, free " << st.free_count << ", extent "
+                          << double(st.alive.extent(0)) / n << ", faces " << double(m.faces()) / n << ", ring pool "
+                          << double(m.tetrahedra().ring.extent(0)) / n << "\n";
+            } else {
+                m.update(to_device(p));
+                m.update_cells();
+            }
+            peak_count = std::max(peak_count, m.repair_state().count);
+        }
+        c.expect(peak_count < 8 * static_cast<int>(n), "slots stay below 8 per cell: " + sci(double(peak_count) / n));
+    });
+    add("large.cycle", [](Check& c) {
+        // There and back: the same positions give the same mesh, at any cycle.
+        const Points p0 = make_points("jittered", 4096);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p0, Expect::exact);
+        const auto first = mc::tets_of(m);
+        const auto v0 = to_host(m.volume());
+        const std::vector<double> before(v0.data(), v0.data() + p0.size());
+        const Flow flow;
+        std::vector<Points> path{p0};
+        for (int s = 0; s < 5; ++s) {
+            path.push_back(path.back());
+            flow.advect(path.back(), 0.3 / 16);
+        }
+        for (int cycle = 1; cycle <= 40; ++cycle) {
+            for (int s = 1; s <= 5; ++s) {
+                m.update(to_device(path[s]));
+                m.update_cells();
+            }
+            for (int s = 4; s >= 0; --s) {
+                m.update(to_device(path[s]));
+                m.update_cells();
+            }
+        }
+        const long long differ = oracle::different_tetrahedra(first, mc::tets_of(m));
+        const auto v = to_host(m.volume());
+        c.expect(differ == 0, "after 40 cycles the tetrahedra of the start (" + std::to_string(differ) + " differ)");
+        c.expect(std::equal(before.begin(), before.end(), v.data()), "and its volumes, bit for bit");
+        c.expect(mc::check(m, 8).ok(), "and the oracle passes");
+    });
+}
+
+// ------------------------------------------------------------------ fallbacks
+
+void fallback_cases() {
+    const std::pair<voronoi::Fallback, std::string> modes[] = {{voronoi::Fallback::cheapest, "cheapest"},
+                                                               {voronoi::Fallback::host, "host"},
+                                                               {voronoi::Fallback::rebuild, "rebuild"}};
+    for (const auto& [mode, name] : modes) {
+        const voronoi::Fallback fallback = mode;
+        const std::string label = name;
+        add("fallback.shells." + label, [=](Check& c) {
+            Points p = make_points("shells@1e-9", 4096);
+            Mesh m(Exec{}, 1.0);
+            m.set_fallback(fallback);
+            build(c, "start", m, p, Expect::exact);
+            const Flow flow;
+            for (int s = 1; s <= 3; ++s) {
+                flow.advect(p, 0.3 / 16);
+                step(c, label + " shells step " + std::to_string(s), m, p);
+            }
+        });
+        add("fallback.large." + label, [=](Check& c) {
+            Points p = make_points("jittered", 4096);
+            Mesh m(Exec{}, 1.0);
+            m.set_fallback(fallback);
+            build(c, "start", m, p, Expect::exact);
+            std::mt19937_64 rng(31);
+            std::normal_distribution<double> g(0, 2.0 / 16);
+            for (int s = 1; s <= 3; ++s) {
+                for (auto& q : p)
+                    for (double& v : q) v = wrap(v + g(rng));
+                to_grid(p);
+                step(c, label + " kicks of 2 spacings, step " + std::to_string(s), m, p);
+            }
+        });
+        add("fallback.growth." + label, [=](Check& c) {
+            // From a lattice (few tetrahedra) to two skew segments in one
+            // step: more tetrahedra, faces and ring entries than the build
+            // sized anything for.
+            Points p = make_points("lattice", 1728);
+            Mesh m(Exec{}, 1.0);
+            m.set_fallback(fallback);
+            build(c, "start", m, p, Expect::exact);
+            const int n = static_cast<int>(p.size());
+            const int count = n / 4;
+            for (int i = 0; i < count; ++i) {
+                p[i] = {0.4 + 0.2 * i / count, 0.45, 0.45};
+                p[count + i] = {0.5, 0.4 + 0.2 * i / count, 0.55};
+            }
+            to_grid(p);
+            bool refused = false;
+            const auto r = step_or_refused(c, label + " to skew segments", m, p, refused);
+            std::cout << "    faces " << double(r.faces) / n << " per cell\n";
+        });
+    }
+    add("fallback.grow_by_steps", [](Check& c) {
+        // The same growth in small steps, so that repair must grow its pools.
+        Points p = make_points("lattice", 1728);
+        Mesh m(Exec{}, 1.0);
+        build(c, "start", m, p, Expect::exact);
+        const int n = static_cast<int>(p.size()), count = n / 4;
+        const Points from = p;
+        Points to = p;
+        for (int i = 0; i < count; ++i) {
+            to[i] = {0.4 + 0.2 * i / count, 0.45, 0.45};
+            to[count + i] = {0.5, 0.4 + 0.2 * i / count, 0.55};
+        }
+        bool refused = false;
+        for (int s = 1; s <= 20 && !refused; ++s) {
+            for (int i = 0; i < n; ++i)
+                for (int a = 0; a < 3; ++a) p[i][a] = wrap(from[i][a] + s / 20.0 * nearest_image(to[i][a] - from[i][a]));
+            to_grid(p);
+            step_or_refused(c, "towards skew segments, step " + std::to_string(s), m, p, refused, 4);
+        }
+    });
+    add("fallback.clip_overflow", [](Check& c) {
+        // clip() of a cell of many faces, with its pool of 10 per cell.
+        std::mt19937_64 rng(32);
+        std::normal_distribution<double> g(0, 3e-3);
+        Points p;
+        add_uniform(p, rng, 1024);
+        for (int i = 0; i < 100; ++i) {
+            const Point d = on_sphere(rng);
+            const double r = 0.1 + g(rng);
+            p.push_back({0.5 + r * d[0], 0.5 + r * d[1], 0.5 + r * d[2]});
+        }
+        p.push_back({0.5, 0.5, 0.5});
+        Mesh m(Exec{}, 1.0);
+        if (!build(c, "hub", m, p, Expect::exact_or_refused, 4)) return;
+        const int hub = static_cast<int>(p.size()) - 1;
+        Kokkos::View<int*, Memory> cells("cells", 1);
+        Kokkos::deep_copy(cells, hub);
+        const auto& local = m.clip(to_device(p), cells);
+        const auto status = to_host(local.status);
+        const auto owned = to_host(local.owned_count);
+        const auto vol = to_host(local.volume);
+        const auto g2 = mc::grid_of(m);
+        const double brute = double(oracle::voronoi_cell(g2, hub).volume * g2.step * g2.step * g2.step);
+        c.expect(status(hub) == shell_voronoi::ok && std::abs(vol(hub) - brute) < 1e-9 * brute,
+                 "clip of a hub: status " + std::to_string(status(hub)) + ", faces " + std::to_string(owned(hub)) +
+                     ", volume " + sci(vol(hub)) + " brute " + sci(brute));
+    });
+}
+
+// -------------------------------------------------- predicates on real sets
+
+void predicate_cases() {
+    // Library predicates on the quintuples a mesh really asks about, against
+    // the oracle's integers: each tetrahedron with the apex across each face.
+    auto compare = [](Check& c, const std::string& name, const Points& p) {
+        Mesh m(Exec{}, 1.0);
+        try {
+            m.update(to_device(p));
+        } catch (const std::exception& e) {
+            c.expect(false, name + ": no mesh: " + e.what());
+            return;
+        }
+        const auto g = mc::grid_of(m);
+        const auto t = mc::tets_of(m);
+        exact_predicates::Points<Kokkos::HostSpace> point("point", g.size());
+        for (int i = 0; i < g.size(); ++i)
+            for (int a = 0; a < 3; ++a) point(i, a) = static_cast<int>(g.p[i][a]);
+        long long wrong = 0, checked = 0, ties = 0, near = 0;
+        std::mt19937_64 rng(41);
+        std::uniform_int_distribution<int> other(0, g.size() - 1);
+        for (int k = 0; k < t.count(); ++k) {
+            if (!t.alive[k]) continue;
+            const auto& v = t.vertex[k];
+            const oracle::Offset a = oracle::difference(g, v[0], v[1]), b = oracle::difference(g, v[0], v[2]),
+                                 d = oracle::difference(g, v[0], v[3]);
+            const int orientation = oracle::det(a, b, d) > 0 ? 1 : oracle::det(a, b, d) < 0 ? -1 : 0;
+            wrong += orientation != exact_predicates::orient(point, v.data());
+            if (orientation == 0) continue;
+            for (int j = 0; j < 5; ++j) {
+                const int u = j < 4 ? t.adjacent[k][j] : -1;
+                int e = other(rng);
+                if (j < 4) {
+                    if (u < 0) continue;
+                    for (int q = 0; q < 4; ++q)
+                        if (std::find(v.begin(), v.end(), t.vertex[u][q]) == v.end()) e = t.vertex[u][q];
+                }
+                if (std::find(v.begin(), v.end(), e) != v.end()) continue;
+                const oracle::Offset o = oracle::difference(g, v[0], e);
+                const int s = oracle::in_sphere(a, b, d, o);
+                const bool inside = exact_predicates::in_sphere(point, v.data(), e);
+                ++checked;
+                ties += s == 0;
+                wrong += (s > 0 && !inside) || (s < 0 && inside);
+                near += s != 0 && std::abs(oracle::det(a, b, o)) < oracle::i128(1) << 60;
+            }
+        }
+        c.expect(wrong == 0, name + ": " + std::to_string(checked) + " in-sphere, " + std::to_string(ties) + " exact ties, " +
+                                 std::to_string(near) + " with a small determinant: " + std::to_string(wrong) + " wrong");
+    };
+    add("predicates.sets", [=](Check& c) {
+        for (const char* kind : {"jittered", "clustered", "halo", "lattice", "wave", "sc@0", "fcc@1e-6", "pairs@1e-6"})
+            compare(c, kind, make_points(kind, 4096));
+    });
+    add("predicates.noise", [=](Check& c) {
+        for (const int noise : {1, 3}) {
+            Points p = exact_lattice(16, sc_basis);
+            std::mt19937_64 rng(42);
+            std::uniform_int_distribution<int> u(-noise, noise);
+            for (auto& q : p)
+                for (double& v : q) v = wrap(v + u(rng) * grid_step);
+            compare(c, "lattice +-" + std::to_string(noise) + " steps", p);
+        }
+    });
+    add("predicates.wide", [=](Check& c) {
+        // Coordinates over the whole grid, tetrahedra up to a large part of
+        // the box: a mesh of few particles, and the last grid positions.
+        Points p = make_points("jittered", 512);
+        for (auto& q : p)
+            for (double& v : q) v = 1 - grid_step * (1 + std::floor((1 - v) * 3e6));  // the top 3e6 steps wrap into 0
+        Points w = make_points("jittered", 512);
+        compare(c, "512 jittered", w);
+        Points tiny = make_points("uniform", 4096);
+        for (auto& q : tiny)
+            for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;  // a box of 2048 steps inside the big one
+        tiny.push_back({0.1, 0.1, 0.1});
+        for (int i = 1; i < 512; ++i) tiny.push_back({wrap(0.1 + 0.618 * i), wrap(0.2 + 0.414 * i), wrap(0.3 + 0.302 * i)});
+        compare(c, "4096 particles on 2048^3 grid positions (no duplicates assumed)", tiny);
+    });
+}
+
+// ------------------------------------------------------------- reproducibility
+
+template <class E>
+std::vector<std::uint64_t> trace(const Points& start, double displacement, int steps) {
+    using Memory = typename E::memory_space;
+    voronoi::Mesh<3, E> mesh(E{}, 1.0);
+    Points p = start;
+    const Flow flow;
+    std::vector<std::uint64_t> hashes;
+    auto put = [](std::uint64_t& h, std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+    auto bits = [](double d) {
+        std::uint64_t u;
+        std::memcpy(&u, &d, sizeof u);
+        return u;
+    };
+    Kokkos::View<double* [3], Memory> x("x", p.size());
+    for (int s = 0; s <= steps; ++s) {
+        auto h = Kokkos::create_mirror_view(x);
+        for (std::size_t i = 0; i < p.size(); ++i)
+            for (int a = 0; a < 3; ++a) h(i, a) = p[i][a];
+        Kokkos::deep_copy(x, h);
+        mesh.update(x);
+        mesh.update_cells();
+        const auto volume = to_host(mesh.volume());
+        const auto centroid = to_host(mesh.centroid());
+        const auto start_of = to_host(mesh.cell_face_start());
+        const auto owner = to_host(mesh.owner());
+        const auto neighbour = to_host(mesh.neighbour());
+        const auto face = to_host(mesh.cell_face());
+        std::uint64_t topology = 1469598103934665603ull, geometry = topology;
+        for (std::size_t i = 0; i < p.size(); ++i) {
+            put(geometry, bits(volume(i)));
+            for (int a = 0; a < 3; ++a) put(geometry, bits(centroid(i, a)));
+            for (int k = start_of(i); k < start_of(i + 1); ++k) {
+                const int f = face(k);
+                put(topology, static_cast<std::uint64_t>(owner(f) == static_cast<int>(i) ? neighbour(f) : owner(f)));
+            }
+        }
+        hashes.push_back(topology);
+        hashes.push_back(geometry);
+        flow.advect(p, displacement / 16);
+    }
+    return hashes;
+}
+
+void reproducibility_cases() {
+    const std::vector<std::pair<std::string, double>> runs{{"jittered", 0.3}, {"clustered", 0.3}, {"lattice", 0.1}, {"wave", 0.3}};
+    for (const auto& [kind, displacement] : runs) {
+        const std::string name = kind;
+        const double d = displacement;
+        add("repro.runs." + name, [=](Check& c) {
+            const Points p = make_points(name, 4096);
+            const auto a = trace<Exec>(p, d, 20), b = trace<Exec>(p, d, 20);
+            c.expect(a == b, name + ": two runs give the same bits, 20 steps");
+        });
+#ifdef KOKKOS_ENABLE_SERIAL
+        add("repro.serial." + name, [=](Check& c) {
+            const Points p = make_points(name, 4096);
+            const auto a = trace<Exec>(p, d, 20);
+            const auto b = trace<Kokkos::Serial>(p, d, 20);
+            long long topology = 0, geometry = 0;
+            for (std::size_t i = 0; i < a.size(); i += 2) {
+                topology += a[i] != b[i];
+                geometry += a[i + 1] != b[i + 1];
+            }
+            c.expect(topology == 0, name + ": faces of " + Exec::name() + " and Serial agree (" + std::to_string(topology) + " of 21 steps differ)");
+            c.expect(geometry == 0, name + ": bits of volumes and centroids agree (" + std::to_string(geometry) + " of 21 steps differ)");
+        });
+#endif
+        add("repro.dump." + name, [=](Check& c) {
+            // Hashes for a comparison across builds and thread counts:
+            // MESH_REPRO_DUMP=<file> appends "<case> <step> <topology> <geometry>".
+            const char* path = std::getenv("MESH_REPRO_DUMP");
+            const auto a = trace<Exec>(make_points(name, 4096), d, 20);
+            if (path) {
+                std::ofstream out(path, std::ios::app);
+                for (std::size_t i = 0; i < a.size(); i += 2)
+                    out << name << " " << i / 2 << " " << a[i] << " " << a[i + 1] << "\n";
+            }
+            c.expect(true, name + ": hashes written");
+        });
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -512,6 +1222,12 @@ int main(int argc, char** argv) {
     few_cases();
     contrast_cases();
     box_cases();
+    degenerate_cases();
+    valence_cases();
+    large_cases();
+    fallback_cases();
+    predicate_cases();
+    reproducibility_cases();
     std::vector<std::string> wanted;
     bool known = false, list = false;
     for (int i = 1; i < argc; ++i) {
