@@ -638,7 +638,9 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
 // Clip by the bisector of the generator `self` and particle `id` (at e in
 // grid steps for an exact cell, at d in box units for a rounded one):
 // remove the vertices it cuts off and close the hole with a new face.
-// Returns ok when the plane does not cut, or after the cut.
+// Returns ok when the plane does not cut, or after the cut. After anything
+// else the cell may be half cut, with a claimed vertex slot never written:
+// it must not be read again.
 template <class C>
 KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int id, int self) {
     using Index = typename C::Index;
@@ -932,10 +934,12 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
             const double sliver = 64 * Kokkos::Experimental::epsilon_v<double> * cell.radius2_in_box(unit);
             std::int16_t first_vertex[Cell::planes_capacity];  // a vertex on each face, or -1
-            for (int plane = 0; plane < cell.planes; ++plane) first_vertex[plane] = -1;
-            for (int v = 0; v < cell.vertices; ++v)
-                if (live(cell, v))
-                    for (int k = 0; k < 3; ++k) first_vertex[cell.corner[v][k]] = static_cast<std::int16_t>(v);
+            if (status == ok) {  // a failed cell may have stopped halfway through a cut: see clip
+                for (int plane = 0; plane < cell.planes; ++plane) first_vertex[plane] = -1;
+                for (int v = 0; v < cell.vertices; ++v)
+                    if (live(cell, v))
+                        for (int k = 0; k < 3; ++k) first_vertex[cell.corner[v][k]] = static_cast<std::int16_t>(v);
+            }
             for (int plane = box_planes; plane < cell.planes && status == ok; ++plane) {
                 const int start = first_vertex[plane];
                 if (start < 0) continue;  // plane later cut away completely
