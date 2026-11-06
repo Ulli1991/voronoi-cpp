@@ -1,20 +1,18 @@
 # voronoi-cpp
 
-Kokkos C++ library for exact Voronoi meshes of moving particles in a
-periodic box (a cube or any three sides) on GPUs (CUDA, validated on an A100
-40 GB; OpenMP and Serial builds run the same code for checks), with a
-moving-mesh finite-volume hydro solver on top. The solver hands over
-particle positions and gets back faces (owner, neighbour, area vector,
-centroid), cell volumes and centroids, and per-cell face lists; the mesh is
-kept exact as the particles move. The library is templated on the dimension
-(`voronoi::Mesh<D, Exec>`); the 3D and 1D meshes are complete, 2D is in
-progress (see "Roadmap").
+Kokkos C++ library for exact Voronoi meshes of moving particles in a periodic
+box (any sides) on GPUs: CUDA, validated on an A100 40 GB; OpenMP and Serial
+builds run the same code for checks. A solver hands over particle positions
+and gets back faces (owner, neighbour, area vector, centroid), cell volumes and
+centroids, and per-cell face lists; the mesh is kept exact as the particles
+move. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
 
-The hydro (`src/hydro/`): MUSCL-Hancock with HLLC or HLL, AREPO-style
-least-squares gradients and mesh regularisation, on a static or moving mesh,
-bit-reproducible run to run. On Sedov 3D the moving mesh is more accurate
-than the static mesh at the same resolution in 4.6x fewer steps (see
-"Hydro").
+The hydro moved to [luna-cpp](https://github.com/Ulli1991/luna-cpp), which uses
+this library as a submodule through `voronoi::Mesh` alone. The copy in
+`src/hydro/` still builds here, as the bit check of mesh changes, and goes when
+the split is finished (#16); nothing is developed in it.
+
+BSD 3-Clause, see [LICENSE](LICENSE).
 
 ## Install and build
 
@@ -89,11 +87,11 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 - Particles are the caller's indices; ties between cospherical particles
   are broken by them (symbolic perturbation), at the start and in every
   repair alike. A permuted input gives the permuted mesh.
-- Positions are snapped to the grid of the exact predicates inside, 2^30
+- Positions are snapped to the grid of the exact predicates inside, 2³⁰
   steps across the longest side, the same step on every axis (so the
   integer in-sphere test is the test of the snapped points); topology and
   geometry both come from the snapped positions. A side that is not a
-  whole number of steps is rounded to one (relative change below 2^-31
+  whole number of steps is rounded to one (relative change below 2⁻³¹
   longest / side; none for sides in power-of-two ratios such as
   2 x 2 x 1/16); `sides()` gives the box used (`box()` is a cube's side).
 - Every cell must be certified within one periodic image: a cell's radius
@@ -116,9 +114,14 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 - `scratch(bytes)` lends device memory between updates (the spare ring
   pool).
 - The dimension is a template parameter, `voronoi::Mesh<D, Exec>`
-  (`exact_predicates::BoxN<D>`, `hydro::FiniteVolume<D, Exec, Riemann>`,
-  `hydro::State<D>`); D = 3 and D = 1 are implemented, the 2D engine follows
+  (`exact_predicates::BoxN<D>`); D = 3, 2 and 1 are implemented
   (research_notes/dimension_design_2026-11-02.md). `Box` is `BoxN<3>`.
+- `voronoi::Mesh<2>` has the contract of `Mesh<3>`, on triangles
+  (`voronoi_mesh_2d.hpp`, `exact_predicates::BoxN<2>`), with two differences:
+  `volume()` is current after `update_cells()` only, and there are always exactly
+  3n faces, numbered for good (a flip gives its face new particles, and a face can
+  have zero length on a lattice). The geometry is a function of the positions
+  alone: a repaired mesh equals a fresh build bit for bit.
 
 ## How it works
 
@@ -133,7 +136,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
 | `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the pipeline below behind one interface |
-| `sorted_mesh.hpp` | `voronoi::Mesh<1>`: generators sorted on a 2^52 grid, ties by id, periodic or with walls; the order is checked every step and sorted only when points crossed; `insert()` and `remove()` change the line between updates, with a report of the ids and of which old cells overlap which new ones |
+| `sorted_mesh.hpp` | `voronoi::Mesh<1>`: generators sorted on a 2⁵² grid, ties by id, periodic or with walls; the order is checked every step and sorted only when points crossed; `insert()` and `remove()` change the line between updates, with a report of the ids and of which old cells overlap which new ones |
 
 **Clipping.** Each cell is built by walking the grid cells of its level
 around its generator, nearest first, clipping with every particle that
@@ -164,24 +167,24 @@ the faces whose ring changed; face geometry.
 
 ## Measured performance
 
-One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates
-in million cells per second. 2.1M column: job 31701509 (commit 2311937's
-code); 256^3 column: job 31694457 (commit f32c909, before the plume-derived
-speedups, so the current code is faster there).
+One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates in
+million cells per second, cells processed per second of GPU time. Current
+at 2.1M cells: job 31952136 (main 16e7769 and this tree, interleaved) for the
+rebuild rows, the moving-mesh update and `update_cells()`. The exact start and the
+sum row at 2.1M: job 31701509 (commit 2311937). The 256³ column: job 31694457 (commit
+f32c909), older than the current code, which is faster there.
 
-Throughput in million cells per second (cells processed per second of GPU time).
-
-| Million cells per second | 2,097,152 cells (128^3) | 16,777,216 cells (256^3) |
+| Million cells per second | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
-| Full rebuild (warp clipping), jittered | **40.1** | 34.8 |
-| Full rebuild, uniform random | **20.0** | |
-| Full rebuild, clustered (Gaussian blobs, ~1:500) | **15.6** | |
-| Full rebuild, halo (1:10^4 core to edge) | **14.3** | |
-| Full rebuild, lattice / wave | **50.2 / 38.5** | |
+| Full rebuild (warp clipping), jittered | **39.4** | 34.8 |
+| Full rebuild, uniform random | **19.7** | |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | **15.4** | |
+| Full rebuild, halo (1:10⁴ core to edge) | **14.1** | |
+| Full rebuild, lattice / wave | **49.2 / 37.9** | |
 | Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
-| Moving-mesh update, 0.03 spacings per step | **210** | 291 |
+| Moving-mesh update, 0.03 spacings per step | **208** | 291 |
 | Moving-mesh update, 0.1 spacings per step | 119 | 188 |
-| Moving-mesh update, 0.3 spacings per step | 58 | 98 |
+| Moving-mesh update, 0.3 spacings per step | 57 | 98 |
 | `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 574 / 448 / 436 | 666 / 543 / 458 |
 | Moving-mesh update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | **154** / 94 / 51 | 202 / 140 / 81 |
 
@@ -192,7 +195,7 @@ Inputs (all in the periodic unit box, `src/test/support.hpp`):
 | jittered | cubic lattice, each point moved randomly by up to ±0.1 lattice spacing per axis | the typical hydro start; nearly regular, ~16 faces per cell |
 | uniform random | independent uniform points | unstructured cells of very different size and shape |
 | clustered | 8 Gaussian blobs (σ = 0.04) with 80 % of the points, 20 % uniform background | density contrast ~1:500 (blob centre to void) |
-| halo | 4 halos with ρ ∝ 1/(r² + c²) to r = 0.2, c = 0.002, 90 % of the points, 10 % background | density contrast ~1:10^4 (core to edge) |
+| halo | 4 halos with ρ ∝ 1/(r² + c²) to r = 0.2, c = 0.002, 90 % of the points, 10 % background | density contrast ~1:10⁴ (core to edge) |
 | lattice | perfect cubic lattice | fully degenerate: 8 points on every circumsphere |
 | wave (moved lattice) | the lattice with every point moved by up to 1e-5 spacing | nearly degenerate: ties broken only by tiny offsets |
 
@@ -201,8 +204,8 @@ points by the given number of mean interparticle spacings per step
 (spacing = (box volume / n)^(1/3)): 0.03 spacings is a typical hydro
 step, 0.3 a very large one (more flips per step, lower throughput).
 
-Device memory: plain warp rebuild 701 B/cell (656 at 256^3); peak during
-start and steps, with face lists, 2028 B/cell (2007 at 256^3, 34.8 GB in use).
+Device memory: plain warp rebuild 701 B/cell (656 at 256³); peak during
+start and steps, with face lists, 2028 B/cell (2007 at 256³, 34.8 GB in use).
 Moving-mesh rows: jobs 31886231, 31886232 (research_notes/mesh_speed_2026-11-04.md).
 
 Non-cubic: a Kelvin-Helmholtz-like slab (Lx = Ly = 2, Lz = 16 spacings,
@@ -216,7 +219,7 @@ thickness: 4x the flips per cell of the cube); peak 2192 B/cell at 16.8M
 the cubic-only code and within 0.3-0.7 % of its rebuild speed.
 
 Steps are medians of steps 2-10 on jittered points moved by a smooth flow;
-the step at 256^3 moves particles by the same number of spacings, but the
+the step at 256³ moves particles by the same number of spacings, but the
 flow varies on the box scale, so neighbours shear half as much per step
 (half the flips per cell). On jittered, uniform and clustered input at
 0.1 and 0.3 spacings no triangle ever sticks; the first step out of a
@@ -237,8 +240,6 @@ cells, double. Throughput in million cells (or cell updates) per second.
 | Full rebuild, jittered / uniform / clustered | 4.1 / 2.8 / 2.0 | 39.9 / 19.9 / 15.5 | 9.7 / 7.0 / 7.9 |
 | Moving-mesh update, 0.03 / 0.3 spacings | 11.5 / 1.7 | 202 / 57 | 17.5 / 33 |
 | `update_cells()` | 43 | 343 | 7.9 |
-| Hydro, static mesh, MUSCL-Hancock HLLC | 9.8 | 112 | 11.4 |
-| Hydro, moving mesh | 8.9 | 55 | 6.2 |
 
 For scale, the hardware ratios A100 / node are about 3.9 in memory bandwidth
 (1.55 TB/s against ~0.4 TB/s) and 1.8 in FP64 peak. Every phase gains more
@@ -248,9 +249,26 @@ rounds with atomics, and even the bandwidth-like hydro passes gain 1.6-3x
 beyond bandwidth. The CPU build is the generic Kokkos OpenMP path (per-thread
 clipping, no hand vectorisation), so a CPU-tuned code would narrow the gap.
 
+### 2D and 1D
+
+`voronoi::Mesh<2>`, one A100 at 1305 MHz, double, Morton order, 0.03 spacings per step (job 31952137):
+
+| M cells/s | jittered | random | clustered | lattice |
+|---|---|---|---|---|
+| Build, 2²⁰ cells | 100 | 50 | 44 | 115 |
+| Step (repair, faces, cell lists), 2²⁰ | 765 | 791 | 789 | 749 |
+| Build, 2²⁴ cells | 134 | 58 | 52 | 168 |
+| Step, 2²⁴ | 1056 | 1059 | 1061 | 1023 |
+
+Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak device
+memory 537-574 B/cell (3D: 1998-2028 B/cell at 2.1M, job 31952136). Details: research_notes/mesh_2d_2026-11-05.md.
+
+`voronoi::Mesh<1>`: the mesh phases of a moving Sod run at 1095 MHz (job 31888427, older
+than this branch, research_notes/stage1_1d_2026-11-04.md): 18,905 M cells/s at 2²⁰, 39,351 at 2²⁴.
+
 ## Tests
 
-Seven CTest programs specify the library and the hydro; details, oracles, run times and
+Twelve CTest programs specify the library and, until the split ends, the hydro copy; details, oracles, run times and
 what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
@@ -263,11 +281,12 @@ what PASS means are in [TESTING.md](TESTING.md).
 | `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
 | `mesh_cases.*` | 3D special cases against an oracle that shares no code with the library: coincident points, few points, extreme contrast, thin and long boxes, degeneracy in motion, high valence, large motion, fallbacks, predicates on real point sets, bits across backends |
 | `distortion` | flows that wind the mesh up, no hydro: shear, vortex, Taylor-Green, turbulence, collapse, expansion, sheets, interpenetrating streams, long thin cells |
+| `mesh2d` | the 2D mesh against oracles that share no code with it: predicates against an integer determinant, on six inputs in four boxes empty circumcircles in exact integers, areas summing to the box exactly, every cell clipped in long double against all particles; a repaired mesh equals a fresh build bit for bit, with both fallbacks |
 | `hydro` | HLLC and HLL against reference fluxes and under rotation; uniform states stay uniform, conservation to rounding, bit-identical runs, the two update loops agree to rounding on jittered and uniform meshes; moving mesh: uniform state with a bulk velocity, conservation, Galilean invariance of a moving blast |
 
 ```sh
-ctest --test-dir build-cuda --output-on-failure         # A100: ~35 s
-OMP_NUM_THREADS=1 ctest --test-dir build-omp            # one CPU core: ~45 s
+ctest --test-dir build-cuda --output-on-failure         # A100: ~5 minutes
+OMP_NUM_THREADS=1 ctest --test-dir build-omp            # one CPU core
 sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A100 checks
 ```
 
@@ -286,99 +305,14 @@ the box.
 Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`.
 
-## Hydro
-
-`hydro::FiniteVolume` (`src/hydro/`) runs finite volumes on a static or
-moving `voronoi::Mesh` (moving: the points follow the flow with a drift
-towards the cell centroids, the mesh is repaired every step, fluxes go
-through the moving faces): extensive conserved state only between steps, least-squares
-gradients of the primitives limited at the face centroids, MUSCL-Hancock
-half step, HLLC (default) or HLL along each face normal, one global time
-step (Courant factor 0.3 on each cell's radius and signal speeds); order 0
-is first-order Godunov. Every cell sums over its face list in a fixed
-order, so runs are bit-reproducible. Two update loops: per face (a face
-flux array, then a per-cell gather; default at second order) or per cell
-(each face flux computed from both sides; default at first order).
-
-```text
-hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face] [--limiter=face|cell|none]
-            [--riemann=hllc|hll] [--precision=default|mixed|low|...] [--moving] [--bulk=km/s] [--out=dir] [--snapshots=10] [--steps=max] [--input-order] [--memory]
-sbatch -o <logs>/hydro-%j.out scripts/hydro_a100.sh build-cuda <out> <mode> (see the script)
-```
-
-`hydro_sedov` (needs HDF5; on Raven `module load hdf5-serial`) runs a
-Sedov blast (1e51 erg, n = 1 cm^-3, 50 pc box, 1e4 yr) and writes HDF5
-snapshots. Measured on one A100, double, jittered points in Morton order,
-median of 40 steps. The 2.1M column is current (static job 31879405, moving job 31886231,
-HLLC rows; the same code varies by about 10 % between GPU jobs). In the 16.8M
-column the moving rows are current (job 31885794); the static rows and the
-HLL and first-order rows are the earlier code (jobs 31699864, 31699865,
-31700852, kept until they are re-measured):
-
-| Million cell updates per second | 2,097,152 cells | 16,777,216 cells |
-|---|---|---|
-| moving mesh, MUSCL-Hancock HLLC, per-face loop (mesh update and face lists included) | **84** | 88 (whole run, job 31885794) |
-| static mesh, MUSCL-Hancock HLLC, per-face loop | **152** | 105 |
-| static mesh, MUSCL-Hancock HLL, per-face loop | 116 | 114 |
-| static mesh, first order HLLC, per-cell loop | 288 | 290 |
-| device memory, mesh + hydro (static, per-face, second order) | 2434 B/cell | 2371 B/cell (41.2 GB in use) |
-| device memory, moving mesh + hydro (per-face) | 2298 B/cell | 2298 B/cell (40.1 GB in use, whole run, job 31885794); `--precision=mixed` 2334 B/cell (40.7 GB, job 31885795) |
-
-Sedov at 128^3 (job 31699863), HLLC: shock radius 0.978 of the
-Sedov-Taylor value at 1e4 yr, L1 density error 0.075 rho0 (first order:
-0.104); mass and energy conserved to 2e-16. On the moving mesh (jobs
-31700850-51): 354 steps instead of 1642, L1 density error 0.058 rho0, the
-same numbers with the whole box moving at 500 km/s; at 256^3 L1 0.034 in
-288 s of GPU time (job 31702077; now 177 s, job 31885794). These L1 values are sampled at
-the mesh generators, which flatters a moving mesh; the field L1 (the integral
-of |rho_h - rho| dV) is the fair norm and is what the test suite will report
-(research_notes/accuracy_score_exploration_2026-11-04.md). Details:
-research_notes/hydro_stage1_2026-10-31.md, hydro_stage3_2026-10-31.md.
-
-### 1D (`hydro_1d`, `finite_volume_1d.hpp`)
-
-`hydro::FiniteVolume<1, Exec, Riemann>` on `voronoi::Mesh<1>`, static or
-moving, with walls (reflective, zero gradient, inflow). The whole step is one
-kernel. Defaults: a static run uses Courant x V / (|v| + c) at 0.8, one launch
-per step that also finds the next time step (`step_and_time_step`); a moving
-run uses AREPO next generation's rule with its pair term at 0.4 (r = V / 2 in
-1D), three launches (time step, step, order check). 3D stays at 0.3. On a
-uniform static line the scheme is second-order MUSCL-Hancock with the MC
-limiter. Points are regularised as
-AREPO next generation does without a face angle: a drift towards the
-density-displaced centroid when it is more than 0.75 cell radii away.
-
-M cell updates/s, one A100 40 GB at 1305 MHz (ravg1002, job 31917211, Sod,
-HLLC, 2000 steps, 200 at 2^24; hydro only is a static step, whole step a
-moving one at its defaults with the order check):
-
-| cells | 4,096 | 65,536 | 1,048,576 | 16,777,216 |
-|---|---|---|---|---|
-| hydro only | 81 | 948 | 2810 | 3226 |
-| whole moving step | 48 | 636 | 1872 | 2297 |
-
-Below ~1e5 cells a step is bound by launch latency (~60 us), not by the
-kernel. Peak device memory: 144 B/cell static, 152 B/cell moving. Runs are
-bit-reproducible (the hash of the final state and positions). Field accuracy on Sod, Shu-Osher and Woodward-Colella:
-research_notes/stage1_1d_2026-11-04.md.
-
 ## Limitations and open items
 
-- The hydro step is not yet at its target (~300 M cell updates/s): on the
-  A100 at 128^3 double precision runs at 152 M cell updates/s static, its
-  hydro part at 140 M cells/s on a moving mesh, the whole moving step at
-  73 M cell updates/s; the mesh step alone at ~210 M cells/s. Compile-time
-  precision options (`--precision=`, default double, main's bits): mixed
-  +10 %, low +19 % on the hydro static, +4 % / +7 % on the whole moving step
-  (research_notes/hydro_speed_2026-11-04.md).
 - Bit-reproducible moving runs cost 2.5-4.7 % on the mesh step alone
-  (canonical circumcentres and face-ring order); the whole hydro step is
-  unchanged.
-- On the CPU (gcc's default FP contraction) some hydro modes differ from the
-  GPU in the last bits; the A100 runs are bit-identical run to run.
+  (canonical circumcentres and face-ring order).
+- CUDA and Serial give different last bits of volumes and centroids (#27).
 - Clipping alone is not watertight on uniform random input at 2.1M cells;
   the exact start makes the mesh exact.
-- Particles on one grid position (grid step box / 2^30) have no Voronoi cell, so
+- Particles on one grid position (grid step box / 2³⁰) have no Voronoi cell, so
   `update()` refuses them on every path, with a `std::runtime_error` that names
   a pair by id; the library does not merge them. It takes a rebuild to find out,
   so such a step costs one. After a refusal there is no mesh (no faces, no
@@ -389,7 +323,7 @@ research_notes/stage1_1d_2026-11-04.md.
 - Faces may have any number of corners. A cell may hold up to 16000 planes and
   32000 vertices during its exact clipping: past 128 planes or 256 vertices it is
   built on the host, with the grid and the ring pool copied there and back. Past those limits
-  `update()` refuses, naming them. Particles around a void cost O(k^2) at the
+  `update()` refuses, naming them. Particles around a void cost O(k²) at the
   start, every cell of the shell clipping all k of them: about 1 s at k = 2000,
   2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
 - A step of order the box (random kicks of 0.6 box) can end the device repair
@@ -412,69 +346,31 @@ research_notes/stage1_1d_2026-11-04.md.
   `active` list for later.
 - Periodic boxes only (any three sides; see the certification limit
   above for thin slabs); only 1D has walls.
-- 1D moving mesh, inflow: the hydro in this repository does not use the mesh's
-  `insert()`, so the gas that enters from an inflow wall fills a few grown
-  cells and the error there does not converge (Shu-Osher). luna-cpp, where the
-  hydro now lives, supplies cells at the wall.
-- 1D moving mesh: the error of Woodward-Colella stops falling near
-  N = 2^15, at every Courant number tried
-  (research_notes/stage1_1d_2026-11-04.md).
+- `voronoi::Mesh<2>` refuses as `Mesh<3>` does: particles on one grid position
+  by name, cells out of certified reach, no particles; a refused update leaves no
+  mesh and the next builds. Its repair is checked by the sum of the signed areas
+  (`Report::overlapped`). `volume()` is current after `update_cells()` only.
+- Memory limits 3D on one A100 to about 256³ today (#28).
 
 ## Roadmap
 
-In order (research_notes/dimension_design_2026-11-02.md):
-1. Hydro speed, first round done: 107 -> 152 M cell updates/s static double,
-   56 -> 73 for the whole moving step, with main's bits. The remaining limit is
-   memory waits in the gradient sweep; sliced lists, 16-bit offsets, tiles and
-   a face-major update did not help (research_notes/hydro_speed_2026-11-04.md).
-   Ceiling: a fixed-grid code's rate per face, ~300 M cell updates/s for the
-   hydro step (a Voronoi cell has ~16 faces against 6), which may stay out of
-   reach.
-2. Mesh-step speed: incremental per-cell face lists and shared cell sums done
-   (research_notes/mesh_speed_2026-11-04.md); next: `faces`, the screening, face numbers.
-3. 1D mesh and hydro with walls; Sod, Shu-Osher and Woodward-Colella against
-   the references and the fixed-grid code LUNA (a first CPU version gives
-   LUNA's results to ~1e-14 on a static mesh).
-4. 2D mesh (polygon clipping, triangles with 2-2 flips) and hydro;
-   Kelvin-Helmholtz after McNally, Lyra & Passy (2012).
-5. Rebuild on clustered input: tune the per-particle level choice at density
-   jumps (12-13 % of tested candidates lie outside the needed 2R radius on
-   clustered/halo input; expected 5-10 %), and look for a cheaper exact
-   certification bound than "everything within 2R" (irregular cells test ~2x
-   the candidates of jittered ones).
-6. Multi-GPU: domain decomposition by Morton ranges, ghost layers, local
-   rebuild of a boundary band, GPU-aware communication, weak and strong
-   scaling. Measure overlapped against blocking communication across two nodes
-   before fixing the design; a task runtime gains little on one GPU or inside
-   a node. Before refinement, so that insertion and load balance are designed
-   with the decomposition in mind; one A100 holds about 256^3.
-7. Refinement and derefinement: split by a 1-4/1-3 split plus flips, merge
-   by an exact local rebuild of the hole, conservative remap from the
-   volumes (reports/GPU Delaunay insertion and removal.md).
-8. Self-gravity by multigrid, after the hydro suite passes at speed, starting
-   from LUNA's gravity solvers (same author; multigrid with coarse-grid gather):
-   V-cycles warm-started from the previous step's potential (as LUNA does),
-   aiming at 2-4 V-cycles per step, so the solve runs at full GPU speed.
-   Options: an auxiliary Cartesian grid (deposit, solve, interpolate) or
-   multigrid on the Voronoi mesh itself with gravity as face fluxes.
-   Multigrid weak-scales poorly (coarse levels), which matters for multi-GPU.
-   Coarse levels are inefficient on GPUs anyway (too little work per launch),
-   so they can run on the host CPUs: fine levels on the GPU, levels below a
-   size threshold on the CPU, one small transfer each way per V-cycle; with
-   several GPUs the CPU side also gathers the coarse levels of all of them.
+Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the
+refusals above.
 
-Every test in the suite reports accuracy per cost, since raw throughput alone
-does not compare a moving mesh with a fixed grid: GPU-seconds to a target
-error at 2-3 resolutions, and the equivalent fixed-grid throughput (the rate
-a fixed grid would need to match that time).
+1. Cut memory to 384³ on one A100 (#28): float faces, `tet_centre`, repair lists, start peak.
+2. Point insertion and removal (#25), 1D first.
+3. Mesh speed: repair rounds, the fixed cost per step.
+4. Clustered rebuild tuning.
+5. Multi-GPU: overlapped against blocking communication across two nodes first.
+6. Refinement and derefinement in 3D.
 
 ## Repository layout
 
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests, `support.hpp` (inputs, references, the
   comparison with an exact rebuild), `check.hpp`.
-- `src/hydro/`: the hydro (header-only). `src/bench/`: `voronoi_bench`, `hydro_sedov`, `hydro_1d`.
-- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `hydro_a100.sh`, `hydro_sedov_compare.py`, `dim1d_a100.sh`, `compare_1d.py`.
+- `src/bench/`: `voronoi_bench`, `mesh2d_bench`. `src/hydro/`, `hydro_sedov`, `hydro_1d`: the copy that goes (#16).
+- `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `dim_gate_a100.sh`, `dim2d_a100.sh`, `mesh_tests_a100.sh`, `mesh_speed_a100.sh`.
 - `research_notes/`, `reports/`: status notes and surveys.
 
 CI (`.github/workflows/checks.yml`) runs clang-tidy and the CPU tests in

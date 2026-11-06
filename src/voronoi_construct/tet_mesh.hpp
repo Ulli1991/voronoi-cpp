@@ -1264,7 +1264,7 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& renumber,
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour, const Others& other,
-                  const Marks& marked, bool all) {
+                  const Marks& marked, bool all, bool sort = true) {
     using Memory = typename ExecSpace::memory_space;
     using Const = Kokkos::View<const int*, Memory>;
     using Ints = Kokkos::View<int*, Memory>;
@@ -1278,9 +1278,10 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         using Sort = CellSortWarp<Ints, Others, Const, Marks>;
         using Sums = CellSumsWarp<Lists, D>;
-        Kokkos::parallel_for("tet_mesh::cell_sort",
-                             Kokkos::TeamPolicy<ExecSpace>(exec, (n + Sort::warps - 1) / Sort::warps, Sort::warps, 32),
-                             Sort{out.start, out.face, other, owner, neighbour, marked, n, all});
+        if (sort)
+            Kokkos::parallel_for("tet_mesh::cell_sort",
+                                 Kokkos::TeamPolicy<ExecSpace>(exec, (n + Sort::warps - 1) / Sort::warps, Sort::warps, 32),
+                                 Sort{out.start, out.face, other, owner, neighbour, marked, n, all});
         Kokkos::parallel_for("tet_mesh::cell_sums",
                              Kokkos::TeamPolicy<ExecSpace>(exec, (n + Sums::block - 1) / Sums::block, Sums::warps, 32),
                              Sums{lists});
@@ -1290,10 +1291,11 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const auto start = out.start;
     const auto face = out.face;
-    Kokkos::parallel_for(
-        "tet_mesh::cell_sort", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
-            if (all || marked(i) == 2) sort_list(face, other, owner, neighbour, i, start(i), start(i + 1));
-        });
+    if (sort)
+        Kokkos::parallel_for(
+            "tet_mesh::cell_sort", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
+                if (all || marked(i) == 2) sort_list(face, other, owner, neighbour, i, start(i), start(i + 1));
+            });
     Kokkos::parallel_for("tet_mesh::cell_sums", Range(exec, 0, n), KOKKOS_LAMBDA(int i) { lists.sum(i); });
 }
 
@@ -1353,6 +1355,106 @@ inline std::size_t incremental_scratch_bytes(int n, int old_faces, int faces) {
     return sizeof(int) * (static_cast<std::size_t>(n) + 1 + 2 * static_cast<std::size_t>(old_faces) + 2 * static_cast<std::size_t>(faces)) + n;
 }
 
+namespace detail {
+
+// The scratch of incremental lists: the old lists, the sort keys, the marks.
+template <class Memory>
+struct IncrementalLists {
+    using Unmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
+    using Ints = Kokkos::View<int*, Memory, Unmanaged>;
+    Ints old_start, old_face, other;
+    Kokkos::View<char*, Memory, Unmanaged> marked;
+};
+
+// Sets up in `at` (incremental_scratch_bytes(n, old_faces, faces) bytes): copies
+// the old lists, clears the marks, makes room for the new lists.
+template <class ExecSpace, int D>
+IncrementalLists<typename ExecSpace::memory_space> begin_incremental(const ExecSpace& exec, int* at, int n, int old_faces, int faces,
+                                                                     CellFaces<typename ExecSpace::memory_space, D>& out) {
+    using Memory = typename ExecSpace::memory_space;
+    using Lists = IncrementalLists<Memory>;
+    IncrementalLists<Memory> l;
+    l.old_start = typename Lists::Ints(at, n + 1);
+    at += n + 1;
+    l.old_face = typename Lists::Ints(at, 2 * old_faces);
+    at += 2 * old_faces;
+    l.other = typename Lists::Ints(at, 2 * faces);
+    at += 2 * faces;
+    l.marked = Kokkos::View<char*, Memory, typename Lists::Unmanaged>(reinterpret_cast<char*>(at), n);
+    Kokkos::deep_copy(exec, l.old_start, Kokkos::View<const int*, Memory>(out.start));
+    Kokkos::deep_copy(exec, l.old_face, Kokkos::subview(out.face, std::make_pair(0, 2 * old_faces)));
+    Kokkos::deep_copy(exec, l.marked, char(0));
+    if (static_cast<int>(out.face.extent(0)) < 2 * faces)
+        Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 16);
+    return l;
+}
+
+// The lists and sums from the old lists, in D = 2 or 3, l.marked set for
+// every cell that may have lost or gained a face: renumber(f) is the new
+// number of old face f, -1 if it has none, and ~f in dirty[0, dirty_count) names
+// each new face without an old number once (other entries are skipped).
+template <int D, class ExecSpace, class X, class Dirty>
+void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
+                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
+                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
+                        const Geometry<typename ExecSpace::memory_space, D>& geometry,
+                        CellFaces<typename ExecSpace::memory_space, D>& out,
+                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& renumber, const Dirty& dirty,
+                        int dirty_count, const IncrementalLists<typename ExecSpace::memory_space>& lists) {
+    using Memory = typename ExecSpace::memory_space;
+    using Range = Kokkos::RangePolicy<ExecSpace>;
+    using Unmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
+    const int n = static_cast<int>(out.volume.extent(0));
+    const auto old_start = lists.old_start, old_face = lists.old_face, other = lists.other;
+    const auto marked = lists.marked;
+    const auto start = out.start, cursor = out.cursor, face = out.face;
+    // The marked cells' counts in `start`, the others' from the old list.
+    Kokkos::parallel_for(
+        "tet_mesh::marked_counts", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
+            if (!marked(i)) return;
+            int kept = 0;
+            for (int a = old_start(i); a < old_start(i + 1); ++a) kept += renumber(old_face(a)) >= 0;
+            start(i) = kept;
+        });
+    Kokkos::parallel_for(
+        "tet_mesh::fresh_counts", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int s) {
+            if (dirty(s) >= 0) return;
+            const int f = ~dirty(s);
+            Kokkos::atomic_inc(&start(owner(f)));
+            Kokkos::atomic_inc(&start(neighbour(f)));
+        });
+    Kokkos::parallel_scan(
+        "tet_mesh::cell_face_start", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int i, int& sum, bool final) {
+            const int count = i == n ? 0 : marked(i) ? start(i) : old_start(i + 1) - old_start(i);
+            if (final) start(i) = sum;
+            sum += count;
+        });
+    Kokkos::parallel_for(
+        "tet_mesh::marked_fill", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
+            if (!marked(i)) return;
+            int to = start(i);
+            for (int a = old_start(i); a < old_start(i + 1); ++a) {
+                const int f = renumber(old_face(a));
+                if (f >= 0) face(to++) = f;
+            }
+            cursor(i) = to;
+        });
+    Kokkos::parallel_for(
+        "tet_mesh::fresh_fill", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int s) {
+            if (dirty(s) >= 0) return;
+            const int f = ~dirty(s);
+            const int o = owner(f), j = neighbour(f);
+            face(Kokkos::atomic_fetch_inc(&cursor(o))) = f;
+            face(Kokkos::atomic_fetch_inc(&cursor(j))) = f;
+            marked(o) = 2;  // to sort: its kept entries alone stand sorted
+            marked(j) = 2;
+        });
+    sort_and_sum<D>(exec, x, box, geometry, out, old_start, old_face, renumber, owner, neighbour, other,
+                    Kokkos::View<const char*, Memory, Unmanaged>(marked), false);
+}
+
+}  // namespace detail
+
 // 3'. cells() after a repair, from the last step's lists: the same lists and
 // sums, bit for bit. Only a corner of a tetrahedron a flip created (list
 // `created`) can have lost or gained a face; every other cell keeps its faces
@@ -1379,20 +1481,8 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
     const int old_faces = rings.renumbered;
     // After the table and the dirty list (in the spare pool, update_face_rings).
     const Ints renumber(reinterpret_cast<int*>(scratch), old_faces);
-    int* at = renumber.data() + old_faces + rings.dirty_count;
-    const Ints old_start(at, n + 1);
-    at += n + 1;
-    const Ints old_face(at, 2 * old_faces);
-    at += 2 * old_faces;
-    const Ints other(at, 2 * faces);
-    at += 2 * faces;
-    const Kokkos::View<char*, Memory, Unmanaged> marked(reinterpret_cast<char*>(at), n);
-    Kokkos::deep_copy(exec, old_start, Kokkos::View<const int*, Memory>(out.start));
-    Kokkos::deep_copy(exec, old_face, Kokkos::subview(out.face, std::make_pair(0, 2 * old_faces)));
-    Kokkos::deep_copy(exec, marked, char(0));
-    if (static_cast<int>(out.face.extent(0)) < 2 * faces)
-        Kokkos::realloc(Kokkos::WithoutInitializing, out.face, 2 * faces + faces / 16);
-    const auto start = out.start, cursor = out.cursor, face = out.face;
+    const auto lists = detail::begin_incremental<ExecSpace, 3>(exec, renumber.data() + old_faces + rings.dirty_count, n, old_faces, faces, out);
+    const auto marked = lists.marked;
     const auto vertex = mesh.vertex;
     Kokkos::parallel_for(
         "tet_mesh::mark_cells", Range(exec, 0, created.extent(0)), KOKKOS_LAMBDA(int s) {
@@ -1400,50 +1490,8 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
             if (!alive(t)) return;
             for (int c = 0; c < 4; ++c) marked(vertex(t, c)) = 1;
         });
-    // The marked cells' counts in `start`, the others' from the old list.
-    Kokkos::parallel_for(
-        "tet_mesh::marked_counts", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
-            if (!marked(i)) return;
-            int kept = 0;
-            for (int a = old_start(i); a < old_start(i + 1); ++a) kept += renumber(old_face(a)) >= 0;
-            start(i) = kept;
-        });
-    const auto dirty = rings.dirty;
-    Kokkos::parallel_for(
-        "tet_mesh::fresh_counts", Range(exec, 0, rings.dirty_count), KOKKOS_LAMBDA(int s) {
-            if (dirty(s) >= 0) return;
-            const int f = ~dirty(s);
-            Kokkos::atomic_inc(&start(owner(f)));
-            Kokkos::atomic_inc(&start(neighbour(f)));
-        });
-    Kokkos::parallel_scan(
-        "tet_mesh::cell_face_start", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int i, int& sum, bool final) {
-            const int count = i == n ? 0 : marked(i) ? start(i) : old_start(i + 1) - old_start(i);
-            if (final) start(i) = sum;
-            sum += count;
-        });
-    Kokkos::parallel_for(
-        "tet_mesh::marked_fill", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
-            if (!marked(i)) return;
-            int to = start(i);
-            for (int a = old_start(i); a < old_start(i + 1); ++a) {
-                const int f = renumber(old_face(a));
-                if (f >= 0) face(to++) = f;
-            }
-            cursor(i) = to;
-        });
-    Kokkos::parallel_for(
-        "tet_mesh::fresh_fill", Range(exec, 0, rings.dirty_count), KOKKOS_LAMBDA(int s) {
-            if (dirty(s) >= 0) return;
-            const int f = ~dirty(s);
-            const int o = owner(f), j = neighbour(f);
-            face(Kokkos::atomic_fetch_inc(&cursor(o))) = f;
-            face(Kokkos::atomic_fetch_inc(&cursor(j))) = f;
-            marked(o) = 2;  // to sort: its kept entries alone stand sorted
-            marked(j) = 2;
-        });
-    detail::sort_and_sum<3>(exec, x, box, geometry, out, old_start, old_face, renumber, owner, neighbour, other,
-                            Kokkos::View<const char*, Memory, Unmanaged>(marked), false);
+    detail::finish_incremental<3>(exec, x, box, owner, neighbour, geometry, out, Kokkos::View<const int*, Memory>(renumber), rings.dirty,
+                                  rings.dirty_count, lists);
 }
 
 // 4. Least-squares gradient weights of every per-cell list entry, as AREPO
