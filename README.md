@@ -187,6 +187,9 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 - **Non-finite or negative geometry with no error** at extreme box sizes ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)). The fuzz drew sides from 1e-140 to 1e141; the usable range is not measured or stated yet.
 - Valid input can be refused below the stated 3/16 limit, with largest radii from 0.112 of the shortest side ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `Fallback::host` has no bound on its work: minutes on hundreds of particles ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
+- `Mesh<2>::update` can hang: the 2D repair flips the same entries forever and never returns ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)).
+- `tet_flips::rebuild` reads particle positions at index -1; the effect on meshes is not known ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)).
+- A periodic `Mesh<1>` with all particles on one grid step gives volumes summing to 0, silently ([#37](https://github.com/Ulli1991/voronoi-cpp/issues/37)).
 
 Other limits:
 
