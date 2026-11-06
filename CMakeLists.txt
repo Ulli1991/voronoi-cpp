@@ -57,4 +57,7 @@ if(BUILD_TESTING)
         add_test(NAME mesh_cases.${group} COMMAND mesh_cases_test ${group}.)
         set_tests_properties(mesh_cases.${group} PROPERTIES TIMEOUT 600)
     endforeach()
+    if(VORONOI_SANITIZERS)
+        set_tests_properties(mesh_cases.large PROPERTIES TIMEOUT 3000)  # its 1000-step long run, about 11x slower
+    endif()
 endif()
