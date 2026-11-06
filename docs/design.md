@@ -193,3 +193,6 @@ The brute-force generator-distance check on a sample of cells costs about 2.5×1
 
 Fields run on the device; 256³ is fine. The turbulence field is random-phase solenoidal modes with k^(−5/6) amplitudes and drifting phases. The collapse and noh fields converge within radius 0.16 (Sedov and Noh reversed); pancake collapses a layer of half thickness 0.16 onto a plane. The aspect ratio is the largest over cells of the reach R over half the distance to the nearest neighbour; reach is the largest 2R of any cell over the box side, and 3/8 is the limit of a build. The drift option is regularisation in this driver only (the library has none).
 
+## Cells under construction (`shell_voronoi.hpp`)
+
+Rounded and exact cells are shared by the walk, the cut topology and the face walk of `construct_pass`. Both keep planes, with the particle id beyond each (box planes are virtual particles from n on), and vertices, each listing its three planes in face-walking order and the three vertices across its edges: `adjacent[v][k]` lies across the edge from corner k to k + 1. Removed vertices are marked and their slots reused. `RoundedCell` is the portable kernel and the warp kernel's CUDA fallback.

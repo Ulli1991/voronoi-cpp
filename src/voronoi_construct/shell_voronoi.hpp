@@ -386,13 +386,9 @@ namespace ep = exact_predicates;
 // every candidate that can cut the cell is unique in the periodic image.
 inline double start_half_width(const ep::Box& box) { return 0.25 * box.shortest(); }
 
-// Cells under construction, shared by the walk, the cut topology and the face walk of construct_pass.
-// Both kinds keep planes (with the particle id beyond each; box planes are virtual particles from n on) and
-// vertices, each listing its three planes in face-walking order and the three vertices across its edges
-// (adjacent[v][k] lies across the edge from corner k to k + 1). Removed vertices are marked and their slots
-// reused. Planes and Vertices are capacities; the rare larger cells are built again with big ones.
-// RoundedCell: planes and vertices in double, relative to the generator; a vertex is cut when it lies beyond
-// the bisector by more than a rounding tolerance. The portable kernel and the warp kernel's CUDA fallback.
+// A cell under construction, in double relative to the generator: a vertex is cut when it lies beyond the
+// bisector by more than a rounding tolerance. Planes and Vertices are capacities; larger cells are built
+// again with bigger ones. Layout of both cell kinds: docs/design.md.
 template <int Planes, int Vertices>
 struct RoundedCell {
     static_assert(Planes <= 255, "plane indices are bytes");
