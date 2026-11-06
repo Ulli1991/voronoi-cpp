@@ -76,6 +76,35 @@ distance to its nearest neighbour), reach, faces per cell and corners per face.
 `scripts/mesh_tests_a100.sh` runs the cases on the A100, the flows at 128³ and
 256³, the drift, and the full oracle at 262144.
 
+### Random cases
+
+`mesh_fuzz_test` (`src/test/mesh_fuzz_test.cpp`, generators in `mesh_fuzz.hpp`)
+draws whole cases from one integer seed: box, points, the `Mesh` type and every
+call, as a plain `Script` that can be saved and replayed. Digits of the seed above
+10^12 choose the profile: 0 small, 1 long call sequences, 2 medium, 3 large, 4 huge
+n, 5 1D, 6 2D. A case ends `exact`, `refused` (a cause the input really has),
+`valid` (a refusal of input that has a mesh, or with no clear cause), `bits`,
+`rough` (exact tetrahedra, geometry past rounding), `WRONG`, `CRASH` or `HANG`.
+Checked on top of `mesh_check::check`: snapping, face order and direction, centroids
+on bisectors and against brute force, per-cell lists, gradient weights, float rows,
+`clip()`, and a refusal for reach against the measured largest cell.
+
+```sh
+mesh_fuzz_test smoke --cases=src/test/fuzz_cases             # ctest: saved cases, 16 fixed seeds
+mesh_fuzz_test run --first=S --count=N --results=FILE        # resumes from FILE; crashes and hangs are logged
+mesh_fuzz_test one SEED [--dump=FILE]                        # one seed, verbose
+mesh_fuzz_test case FILE                                     # a saved case
+mesh_fuzz_test min SEED|FILE --out=FILE                      # delta debugging, keeps the signature (3D)
+```
+
+`src/test/fuzz_cases/*.case` are minimised failures; a line `known <issue>` skips one
+until the issue is fixed (`--known=1` runs it). ctest skips seeds in boxes of
+non-dyadic step and of extreme side (#29, #32), and counts `rough` without failing,
+so most of the checking is in the long runs: `scripts/mesh_fuzz_cpu.sh` (`small`),
+`scripts/mesh_fuzz_gpudev.sh` (15-minute chunks; resubmit the same command to go on).
+The seeds of a run are tied to the generator: a changed generator needs a new base.
+With a coverage build a worker writes its counters before `_exit`.
+
 ### Oracles
 
 Brute force exists only in tests and the benchmark, never in the library:

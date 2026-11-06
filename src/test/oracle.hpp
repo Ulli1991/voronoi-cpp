@@ -213,22 +213,40 @@ inline Verdict check(const Grid& g, const Tets& m) {
         volume6 += d < 0 ? -d : d;
 
         // The long double circumcentre selects candidate images, the exact sign decides.
-        const long double la = (long double)(lift(a)), lb = (long double)(lift(b)), lc = (long double)(lift(c));
+        // The numerators in integers (each below 2^122: nearest-image corners,
+        // |a[k]| <= 2^29): in long double they cancel on a sliver, and a tiny
+        // sphere comes out hundreds of boxes wide.
         const long double dd = (long double)(d);
         std::array<long double, 3> centre;
         long double r2 = 0;
-        const std::array<long double, 3> A{(long double)a[0], (long double)a[1], (long double)a[2]},
-            B{(long double)b[0], (long double)b[1], (long double)b[2]},
-            C{(long double)c[0], (long double)c[1], (long double)c[2]};
+        const i128 la = lift(a), lb = lift(b), lc = lift(c);
         for (int k = 0; k < 3; ++k) {
             const int i = (k + 1) % 3, j = (k + 2) % 3;
-            centre[k] = (la * (B[i] * C[j] - B[j] * C[i]) + lb * (C[i] * A[j] - C[j] * A[i]) +
-                         lc * (A[i] * B[j] - A[j] * B[i])) / (2 * dd);
+            const i128 n = la * (i128(b[i]) * c[j] - i128(b[j]) * c[i]) + lb * (i128(c[i]) * a[j] - i128(c[j]) * a[i]) +
+                           lc * (i128(a[i]) * b[j] - i128(a[j]) * b[i]);
+            centre[k] = (long double)(n) / (2 * dd);
             r2 += centre[k] * centre[k];
         }
         v.radius = std::max(v.radius, std::sqrt(r2) / (long double)(std::min({g.period[0], g.period[1], g.period[2]})));
         if (!(r2 <= covering2 * (1 + 1e-12L))) {
+            // Too large to be empty on the torus. The long double centre means
+            // little at this size: every particle in 27 images, by the exact sign.
             ++v.oversized;
+            bool inside = false;
+            for (int e = 0; e < g.size() && !inside; ++e)
+                for (int i = -1; i <= 1 && !inside; ++i)
+                    for (int j = -1; j <= 1 && !inside; ++j)
+                        for (int k = -1; k <= 1 && !inside; ++k) {
+                            const Offset o = difference(g, w[0], e);
+                            const Offset q{o[0] + i * g.period[0], o[1] + j * g.period[1], o[2] + k * g.period[2]};
+                            if (in_sphere(a, b, c, q) <= 0) continue;
+                            inside = true;
+                            if (v.witness[0] < 0) {
+                                v.witness = {w[0], w[1], w[2], w[3], e};
+                                v.witness_image = {g.p[w[0]][0] + q[0], g.p[w[0]][1] + q[1], g.p[w[0]][2] + q[2]};
+                            }
+                        }
+            v.not_empty += inside;
             continue;
         }
         const long double radius = std::sqrt(r2) * (1 + 1e-12L) + 2;
