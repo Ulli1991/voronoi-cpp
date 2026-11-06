@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #if defined(KOKKOS_ENABLE_CUDA)
 #include <cub/device/device_radix_sort.cuh>
@@ -164,6 +167,37 @@ namespace voronoi {
 // conditions belong to the hydro).
 enum class Ends { periodic, walls };
 
+// What Mesh<1>::insert() or remove() did: for request r of `requested`,
+//
+//   id(r)           the new id (insert), the id removed (remove), or -1 if
+//                   the request was deferred and nothing changed for it;
+//   neighbour(r, 0), neighbour(r, 1)
+//                   the particles left and right of it on the line, or the wall
+//                   (-1 at 0, -2 at L); ids of before the change;
+//   overlap(r, 0), overlap(r, 1)
+//                   insert: the length the new cell takes from those two old
+//                   cells; remove: the length each of them takes from the
+//                   removed cell. Either way their sum is that cell's volume;
+//   volume(r, 0), volume(r, 1)
+//                   the volumes of those two cells before the change.
+//
+// An insertion is exact against the old cells, so a caller holding conserved
+// quantities moves the fraction overlap / volume of each neighbour's (of the
+// values before the change: a cell can give to both sides) and conserves them.
+// New ids are first, first + 1, ... in the order of the requests.
+//
+// remove() keeps ids dense: the last ids fill the holes, and after the
+// caller has moved its data by `neighbour` and `overlap`, it copies its data
+// of id moved(m, 0) to id moved(m, 1) for m < moves, and its positions too.
+// The views belong to the mesh and hold until the next change.
+template <class Memory>
+struct Changes {
+    int requested = 0, done = 0, first = 0, moves = 0;
+    Kokkos::View<int*, Memory> id;
+    Kokkos::View<int* [2], Memory> neighbour, moved;
+    Kokkos::View<double* [2], Memory> overlap, volume;
+};
+
 // The 1D mesh: the sorted order of the generators (sorted_mesh).
 //
 // The contract of Mesh<3> holds with D = 1: faces once, owner the lower id,
@@ -180,6 +214,13 @@ enum class Ends { periodic, walls };
 // holds (one pass; a periodic line may have rotated as particles wrapped
 // around) and sorts again only if particles crossed. order(x) does only
 // that: the 1D hydro reads the line and needs none of the face arrays.
+//
+// insert() and remove() change the line in place between updates, without a
+// sort: a binary search per request and one pass over the line. Ids stay dense
+// (Changes). Per-particle arrays grow by a quarter when full, so after a change
+// the views may be longer than particles(), and x given to update() or
+// order() must have exactly particles() rows. Any id of the next x not yet set
+// is the caller's: it writes the requested position to the new ids.
 template <class ExecSpace>
 class Mesh<1, ExecSpace, double, void> {
 public:
@@ -189,6 +230,7 @@ public:
     using View = Kokkos::View<T, Memory>;
     using Positions = View<double* [1]>;
     using Line = sorted_mesh::Line<Memory>;
+    using Changes = voronoi::Changes<Memory>;
 
     Mesh(const ExecSpace& exec, const ep::BoxN<1>& box, Ends ends = Ends::periodic)
         : exec_(exec), box_(box), grid_(box.side[0]), periodic_(ends == Ends::periodic) {}
@@ -246,7 +288,281 @@ public:
         return Scratch(scratch_.data(), bytes);
     }
 
+    // Adds a generator at each of points(r, 0), r < extent(0), a view in the
+    // mesh's memory, to the line of the last update()/order(). A request is deferred if another one takes the
+    // same gap between two generators or if it snaps onto a generator, as the
+    // new cell would be empty or its old cells unknown. Stale face and cell
+    // arrays, as order(), until update_cells().
+    template <class Points>
+    const Changes& insert(const Points& points) {
+        const int requested = static_cast<int>(points.extent(0));
+        reserve(n_ + requested);
+        changes_for(requested);
+        const Line line = line_;
+        const auto rank = rank_;
+        const auto keys = request_keys_;
+        const sorted_mesh::Grid grid = grid_;
+        const bool periodic = periodic_;
+        const int n = n_, start = first_slot();
+        Kokkos::parallel_for(
+            "mesh1::locate", Kokkos::RangePolicy<ExecSpace>(exec_, 0, requested), KOKKOS_LAMBDA(int r) {
+                const sorted_mesh::Key key = sorted_mesh::snap(points(r, 0), grid, periodic);
+                int lo = 0, hi = n;  // the first slot past `key`, counted from the smallest key
+                while (lo < hi) {
+                    const int mid = lo + (hi - lo) / 2, slot = mid + start >= n ? mid + start - n : mid + start;
+                    if (line.key(slot) <= key)
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+                keys(r) = key;
+                const int before = lo == 0 ? 0 : (lo - 1 + start >= n ? lo - 1 + start - n : lo - 1 + start);
+                rank(r) = lo == 0 || line.key(before) != key ? lo : -1;  // -1: on a generator
+            });
+        // Which ones go ahead, decided on the host: a request per gap, the
+        // earliest in order of position, then of request.
+        const auto rank_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, rank);
+        const auto key_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, keys);
+        std::vector<int> by_place(static_cast<std::size_t>(requested));
+        std::iota(by_place.begin(), by_place.end(), 0);
+        const auto gap_of = [&](int r) { return periodic && rank_host(r) == n ? 0 : rank_host(r); };
+        std::stable_sort(by_place.begin(), by_place.end(), [&](int a, int b) { return gap_of(a) < gap_of(b); });
+        std::vector<char> go(static_cast<std::size_t>(requested), 0);
+        int last_gap = -1;
+        for (const int r : by_place) {
+            if (rank_host(r) < 0 || gap_of(r) == last_gap) continue;
+            go[static_cast<std::size_t>(r)] = 1;
+            last_gap = gap_of(r);
+        }
+        const auto id_host = Kokkos::create_mirror_view(changes_.id);
+        int done = 0;
+        for (int r = 0; r < requested; ++r) id_host(r) = go[static_cast<std::size_t>(r)] ? n + done++ : -1;
+        Kokkos::deep_copy(exec_, changes_.id, id_host);
+        changes_.requested = requested;
+        changes_.done = done;
+        changes_.first = n;
+        changes_.moves = 0;
+        // The accepted ones by position, for the pass over the line.
+        by_place.erase(std::remove_if(by_place.begin(), by_place.end(), [&](int r) { return !go[static_cast<std::size_t>(r)]; }),
+                       by_place.end());
+        std::stable_sort(by_place.begin(), by_place.end(), [&](int a, int b) { return rank_host(a) < rank_host(b); });
+        const auto ranks = sorted_ranks_;
+        const auto place_host = Kokkos::create_mirror_view(ranks);
+        const auto sorted_keys = sorted_keys_;
+        const auto sorted_ids = sorted_ids_;
+        const auto sorted_key_host = Kokkos::create_mirror_view(sorted_keys);
+        const auto sorted_id_host = Kokkos::create_mirror_view(sorted_ids);
+        for (int j = 0; j < done; ++j) {
+            const int r = by_place[static_cast<std::size_t>(j)];
+            place_host(j) = rank_host(r);
+            sorted_key_host(j) = key_host(r);
+            sorted_id_host(j) = id_host(r);
+        }
+        Kokkos::deep_copy(exec_, ranks, place_host);
+        Kokkos::deep_copy(exec_, sorted_keys, sorted_key_host);
+        Kokkos::deep_copy(exec_, sorted_ids, sorted_id_host);
+        const auto id = changes_.id;
+        const auto neighbour = changes_.neighbour;
+        const auto overlap = changes_.overlap;
+        const auto volume = changes_.volume;
+        Kokkos::parallel_for(
+            "mesh1::overlaps", Kokkos::RangePolicy<ExecSpace>(exec_, 0, requested), KOKKOS_LAMBDA(int r) {
+                for (int side = 0; side < 2; ++side) {
+                    neighbour(r, side) = side == 0 ? -1 : -2;
+                    overlap(r, side) = 0;
+                    volume(r, side) = 0;
+                }
+                if (id(r) < 0) return;
+                const int at = rank(r);
+                const sorted_mesh::i64 p = static_cast<sorted_mesh::i64>(keys(r));
+                const bool wall_left = !periodic && at == 0, wall_right = !periodic && at == n;
+                const int a = (at - 1 + start + n) % n, b = (at + start) % n;  // the slots around the new point
+                const sorted_mesh::i64 ka = static_cast<sorted_mesh::i64>(line.key(a)), kb = static_cast<sorted_mesh::i64>(line.key(b));
+                const double half = 0.5 * line.step;
+                if (!wall_left) {
+                    neighbour(r, 0) = line.order(a);
+                    volume(r, 0) = line.volume(a);
+                }
+                if (!wall_right) {
+                    neighbour(r, 1) = line.order(b);
+                    volume(r, 1) = line.volume(b);
+                }
+                if (wall_left) {
+                    overlap(r, 1) = static_cast<double>(p + kb) * half;
+                } else if (wall_right) {
+                    overlap(r, 0) = static_cast<double>(2 * line.period - ka - p) * half;
+                } else {
+                    const sorted_mesh::i64 from_a = kb - p, from_b = p - ka;
+                    overlap(r, 0) = static_cast<double>(from_a < 0 ? from_a + line.period : from_a) * half;
+                    overlap(r, 1) = static_cast<double>(from_b < 0 ? from_b + line.period : from_b) * half;
+                }
+            });
+        // The old slots move up by the new points before them; ids_ and keys_
+        // are spare, and the line starts at its smallest key from here on.
+        const auto next_order = ids_;
+        const auto next_key = keys_;
+        const int accepted = done;
+        Kokkos::parallel_for(
+            "mesh1::insert", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n), KOKKOS_LAMBDA(int s) {
+                const int u = s - start < 0 ? s - start + n : s - start;
+                const int up = count_up_to(ranks, accepted, u) + u;
+                next_order(up) = line.order(s);
+                next_key(up) = line.key(s);
+            });
+        Kokkos::parallel_for(
+            "mesh1::insert_new", Kokkos::RangePolicy<ExecSpace>(exec_, 0, accepted), KOKKOS_LAMBDA(int j) {
+                next_order(ranks(j) + j) = sorted_ids(j);
+                next_key(ranks(j) + j) = sorted_keys(j);
+            });
+        std::swap(line_.order, ids_);
+        std::swap(line_.key, keys_);
+        n_ += done;
+        line_.n = n_;
+        current_ = false;
+        return changes_;
+    }
+
+    // Takes particles ids(r), r < extent(0), off the line. A request is
+    // deferred if it would leave fewer than 3 particles, or if a neighbour on
+    // the line is going as well (its old neighbours would not be the cells that
+    // take over) or the id is not on the line. Stale arrays, as insert().
+    template <class Ids>
+    const Changes& remove(const Ids& ids) {
+        const int requested = static_cast<int>(ids.extent(0));
+        changes_for(requested);
+        const Line line = line_;
+        const int n = n_;
+        const bool periodic = periodic_;
+        const auto slot_of = ids_;  // spare: by id
+        Kokkos::parallel_for(
+            "mesh1::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n), KOKKOS_LAMBDA(int s) { slot_of(line.order(s)) = s; });
+        const auto rank = rank_;
+        Kokkos::parallel_for(
+            "mesh1::find", Kokkos::RangePolicy<ExecSpace>(exec_, 0, requested), KOKKOS_LAMBDA(int r) {
+                const int i = ids(r);
+                rank(r) = i >= 0 && i < n ? slot_of(i) : -1;
+            });
+        const auto slot_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, rank);
+        std::vector<int> by_slot(static_cast<std::size_t>(requested));
+        std::iota(by_slot.begin(), by_slot.end(), 0);
+        std::stable_sort(by_slot.begin(), by_slot.end(), [&](int a, int b) { return slot_host(a) < slot_host(b); });
+        std::vector<char> go(static_cast<std::size_t>(requested), 0);
+        int done = 0, last = -2, first_slot_gone = -1;
+        for (const int r : by_slot) {
+            const int s = slot_host(r);
+            if (s < 0 || s == last || s == last + 1 || n - done <= 3) continue;
+            if (periodic && s == n - 1 && first_slot_gone == 0) continue;  // the seam
+            go[static_cast<std::size_t>(r)] = 1;
+            last = s;
+            if (done++ == 0) first_slot_gone = s;
+        }
+        const auto id_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, ids);
+        const auto reported_host = Kokkos::create_mirror_view(changes_.id);
+        by_slot.erase(std::remove_if(by_slot.begin(), by_slot.end(), [&](int r) { return !go[static_cast<std::size_t>(r)]; }),
+                      by_slot.end());
+        const auto gone = sorted_ranks_;
+        const auto gone_host = Kokkos::create_mirror_view(gone);
+        for (int r = 0; r < requested; ++r) reported_host(r) = go[static_cast<std::size_t>(r)] ? id_host(r) : -1;
+        for (int j = 0; j < done; ++j) gone_host(j) = slot_host(by_slot[static_cast<std::size_t>(j)]);
+        Kokkos::deep_copy(exec_, changes_.id, reported_host);
+        Kokkos::deep_copy(exec_, gone, gone_host);
+        // Holes below the new count take the last ids that stay, both in order.
+        const int kept = n - done;
+        std::vector<int> holes;
+        std::vector<char> leaving(static_cast<std::size_t>(n - kept), 0);
+        for (int j = 0; j < done; ++j) {
+            const int i = id_host(by_slot[static_cast<std::size_t>(j)]);
+            if (i < kept)
+                holes.push_back(i);
+            else
+                leaving[static_cast<std::size_t>(i - kept)] = 1;
+        }
+        std::sort(holes.begin(), holes.end());
+        const auto moved_host = Kokkos::create_mirror_view(changes_.moved);
+        const auto new_id = sorted_ids_;  // by (id - kept)
+        const auto new_id_host = Kokkos::create_mirror_view(new_id);
+        int moves = 0;
+        for (int i = kept; i < n; ++i) {
+            new_id_host(i - kept) = -1;
+            if (leaving[static_cast<std::size_t>(i - kept)]) continue;
+            const int hole = holes[static_cast<std::size_t>(moves)];
+            moved_host(moves, 0) = i;
+            moved_host(moves, 1) = hole;
+            new_id_host(i - kept) = hole;
+            ++moves;
+        }
+        Kokkos::deep_copy(exec_, changes_.moved, moved_host);
+        Kokkos::deep_copy(exec_, new_id, new_id_host);
+        changes_.requested = requested;
+        changes_.done = done;
+        changes_.first = 0;
+        changes_.moves = moves;
+        const auto id = changes_.id;
+        const auto neighbour = changes_.neighbour;
+        const auto overlap = changes_.overlap;
+        const auto volume = changes_.volume;
+        Kokkos::parallel_for(
+            "mesh1::overlaps", Kokkos::RangePolicy<ExecSpace>(exec_, 0, requested), KOKKOS_LAMBDA(int r) {
+                for (int side = 0; side < 2; ++side) {
+                    neighbour(r, side) = side == 0 ? -1 : -2;
+                    overlap(r, side) = 0;
+                    volume(r, side) = 0;
+                }
+                if (id(r) < 0) return;
+                const int s = rank(r), a = line.slot(s, -1), b = line.slot(s, 1);
+                const double half = 0.5 * line.step;
+                if (a >= 0) {
+                    neighbour(r, 0) = line.order(a);
+                    volume(r, 0) = line.volume(a);
+                }
+                if (b >= 0) {
+                    neighbour(r, 1) = line.order(b);
+                    volume(r, 1) = line.volume(b);
+                }
+                if (a < 0)
+                    overlap(r, 1) = line.volume(s);
+                else if (b < 0)
+                    overlap(r, 0) = line.volume(s);
+                else {
+                    overlap(r, 0) = static_cast<double>(line.gap(s)) * half;
+                    overlap(r, 1) = static_cast<double>(line.gap(s - 1)) * half;
+                }
+            });
+        // Down by the removed slots before each one, ids renamed.
+        const auto next_order = ids_;
+        const auto next_key = keys_;
+        const int count = done;
+        Kokkos::parallel_for(
+            "mesh1::remove", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n), KOKKOS_LAMBDA(int s) {
+                const int below = count_up_to(gone, count, s);
+                if (below > 0 && gone(below - 1) == s) return;
+                const int i = line.order(s);
+                next_order(s - below) = i < kept ? i : new_id(i - kept);
+                next_key(s - below) = line.key(s);
+            });
+        std::swap(line_.order, ids_);
+        std::swap(line_.key, keys_);
+        n_ = kept;
+        line_.n = n_;
+        current_ = false;
+        return changes_;
+    }
+
+    // Room for `count` particles without another allocation.
+    void reserve(int count) {
+        if (count <= capacity_) return;
+        const int capacity = std::max(count, capacity_ + capacity_ / 4);
+        const auto order = line_.order;
+        const auto key = line_.key;
+        const auto used = std::make_pair(std::size_t(0), static_cast<std::size_t>(n_));
+        make_arrays(capacity);
+        Kokkos::deep_copy(exec_, Kokkos::subview(line_.order, used), Kokkos::subview(order, used));
+        Kokkos::deep_copy(exec_, Kokkos::subview(line_.key, used), Kokkos::subview(key, used));
+        current_ = false;
+    }
+
     int particles() const { return n_; }
+    int capacity() const { return capacity_; }
     bool periodic() const { return periodic_; }
     const ep::BoxN<1>& sides() const { return box_; }
     double box() const { return box_.side[0]; }
@@ -279,14 +595,20 @@ public:
     void allocate(int n) {
         n_ = n;
         sorts_ = 0;
-        auto make = [](auto& v, const char* label, auto... extents) {
-            using V = std::decay_t<decltype(v)>;
-            v = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), extents...);
-        };
         line_.n = n;
         line_.period = sorted_mesh::Grid::period;
         line_.step = grid_.step;
         line_.periodic = periodic_;
+        make_arrays(n);
+    }
+
+    // Every array for n particles; none keeps its contents.
+    void make_arrays(int n) {
+        capacity_ = n;
+        auto make = [](auto& v, const char* label, auto... extents) {
+            using V = std::decay_t<decltype(v)>;
+            v = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), extents...);
+        };
         make(line_.order, "mesh1_order", n);
         make(line_.key, "mesh1_key", n);
         make(keys_, "mesh1_keys_by_id", n);
@@ -339,6 +661,53 @@ public:
         return descents == (periodic ? 1 : 0);
     }
 
+    // The entries of `sorted` (of length count) that are at most `value`.
+    KOKKOS_INLINE_FUNCTION static int count_up_to(const View<int*>& sorted, int count, int value) {
+        int lo = 0, hi = count;
+        while (lo < hi) {
+            const int mid = lo + (hi - lo) / 2;
+            if (sorted(mid) <= value)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    // The slot of the smallest key: a periodic line may have rotated.
+    int first_slot() {
+        if (!periodic_) return 0;
+        const Line line = line_;
+        int found = 0;
+        Kokkos::parallel_reduce(
+            "mesh1::first_slot", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
+            KOKKOS_LAMBDA(int s, int& at) {
+                const int t = s + 1 == line.n ? 0 : s + 1;
+                if (line.key(t) < line.key(s)) at = t;
+            },
+            Kokkos::Max<int>(found));
+        return std::max(found, 0);
+    }
+
+    // Room for a batch of `requested`, reused from batch to batch.
+    void changes_for(int requested) {
+        if (requested <= static_cast<int>(rank_.extent(0))) return;
+        auto make = [](auto& v, const char* label, auto... extents) {
+            using V = std::decay_t<decltype(v)>;
+            v = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), extents...);
+        };
+        make(changes_.id, "mesh1_change_id", requested);
+        make(changes_.neighbour, "mesh1_change_neighbour", requested);
+        make(changes_.moved, "mesh1_change_moved", requested);
+        make(changes_.overlap, "mesh1_change_overlap", requested);
+        make(changes_.volume, "mesh1_change_volume", requested);
+        make(rank_, "mesh1_change_rank", requested);
+        make(sorted_ranks_, "mesh1_change_sorted", requested);
+        make(sorted_ids_, "mesh1_change_ids", requested);
+        make(request_keys_, "mesh1_change_keys", requested);
+        make(sorted_keys_, "mesh1_change_sorted_keys", requested);
+    }
+
     // Faces, volumes, centroids and per-cell face lists from the line, one
     // thread per slot.
     void geometry() {
@@ -389,10 +758,13 @@ private:
     ep::BoxN<1> box_;
     sorted_mesh::Grid grid_;
     bool periodic_;
-    int n_ = 0;
+    int n_ = 0, capacity_ = 0;
     long long sorts_ = 0;
     bool current_ = false;
     Line line_;
+    Changes changes_;
+    View<int*> rank_, sorted_ranks_, sorted_ids_;
+    View<sorted_mesh::Key*> request_keys_, sorted_keys_;
     View<sorted_mesh::Key*> keys_;
     View<int*> ids_;
     sorted_mesh::Sorter<ExecSpace> sorter_;

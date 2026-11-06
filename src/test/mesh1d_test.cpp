@@ -8,7 +8,11 @@
 // wall faces point out. Moving: after every step (small steps that keep the
 // order, large ones that cross, points wrapping through L) the mesh equals
 // a fresh build bit for bit, and the order is sorted again only when points
-// crossed.
+// crossed. Insertion and removal: over random batches, on a periodic line
+// that has rotated and on one with walls, near the walls, on generators and
+// twice in one gap, the mesh equals the oracle and a fresh build, the reported
+// overlaps equal the overlaps of the old and new cells computed on the host (in
+// integers, brute force), so a transfer by them conserves, and the arrays grow.
 
 #include "check.hpp"
 #include "voronoi_mesh.hpp"
@@ -132,6 +136,229 @@ std::string oracle(const Mesh& mesh, const std::vector<double>& x, const sorted_
     return "";
 }
 
+// The cells of the snapped points as intervals in half grid steps: a periodic
+// cell may run past the end of the line. O(n^2) in overlaps, a test's oracle.
+struct Interval {
+    long long lo, hi;
+};
+
+std::vector<long long> keys_of(const std::vector<double>& x, const sorted_mesh::Grid& grid, bool periodic) {
+    std::vector<long long> key;
+    for (const double v : x) key.push_back(static_cast<long long>(sorted_mesh::snap(v, grid, periodic)));
+    return key;
+}
+
+std::vector<Interval> cells_of(const std::vector<long long>& key, bool periodic) {
+    const long long P = sorted_mesh::Grid::period;
+    const int n = static_cast<int>(key.size());
+    std::vector<int> order(n);
+    for (int i = 0; i < n; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](int a, int b) { return key[a] != key[b] ? key[a] < key[b] : a < b; });
+    std::vector<Interval> cell(n);
+    for (int s = 0; s < n; ++s) {
+        const long long k = key[order[s]];
+        const long long left = s > 0 ? key[order[s - 1]] : periodic ? key[order[n - 1]] - P : -k;
+        const long long right = s + 1 < n ? key[order[s + 1]] : periodic ? key[order[0]] + P : 2 * P - k;
+        cell[order[s]] = {left + k, k + right};
+    }
+    return cell;
+}
+
+long long common(const Interval& a, const Interval& b, bool periodic) {
+    long long sum = 0;
+    const long long P2 = 2 * sorted_mesh::Grid::period;
+    for (int shift = periodic ? -1 : 0; shift <= (periodic ? 1 : 0); ++shift)
+        sum += std::max(0LL, std::min(a.hi, b.hi + shift * P2) - std::max(a.lo, b.lo + shift * P2));
+    return sum;
+}
+
+// The report of one change against the cells before and after it. Insert:
+// the new cells' overlaps; remove: what the neighbours gain from the gone
+// cell, the same integers with the old and the new cells' roles swapped.
+std::string check_report(const Mesh::Changes& c, const std::vector<Interval>& parents, const std::vector<Interval>& children,
+                         const std::vector<int>& child_of_request, const std::vector<Interval>& before, double step, bool periodic) {
+    const auto id = host(c.id);
+    const auto neighbour = host(c.neighbour);
+    const auto overlap = host(c.overlap);
+    const auto volume = host(c.volume);
+    for (int r = 0; r < c.requested; ++r) {
+        if (id(r) < 0) continue;
+        const Interval& cell = children[child_of_request[r]];
+        for (int side = 0; side < 2; ++side) {
+            const int other = neighbour(r, side);
+            if (other < 0) {
+                if (overlap(r, side) != 0.0) return "a wall gives nothing";
+                continue;
+            }
+            const double expected = 0.5 * step * static_cast<double>(common(cell, parents[other], periodic));
+            if (overlap(r, side) != expected) return "overlap of request " + std::to_string(r);
+            if (volume(r, side) != 0.5 * step * static_cast<double>(before[other].hi - before[other].lo))
+                return "volume before, request " + std::to_string(r);
+        }
+        if (overlap(r, 0) + overlap(r, 1) != 0.5 * step * static_cast<double>(cell.hi - cell.lo)) return "the overlaps miss part of the cell";
+    }
+    return "";
+}
+
+// Random batches of insertions and removals on a line.
+void changes_on(Check& check, bool periodic, const Exec& exec, std::mt19937_64& rng) {
+    const double L = 3.0;
+    const sorted_mesh::Grid grid(L);
+    const std::string ends = periodic ? "periodic" : "walls";
+    const auto kind = periodic ? voronoi::Ends::periodic : voronoi::Ends::walls;
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::vector<double> x(200);
+    for (double& v : x) v = L * unit(rng);
+    Mesh mesh(exec, L, kind);
+    mesh.update(device(x));
+    bool order_good = true, fresh_good = true, report_good = true, same_gap_deferred = false, on_generator_deferred = false;
+    std::string why;
+    long long inserted = 0, removed = 0;
+    int deferred = 0;
+    const int capacity = mesh.capacity();
+    for (int round = 0; round < 60; ++round) {
+        // Rotate a periodic line: the order holds without a sort.
+        if (periodic) {
+            for (double& v : x) v = std::fmod(v + 0.07 * L, L);
+            mesh.update(device(x));
+        }
+        const std::vector<long long> key_before = keys_of(x, grid, periodic);
+        const std::vector<Interval> before = cells_of(key_before, periodic);
+        if (round % 3 != 2) {
+            std::vector<double> points;
+            const int k = 1 + static_cast<int>(rng() % 12);
+            for (int r = 0; r < k; ++r) points.push_back(L * unit(rng));
+            points.push_back(x[rng() % x.size()]);                      // on a generator
+            points.push_back(std::nextafter(points[0], L) + grid.step);  // the gap of points[0]
+            if (!periodic) points.push_back(0.1 * L / static_cast<double>(x.size()) * unit(rng));  // near a wall
+            if (!periodic) points.push_back(L * (1 - 0.1 * unit(rng) / static_cast<double>(x.size())));
+            const X requests = device(points);
+            const std::size_t old_n = x.size();
+            const Mesh::Changes& c = mesh.insert(requests);
+            const auto id = host(c.id);
+            std::vector<int> child_of_request(points.size(), -1);
+            x.resize(old_n + static_cast<std::size_t>(c.done));
+            for (int r = 0; r < c.requested; ++r) {
+                if (id(r) < 0) {
+                    ++deferred;
+                    const long long key = static_cast<long long>(sorted_mesh::snap(points[r], grid, periodic));
+                    if (std::find(key_before.begin(), key_before.end(), key) != key_before.end())
+                        on_generator_deferred = true;
+                    else
+                        same_gap_deferred = true;
+                    continue;
+                }
+                if (id(r) < c.first || id(r) >= c.first + c.done) report_good = false;
+                x[id(r)] = points[r];
+                child_of_request[r] = id(r);
+                ++inserted;
+            }
+            const std::vector<Interval> after = cells_of(keys_of(x, grid, periodic), periodic);
+            const std::string bad = check_report(c, before, after, child_of_request, before, grid.step, periodic);
+            if (!bad.empty()) why = "insert: " + bad;
+        } else {
+            // Up to 8 ids, some of them neighbours on the line.
+            std::vector<int> ids;
+            const int k = 1 + static_cast<int>(rng() % 8);
+            for (int r = 0; r < k; ++r) ids.push_back(static_cast<int>(rng() % x.size()));
+            Kokkos::View<int*, Memory> requests("ids", ids.size());
+            const auto requests_host = Kokkos::create_mirror_view(requests);
+            for (std::size_t r = 0; r < ids.size(); ++r) requests_host(r) = ids[r];
+            Kokkos::deep_copy(requests, requests_host);
+            const Mesh::Changes& c = mesh.remove(requests);
+            const auto id = host(c.id);
+            const auto moved = host(c.moved);
+            std::vector<int> cell_of_request(ids.size(), -1);
+            for (int r = 0; r < c.requested; ++r) {
+                if (id(r) >= 0)
+                    cell_of_request[r] = id(r);
+                else
+                    ++deferred;
+            }
+            // The cells after, under the ids before: what the neighbours became.
+            std::vector<char> gone(x.size(), 0);
+            for (int r = 0; r < c.requested; ++r)
+                if (id(r) >= 0) gone[id(r)] = 1;
+            std::vector<long long> kept_keys;
+            std::vector<int> kept_ids;
+            for (std::size_t i = 0; i < x.size(); ++i)
+                if (!gone[i]) {
+                    kept_keys.push_back(key_before[i]);
+                    kept_ids.push_back(static_cast<int>(i));
+                }
+            const std::vector<Interval> kept = cells_of(kept_keys, periodic);
+            std::vector<Interval> after(x.size(), Interval{0, 0});
+            for (std::size_t j = 0; j < kept.size(); ++j) after[kept_ids[j]] = kept[j];
+            const std::string bad = check_report(c, after, before, cell_of_request, before, grid.step, periodic);
+            if (!bad.empty()) why = "remove: " + bad;
+            for (int m = 0; m < c.moves; ++m) x[moved(m, 1)] = x[moved(m, 0)];
+            const std::size_t now = x.size() - static_cast<std::size_t>(c.done);
+            x.resize(now);
+            removed += c.done;
+        }
+        mesh.update_cells();
+        if (mesh.particles() != static_cast<int>(x.size())) why = "the count";
+        // Renaming can leave ties out of id order, and the next update sorts them.
+        mesh.update(device(x));
+        const std::string bad = oracle(mesh, x, grid, periodic);
+        if (!bad.empty()) {
+            order_good = false;
+            why = bad;
+        }
+        Mesh fresh(exec, L, kind);
+        fresh.update(device(x));
+        fresh_good = fresh_good && same(read(mesh), read(fresh));
+    }
+    check.expect(order_good && fresh_good && report_good && why.empty(),
+                 ends + ": 60 batches, " + std::to_string(inserted) + " inserted, " + std::to_string(removed) + " removed, " + std::to_string(deferred) +
+                     " deferred: the oracle, a fresh build, and overlaps against the host's" + (why.empty() ? "" : " (" + why + ")"));
+    check.expect(same_gap_deferred && on_generator_deferred, ends + ": a second request in a gap and one on a generator are deferred");
+    check.expect(mesh.capacity() > capacity, ends + ": the arrays grew, from " + std::to_string(capacity) + " to " + std::to_string(mesh.capacity()));
+}
+
+// Insertion at the two ends of a line with walls: a transfer by the report
+// conserves to rounding, and no sort runs.
+void transfer_at_a_wall(Check& check, const Exec& exec) {
+    std::vector<double> x;
+    const double L = 2.0;
+    for (int i = 0; i < 64; ++i) x.push_back(L * (i + 0.5) / 64);
+    Mesh mesh(exec, L, voronoi::Ends::walls);
+    mesh.update(device(x));
+    std::vector<double> mass(64);
+    double total = 0;
+    for (int i = 0; i < 64; ++i) total += mass[i] = 1.0 + 0.3 * std::sin(i * 0.37);
+    const Mesh::Changes& c = mesh.insert(device({0.01, 1.99}));
+    const auto id = host(c.id);
+    const auto neighbour = host(c.neighbour);
+    const auto overlap = host(c.overlap);
+    const auto volume = host(c.volume);
+    check.expect(neighbour(0, 0) == -1 && neighbour(1, 1) == -2 && c.done == 2, "insertion next to the walls: the wall is reported");
+    mass.resize(66);
+    for (int r = 0; r < 2; ++r) {
+        double taken = 0;
+        for (int side = 0; side < 2; ++side) {
+            const int other = neighbour(r, side);
+            if (other < 0) continue;
+            const double part = overlap(r, side) / volume(r, side) * mass[other];
+            mass[other] -= part;
+            taken += part;
+        }
+        mass[id(r)] = taken;
+    }
+    double after = 0;
+    for (const double m : mass) after += m;
+    check.expect(std::abs(after - total) < 1e-14 * total, "a transfer by the report conserves");
+    check.expect(mesh.sorts() == 0, "insertion does not sort");
+    x.push_back(0.01);
+    x.push_back(1.99);
+    mesh.update(device(x));
+    check.expect(mesh.sorts() == 0, "the next update finds the order good");
+    check.expect(host(mesh.line().order)(0) == id(0),
+                 "the new point is the first of the line");
+    check.expect(host(mesh.line().order)(65) == id(1),
+                 "and the other the last");
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -214,5 +441,8 @@ int main(int argc, char* argv[]) {
         }
         check.expect(refused, "fewer than 3 particles are refused");
     }
+    changes_on(check, true, exec, rng);
+    changes_on(check, false, exec, rng);
+    transfer_at_a_wall(check, exec);
     return check.failed() != 0;
 }
