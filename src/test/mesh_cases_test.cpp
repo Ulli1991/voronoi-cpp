@@ -1,4 +1,5 @@
-// 3D special cases of the mesh against the oracle (oracle.hpp via mesh_check.hpp);
+// 3D special cases against the oracle: a case needs the exact mesh or a refusal, never a wrong mesh with no error.
+// `list` prints the names, `<prefix> ...` runs matching cases; known open issues run with --known only.
 
 #include "check.hpp"
 #include "distortion.hpp"
@@ -1631,7 +1632,7 @@ void reproducibility_cases() {
         }, on_cuda(27));
 #endif
         add("repro.dump." + name, [=](Check& c) {
-            // Hashes for a comparison across builds and thread counts:
+            // Hashes to compare builds and thread counts: MESH_REPRO_DUMP=<file> appends "<case> <step> <topology> <geometry>".
             const char* path = std::getenv("MESH_REPRO_DUMP");
             const auto a = trace<Exec>(make_points(name, 4096), d, 20);
             if (path) {
@@ -1673,7 +1674,7 @@ int main(int argc, char** argv) {
         for (const auto& c : cases()) std::cout << c.name << (c.issue ? " known" : "") << "\n";
         return 0;
     }
-    // ctest runs a subset within its time budget;
+    // ctest runs a subset within its time budget; MESH_CASES_FULL=1 runs the whole matrix.
     const bool full = std::getenv("MESH_CASES_FULL") != nullptr;
     auto subset_skips = [&](const std::string& name) {
         static const std::vector<std::string> only_full{

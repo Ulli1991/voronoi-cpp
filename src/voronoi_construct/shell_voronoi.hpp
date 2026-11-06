@@ -267,7 +267,7 @@ struct Cells {
     Cells() = default;
 
     // Cells of n particles with owned faces, room for faces_per_cell per built cell on average (about 8 are needed) and
-    // a part-used block per warp;
+    // a part-used block per warp; built: cells to build (all by default, fewer for a local rebuild).
     Cells(int n, bool with_diagnostics, int faces_per_cell = 10, int built = -1) : Cells(n) {
         if (built < 0) built = n;
         face_start = Kokkos::View<int*, MemorySpace>(uninitialized("cell_face_start"), n);

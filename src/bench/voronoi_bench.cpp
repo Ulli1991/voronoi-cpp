@@ -1,4 +1,4 @@
-// Timing and debugging of the mesh pipeline (not a test):
+// Timing and debugging of the mesh pipeline, not a test: `rebuild` and `step`; flags in docs/design.md.
 
 #include "support.hpp"
 

@@ -229,7 +229,7 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
         d = sign(w);
     }
     if (d == 0) {
-        // Cofactor of lift i:
+        // Cofactor of lift i: (-1)^i times the orientation of the other four, in order of increasing particle id.
         int order[5] = {0, 1, 2, 3, 4};
         for (int i = 1; i < 5; ++i)
             for (int j = i; j > 0 && id[order[j - 1]] > id[order[j]]; --j) {
