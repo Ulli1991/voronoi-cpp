@@ -1,10 +1,7 @@
 #pragma once
 
-// Random mesh cases for mesh_fuzz_test: one integer seed gives a Script, a
-// plain list of positions and API calls with no reference to the generators,
-// so a Script can be saved, cut down and replayed by itself. Everything here
-// runs on the host and is the same on every backend. A seed's high digits
-// choose the profile (see `profile_of`).
+// Random mesh cases for mesh_fuzz_test: one integer seed gives a Script, a plain list of positions and API calls that can be
+// saved, cut down and replayed by itself. Host only, the same on every backend; a seed's high digits choose the profile (`profile_of`).
 
 #include "exact_predicates.hpp"
 

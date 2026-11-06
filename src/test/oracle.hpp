@@ -212,10 +212,8 @@ inline Verdict check(const Grid& g, const Tets& m) {
         v.inverted += d < 0;
         volume6 += d < 0 ? -d : d;
 
-        // The long double circumcentre selects candidate images, the exact sign decides.
-        // The numerators in integers (each below 2^122: nearest-image corners,
-        // |a[k]| <= 2^29): in long double they cancel on a sliver, and a tiny
-        // sphere comes out hundreds of boxes wide.
+        // The long double circumcentre selects candidate images, the exact sign decides. Numerators in integers (below 2¹²²:
+        // nearest-image corners, |a[k]| <= 2²⁹): in long double they cancel on a sliver, and a tiny sphere comes out hundreds of boxes wide.
         const long double dd = (long double)(d);
         std::array<long double, 3> centre;
         long double r2 = 0;

@@ -81,7 +81,7 @@ distance to its nearest neighbour), reach, faces per cell and corners per face.
 `mesh_fuzz_test` (`src/test/mesh_fuzz_test.cpp`, generators in `mesh_fuzz.hpp`)
 draws whole cases from one integer seed: box, points, the `Mesh` type and every
 call, as a plain `Script` that can be saved and replayed. Digits of the seed above
-10^12 choose the profile: 0 small, 1 long call sequences, 2 medium, 3 large, 4 huge
+10¹² choose the profile: 0 small, 1 long call sequences, 2 medium, 3 large, 4 huge
 n, 5 1D, 6 2D. A case ends `exact`, `refused` (a cause the input really has),
 `valid` (a refusal of input that has a mesh, or with no clear cause), `bits`,
 `rough` (exact tetrahedra, geometry past rounding), `WRONG`, `CRASH` or `HANG`.

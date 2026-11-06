@@ -1,24 +1,5 @@
-// Random cases of voronoi::Mesh against the independent oracle (TESTING.md).
-//
-//   mesh_fuzz_test                      a few seconds of fixed seeds and the saved cases
-//   mesh_fuzz_test smoke [--cases=DIR] [--seconds=S] [--known]   the same, as ctest calls it
-//   mesh_fuzz_test run --first=S --count=N --results=FILE [--seconds=S] [--timeout=S] [--stride=K]
-//                                       a long run: resumes from its results file, one
-//                                       line per seed, survives crashes and hangs
-//   mesh_fuzz_test one SEED [--dump=FILE]    one seed, verbose; FILE gets its Script
-//   mesh_fuzz_test case FILE            a saved Script, verbose
-//   mesh_fuzz_test dump SEED FILE       only writes the Script: generated doubles can differ
-//                                       between compilers, so backends are compared on files
-//   mesh_fuzz_test min SEED|FILE --out=FILE [--timeout=S]   delta debugging, keeping the signature
-//
-// One seed is one whole case: positions, box, the Mesh type, every call. Each case ends as
-//   exact     every call gave the exact mesh, or a refusal of input that has none
-//   refused   a refusal naming a cause the input really has
-//   valid     a refusal of input that has a mesh, or with no clear cause: a finding, a lesser one
-//   bits      the mesh is right, a promise about its bits is not kept
-//   rough     topology right, geometry beyond rounding but by small amounts
-//   WRONG     no error, and something in the mesh is wrong
-//   CRASH     the process died            HANG  no answer within the timeout
+// Random cases of voronoi::Mesh against the independent oracle: smoke (ctest), run (long, resumes, survives crashes), one, case, min.
+// One seed is one whole case, ending exact, refused, valid, bits, rough, WRONG, CRASH or HANG; usage and classes are in TESTING.md.
 
 #include "check.hpp"
 #include "mesh_check.hpp"

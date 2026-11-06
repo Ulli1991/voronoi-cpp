@@ -10,8 +10,7 @@
 // 2D repair stage, device: called by Mesh<2>::update after snap, then tri_finish on stuck triangles; feeds tri_mesh::faces.
 // Keeps the triangulation Delaunay as particles move: screen() lists failing edges, repair() flips them in rounds (Lawson 2-2).
 // Conflicting flips are settled by votes in per-triangle locks whose keys grow with the round, so winners do not depend on list order.
-// Inversions no flip removes stay stuck, for tri_finish::finish() or a rebuild in voronoi::Mesh. Geometry wider than half a
-// period is `unfinished` at once: flips on it follow no potential and can cycle for ever, and only a rebuild helps.
+// Inversions no flip removes stay stuck for tri_finish::finish() or a rebuild; geometry beyond one periodic image can cycle, so it ends the repair (`unfinished`).
 namespace tri_repair {
 
 namespace ep = exact_predicates;
