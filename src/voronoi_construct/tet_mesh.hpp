@@ -266,6 +266,21 @@ KOKKOS_INLINE_FUNCTION Vec2 wrap(Vec2 d, const exact_predicates::BoxN<2>& box) {
     return {wrap(d.x, box.side[0], box.inverse[0]), wrap(d.y, box.side[1], box.inverse[1])};
 }
 
+// x_b - x_a of snapped positions, in the nearest image, as a whole number of grid steps times the step. Their plain
+// difference has the rounding of two products k * step, a large error on neighbours a few steps apart (#29).
+template <int D>
+KOKKOS_INLINE_FUNCTION double snapped_difference(double delta, const exact_predicates::BoxN<D>& box, int a) {
+    return (Kokkos::nearbyint(delta * box.per_step) - static_cast<double>(box.period[a]) * Kokkos::nearbyint(delta * box.inverse[a])) * box.step;
+}
+// The same per axis.
+template <int D>
+KOKKOS_INLINE_FUNCTION VecN<D> snapped_difference(VecN<D> d, const exact_predicates::BoxN<D>& box) {
+    if constexpr (D == 3)
+        return {snapped_difference(d.x, box, 0), snapped_difference(d.y, box, 1), snapped_difference(d.z, box, 2)};
+    else
+        return {snapped_difference(d.x, box, 0), snapped_difference(d.y, box, 1)};
+}
+
 // Row i of positions or centres x, in D dimensions.
 template <int D = 3, class X>
 KOKKOS_INLINE_FUNCTION VecN<D> row(const X& x, int i) {
@@ -881,7 +896,9 @@ KOKKOS_INLINE_FUNCTION void rounded_offsets(const X& x, const Box& box, const in
     for (int k = 0; k < 3; ++k)
         for (int a = 0; a < 3; ++a) {
             const double delta = R::sub(x(v[k + 1], a), x(v[0], a));
-            e[k][a] = R::sub(delta, R::mul(box.side[a], Kokkos::nearbyint(R::mul(delta, box.inverse[a]))));
+            const double whole = R::sub(Kokkos::nearbyint(R::mul(delta, box.per_step)),
+                                        R::mul(static_cast<double>(box.period[a]), Kokkos::nearbyint(R::mul(delta, box.inverse[a]))));
+            e[k][a] = R::mul(whole, box.step);
         }
     for (int k = 0; k < 3; ++k) d[k] = {e[k][0], e[k][1], e[k][2]};
 }
@@ -975,7 +992,7 @@ void faces(const ExecSpace& exec, const X& x, const Box& box,
             const int begin = mesh.ring_start(f), end = begin + mesh.ring_length(f);
             const Vec3 p = row(x, i);
             auto vertex = [&](int m) { return wrap(row(mesh.centre, mesh.ring(m)) - p, box); };
-            const Vec3 dj = wrap(row(x, j) - p, box);
+            const Vec3 dj = snapped_difference<3>(row(x, j) - p, box);
             // Fan triangles (first, previous, v): twice the area vector and (previous + v) weighted by the triangle's
             // area projected on dj, divided once per face (idea from Doug Rennehan's plume, commit 6cbb429).
             const Vec3 first = vertex(begin);

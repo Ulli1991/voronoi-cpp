@@ -42,6 +42,7 @@ struct BoxN {
     double side[D];
     double inverse[D];  // 1 / side
     double step = 1 / scale;
+    double per_step = scale;  // 1 / step
     i64 period[D];
 
     BoxN() : BoxN(1.0) {}
@@ -74,6 +75,7 @@ private:
             if (!(given[a] > 0)) throw std::invalid_argument("exact_predicates::Box: sides must be positive and finite");
         if (!std::isfinite(longest)) throw std::invalid_argument("exact_predicates::Box: sides must be positive and finite");
         step = longest / scale;
+        per_step = scale / longest;
         for (int a = 0; a < D; ++a) {
             period[a] = std::max(std::llround(given[a] / step), 2LL);
             side[a] = given[a] == longest ? longest : static_cast<double>(period[a]) * step;

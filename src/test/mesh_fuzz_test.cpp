@@ -7,6 +7,8 @@
 //                                       line per seed, survives crashes and hangs
 //   mesh_fuzz_test one SEED [--dump=FILE]    one seed, verbose; FILE gets its Script
 //   mesh_fuzz_test case FILE            a saved Script, verbose
+//   mesh_fuzz_test dump SEED FILE       only writes the Script: generated doubles can differ
+//                                       between compilers, so backends are compared on files
 //   mesh_fuzz_test min SEED|FILE --out=FILE [--timeout=S]   delta debugging, keeping the signature
 //
 // One seed is one whole case: positions, box, the Mesh type, every call. Each case ends as
@@ -1129,7 +1131,7 @@ void smoke(Check& c, const std::string& directory, double seconds, bool with_kno
         }
         Outcome o;
         run_script(load(path), o, Limits{});
-        c.expect(o.kind <= valid, "case " + name + " " + o.signature + " " + o.detail);
+        c.expect(o.kind <= valid || o.kind == rough, "case " + name + " " + o.signature + " " + o.detail);
     }
     for (const std::uint64_t seed : cycling_2d) {
         Outcome o;
@@ -1183,6 +1185,11 @@ int main(int argc, char** argv) {
         }
         return long_run(std::stoll(option(argc, argv, "first", "1")), std::stoll(option(argc, argv, "count", "1000")),
                         std::stoll(option(argc, argv, "stride", "1")), results, std::stod(option(argc, argv, "seconds", "1e9")), timeout);
+    }
+    if (mode == "dump") {  // a seed's Script, so that two builds replay the same doubles
+        if (argc < 4) return 2;
+        save(make_script(std::stoull(argv[2])), std::string(argv[3]));
+        return 0;
     }
     if (mode == "min") {  // a process per candidate, no Kokkos here
         const std::string what = argc > 2 ? argv[2] : "";

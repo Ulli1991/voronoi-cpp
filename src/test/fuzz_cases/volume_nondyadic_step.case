@@ -1,5 +1,4 @@
 label ratio hcp+jit+shell+void+powerlaw+coplanar+line steps:1, (min of 1000049546, WRONG:closure)
-known 29
 sides 0x1.87220221920e4p-1 0x1.3e32404dc0f7p-1 0x1.3e4434d4b1f27p-1
 variant 0
 ops 1

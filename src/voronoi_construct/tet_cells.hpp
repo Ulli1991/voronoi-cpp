@@ -38,7 +38,7 @@ constexpr double pyramid_centroid = static_cast<double>(D) / (D + 1);
 template <int D, class X, class Area, class Centroid>
 KOKKOS_INLINE_FUNCTION double pyramid(const X& x, const exact_predicates::BoxN<D>& box, const Area& area,
                                       const Centroid& centroid, int i, int j, int f, VecN<D>& c) {
-    const VecN<D> d = wrap(row<D>(x, j) - row<D>(x, i), box);
+    const VecN<D> d = snapped_difference<D>(row<D>(x, j) - row<D>(x, i), box);
     const VecN<D> A = row<D>(area, f);
     c = row<D>(centroid, f);
     if (j < i) c = c + d;
@@ -455,7 +455,7 @@ void gradient_weights(const ExecSpace& exec, const Xs& x, const exact_predicates
                 const int f = face(k), o = owner(f), m = neighbour(f), j = o == i ? m : o;
                 X[0] = 1;
                 for (int a = 0; a < D; ++a)
-                    X[1 + a] = wrap(x(j, a) - x(i, a), box.side[a], box.inverse[a]) + centroid(j, a) - centroid(i, a);
+                    X[1 + a] = snapped_difference(x(j, a) - x(i, a), box, a) + centroid(j, a) - centroid(i, a);
                 double s = 0;
                 for (int a = 0; a < D; ++a) s += area(f, a) * area(f, a);
                 return Kokkos::sqrt(s);
