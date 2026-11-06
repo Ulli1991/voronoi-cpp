@@ -1108,6 +1108,7 @@ std::string header_of(const std::string& path) {
 }
 
 constexpr long long fixed_seeds = 16;
+constexpr std::uint64_t cycling_2d[] = {6000000000027, 6000000155537, 6000000831756};  // #36: repair never returned
 
 void smoke(Check& c, const std::string& directory, double seconds, bool with_known) {
     std::vector<std::string> names;
@@ -1128,6 +1129,12 @@ void smoke(Check& c, const std::string& directory, double seconds, bool with_kno
         Outcome o;
         run_script(load(path), o, Limits{});
         c.expect(o.kind <= valid, "case " + name + " " + o.signature + " " + o.detail);
+    }
+    for (const std::uint64_t seed : cycling_2d) {
+        Outcome o;
+        std::string label;
+        run_low(seed, o, label, false);
+        c.expect(o.kind <= valid, "seed " + std::to_string(seed) + " " + o.signature + " " + o.detail);
     }
     // Fixed seeds. Boxes of a non-dyadic step meet #29, extreme ones #32: these
     // run in the long fuzz, not here. A clip volume off in the others is #30.

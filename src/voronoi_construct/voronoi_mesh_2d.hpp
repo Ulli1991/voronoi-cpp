@@ -49,9 +49,10 @@ public:
         report.stuck = device.stuck;
         lap(timer, timings, &Timings::repair);
         int stuck = device.stuck;
-        if (stuck > 0 && fallback_ != Fallback::rebuild &&
+        bool unfinished = device.unfinished;
+        if (stuck > 0 && !unfinished && fallback_ != Fallback::rebuild &&
             (fallback_ == Fallback::host || static_cast<long long>(stuck) * host_limit <= n_)) {
-            for (int pass = 0; pass < 4 && stuck > 0; ++pass) {
+            for (int pass = 0; pass < 4 && stuck > 0 && !unfinished; ++pass) {
                 tri_finish::Stats host;
                 try {
                     host = tri_finish::finish(exec_, point_, mesh_, state_);
@@ -66,10 +67,11 @@ public:
                 report.flips += again.flips;
                 report.rounds += again.rounds;
                 stuck = again.stuck;
+                unfinished = again.unfinished;
             }
             lap(timer, timings, &Timings::fallback);
         }
-        if (stuck == 0) {
+        if (stuck == 0 && !unfinished) {
             report.overlapped = !fills_box();
             if (!report.overlapped) {
                 report.faces = geometry(timings);
@@ -135,7 +137,7 @@ public:
         report.flips = device.flips;
         report.rounds = device.rounds;
         report.stuck = device.stuck;
-        if (device.stuck > 0) refuse("voronoi::Mesh<2>: inverted triangles after a build");
+        if (device.stuck > 0 || device.unfinished) refuse("voronoi::Mesh<2>: inverted triangles after a build");
         if (!fills_box()) refuse("voronoi::Mesh<2>: the triangles of a build do not fill the box once");
         report.faces = geometry(timings);
         return report;

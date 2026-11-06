@@ -597,6 +597,31 @@ void test_moving(Check& check, voronoi::Fallback fallback) {
         }
 }
 
+// Moves of order the box leave triangles wider than half a period: the repair cycled on those for ever (#36).
+void test_jumps(Check& check) {
+    const Box box(1.0, 1.0);
+    long long rebuilt = 0;
+    for (int seed = 0; seed < 12; ++seed) {
+        std::mt19937_64 rng(100 + seed);
+        std::uniform_real_distribution<double> unit(0, 1);
+        Points p = make_points("random", 600, box);
+        Mesh mesh(Exec(), box);
+        mesh.update(device(p));
+        for (int step = 0; step < 3; ++step) {
+            const double d = 0.2 + 0.9 * unit(rng);
+            for (auto& q : p)
+                for (int a = 0; a < 2; ++a) q[a] += d * (2 * unit(rng) - 1);
+            p = on_grid(p, box);
+            rebuilt += mesh.update(device(p)).rebuilt;
+        }
+        mesh.update_cells();
+        const std::string name = "jumps of order the box, seed " + std::to_string(seed);
+        check_triangles(check, mesh, box, name);
+        check_cells(check, mesh, p, box, name);
+    }
+    check.expect(rebuilt > 0, "jumps of order the box end in rebuilds (" + std::to_string(rebuilt) + " of 36)");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -608,6 +633,7 @@ int main(int argc, char** argv) {
     test_large(check);
     test_clip(check);
     test_refusals(check);
+    test_jumps(check);
     test_moving(check, voronoi::Fallback::host);
     test_moving(check, voronoi::Fallback::rebuild);
     return check.failed() != 0;
