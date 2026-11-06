@@ -76,6 +76,10 @@ What a caller can rely on:
 
 ## How it works
 
+![Control flow of Mesh::update](docs/figures/flow_mesh.png)
+
+What `update()` does with new positions. Normally the mesh is repaired by exact flips on the GPU, which is the green path. If a repair can't finish, or the first time, the mesh is rebuilt from scratch by clipping, the blue path. Input that can't give an exact mesh is refused with an error.
+
 | Header | Job |
 |---|---|
 | `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
