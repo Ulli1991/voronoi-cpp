@@ -386,7 +386,7 @@ refusals above.
 1. Fix the wrong volumes ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), then state the box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)), the reach limit ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)) and a
    bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
 2. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
-3. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)), 1D first.
+3. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
 4. Mesh speed: a re-sort when the order has decayed ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)), faces numbered by owner, then repair
    rounds and the fixed cost per step.
 5. Clustered rebuild tuning.
