@@ -6,8 +6,11 @@
 // The 2D Voronoi mesh: Mesh<3>'s contract on the engine of tri_mesh.hpp and
 // tri_repair.hpp. Faces are numbered for good at the start: there are always
 // exactly 3n, and a flip gives its face new particles. volume() is current
-// after update_cells() only (no atomic sums in update()). Hidden: the cell
-// list, the rings, the triangles.
+// after update_cells() only (no atomic sums in update()). As Mesh<3>: particles
+// on one grid position are refused by name, a refused update leaves no mesh and
+// the next builds, no particles are an invalid_argument that leaves the object
+// as it was, and a repair whose areas do not fill the box once is rebuilt.
+// Hidden: the cell list, the rings, the triangles.
 namespace voronoi {
 
 template <class ExecSpace, class FaceReal, class Weight>
@@ -33,7 +36,9 @@ public:
     Mesh(const ExecSpace& exec, double side) : Mesh(exec, Box(side)) {}
 
     // As Mesh<3>::update: new positions x(i, a) in [0, side[a]), repaired,
-    // or built on the first call or when the number of particles changed.
+    // or built on the first call or when the number of particles changed;
+    // exact on return, or a std::runtime_error saying what is wrong with the
+    // positions, and then there is no mesh and the next update() builds.
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -51,7 +56,12 @@ public:
         if (stuck > 0 && fallback_ != Fallback::rebuild &&
             (fallback_ == Fallback::host || static_cast<long long>(stuck) * host_limit <= n_)) {
             for (int pass = 0; pass < 4 && stuck > 0; ++pass) {
-                const tri_finish::Stats host = tri_finish::finish(exec_, point_, mesh_, state_);
+                tri_finish::Stats host;
+                try {
+                    host = tri_finish::finish(exec_, point_, mesh_, state_);
+                } catch (const std::exception&) {  // out of local room: the rebuild decides
+                    break;
+                }
                 report.host_flips += host.triangles;
                 report.host_rebuilds += host.patches;
                 patched_ = true;
@@ -63,17 +73,21 @@ public:
             }
             lap(timer, timings, &Timings::fallback);
         }
-        if (stuck > 0) {
-            Report rebuilt = rebuild(x, timings);
-            rebuilt.flips = report.flips;
-            rebuilt.rounds = report.rounds;
-            rebuilt.stuck = report.stuck;
-            rebuilt.host_flips = report.host_flips;
-            rebuilt.host_rebuilds = report.host_rebuilds;
-            return rebuilt;
+        if (stuck == 0) {
+            report.overlapped = !fills_box();
+            if (!report.overlapped) {
+                report.faces = geometry(timings);
+                return report;
+            }
         }
-        report.faces = geometry(timings);
-        return report;
+        Report rebuilt = rebuild(x, timings);
+        rebuilt.flips = report.flips;
+        rebuilt.rounds = report.rounds;
+        rebuilt.stuck = report.stuck;
+        rebuilt.host_flips = report.host_flips;
+        rebuilt.host_rebuilds = report.host_rebuilds;
+        rebuilt.overlapped = report.overlapped;
+        return rebuilt;
     }
 
     // The exact mesh of positions x from scratch: clipping, then the
@@ -81,21 +95,33 @@ public:
     // clipping is right; both are counted in the report).
     template <class X>
     Report rebuild(const X& x, Timings* timings = nullptr) {
+        if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh<2>: no particles");
         Kokkos::Timer timer;
         Report report;
         report.rebuilt = true;
-        n_ = static_cast<int>(x.extent(0));
+        const int particles = static_cast<int>(x.extent(0));
+        forget();
+        n_ = particles;
         snap(x);
         {
             index();
             if (stencil_.offsets.extent(0) == 0) stencil_ = polygon_clip::make_stencil(exec_);
-            const auto rings = polygon_clip::construct(exec_, polygon_clip::make_grid(list_), stencil_);
+            polygon_clip::Rings<Memory> rings;
+            try {
+                rings = polygon_clip::construct(exec_, polygon_clip::make_grid(list_), stencil_);
+            } catch (const std::runtime_error& e) {  // also two particles on one position: no bisector
+                refuse(e.what());
+            }
             const long long uncertified = polygon_clip::count_status(exec_, rings, polygon_clip::uncertified);
             if (uncertified > 0)
-                throw std::runtime_error("voronoi::Mesh<2>: " + std::to_string(uncertified) +
-                                         " cells reach too far to be certified in one periodic image (a cell's radius must "
-                                         "stay below about 3/16 of the shortest box side): too few particles across the box");
-            mesh_ = tri_mesh::from_rings(exec_, rings);
+                refuse("voronoi::Mesh<2>: " + std::to_string(uncertified) +
+                       " cells reach too far to be certified in one periodic image (a cell's radius must "
+                       "stay below about 3/16 of the shortest box side): too few particles across the box");
+            try {
+                mesh_ = tri_mesh::from_rings(exec_, rings);
+            } catch (const std::runtime_error& e) {
+                refuse(e.what());
+            }
         }
         const int triangles = mesh_.count(), faces = 3 * n_;
         state_ = tri_repair::State<Memory>(triangles, n_ / 4 + 1024);
@@ -113,7 +139,8 @@ public:
         report.flips = device.flips;
         report.rounds = device.rounds;
         report.stuck = device.stuck;
-        if (device.stuck > 0) throw std::runtime_error("voronoi::Mesh<2>: inverted triangles after a build");
+        if (device.stuck > 0) refuse("voronoi::Mesh<2>: inverted triangles after a build");
+        if (!fills_box()) refuse("voronoi::Mesh<2>: the triangles of a build do not fill the box once");
         report.faces = geometry(timings);
         return report;
     }
@@ -122,6 +149,7 @@ public:
     // of the persistent mesh; ring-status uncertified for the others.
     template <class X>
     polygon_clip::Rings<Memory> clip(const X& x, const View<const int*>& cells) {
+        if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh::clip: no particles");
         n_ = n_ > 0 ? n_ : static_cast<int>(x.extent(0));
         if (static_cast<int>(x.extent(0)) != n_) throw std::invalid_argument("voronoi::Mesh::clip: other particles");
         snap(x);
@@ -143,6 +171,7 @@ public:
     // fixed order (bit-reproducible); does nothing if they are current.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
+        if (!built()) throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
         // As Mesh<3>: from the last step's lists up to one triangle created per
         // five cells (tet_mesh::finish_incremental). Face numbers stay, so the
@@ -264,6 +293,34 @@ public:
 
 private:
     bool built() const { return mesh_.corners.extent(0) > 0; }
+
+    // No mesh any more: the next update() builds from scratch.
+    void forget() {
+        exec_.fence();  // kernels in flight may still read what goes here
+        mesh_ = tri_mesh::Triangles<Memory>{};
+        state_ = tri_repair::State<Memory>{};
+        geometry_ = tet_mesh::Geometry<Memory, 2>{};
+        cells_ = tet_mesh::CellFaces<Memory, 2>{};
+        weights_ = {};
+        renumber_ = {};
+        n_ = 0;
+        cells_current_ = false;
+        lists_valid_ = false;
+        patched_ = false;
+        updates_since_lists_ = 0;
+    }
+    // The positions were refused: coincident particles by name, else `why`.
+    [[noreturn]] void refuse(const std::string& why) {
+        const std::string pair = detail::coincident(positions_);
+        forget();
+        throw std::runtime_error(pair.empty() ? why : pair);
+    }
+    // Whether the signed areas add up to the box once (tri_repair::total_area).
+    bool fills_box() const {
+        const double whole = 2.0 * static_cast<double>(box_.period[0]) * static_cast<double>(box_.period[1]);
+        const double area = state_.area_stale || patched_ ? tri_repair::total_area(exec_, point_, box_, mesh_) : state_.area;
+        return Kokkos::abs(area / whole - 1) < 1e-6;
+    }
 
     void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
         if (!timings) return;

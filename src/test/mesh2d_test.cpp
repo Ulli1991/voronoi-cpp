@@ -13,6 +13,9 @@
 // Moving: after steps of 0.03 to 1 spacings the repaired mesh equals a mesh
 // built from nothing bit for bit (volumes, centroids, faces), as a function
 // of the positions alone; repeated runs give the same hash.
+// Refusals: coincident particles at the start and in a step, by name; no mesh
+// after a refusal, and the next update builds; no particles; a mapping of
+// degree 4 and kicks of order the box.
 
 #include "check.hpp"
 #include "voronoi_mesh.hpp"
@@ -28,6 +31,13 @@
 #include <vector>
 
 namespace {
+
+// Sanitizers cost about 11x: the longest runs shrink there, the same code paths.
+#ifdef __SANITIZE_ADDRESS__
+constexpr int large_n = 1 << 17, moving_steps = 3;
+#else
+constexpr int large_n = 1 << 20, moving_steps = 10;
+#endif
 
 using Exec = Kokkos::DefaultExecutionSpace;
 using Memory = Exec::memory_space;
@@ -381,7 +391,7 @@ Bits bits_of(const Mesh& mesh) {
 // Large: deep levels of the cell list (10 bits per axis in Morton numbers).
 void test_large(Check& check) {
     const Box box(1.0);
-    const int n = 1 << 20;
+    const int n = large_n;
     for (const char* kind : {"random", "lattice"}) {
         Mesh mesh(Exec(), box);
         const auto report = mesh.update(device(make_points(kind, n, box)));
@@ -389,7 +399,122 @@ void test_large(Check& check) {
         const auto volume = host(mesh.volume());
         double sum = 0;
         for (int i = 0; i < mesh.particles(); ++i) sum += volume(i);
-        check.expect(report.flips == 0 && std::abs(sum - 1) < 1e-11, std::string(kind) + " 2^20: exact start, volumes sum to the box");
+        check.expect(report.flips == 0 && std::abs(sum - 1) < 1e-11, std::string(kind) + " large: exact start, volumes sum to the box");
+    }
+}
+
+// Whether f() throws E with `text` in its message.
+template <class E, class F>
+bool refused(F&& f, const std::string& text) {
+    try {
+        f();
+    } catch (const E& e) {
+        return std::string(e.what()).find(text) != std::string::npos;
+    }
+    return false;
+}
+
+// The same refusals and the same safety as Mesh<3>.
+void test_refusals(Check& check) {
+    const Box box(1.0);
+    const Points good = make_points("jittered", 2500, box);
+    {
+        Points p = good;
+        p[1700] = p[300];
+        Mesh mesh(Exec(), box);
+        check.expect(refused<std::runtime_error>([&] { mesh.update(device(p)); }, "particles 300 and 1700"), "coincident at the start: refused, the pair by name");
+        check.expect(mesh.particles() == 0 && mesh.faces() == 0, "a refused start leaves no mesh");
+        check.expect(refused<std::logic_error>([&] { mesh.update_cells(); }, "no mesh"), "update_cells() after a refusal says so");
+        const auto report = mesh.update(device(good));
+        mesh.update_cells();
+        check.expect(report.rebuilt && mesh.faces() == 3 * int(good.size()), "after a refusal the next update builds");
+        check_triangles(check, mesh, box, "after a refusal");
+    }
+    for (const auto fallback : {voronoi::Fallback::cheapest, voronoi::Fallback::host, voronoi::Fallback::rebuild}) {
+        const std::string name = fallback == voronoi::Fallback::host ? "host" : fallback == voronoi::Fallback::rebuild ? "rebuild" : "cheapest";
+        for (const int gap : {7, 1100}) {  // the pair: near neighbours, or far apart
+            Points p = on_grid(good, box);
+            Mesh mesh(Exec(), box);
+            mesh.set_fallback(fallback);
+            mesh.update(device(p));
+            mesh.update_cells();
+            p[200 + gap] = p[200];
+            const std::string what = name + " gap " + std::to_string(gap);
+            check.expect(refused<std::runtime_error>([&] { mesh.update(device(p)); }, "one position of the snapping grid"), what + ": a pair landing on one position is refused");
+            check.expect(mesh.particles() == 0, what + ": a refused step leaves no mesh");
+            p[200 + gap][0] = std::fmod(p[200 + gap][0] + 0.013, 1.0);
+            mesh.update(device(p));
+            mesh.update_cells();
+            check_triangles(check, mesh, box, what + " after the refusal");
+        }
+    }
+    {
+        Mesh mesh(Exec(), box);
+        const X none("none", 0);
+        check.expect(refused<std::invalid_argument>([&] { mesh.update(none); }, "no particles"), "no particles: refused");
+        mesh.update(device(good));
+        mesh.update_cells();
+        const int faces = mesh.faces();
+        check.expect(refused<std::invalid_argument>([&] { mesh.update(none); }, "no particles") && mesh.faces() == faces && mesh.cells_current(),
+                     "no particles leave a mesh as it was");
+    }
+    {   // Another n after a build, then steps: the lists start over.
+        Mesh mesh(Exec(), box);
+        mesh.update(device(good));
+        mesh.update_cells();
+        Points p = make_points("jittered", 1600, box);
+        mesh.update(device(p));
+        mesh.update_cells();
+        for (auto& q : p) q[0] = std::fmod(q[0] + 2e-3, 1.0);
+        mesh.update(device(p));
+        mesh.update_cells();
+        check_triangles(check, mesh, box, "another n, then a step");
+        check_cells(check, mesh, on_grid(p, box), box, "another n, then a step");
+    }
+    // x -> 2 x: every triangle stays positive and locally Delaunay, and the
+    // mesh would cover the torus four times; the areas tell.
+    {
+        Points p = on_grid(make_points("hexagonal", 2500, box), box);
+        Mesh mesh(Exec(), box);
+        mesh.update(device(p));
+        mesh.update_cells();
+        for (auto& q : p) {
+            q[0] = std::fmod(2 * q[0], 1.0);
+            q[1] = std::fmod(2 * q[1], 1.0);
+        }
+        bool done = true;
+        voronoi::Report report;
+        try {
+            report = mesh.update(device(p));
+        } catch (const std::runtime_error&) {
+            done = false;  // a doubled lattice may land on itself: a refusal is fine, a wrong mesh is not
+        }
+        if (done) {
+            mesh.update_cells();
+            check.expect(report.rebuilt, "a mapping of degree 4 is rebuilt (overlapped " + std::to_string(report.overlapped) + ")");
+            check_triangles(check, mesh, box, "degree 4");
+        } else {
+            check.expect(mesh.particles() == 0, "a mapping of degree 4 refused: no mesh");
+        }
+    }
+    {   // Kicks of order the box, random: exact on return, or refused.
+        std::mt19937_64 rng(5);
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        for (double kick : {0.1, 0.5}) {
+            Points p = on_grid(good, box);
+            Mesh mesh(Exec(), box);
+            mesh.update(device(p));
+            mesh.update_cells();
+            for (auto& q : p) {
+                q[0] = std::fmod(q[0] + kick * unit(rng), 1.0);
+                q[1] = std::fmod(q[1] + kick * unit(rng), 1.0);
+            }
+            mesh.update(device(p));
+            mesh.update_cells();
+            const std::string name = "kicks of " + std::to_string(kick) + " of the box";
+            check_triangles(check, mesh, box, name);
+            check_cells(check, mesh, on_grid(p, box), box, name);
+        }
     }
 }
 
@@ -452,7 +577,7 @@ void test_moving(Check& check, voronoi::Fallback fallback) {
             mesh.update_cells();
             long long flips = 0, stuck = 0, patches = 0, rebuilt = 0;
             bool same = true;
-            for (int step = 0; step < 10; ++step) {
+            for (int step = 0; step < moving_steps; ++step) {
                 for (std::size_t i = 0; i < p.size(); ++i) {
                     const double phase = 2 * M_PI * p[i][1];
                     p[i][0] += amount * spacing * (0.6 * std::sin(phase) + 0.4 * normal(rng));
@@ -488,6 +613,7 @@ int main(int argc, char** argv) {
     test_static(check);
     test_large(check);
     test_clip(check);
+    test_refusals(check);
     test_moving(check, voronoi::Fallback::host);
     test_moving(check, voronoi::Fallback::rebuild);
     return check.failed() != 0;

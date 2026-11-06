@@ -53,6 +53,8 @@ struct State {
     unsigned long long round = 0;
     int entries = 0, touched_count = 0;
     bool inverted = false;  // the screen or the repair saw an inverted or flat triangle
+    double area = 0;        // the screen's sum of twice the signed areas, in grid steps^2
+    bool area_stale = false;  // the screen saw an inversion: total_area() decides, not `area`
 
     State() = default;
     State(int triangles, int capacity)
@@ -98,13 +100,14 @@ struct Screen {
         const int at = Kokkos::atomic_fetch_inc(&used(0));
         if (at < capacity) list(at) = edge;
     }
-    KOKKOS_INLINE_FUNCTION void operator()(int t, long long& failing, long long& bad) const {
+    KOKKOS_INLINE_FUNCTION void operator()(int t, long long& failing, long long& bad, double& area) const {
         const int v0 = corners(t, 0), v1 = corners(t, 1), v2 = corners(t, 2);
         const int x0 = point(v0, 0), y0 = point(v0, 1);
         const double ax = tri_mesh::steps(x0, point(v1, 0), px), ay = tri_mesh::steps(y0, point(v1, 1), py);
         const double bx = tri_mesh::steps(x0, point(v2, 0), px), by = tri_mesh::steps(y0, point(v2, 1), py);
         const tri_mesh::Circle circle(ax, ay, bx, by);
         const double la = circle.la, lb = circle.lb, mx = circle.mx, my = circle.my, det = circle.det;
+        area += det;
         tet_mesh::store(centre, t, circle.centre(x0, y0, step));
         const double spread = Kokkos::abs(ax * by) + Kokkos::abs(ay * bx);
         if (!(det > 8 * ep::epsilon * spread)) {
@@ -142,9 +145,12 @@ void screen(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_s
                                     static_cast<int>(box.period[0]), static_cast<int>(box.period[1]),
                                     static_cast<int>(state.list.extent(0))};
         long long failing = 0, bad = 0;
-        Kokkos::parallel_reduce("tri_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.count()), kernel, failing, bad);
+        double area = 0;
+        Kokkos::parallel_reduce("tri_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.count()), kernel, failing, bad, area);
         state.entries = static_cast<int>(failing);
         state.inverted = bad > 0;
+        state.area = area;
+        state.area_stale = bad > 0;
         state.touched_count = 0;
         if (failing <= static_cast<long long>(state.list.extent(0))) return;
         detail::reserve(state.list, static_cast<std::size_t>(failing), false);
@@ -307,6 +313,29 @@ int count_inverted(const ExecSpace& exec, const ep::Points<typename ExecSpace::m
         },
         inverted);
     return inverted;
+}
+
+// Twice the sum of the signed areas, in grid steps^2. A step of order the box
+// can leave a mesh with every local test passing that covers the torus several
+// times; its areas do not add up to the box. A flip of two positive triangles
+// keeps this sum, so without an inversion the screen's sum holds after the
+// repair, and this kernel runs only after an inversion.
+template <class ExecSpace>
+double total_area(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point, const ep::BoxN<2>& box,
+                  const Triangles<typename ExecSpace::memory_space>& mesh) {
+    const auto corners = mesh.corners;
+    const int px = static_cast<int>(box.period[0]), py = static_cast<int>(box.period[1]);
+    double sum = 0;
+    Kokkos::parallel_reduce(
+        "tri_repair::total_area", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.count()),
+        KOKKOS_LAMBDA(int t, double& area) {
+            const int v0 = corners(t, 0), v1 = corners(t, 1), v2 = corners(t, 2);
+            const int x0 = point(v0, 0), y0 = point(v0, 1);
+            area += tri_mesh::Circle(tri_mesh::steps(x0, point(v1, 0), px), tri_mesh::steps(y0, point(v1, 1), py),
+                                     tri_mesh::steps(x0, point(v2, 0), px), tri_mesh::steps(y0, point(v2, 1), py)).det;
+        },
+        sum);
+    return sum;
 }
 
 // Works through the list. stuck: inverted or flat triangles left.

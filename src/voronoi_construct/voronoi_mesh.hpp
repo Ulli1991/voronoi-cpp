@@ -79,7 +79,8 @@ std::string coincident(const Positions& positions) {
     const auto x = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, positions);
     std::vector<int> id(x.extent(0));
     std::iota(id.begin(), id.end(), 0);
-    auto key = [&](int i) { return std::array<double, 3>{x(i, 0), x(i, 1), x(i, 2)}; };
+    const bool third = x.extent(1) > 2;  // D = 2 or 3
+    auto key = [&](int i) { return std::array<double, 3>{x(i, 0), x(i, 1), third ? x(i, 2) : 0.0}; };
     std::sort(id.begin(), id.end(), [&](int a, int b) { return std::make_pair(key(a), a) < std::make_pair(key(b), b); });
     long long extra = 0;
     int first = -1, second = -1;
