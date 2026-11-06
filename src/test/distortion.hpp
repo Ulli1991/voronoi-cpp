@@ -1,14 +1,8 @@
 #pragma once
 
-// Prescribed velocity fields that distort the mesh, without any hydro, and a
-// driver that runs them through voronoi::Mesh and measures, per step,
-// robustness (stuck flips, fallbacks, exact oracle at sampled steps), accuracy
-// (volumes, closure, equal to a fresh build), speed (M cells/s of the mesh
-// step, flips, rounds) and memory (faces, tetrahedra, B/cell, worst aspect
-// ratio and faces per cell). Fields run on the device: 256^3 is fine.
-//
-// Fields live in the unit box (a cube of side 1), peak speed about 1, and are
-// integrated with the midpoint rule. No hydro keeps them regular.
+// Prescribed velocity fields that distort the mesh without hydro, and a driver that runs them
+// through voronoi::Mesh measuring robustness, accuracy, speed and memory per step.
+// Fields live in the unit box with peak speed about 1 and are integrated by the midpoint rule.
 
 #include "mesh_check.hpp"
 
@@ -34,8 +28,7 @@ enum class Kind {
     pancake,      // a layer of half thickness 0.16 collapses onto a plane, shock-like
     counter,      // every other particle streams against the rest: all interpenetrate
     thin,         // compression onto four planes plus shear: long thin cells
-    // The same with room for a void as wide as the box: these end in the
-    // refusal of a cell that reaches too far.
+    // The same with room for a void as wide as the box: these end in a refusal.
     collapse_wide,
     pancake_wide,
     streams,      // two halves of the box stream against each other
@@ -76,7 +69,7 @@ struct Field {
                 for (int d = 0; d < 3; ++d) k[m][d] = std::round(8 * unit(rng));
                 norm2 = k[m][0] * k[m][0] + k[m][1] * k[m][1] + k[m][2] * k[m][2];
             } while (norm2 < 1 || norm2 > 64);
-            // Solenoidal: the amplitude across the wave vector.
+            // Solenoidal: amplitude across the wave vector.
             const double r[3] = {unit(rng), unit(rng), unit(rng)};
             const double c[3] = {k[m][1] * r[2] - k[m][2] * r[1], k[m][2] * r[0] - k[m][0] * r[2], k[m][0] * r[1] - k[m][1] * r[0]};
             const double size = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]), amplitude = std::pow(norm2, -5.0 / 12);
@@ -89,8 +82,7 @@ struct Field {
             for (int d = 0; d < 3; ++d) a[m][d] *= 3 / sum;  // peak speed about 1: rms sums, not all modes in phase
     }
 
-    // v at (x, y, z) in the unit box at time t; `side` is the particle's
-    // stream (streams only).
+    // v at (x, y, z) in the unit box at time t; `side` is the particle's stream (streams only).
     KOKKOS_INLINE_FUNCTION void velocity(const double* p, double t, int side, double* v) const {
         const double x = p[0], y = p[1], z = p[2];
         v[0] = v[1] = v[2] = 0;
@@ -158,8 +150,7 @@ struct Field {
     }
 };
 
-// One midpoint step of `field` on x (kept in the box); `side`: streams. Other
-// displacements (a drift) are added by the caller.
+// One midpoint step of `field` on x, kept in the box; `side` is the stream per particle (streams only).
 template <class X, class S>
 void advance(const Field& field, const X& x, const S& side, double t, double dt) {
     Kokkos::parallel_for(
@@ -276,8 +267,7 @@ struct Options {
     int oracle_every = 0;   // the full oracle (mesh_check::check); 0: never
     int rebuild_every = 0;  // compare_with_rebuild, cheaper; 0: never
     int oracle_cells = 16;
-    double drift = 0;       // regularisation in this driver (the library has none): each step
-                            // moves each generator this fraction of the way to its centroid
+    double drift = 0;       // each step moves each generator this fraction towards its centroid
     voronoi::Fallback fallback = voronoi::Fallback::cheapest;
     int shape_every = 1;    // cell shapes every this many steps (atomics over all tetrahedra: costly)
     double seconds = 0;     // stop after this much wall time; 0: run all steps

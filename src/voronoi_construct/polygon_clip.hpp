@@ -13,24 +13,9 @@
 #include <utility>
 #include <vector>
 
-// The exact Voronoi cells of particles in a periodic 2D box, each built alone
-// by clipping a polygon with its neighbours (shell_voronoi's walk in 2D: grid
-// cells around the generator nearest first, on the level fitted to the local
-// density, until nothing within twice the farthest vertex is left).
-//
-// A cell is a convex polygon: a cycle of edges, each the bisector with one
-// neighbour, and vertices between consecutive edges. A bisector cuts off one
-// contiguous arc of vertices, which two new vertices replace. Every decision
-// is exact: whether a vertex lies beyond a bisector is the perturbed in-circle
-// test of the generator, the vertex's two neighbours and the candidate
-// (exact_predicates_2d.hpp), which a double comparison with a rounding bound
-// settles nearly always. So the cells agree with each other: q is in the ring
-// of p exactly if p is in the ring of q. There is one kind of cell, no rounded
-// pass and no patching.
-//
-// All lengths are in grid steps, relative to the generator. The output is the
-// ring of each cell: its neighbours in counter-clockwise order, the Delaunay
-// star of the generator (Rings).
+// Exact Voronoi cells of particles in a periodic 2D box, each built alone by clipping a polygon (shell_voronoi's walk in 2D).
+// Every decision is the exact perturbed in-circle test (exact_predicates_2d.hpp), so q is in the ring of p exactly if p is in the ring of q.
+// Lengths are in grid steps relative to the generator; the output is each cell's ring, its neighbours counter-clockwise (Rings).
 namespace polygon_clip {
 
 namespace ep = exact_predicates;
@@ -166,10 +151,8 @@ struct Rings {
     static long long entries_for(int n) { return 6LL * n + n / 8 + 256; }
 };
 
-// A corner of a polygon: edge m, the bisector with the particle at offset o
-// in `slot` (the virtual particles of the starting square are negative), and
-// the vertex between edges m and m + 1 with a bound on its rounding error per
-// axis.
+// A corner of a polygon: edge m, the bisector with the particle at offset o in  (negative for the starting square),
+// and the vertex between edges m and m + 1 with a bound on its rounding error per axis.
 struct Corner {
     double ox, oy, vx, vy, tol;
     int slot;

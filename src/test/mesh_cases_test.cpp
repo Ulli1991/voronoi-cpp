@@ -1,12 +1,6 @@
-// 3D special cases of the mesh, each against the independent oracle
-// (oracle.hpp, through mesh_check.hpp), each named:
-//   mesh_cases_test list              the names
-//   mesh_cases_test <prefix> ...      the cases whose name starts with a
-//                                     prefix, in one process (ctest runs one
-//                                     per group)
-// A case either requires the exact mesh, or accepts a refusal (an exception)
-// in place of it: what it never accepts is a wrong mesh without an error.
-// Cases of a known open problem carry the issue and run with --known only.
+// 3D special cases of the mesh against the oracle (oracle.hpp via mesh_check.hpp); `list` prints
+// the names, `<prefix> ...` runs the cases starting with a prefix. A case needs the exact mesh or
+// a refusal, never a wrong mesh without an error; known open issues run with --known only.
 
 #include "check.hpp"
 #include "distortion.hpp"

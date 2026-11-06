@@ -2,12 +2,8 @@
 
 #include "exact_predicates.hpp"
 
-// The exact predicates in 2D, on offsets of snapped points (|offset| <= 2^30
-// along each axis): the orientation is a difference of two products, exact
-// in 64 bits; the in-circle determinant is 3 products of a lift and a cross,
-// at most 2^122 each, exact in 128 bits. A double filter comes first, then
-// the exact sum, then the symbolic perturbation, as in 3D: the lift |p|^2 of
-// each point grows by eps^(its id), lower ids dominating.
+// The exact predicates in 2D on offsets of snapped points (|offset| <= 2³⁰): orientation in 64 bits, in-circle in
+// 128 bits (terms below 2¹²²), behind a double filter, with the same symbolic perturbation as 3D.
 namespace exact_predicates {
 
 using Offset2 = OffsetN<2>;
@@ -17,9 +13,8 @@ KOKKOS_INLINE_FUNCTION i64 cross(const Offset2& a, const Offset2& b) { return a[
 KOKKOS_INLINE_FUNCTION i64 lift(const Offset2& a) { return a[0] * a[0] + a[1] * a[1]; }
 KOKKOS_INLINE_FUNCTION int sign_of(i64 v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 
-// The sign of det [a la; b lb; e le] of offsets from one point: -orientation(a, b)
-// if e lies inside the circle through the origin, a and b, +orientation(a, b)
-// if outside, 0 on it.
+// Sign of det [a la; b lb; e le] of offsets from one point: -orientation(a, b) if e is inside the circle through
+// the origin, a, b; +orientation(a, b) if outside; 0 on it.
 KOKKOS_INLINE_FUNCTION int circle_sign(const Offset2& a, const Offset2& b, const Offset2& e) {
     const double ax = double(a[0]), ay = double(a[1]), bx = double(b[0]), by = double(b[1]);
     const double ex = double(e[0]), ey = double(e[1]);
@@ -36,9 +31,8 @@ KOKKOS_INLINE_FUNCTION int circle_sign(const Offset2& a, const Offset2& b, const
     return exact > 0 ? 1 : exact < 0 ? -1 : 0;
 }
 
-// Whether p[3] lies inside the circle through p[0..2] (any orientation, not
-// flat, all in one frame); id are the points' particle ids. The perturbed
-// test is never a tie: the term of p[3] is the triangle's own orientation.
+// Whether p[3] lies inside the circle through p[0..2] (any orientation, not flat, one frame); id are particle ids.
+// Perturbed, so never a tie: the term of p[3] is the triangle's own orientation.
 KOKKOS_INLINE_FUNCTION bool in_circle(const Offset2* p, const int* id) {
     const Offset2 a = minus(p[1], p[0]), b = minus(p[2], p[0]), e = minus(p[3], p[0]);
     const int o = sign_of(cross(a, b));

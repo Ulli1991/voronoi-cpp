@@ -6,19 +6,8 @@
 
 #include <cstdint>
 
-// The starting tetrahedralization: exactly the Delaunay tetrahedralization
-// of the snapped positions, ties broken by the symbolic perturbation of
-// exact_predicates, for any input (lattices and other cospherical layouts
-// included).
-//
-// The face rings of a clipping build give a fast guess (tet_mesh::from_rings),
-// but rounding decides its near-ties, so neighbouring cells can disagree:
-// holes and overlaps on near-degenerate input, now and then on random input.
-// build() checks the guess exactly and rebuilds the cells around whatever is
-// wrong by the exact per-thread clipping (shell_voronoi::construct: every
-// vertex is named by the three particles whose bisectors meet there, and
-// every cut is the exact perturbed in-sphere sign, so cells agree with each
-// other by construction).
+// The starting tetrahedralization: exactly the Delaunay one of the snapped positions, ties broken by the symbolic
+// perturbation of exact_predicates; a clipping guess is checked exactly and wrong cells rebuilt by exact clipping.
 namespace tet_start {
 
 namespace ep = exact_predicates;
@@ -59,15 +48,10 @@ void grow(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory
 
 }  // namespace detail
 
-// Exact check of a tetrahedralization of all n particles, one thread per
-// tetrahedron: it is not flat; across each face lies a tetrahedron sharing
-// that face and pointing back, with its far vertex on the other side and
-// outside this circumsphere (local Delaunay, perturbed); every particle is
-// used; the volumes sum to the box. Together these make it the Delaunay
-// tetrahedralization: a closed, consistently oriented complex covers the box
-// a whole number of times (the volume says once), and a locally Delaunay
-// triangulation is Delaunay. Marks the particles of bad tetrahedra and the
-// unused ones in `marked` (1), leaving other entries as they are.
+// Exact check of a tetrahedralization of all n particles, one thread per tetrahedron: it is not flat; across each face
+// lies a tetrahedron sharing it and pointing back, its far vertex on the other side and outside this circumsphere
+// (local Delaunay, perturbed); every particle is used; the volumes sum to the box. Marks the particles of bad
+// tetrahedra and the unused ones in `marked` (1), leaving other entries as they are.
 template <class ExecSpace>
 Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& mesh,
              const ep::Points<typename ExecSpace::memory_space>& point, int count,
@@ -141,14 +125,8 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     return report;
 }
 
-// The Delaunay tetrahedralization from a clipping build with face rings
-// (shell_voronoi::construct of `grid`, every cell ok or not): from_rings,
-// check, and where it fails, rebuild the cells of the bad tetrahedra and
-// their neighbours by exact clipping, then assemble and check again. When
-// many cells are bad, or the second try still fails, every cell is rebuilt.
-// Rebuilt cells claim new blocks in the ring pool of `cells`
-// (Cells::with_rings); a cell that does not fit is face_overflow, and the
-// result is not exact: build again with a pool of Cells::needed().
+// The Delaunay tetrahedralization from a clipping build with face rings: from_rings, check, and where it fails
+// rebuild the bad cells by exact clipping and check again. face_overflow means build again with a pool of Cells::needed().
 template <class ExecSpace>
 Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
             const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,

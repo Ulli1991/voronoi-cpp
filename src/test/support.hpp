@@ -1,8 +1,7 @@
 #pragma once
 
-// Inputs, reference results and comparisons shared by the tests
-// and the benchmark. Reference checks that compare against every generator
-// are brute force: test oracles only.
+// Inputs, reference results and comparisons shared by the tests and the benchmark.
+// The reference checks are brute force: test oracles only.
 
 #include "neighbor_search.hpp"
 #include "shell_voronoi_warp.hpp"
@@ -30,15 +29,13 @@ using Points = std::vector<Point>;
 using Positions = Kokkos::View<double* [3], Memory>;
 using NeighbourSets = std::vector<std::vector<int>>;
 using Box = exact_predicates::Box;
-// Sides relative to the longest, (1, 1, 1) for a cube: lattices get about
-// equal spacings along every axis.
+// Box sides relative to the longest, so lattices get about equal spacings.
 using Shape = std::array<double, 3>;
 inline Shape shape(const Box& box) {
     const double longest = std::max({box.side[0], box.side[1], box.side[2]});
     return {box.side[0] / longest, box.side[1] / longest, box.side[2] / longest};
 }
-// Lattice cells along each axis for about `cells` cells of equal spacing in
-// a box of shape s (at least `fewest` per axis).
+// Lattice cells per axis for about `cells` cells of equal spacing in a box of shape s, at least `fewest` per axis.
 inline std::array<int, 3> lattice_sides(double cells, const Shape& s, int fewest) {
     const double per_unit = std::cbrt(cells / (s[0] * s[1] * s[2]));
     return {std::max(fewest, static_cast<int>(std::lround(per_unit * s[0]))),
@@ -48,19 +45,15 @@ inline std::array<int, 3> lattice_sides(double cells, const Shape& s, int fewest
 
 inline double wrap(double x) { return x - std::floor(x); }
 
-// Positions on the grid of the exact predicates (2^30 steps across the box).
-// The mesh's topology is decided on snapped positions and its geometry
-// computed from the positions themselves; off the grid, the two disagree on
-// near-degenerate cells (volumes ~1e-9 apart) and for particles closer than
-// ~1e3 grid steps. Every input and flow step here is kept on the grid.
+// Snaps points to the grid of the exact predicates (2³⁰ steps across the box).
+// Inputs must be on the grid: topology uses snapped positions, geometry the raw ones.
 inline void to_grid(Points& points) {
     for (auto& p : points)
         for (double& x : p) x = std::floor(x * exact_predicates::scale) / exact_predicates::scale;
 }
 inline double nearest_image(double d, double side = 1.0) { return d - side * std::nearbyint(d / side); }
 
-// The same on the grid of a box (exact_predicates::snap): what voronoi::Mesh
-// computes from them.
+// The same on the grid of `box` (exact_predicates::snap), as voronoi::Mesh does.
 inline void to_grid(Points& points, const Box& box) {
     for (auto& p : points)
         for (int a = 0; a < 3; ++a) p[a] = exact_predicates::snap(p[a], box, a) * box.step;
@@ -71,13 +64,8 @@ auto to_host(const View& v) {
     return Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, v);
 }
 
-// Degenerate layouts, "<layout>@<perturbation>" with the perturbation in
-// spacings (each coordinate moved uniformly within +-perturbation):
-//   sc, bcc, fcc  cubic lattices (8, 4 and 6 cells meeting at vertices)
-//   shells        icosahedral shells of 12 points without a centre point,
-//                 so 12 cells meet at each shell centre
-//   planes        random points on exactly spaced planes
-//   pairs         random points, each with a twin `perturbation` away
+// Degenerate layouts "<layout>@<perturbation>" (perturbation in spacings, uniform in each coordinate):
+// sc, bcc, fcc lattices; shells of 12 points (12 cells meet at the centre); planes; pairs with a twin.
 inline Points make_degenerate(const std::string& layout, double perturbation, int n, const Shape& shape = {1, 1, 1}) {
     std::mt19937_64 rng(20261029);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
@@ -131,10 +119,8 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
     return points;
 }
 
-// Points in the unit box: uniform, jittered (lattice moved by up to 0.1
-// spacings), lattice, wave (lattice moved by 1e-5 spacings), clustered, halo,
-// or a degenerate layout. Lattices round n to a cube, or with `shape` to a
-// lattice of about equal spacings once scaled to a box of that shape.
+// Points in the unit box of the given `kind`: uniform, jittered, lattice, wave, clustered, halo or a degenerate layout.
+// Lattices round n to a cube, or with `shape` to equal spacings once scaled to that box.
 inline Points make_points_off_grid(const std::string& kind, int n, const Shape& shape = {1, 1, 1}) {
     if (const auto at = kind.find('@'); at != std::string::npos)
         return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n, shape);
@@ -170,9 +156,7 @@ inline Points make_points_off_grid(const std::string& kind, int n, const Shape& 
             }
         }
     } else if (kind == "halo") {
-        // Four halos with density 1 / (r^2 + c^2) out to r = 0.2, c = 0.002
-        // (core to edge 1:10^4), over a 10 % uniform background: about
-        // 1:10^5 from the voids to the halo cores.
+        // Four halos of density 1 / (r² + c²) out to r = 0.2, c = 0.002, over a 10 % uniform background.
         constexpr double edge = 0.2, core = 0.002;
         std::array<Point, 4> centres;
         for (auto& c : centres) c = {unit(rng), unit(rng), unit(rng)};
@@ -278,9 +262,7 @@ public:
         return v;
     }
 
-    // Move every point by `distance` times the velocity, wrapped into the box
-    // and kept on the grid. The field is periodic in the unit box; in another
-    // box it is stretched with it (distances stay in box units).
+    // Moves every point by `distance` times the velocity, wrapped and kept on the grid.
     void advect(Points& x, double distance) const {
         for (auto& p : x) {
             const Point v = velocity(p);
@@ -316,12 +298,9 @@ double median_ms(int repeats, const F& f) {
     return times[times.size() / 2];
 }
 
-// Checks of a clipping build that need no other construction: every cell
-// certified, volumes positive and summing to the box, area vectors closing
-// each cell, every face seen from both sides (faces = 2 x owned), and each
-// owned face centroid equidistant from its two generators with no generator
-// closer (brute force over all generators for a sample of cells). Prints a
-// one-line summary; returns the number of failed checks.
+// Checks a clipping build on its own: cells certified, volumes positive and summing to the box,
+// area vectors closing, faces seen from both sides, owned face centroids equidistant from their
+// two generators with none closer (brute force on a sample). Prints a summary; returns the failed checks.
 inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& positions, std::ostream& out,
                        const Box& box = {}) {
     constexpr double volume_tolerance = 1e-12, closure_tolerance = 1e-12, distance_tolerance = 1e-9;
@@ -535,15 +514,11 @@ Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(con
     return to_host(packed);
 }
 
-// A mesh compared with an exact rebuild by clipping of the same positions
-// (support::clipped): failing triangles and inverted tetrahedra (brute force
-// over all tetrahedra, support::failing), cells with other Delaunay
-// neighbours, clipping faces the mesh lacks, mesh faces the clipping lacks
-// (and the largest of their areas, in spacings^2; clipping drops faces
-// below rounding level, the mesh keeps every Delaunay edge), the largest
-// relative volume difference and the total volume (box volumes). With
-// update_cells() done: list entries that break the per-cell lists (each face
-// in both its cells, in increasing id of the other particle).
+// A mesh compared with an exact clipping rebuild of the same positions (support::clipped):
+// failing (support::failing), mismatched (other Delaunay neighbours), missing (clipping faces the
+// mesh lacks), extra (mesh faces clipping lacks, extra_area their largest area in spacings²;
+// clipping drops faces below rounding level), volume (largest relative difference), total (box
+// volumes), wrong_lists (per-cell list entries out of order or one-sided, after update_cells()).
 struct Comparison {
     long long failing = 0, mismatched = 0, missing = 0, extra = 0, faces = 0, clipped_faces = 0, wrong_lists = 0;
     double extra_area = 0, volume = 0, total = 0;

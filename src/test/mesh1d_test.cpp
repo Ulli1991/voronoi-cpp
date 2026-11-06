@@ -1,18 +1,6 @@
-// The 1D mesh (voronoi::Mesh<1>, sorted_mesh.hpp) against a host oracle:
-// the order is the sort of the snapped positions with ties by id, volumes
-// and centroids are the exact midpoint cells (in quarter grid steps), the
-// volumes sum to the line exactly, faces are stored once with owner < neighbour,
-// area +-1 from owner to neighbour and centroid relative to the owner, the
-// per-cell face lists name a cell's two faces in increasing id of the other
-// particle; on a line with walls the end cells reach the walls and the two
-// wall faces point out. Moving: after every step (small steps that keep the
-// order, large ones that cross, points wrapping through L) the mesh equals
-// a fresh build bit for bit, and the order is sorted again only when points
-// crossed. Insertion and removal: over random batches, on a periodic line
-// that has rotated and on one with walls, near the walls, on generators and
-// twice in one gap, the mesh equals the oracle and a fresh build, the reported
-// overlaps equal the overlaps of the old and new cells computed on the host (in
-// integers, brute force), so a transfer by them conserves, and the arrays grow.
+// The 1D mesh (voronoi::Mesh<1>, sorted_mesh.hpp) against a host oracle in integers (quarter grid steps): order, cells,
+// faces, wall cases, and after every step (order kept or crossed, wrapping) equal to a fresh build bit for bit.
+// Insertion and removal against the oracle, a fresh build and brute-force overlaps; details in docs/design.md.
 
 #include "check.hpp"
 #include "voronoi_mesh.hpp"
@@ -389,9 +377,8 @@ int main(int argc, char* argv[]) {
                 check.expect(bad.empty(), "build: " + ends + " L=" + std::to_string(int(L)) + " " + name +
                                               ": the oracle's order, cells and faces" + (bad.empty() ? "" : " (" + bad + ")"));
             }
-            // Moving: steps of 0.01 spacings (order kept), then 0.7 spacings
-            // (points cross), with a drift that wraps (periodic) or is
-            // clamped at the walls.
+            // Moving: steps of 0.01 spacings (order kept), then 0.7 spacings (points cross),
+            // with a drift that wraps (periodic) or is clamped at the walls.
             std::vector<double> y = inputs[0].second;
             Mesh mesh(exec, box, periodic ? voronoi::Ends::periodic : voronoi::Ends::walls);
             mesh.update(device(y));

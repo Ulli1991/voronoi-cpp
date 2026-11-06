@@ -1,21 +1,6 @@
-// The 2D mesh (voronoi::Mesh<2>) against oracles that share no code with it.
-//
-// Predicates: the in-circle sign against a 4 x 4 integer determinant and the
-// perturbed test consistent under every permutation of its points.
-// Mesh: on random, jittered, clustered, lattice, hexagonal and wave inputs in
-// square and non-square boxes, (a) brute force over all particles: every
-// triangle positive, every edge shared by two triangles, signed areas summing
-// to the box in exact integers, no particle strictly inside a circumcircle;
-// (b) every cell clipped in long double by the bisectors of all particles in
-// all images: volumes, centroids, the neighbours across faces of nonzero
-// length, their length and centroid; (c) the face lists in order of the other
-// id. Brute force O(n^2): test oracles only.
-// Moving: after steps of 0.03 to 1 spacings the repaired mesh equals a mesh
-// built from nothing bit for bit (volumes, centroids, faces), as a function
-// of the positions alone; repeated runs give the same hash.
-// Refusals: coincident particles at the start and in a step, by name; no mesh
-// after a refusal, and the next update builds; no particles; a mapping of
-// degree 4 and kicks of order the box.
+// The 2D mesh (voronoi::Mesh<2>) against oracles that share no code with it: predicates, brute-force triangulation and cells,
+// moving meshes equal to fresh builds bit for bit, and refusals. Brute force is O(n^2): test oracles only.
+// The oracle details are in docs/design.md.
 
 #include "check.hpp"
 #include "voronoi_mesh.hpp"
@@ -159,9 +144,8 @@ void test_predicates(Check& check) {
                         const int ids[4] = {id[order[0]], id[order[1]], id[order[2]], id[order[3]]};
                         const ep::i64 flat = ep::cross(ep::minus(q[1], q[0]), ep::minus(q[2], q[0]));
                         if (flat == 0) continue;
-                        // Swapping which point is tested: the perturbed circle test of d in (a, b, c)
-                        // and of a in (b, c, d) differ by the orientation rule of the lifted facet;
-                        // a permutation of the triangle alone must not change the answer.
+                        // Swapping the tested point (d in (a, b, c) versus a in (b, c, d)) follows the lifted facet's orientation rule,
+                        // but a permutation of the triangle alone must not change the answer.
                         if (order[3] == 3 && ep::in_circle(q, ids) != inside) ++inconsistent;
                     } while (std::next_permutation(order, order + 4));
                 } else if ((det > 0) != inside) {

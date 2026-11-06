@@ -8,35 +8,9 @@
 #include <cuda_fp16.h>
 #endif
 
-// The hydro's compile-time precision policy (research_notes/hydro_speed_2026-11-04.md).
-// The conserved state Q, the volumes and cell centroids, W = primitive(Q / V)
-// and the sums of the face fluxes are double in every policy. The default,
-// Precision<>, is double throughout, with the least-squares fit solved in
-// the gradient sweep (main's arithmetic and bits). The settings:
-//   Geometry  the face rows the hydro reads (area vector, centroid, owner,
-//             neighbour): double (the mesh's double arrays) or float (the
-//             mesh's float rows, voronoi::Mesh<D, Exec, float>); converted to
-//             double when read, so only storage is reduced
-//   Weight    void: the area-weighted least-squares fit is summed and solved
-//             in the gradient sweep (default); float or double: the fit's
-//             weight of each face side, computed in double by the mesh at
-//             every update (voronoi::Mesh<D, Exec, F, Weight>,
-//             tet_mesh::gradient_weights) and stored as Weight, so that the
-//             gradient is a weighted sum (measured: research notes)
-//   Gradient  the least-squares gradients, the limiter and the face-state
-//             change (half step + extrapolation): double; float; or Half,
-//             float arithmetic with the gradients stored as FP16 with one
-//             power-of-two exponent per variable group (rho, v, P). With a
-//             float type the differences W_j - W_i and separations are formed
-//             in double and rounded once, and a face state is W + (its change
-//             in float), so a uniform state stays exactly uniform
-//   Flux      the stored face fluxes (per-face loop): double or float, summed
-//             in double
-//   Riemann   the Riemann solve: double, or float in the frame of the face
-//             (the states' velocities relative to the face in double, then
-//             rounded; the flux back to the lab frame in double)
-// The FP16 storage is the precision study's (branch precision-study 59ff9d1,
-// src/hydro/precision.hpp).
+// The hydro's compile-time precision policy; Precision<> is double throughout. Settings: Geometry (face rows),
+// Weight (stored least-squares weights, or void), Gradient (gradients and face-state change),
+// Flux (stored face fluxes), Riemann (the Riemann solve).
 namespace hydro {
 
 // FP16 storage of float gradients (a Gradient setting).

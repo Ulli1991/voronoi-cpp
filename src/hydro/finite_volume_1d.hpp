@@ -2,57 +2,9 @@
 
 #include "finite_volume.hpp"
 
-// Finite volumes on the 1D mesh (voronoi::Mesh<1>), static or moving: the
-// scheme of FiniteVolume<D> (finite_volume.hpp) in one dimension, with
-// walls, in one fused kernel per step (owner's decision 2,
-// research_notes/dimension_design_2026-11-02.md).
-//
-// On the sorted line a cell's neighbours are the slots s - 1 and s + 1, so
-// one thread per slot reads the five cells s - 2 .. s + 2 and computes, in
-// registers, the limited gradients of s - 1, s, s + 1, the four face states
-// and the fluxes through its two faces, and writes its new state (moving:
-// and drifts its point). Each face is computed by both of its cells from the
-// same data in the same frame (every distance is an integer of the line,
-// sorted_mesh::Line), so both get the same bits and the update conserves to
-// rounding. A static step is two launches, time_step() and step(), a moving one
-// three with the mesh's order check; a sort runs only when points crossed.
-// step_and_time_step() fuses them into one for LUNA's rule, the static default.
-// AREPO's rule, the moving default, cannot be fused: its pair term reads the
-// neighbours' next state. Fusing only the order check into step() was
-// measured and is 2-6 % slower (research_notes/stage1_1d_2026-11-04.md).
-//
-// Scheme, as finite_volume.hpp unless said:
-// - gradients: AREPO-ng's least-squares fit with an intercept over the face
-//   neighbours, weighted by the face area (mesh_gradients.cc; lines in the
-//   stage 1 notes). In 1D the two neighbours with weight 1 determine the
-//   fit exactly: g = (dW_R - dW_L) / (d_R - d_L), d the separations of the
-//   cell centroids. The limiter is AREPO-ng's (limit_gradient,
-//   mesh_gradients.cc:120-148): scaled face by face (left, then right)
-//   until the values extrapolated to the face centroids (or the neighbours'
-//   centroids) stay within the neighbours' range. On a uniform line this is
-//   the MC limiter of LUNA (slopes.py:22-24) on the central difference.
-// - the MUSCL-Hancock half step and HLLC/HLL in 1D (euler.hpp), each side's
-//   face state the cell's if rho or P would not stay positive.
-// - moving: the point velocity is the fluid velocity plus AREPO-ng's
-//   regularisation. A face in 1D has no extent, so the face angle of
-//   finite_volume.hpp does not exist; the criterion is AREPO-ng's other
-//   branch (Arepo2-nextgeneration, set_vertex_velocities, !REGULARIZE_MESH_FACE_ANGLE,
-//   with CellShapingFactor 1 and CellShapingSpeed 0.5 of its examples): a
-//   drift at fraction * c towards the cell's centroid, displaced towards
-//   higher density, fraction rising from 0 at an offset of 0.75 r to 0.5 at
-//   r, r = V / 2. It keeps generators from crossing, which would swap the two
-//   cells' volumes under their masses (research_notes/stage1_1d_2026-11-04.md).
-//   The face velocity is the mean of the two point velocities: AREPO-ng's
-//   prepare_face_velocity (mesh_fluxes.cc:294-331) with the face centroid at
-//   the generators' midpoint.
-// - walls (a mesh with Ends::walls): a wall face is static and takes a ghost
-//   state for the outside, LUNA's ghost cells on a uniform line
-//   (halo_local.py:16-31, the wide step of muscl_hancock.py:246-247):
-//   reflective, the mirror of the cell's face state (the ghost's stencil is
-//   the mirror of the cell's); zero gradient, the cell's W (two equal ghosts,
-//   a flat stencil, no half step); inflow, a fixed state, which LUNA does not
-//   have. The ghost is also the cell's outer neighbour in its gradient, at
-//   the mirrored centroid.
+// Finite volumes on the 1D mesh (voronoi::Mesh<1>), static or moving, with walls: FiniteVolume<D> in one dimension,
+// one fused kernel per step (a thread per slot reads s - 2 .. s + 2). step_and_time_step() also gives the next
+// time step (LUNA's rule); AREPO's rule cannot be fused.
 namespace hydro {
 
 // The boundary of a wall of the 1D line.
@@ -62,20 +14,8 @@ struct Walls {
     State<1> left_inflow{}, right_inflow{};  // primitives (rho, v, P) of an inflow
 };
 
-// The global time step's rule.
-// arepo: AREPO next generation's, as finite_volume.hpp, time_step() (lines of
-// Arepo2-nextgeneration-SoA): courant * min_i min(r_i / (c_i + |v_i - w_i|),
-// min_j (d_ij + r_i) / vsig_ij), with |v_i| on a static mesh (timestep.cc:156-165,
-// sph_particle_data.h:305-334), vsig_ij = c_i + c_j - (v_j - v_i).d_ij / d_ij > 0
-// in the fluid velocities (timestep_treebased.cc:81-88). AREPO-ng has no 1D
-// mesh, so three points are this code's reading in 1D: r_i = V_i / 2, the radius
-// of a 1D ball of the cell's volume, as its 2D and 3D branches are of theirs
-// (sph_particle_data.h:280-287 falls through to the cube root for ONEDIMS);
-// j runs over the two neighbours, not every point a signal reaches (as the
-// 3D code, finite_volume.hpp); and a wall gives no pair term, there being no
-// point behind it. research_notes/stage1_1d_2026-11-04.md has what each costs.
-// luna: courant * min_i V_i / (|v_i - w_i| + c_i), the RAMSES rule of LUNA's
-// integrators.py:11-13 with dx the cell's length, in the frame of the point.
+// The global time step's rule: arepo (AREPO-ng's, as finite_volume.hpp with r_i = V_i / 2),
+// luna (courant * min_i V_i / (|v_i - w_i| + c_i), in the frame of the point).
 enum class TimeStep { arepo, luna };
 
 // The defaults of a 1D run (owner, 2026-11-05): static, LUNA's rule at 0.8,
@@ -154,12 +94,8 @@ public:
             if (wall == Wall::inflow) return left ? walls.left_inflow : walls.right_inflow;
             return W;
         }
-        // The ghost's face state at the wall, for an end cell of state W
-        // and face state Wf. Reflective: the mirror of Wf, the ghost's stencil
-        // being the mirror of the cell's. Zero gradient and inflow: the
-        // ghost's own W, its two-cell stencil being flat, so its slope and
-        // half step vanish (LUNA's wide step, muscl_hancock.py:246-247 on
-        // halo_local.py:16-17, BOUNDARY 1: mode "edge").
+        // The ghost's face state at the wall for an end cell of state W and face state Wf:
+        // reflective, the mirror of Wf; zero gradient and inflow, the ghost's own W.
         KOKKOS_INLINE_FUNCTION State ghost_face(const State& Wf, const State& W, bool left) const {
             const Wall wall = left ? walls.left : walls.right;
             if (wall == Wall::reflective) return mirror(Wf);
@@ -239,11 +175,8 @@ public:
             return g;
         }
 
-        // The point velocity's difference from the fluid's, AREPO-ng's
-        // regularisation (set_vertex_velocities, voronoi_vertex_velocities.cc), for a cell of
-        // primitives W, limited density gradient g, centroid c relative to the
-        // generator and volume `volume`. Below 0.5 r the displaced centre
-        // stays below the threshold of 0.75 r.
+        // The point velocity's difference from the fluid's (AREPO-ng's regularisation), for a cell of primitives W,
+        // limited density gradient g, centroid c relative to the generator and volume `volume`.
         KOKKOS_INLINE_FUNCTION double drift(const State& W, double g, double c, double volume) const {
             const double r = 0.5 * volume;
             if (!regularise || Kokkos::fabs(c) <= 0.5 * r) return 0.0;
@@ -345,11 +278,8 @@ public:
         timer_.reset();
     }
 
-    // The fused step, one thread per slot: public only because CUDA device
-    // lambdas may not be defined in private member functions.
-    // Fused: also the next time step (LUNA's rule) from the new state, on the
-    // moved mesh, with the regularisation's |v - w| of this step, and the
-    // next keys and a count of the slots out of order (moving).
+    // The fused step, one thread per slot (public for CUDA lambdas). Fused: also the next time step
+    // (LUNA's rule) from the new state, the next keys and a count of slots out of order (moving).
     template <int Order, bool Moving, bool Fused>
     struct Kernel {
         Stencil st;

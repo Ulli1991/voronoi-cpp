@@ -17,29 +17,8 @@
 #include <cub/device/device_radix_sort.cuh>
 #endif
 
-// The 1D Voronoi mesh: generators sorted by their snapped position, faces
-// at the midpoints between neighbours, volume the distance between the faces,
-// with the order decided on the snapped integers and ties by particle id (the
-// 1D symbolic perturbation), so it is exact.
-//
-// The grid is finer than the 3D one: 2^52 steps across the line (Grid), the
-// resolution of a double position, against 2^30. A cell's volume comes from
-// the snapped points and its mass from the fluxes, so a grid step shows as
-// relative density noise step / h: 2^-12 at N = 2^18 on 2^30 steps, the size
-// of the error of that resolution (research_notes/stage1_1d_2026-11-04.md).
-// 1D needs no bounded integer predicates, so the fine grid costs only the
-// wider key.
-//
-// A periodic line [0, L) closes the order into a cycle. A line with walls
-// [0, L] puts a mirror of the end generators behind each wall (a generator at
-// x_0 has its mirror at -x_0, and at 2L - x_{n-1}): the end cells reach the
-// walls exactly.
-//
-// Distances are whole grid steps: gap(s) is the distance from slot s to
-// slot s + 1 (to the mirror behind a wall: twice the distance to the wall),
-// so volumes, (gap(s - 1) + gap(s)) / 2, and centroids relative to the
-// generator, (gap(s) - gap(s - 1)) / 4, are exact multiples of a quarter
-// step, the same bits wherever they are computed.
+// The 1D Voronoi mesh: generators sorted by snapped position (ties by particle id), faces at the midpoints,
+// exact because distances are whole grid steps; periodic, or with walls via mirrored end generators.
 namespace sorted_mesh {
 
 namespace ep = exact_predicates;
@@ -163,33 +142,12 @@ private:
 
 namespace voronoi {
 
-// The ends of a 1D line: periodic, or walls at 0 and L (whose boundary
-// conditions belong to the hydro).
+// The ends of a 1D line: periodic, or walls at 0 and L.
 enum class Ends { periodic, walls };
 
-// What Mesh<1>::insert() or remove() did: for request r of `requested`,
-//
-//   id(r)           the new id (insert), the id removed (remove), or -1 if
-//                   the request was deferred and nothing changed for it;
-//   neighbour(r, 0), neighbour(r, 1)
-//                   the particles left and right of it on the line, or the wall
-//                   (-1 at 0, -2 at L); ids of before the change;
-//   overlap(r, 0), overlap(r, 1)
-//                   insert: the length the new cell takes from those two old
-//                   cells; remove: the length each of them takes from the
-//                   removed cell. Either way their sum is that cell's volume;
-//   volume(r, 0), volume(r, 1)
-//                   the volumes of those two cells before the change.
-//
-// An insertion is exact against the old cells, so a caller holding conserved
-// quantities moves the fraction overlap / volume of each neighbour's (of the
-// values before the change: a cell can give to both sides) and conserves them.
-// New ids are first, first + 1, ... in the order of the requests.
-//
-// remove() keeps ids dense: the last ids fill the holes, and after the
-// caller has moved its data by `neighbour` and `overlap`, it copies its data
-// of id moved(m, 0) to id moved(m, 1) for m < moves, and its positions too.
-// The views belong to the mesh and hold until the next change.
+// What Mesh<1>::insert() or remove() did, per request r: id (-1: deferred), the two neighbours (-1, -2: walls), the
+// lengths they give to or take from the cell, and their old volumes. Ids of before the change; the views are the mesh's
+// and hold until the next change. Using it to move conserved quantities: docs/design.md.
 template <class Memory>
 struct Changes {
     int requested = 0, done = 0, first = 0, moves = 0;
@@ -198,29 +156,10 @@ struct Changes {
     Kokkos::View<double* [2], Memory> overlap, volume;
 };
 
-// The 1D mesh: the sorted order of the generators (sorted_mesh).
-//
-// The contract of Mesh<3> holds with D = 1: faces once, owner the lower id,
-// area +-1 from owner to neighbour, centroids relative to the owner; on a
-// line with walls the two wall faces have neighbour -1 (at 0) and -2 (at
-// L), area pointing out. Faces are numbered by slot: face s lies between
-// slots s and s + 1 (s < n on a periodic line; n - 1 inner faces on a line
-// with walls, then the wall faces n - 1 at 0 and n at L). The per-cell
-// face lists are cell i's two faces at 2i, 2i + 1, in increasing id of the
-// other particle (a wall's negative id first). update() computes all of it
-// at once, without atomics; update_cells() has nothing left to do.
-//
-// update(x) snaps, then checks whether the order of the last update still
-// holds (one pass; a periodic line may have rotated as particles wrapped
-// around) and sorts again only if particles crossed. order(x) does only
-// that: the 1D hydro reads the line and needs none of the face arrays.
-//
-// insert() and remove() change the line in place between updates, without a
-// sort: a binary search per request and one pass over the line. Ids stay dense
-// (Changes). Per-particle arrays grow by a quarter when full, so after a change
-// the views may be longer than particles(), and x given to update() or
-// order() must have exactly particles() rows. Any id of the next x not yet set
-// is the caller's: it writes the requested position to the new ids.
+// The 1D mesh: the sorted order of the generators, with the contract of Mesh<3> at D = 1 (faces once, owner the lower
+// id, area +-1 owner to neighbour, centroids relative to the owner). Wall faces have neighbour -1 (at 0) and -2 (at
+// L). Face s lies between slots s and s + 1; cell i's faces are 2i, 2i + 1 in increasing id of the other particle.
+// update(x) snaps, rechecks the order and sorts again only if particles crossed; order(x) does only that.
 template <class ExecSpace>
 class Mesh<1, ExecSpace, double, void> {
 public:
@@ -236,9 +175,8 @@ public:
         : exec_(exec), box_(box), grid_(box.side[0]), periodic_(ends == Ends::periodic) {}
     Mesh(const ExecSpace& exec, double side, Ends ends = Ends::periodic) : Mesh(exec, ep::BoxN<1>(side), ends) {}
 
-    // New positions x(i, 0) in [0, L) (walls: positions outside are put
-    // on the nearest end step). Builds on the first call or when the number
-    // of particles changed. `active` and `timings` as Mesh<3> (unused).
+    // New positions x(i, 0) in [0, L) (walls: outside ones go to the nearest end step). Builds on the first call or when
+    // the particle count changed. `active` and `timings` as Mesh<3> (unused).
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -280,19 +218,16 @@ public:
     }
     void set_fallback(Fallback) {}
 
-    // Scratch memory the caller may use between updates, grown to `bytes`
-    // (valid until the next update; the 1D mesh itself needs none).
+    // Scratch memory the caller may use between updates, grown to `bytes` (valid until the next update).
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         if (scratch_.extent(0) < bytes) scratch_ = View<char*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("mesh1_scratch")), bytes);
         return Scratch(scratch_.data(), bytes);
     }
 
-    // Adds a generator at each of points(r, 0), r < extent(0), a view in the
-    // mesh's memory, to the line of the last update()/order(). A request is deferred if another one takes the
-    // same gap between two generators or if it snaps onto a generator, as the
-    // new cell would be empty or its old cells unknown. Stale face and cell
-    // arrays, as order(), until update_cells().
+    // Adds generators at points(r, 0), in the mesh's memory, to the line of the last update()/order(), without a sort. Views
+    // may then be longer than particles(), but x given to update() or order() must have exactly particles() rows. A request
+    // in a gap already taken or on a generator is deferred. Face and cell arrays stale until update_cells().
     template <class Points>
     const Changes& insert(const Points& points) {
         const int requested = static_cast<int>(points.extent(0));
@@ -422,10 +357,8 @@ public:
         return changes_;
     }
 
-    // Takes particles ids(r), r < extent(0), off the line. A request is
-    // deferred if it would leave fewer than 3 particles, or if a neighbour on
-    // the line is going as well (its old neighbours would not be the cells that
-    // take over) or the id is not on the line. Stale arrays, as insert().
+    // Takes particles ids(r) off the line. A request is deferred if it would leave fewer than 3 particles, if a neighbour
+    // on the line is going as well, or if the id is not on the line. Stale arrays, as insert().
     template <class Ids>
     const Changes& remove(const Ids& ids) {
         const int requested = static_cast<int>(ids.extent(0));
@@ -579,9 +512,8 @@ public:
     Positions positions() const { return positions_; }
     // The sorted line (current after update() and order()).
     const Line& line() const { return line_; }
-    // For a caller that computes the keys of the next positions itself, in
-    // slot order, in a kernel of its own: it writes spare_keys(), then
-    // swap_keys() makes them the line's (order() only if the order broke).
+    // For a caller computing the next keys itself in slot order: write spare_keys(), then swap_keys() (order() only if
+    // the order broke).
     View<sorted_mesh::Key*> spare_keys() const { return keys_; }
     void swap_keys() {
         std::swap(line_.key, keys_);
@@ -590,8 +522,7 @@ public:
     // How often the order had to be sorted again since the first build.
     long long sorts() const { return sorts_; }
 
-    // Internals, public only because CUDA device lambdas may not be
-    // defined in private member functions.
+    // Internals, public only because CUDA device lambdas may not be defined in private member functions.
     void allocate(int n) {
         n_ = n;
         sorts_ = 0;

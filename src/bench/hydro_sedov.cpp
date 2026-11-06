@@ -1,36 +1,5 @@
-// The Sedov-Taylor blast of LUNA's scripts/validation/runs/sedov3d_run.py
-// on the Voronoi mesh (hydro::FiniteVolume), static or moving, with phase
-// timings.
-//
-//   hydro_sedov <side> <jittered|uniform> [--order=0|1] [--update=cell|face]
-//               [--limiter=face|cell|none] [--riemann=hllc|hll] [--precision=<name>]
-//               [--moving] [--bulk=<km/s>] [--no-blast] [--box=fx,fy,fz] [--out=<dir>]
-//               [--snapshots=10] [--steps=<max>] [--input-order] [--memory]
-//
-// side^3 generating points in a 50 pc periodic box (jittered: a lattice
-// moved by up to 0.1 spacings; uniform: uniform random). AREPO units (kpc,
-// 1e10 Msun, km/s), gamma 5/3, n = 1 cm^-3, T = 1e4 K, 1e51 erg into the
-// cells nearest the centre whose volumes add up closest to LUNA's 8 central
-// cells at the same resolution (8 (L / side)^3), as extra pressure
-// (gamma - 1) E / V_deposit over their actual volume V_deposit; run to
-// 1e4 yr. --moving: the points move with the flow (AREPO-ng's
-// regularisation), the mesh is updated every step. --bulk: the whole box
-// moves along x at that speed (a moving blast wave). --box: the box sides as
-// multiples of 50 pc (default 1,1,1; about side^3 cells). --out writes snapshots
-// 0..snapshots at equal times (LUNA's time_bet_snaps = t_end / n_snaps).
-// --steps stops after that many steps (timing runs). Particles are numbered
-// in Morton order of their positions (--input-order: as generated, lattice
-// rows or random). --update: the update loop, default face at order 1 and
-// cell at order 0. --limiter: the gradient limiter (hydro::Limiter: face or
-// cell centroids, or none; default face). --riemann: HLLC (default, as
-// LUNA) or HLL. --precision: the hydro's precision policy (run_precision
-// below; default double). --no-blast: no blast, a uniform stream (with
-// --bulk), printing its largest deviation from uniform. Prints per step
-// phase medians and cell updates per second and a checksum of the final
-// state, positions and volumes (bits),
-// the face sides whose extrapolation fell back to the cell state (total,
-// steps with any, most in one step) and what the mesh updates did;
-// --memory adds device memory (Kokkos allocations) per phase.
+// The Sedov-Taylor blast of LUNA on the Voronoi mesh (hydro::FiniteVolume), static or moving, with phase timings.
+// Usage: hydro_sedov <side> <jittered|uniform> [--order=] [--moving] [--bulk=] [--box=] [--out=] [--steps=]; options in main().
 
 
 #include "finite_volume.hpp"
@@ -288,11 +257,8 @@ void run(const Options& o, Points points) {
     snap.order = o.order;
     snap.gas = gas;
     snap.units = sedov.units;
-    // The radius of the disturbed region: the farthest cell, from the
-    // blast centre moving with the bulk velocity, whose density or
-    // pressure differs from the background by more than 1e-6. Uniform
-    // stream: the largest relative deviation of rho, P and v from the
-    // background.
+    // The radius of the disturbed region (density or pressure off the background by 1e-6);
+    // for a uniform stream, the largest relative deviation of rho, P and v.
     auto write = [&](int index, double t) {
         const auto Q = to_host(fv.state());
         const auto x = to_host(mesh.positions());

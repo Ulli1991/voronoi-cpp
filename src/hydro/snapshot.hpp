@@ -10,12 +10,8 @@
 #include <string>
 #include <vector>
 
-// HDF5 snapshots in LUNA's layout (src/luna/file_io/write_snapshot_distributed.py,
-// checkpoint_utils.py:_write_units): <dir>/snapdir_NNN/snapshot_NNN.0.hdf5,
-// group `cells` with LUNA's attributes and datasets (density, velocity_x/y/z,
-// internal_energy per unit volume, pressure, U as [5][N]), plus for the
-// Voronoi mesh mesh = "voronoi", N_cells, and the datasets x, y, z
-// (generating points) and volume. Group `units` as LUNA writes it.
+// HDF5 snapshots in LUNA's layout: <dir>/snapdir_NNN/snapshot_NNN.0.hdf5, group `cells`
+// (density, velocity, pressure, U, plus x, y, z and volume of the mesh) and group `units`.
 namespace hydro {
 
 struct Units {

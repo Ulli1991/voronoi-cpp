@@ -15,37 +15,17 @@
 #include <cub/device/device_radix_sort.cuh>
 #endif
 
-// Particles of a periodic box sorted along a Morton curve: an implicit
-// octree in which every node, from a tile down to cells 2^-(levels +
-// fine_levels) tiles wide, owns a contiguous range of slots.
-//
-// Tiles: the box is cut into tiles[0] x tiles[1] x tiles[2] near-cubes of
-// about its shortest side (one tile, the box itself, for a cube), numbered
-// in row-major order; each is the root of an octree, and a cell number is
-// the tile's number above the Morton number inside it. So unequal sides
-// need no padding to a cube (a 2 x 2 x 1/16 slab is 32 x 32 x 1 tiles).
-//
-// Slot q holds particle order(q) at positions(q). The base grid (2^levels
-// cells per tile side, cells numbered as above) has a dense offset table:
-// base cell c owns the slots [cell_offsets(c), cell_offsets(c + 1)), and so a
-// block of 8^k base cells at a coarser level owns a contiguous range too.
-// Below the base grid, the slots of a base cell are sorted by fine(q), the
-// Morton key of the particle inside its base cell (fine_levels levels), so a
-// finer node is found by binary search. Ties keep particle-ID order, which
-// makes the slot order deterministic.
-//
-// level(q) is the grid level whose cells hold about one particle near slot q
-// (2^level cells per side): the deepest node around q with at least 64
-// particles gives the local density. Clipping walks the cells of that level
-// around each particle, so clusters and voids each get a fitting cell size.
-//
-// Buffers persist across builds; a build allocates nothing.
+// Particles of a periodic box sorted along a Morton curve: an implicit octree whose nodes each own
+// a contiguous range of slots. Buffers persist across builds; a build allocates nothing.
 namespace neighbor_search {
 
 constexpr int fine_levels = 10;
 constexpr int max_levels = 10;  // base levels: Morton cell numbers fit in an int
 
-// In D = 2 or 3 dimensions (a quadtree in 2D); 1D needs no cell list.
+// Cell list in D = 2 or 3 dimensions (a quadtree in 2D); 1D needs none. The box is cut into tiles (near-cubes of
+// about its shortest side, one for a cube), each an octree root. Slot q holds particle order(q) at positions(q).
+// Base cell c owns slots [cell_offsets(c), cell_offsets(c + 1)); within it slots are sorted by the fine Morton key.
+// level(q) is the grid level (2^level cells per tile side) whose cells hold about one particle near q.
 template <class ExecSpace, int D = 3>
 struct CellList {
     static_assert(D == 2 || D == 3, "neighbor_search::CellList: 2 or 3 dimensions");
@@ -113,9 +93,7 @@ KOKKOS_INLINE_FUNCTION std::uint64_t spread2(std::uint64_t v) {
 }
 KOKKOS_INLINE_FUNCTION std::uint64_t morton(std::uint64_t x, std::uint64_t y) { return spread2(x) << 1 | spread2(y); }
 
-// Integer coordinate of x on a grid of `side` cells over [0, box) (one
-// axis). Every user computes it this way, so a particle's node never
-// depends on who asks.
+// Integer coordinate of x on a grid of `side` cells over [0, box) (one axis); every user computes it this way.
 KOKKOS_INLINE_FUNCTION int grid_coordinate(double x, double box, int side) {
     return Kokkos::clamp(static_cast<int>(x / box * side), 0, side - 1);
 }
@@ -143,8 +121,7 @@ void ensure(View& v, const char* label, Extents... extents) {
     if (!same) v = View(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), extents...);
 }
 
-// The sort works in the storage of `positions` (24 bytes per particle), which
-// is only written after it: two buffers of 64-bit keys, two of particle IDs.
+// The sort works in the storage of `positions` (24 bytes per particle): two buffers of 64-bit keys, two of ids.
 struct SortBuffers {
     std::uint64_t* keys[2];
     int* ids[2];
@@ -170,10 +147,8 @@ int key_bits(const CellList<ExecSpace, D>& s) {
     return bits(s.tile_count()) + D * (s.levels + fine_levels);
 }
 
-// Size the tiles, the base grid (2^levels cells per tile side, the power of
-// two nearest to tile / cell_width) and the buffers. Call again whenever n,
-// the box or the width changes; unchanged buffers are kept. Levels are
-// capped so that keys fit 64 bits and cell numbers an int.
+// Size the tiles, the base grid (2^levels cells per tile side, the power of two nearest to tile / cell_width)
+// and the buffers; call again when n, the box or the width changes. Levels are capped so keys fit 64 bits.
 template <class ExecSpace, int D>
 void configure(CellList<ExecSpace, D>& s, int n, const exact_predicates::BoxN<D>& box, double cell_width) {
     s.n = n;
@@ -281,9 +256,8 @@ void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPosit
             fine(q) = static_cast<std::uint32_t>(keys[q] & fine_mask);
         }
     });
-    // Per-slot level: the deepest node around q holding at least `enough`
-    // particles, refined by the (2^D)-th root of its count. Coarser nodes are
-    // blocks of base cells; finer ones are found in the base cell's fine keys.
+    // Per-slot level: the deepest node around q holding at least `enough` particles, refined by the (2^D)-th
+    // root of its count; coarser nodes are blocks of base cells, finer ones come from the fine keys.
     Kokkos::parallel_for("cell_list::levels", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
         constexpr int enough = 64;
         const int cell = static_cast<int>(keys[q] >> (D * fine_levels));

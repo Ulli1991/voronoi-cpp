@@ -1,14 +1,6 @@
-// The 2D mesh timed: a build from nothing and moving steps, on one device.
-//
-//   mesh2d_bench <jittered|random|clustered|lattice> <n> [--steps=<k>] [--move=<spacings per step>]
-//                [--repeats=<r>] [--box=<lx>x<ly>] [--unsorted]
-//
-// Prints M cells/s of the build (cell list, clipping, triangles, faces, cell
-// lists) and of the steps (repair, centres and faces, cell lists), flips,
-// rounds, the steps that fell back, and the peak of device allocations in
-// bytes per cell. --move: every step, points drift along a smooth flow, as
-// voronoi_bench's (a sum of sines), so that shear and compression both occur.
-// Particles are numbered along a Morton curve (--unsorted: as generated).
+// The 2D mesh timed: a build from nothing and moving steps, on one device, in M cells/s.
+// Usage: mesh2d_bench <jittered|random|clustered|lattice> <n> [--steps=<k>] [--move=<spacings per step>]
+// [--repeats=<r>] [--box=<lx>x<ly>] [--unsorted]; the flow and options are described in docs/design.md.
 
 #include "device_memory.hpp"
 #include "voronoi_mesh.hpp"

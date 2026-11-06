@@ -1,21 +1,6 @@
-// The contract of voronoi::Mesh, the hydro code's interface, on positions
-// off the snapping grid in a box of side 2:
-//   - the first update builds the mesh; later ones repair it, and after
-//     each the faces are those of an exact rebuild (neighbours, volumes);
-//     on near-cospherical shells, where the device repair leaves stuck
-//     triangles, Fallback::host (the host finishes them) and
-//     Fallback::rebuild (the step rebuilds) are exact too;
-//   - faces are stored once, owner < neighbour, and close every cell;
-//     volumes fill the box; cell centroids equal those of clipping;
-//   - the per-cell face lists (update_cells) name each cell's faces once,
-//     in increasing id of the other particle;
-//   - particle ids are the caller's: a permuted input gives the permuted
-//     mesh; the same input gives the same bits;
-//   - a local rebuild by clipping returns each face of the listed cells
-//     once, equal to the mesh's;
-//   - the scratch memory can be used between updates;
-//   - a box of three sides: volumes fill it, box() refuses it; a slab too
-//     thin for its particles is refused with a clear error.
+// The contract of voronoi::Mesh on positions off the snapping grid in a box of side 2: after each update the faces
+// are those of an exact rebuild (also with Fallback::host and ::rebuild), stored once and closing every cell,
+// and ids, determinism, local rebuilds, scratch reuse and thin boxes behave as the blocks below state.
 
 #include "check.hpp"
 #include "support.hpp"
