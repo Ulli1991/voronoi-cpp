@@ -1,5 +1,4 @@
 label cube uniform+jit+void+cusp+cube steps:6,3,7, (min of /raven/u/uli/voronoi-cpp/build-fuzz/logs/s258071.case, WRONG:clip_volume)
-known 30
 sides 0x1p+0 0x1p+0 0x1p+0
 variant 0
 ops 1

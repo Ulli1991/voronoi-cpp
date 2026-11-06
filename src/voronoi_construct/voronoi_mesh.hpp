@@ -289,7 +289,7 @@ public:
                 listed(cells(i)) = 1;
             });
         local_ = shell_voronoi::Cells<Memory>(n_, false, 10, count);
-        shell_voronoi::construct_warp(exec_, shell_voronoi::make_grid(list_), local_, {slots, listed});
+        shell_voronoi::construct(exec_, shell_voronoi::make_grid(list_), local_, {slots, listed}, true);  // exact: nothing checks a rounded cell here
         return local_;
     }
 

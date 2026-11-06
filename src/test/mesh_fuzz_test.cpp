@@ -398,7 +398,8 @@ void check_clip(M& mesh, const Op& o, const Box& box, Outcome& out, int at, bool
             std::snprintf(text, sizeof text, "  clip cell %d status %d volume %.17g brute %.17g", i, status(i), volume(i), brute);
             std::cout << text << std::endl;
         }
-        if (e * std::cbrt(double(cell.volume)) > 1e-6) out.hit(e > 1e-6 ? wrong : rough, "clip_volume", "cell " + std::to_string(i) + " off by " + sci(e), at);
+        // Scaled by the cell's width in steps, with a floor for doubles summed over dozens of faces.
+        if (e * std::cbrt(double(cell.volume)) > 1e-6 && e > 1e-13) out.hit(e > 1e-6 ? wrong : rough, "clip_volume", "cell " + std::to_string(i) + " off by " + sci(e), at);
     }
 }
 
@@ -1137,8 +1138,8 @@ void smoke(Check& c, const std::string& directory, double seconds, bool with_kno
         c.expect(o.kind <= valid, "seed " + std::to_string(seed) + " " + o.signature + " " + o.detail);
     }
     // Fixed seeds. Boxes of a non-dyadic step meet #29, extreme ones #32: these
-    // run in the long fuzz, not here. A clip volume off in the others is #30.
-    long long cases = 0, skipped = 0, known_clip = 0, count[classes] = {};
+    // run in the long fuzz, not here.
+    long long cases = 0, skipped = 0, count[classes] = {};
     const double start = now_seconds();
     for (long long seed = 1; seed <= fixed_seeds && now_seconds() - start < seconds; ++seed) {
         const Script s = make_script(static_cast<std::uint64_t>(seed));
@@ -1155,13 +1156,9 @@ void smoke(Check& c, const std::string& directory, double seconds, bool with_kno
         run_script(s, o, limits);
         ++cases;
         ++count[o.kind];
-        if (o.signature == "WRONG:clip_volume") {
-            ++known_clip;
-            continue;
-        }
         c.expect(o.kind != wrong, "seed " + std::to_string(seed) + " " + o.signature + " " + o.detail);
     }
-    std::cout << cases << " seeds, " << skipped << " skipped (#29, #32), " << known_clip << " at #30:";
+    std::cout << cases << " seeds, " << skipped << " skipped (#29, #32):";
     for (int k = 0; k < classes; ++k) std::cout << " " << class_name[k] << "=" << count[k];
     std::cout << std::endl;
 }

@@ -571,9 +571,9 @@ void until_pool_fits(const ExecSpace& exec, Cells<MemorySpace>& out, const Build
 
 }  // namespace detail
 
-// Build the selected cells (default: all) with one thread per cell: the
-// portable kernel (rounded cells, as the warp kernel), or exactly
-// (detail::ExactCell) if `exact`.
+// Build the selected cells (default: all) with one thread per cell: the portable kernel (rounded cells, as the warp
+// kernel), or exactly (detail::ExactCell) if `exact`. Rounded cells are guesses: near-equal bisectors can break one with
+// status ok (#30), so use them only under an exact check, as tet_start does.
 // Used by: construct_warp (non-CUDA), tests.
 template <class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
