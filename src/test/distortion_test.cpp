@@ -1,11 +1,6 @@
-// Mesh under flows that distort it (distortion.hpp): prescribed velocities, no
-// hydro, no regularisation, then with a drift to the centroids in this driver
-// (the library layer has none). A run may end in a refusal; every mesh it
-// returns must pass the oracle (sampled steps).
-//   distortion_test [flow ...] [--steps=N] [--n=N] [--d=spacings per step]
-//                   [--every=N oracle] [--rebuild-every=N] [--cells=N brute cells]
-//                   [--no-drift | --drift=chi] [--fallback=host|rebuild] [--print]
-//                   [--seconds=S per run] [--shape-every=N] [--final-oracle] [--dump]
+// Mesh under flows that distort it (distortion.hpp): prescribed velocities, no hydro, then with a drift to the centroids.
+// A run may end in a refusal; every mesh it returns must pass the oracle (sampled steps).
+// Flags: [flow ...] --steps --n --d --every --rebuild-every --cells --no-drift --drift --fallback --print --seconds --shape-every --final-oracle --dump
 
 #include "check.hpp"
 #include "distortion.hpp"

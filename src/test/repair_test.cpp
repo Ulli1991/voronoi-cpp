@@ -1,15 +1,6 @@
-// Repair of the persistent mesh as particles move: jittered points (ten
-// steps), a lattice and a wave lattice (four steps; their exact starting
-// meshes are decided by the perturbation alone) carried by a smooth flow
-// at 0.03 and at 0.3 spacings per step, and icosahedral shells (two steps
-// at 0.03; their first step needs the host's local rebuilds), and jittered
-// points in a box of side 2 (snapping divides by the box), in a 1:2:3 box
-// and in a 1:1:0.125 slab (64 x 64 x 8; the flow is stretched with the
-// box, steps are in spacings). Every
-// step runs the pipeline (screened device flips, host fallback when stuck,
-// face rings and geometry), then the mesh must be Delaunay, its neighbours
-// must equal those of an exact rebuild by clipping, and the volumes from
-// its faces must match the clipped cells.
+// Repair of the persistent mesh as particles move (jittered, lattice, wave lattice, icosahedral shells; cubes, 2, 1:2:3
+// and slab boxes) under a smooth flow: after each step the mesh must be Delaunay, match an exact clipped rebuild's
+// neighbours, and its face volumes must match the clipped cells.
 
 #include "check.hpp"
 #include "support.hpp"

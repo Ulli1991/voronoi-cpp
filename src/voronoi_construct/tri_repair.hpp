@@ -7,32 +7,9 @@
 #include <string>
 #include <utility>
 
-// Keeps the triangulation Delaunay as the particles move.
-//
-// screen(): one pass over the triangles with the new positions writes every
-// circumcentre and lists the edges that fail the in-circle test. The test
-// shares its products with the centre, reads only the corners and apexes,
-// and is filtered in double; each edge is tested from the side of the lower
-// apex. Inverted or flat triangles list their three edges.
-//
-// repair(): Lawson's 2-2 flips in rounds over the list of edges (one entry =
-// triangle << 2 | corner opposite the edge). An edge between two positive
-// triangles flips when it is not locally Delaunay (exact, perturbed); such a
-// quadrilateral is strictly convex. An edge at an inverted or flat triangle
-// flips when both new triangles are positive, which removes the inversion.
-// Conflicting flips are settled by votes: a planned flip writes a hash of the
-// edge and the round into the locks of its two triangles and four outer
-// neighbours (fetch-max), and it applies if it holds all six. Keys grow with
-// the round, so locks never need resetting, and the set of winners does not
-// depend on the order of the list. The highest key always wins, so every
-// round makes progress: flips of positive edges lower the lifted surface and
-// flips at inversions lower their number. A flip rewrites its two triangles
-// and one face in place, patches the outer neighbours and lists the four
-// outer edges; losers stay listed.
-//
-// What can remain are inversions no flip of this kind removes (stuck): a
-// point moved past more than its neighbouring triangle. tri_finish::finish()
-// then replaces a patch around them on the host, or voronoi::Mesh rebuilds.
+// Keeps the triangulation Delaunay as particles move: screen() lists failing edges, repair() flips them in rounds (Lawson 2-2).
+// Conflicting flips are settled by votes in per-triangle locks whose keys grow with the round, so winners do not depend on list order.
+// Inversions no flip removes stay stuck, for tri_finish::finish() or a rebuild in voronoi::Mesh.
 namespace tri_repair {
 
 namespace ep = exact_predicates;
@@ -256,9 +233,8 @@ struct Apply {
         if (e < 0) return;
         const int t = e >> 2, k = e & 3;
         const unsigned long long key = token | detail::hash(static_cast<unsigned>(e) ^ static_cast<unsigned>(token >> 29));
-        // A flip writes a row only with its lock, so while the locks read so
-        // far are ours, the rows they guard are the ones planned from. The
-        // first lock is taken for good: an edge may be listed twice.
+        // A flip writes rows only with its lock, so while the locks read so far are ours the planned rows are current.
+        // The first lock is taken for good: an edge may be listed twice.
         bool won = Kokkos::atomic_compare_exchange(&lock(t), key, token) == key;
         int u = -1, j = 0;
         if (won) {
@@ -315,11 +291,8 @@ int count_inverted(const ExecSpace& exec, const ep::Points<typename ExecSpace::m
     return inverted;
 }
 
-// Twice the sum of the signed areas, in grid steps^2. A step of order the box
-// can leave a mesh with every local test passing that covers the torus several
-// times; its areas do not add up to the box. A flip of two positive triangles
-// keeps this sum, so without an inversion the screen's sum holds after the
-// repair, and this kernel runs only after an inversion.
+// Twice the sum of the signed areas, in grid steps^2: a step of order the box can leave a covering of the torus several times.
+// Flips of positive triangles keep it, so this runs only after an inversion.
 template <class ExecSpace>
 double total_area(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point, const ep::BoxN<2>& box,
                   const Triangles<typename ExecSpace::memory_space>& mesh) {

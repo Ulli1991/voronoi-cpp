@@ -3,14 +3,8 @@
 #include "tri_finish.hpp"
 #include "tri_repair.hpp"
 
-// The 2D Voronoi mesh: Mesh<3>'s contract on the engine of tri_mesh.hpp and
-// tri_repair.hpp. Faces are numbered for good at the start: there are always
-// exactly 3n, and a flip gives its face new particles. volume() is current
-// after update_cells() only (no atomic sums in update()). As Mesh<3>: particles
-// on one grid position are refused by name, a refused update leaves no mesh and
-// the next builds, no particles are an invalid_argument that leaves the object
-// as it was, and a repair whose areas do not fill the box once is rebuilt.
-// Hidden: the cell list, the rings, the triangles.
+// The 2D Voronoi mesh: Mesh<3>'s contract on tri_mesh.hpp and tri_repair.hpp, with the same refusals and rebuild rules.
+// Faces are numbered at the start (always 3n); volume() is current after update_cells() only.
 namespace voronoi {
 
 template <class ExecSpace, class FaceReal, class Weight>
@@ -35,10 +29,8 @@ public:
     Mesh(const ExecSpace& exec, const Box& box) : exec_(exec), box_(box), point_("point2", 0, box) {}
     Mesh(const ExecSpace& exec, double side) : Mesh(exec, Box(side)) {}
 
-    // As Mesh<3>::update: new positions x(i, a) in [0, side[a]), repaired,
-    // or built on the first call or when the number of particles changed;
-    // exact on return, or a std::runtime_error saying what is wrong with the
-    // positions, and then there is no mesh and the next update() builds.
+    // As Mesh<3>::update: new positions x(i, a) in [0, side[a]), repaired, or built on the first call or when n changed;
+    // exact on return, or a std::runtime_error (then there is no mesh and the next update() builds).
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -90,9 +82,8 @@ public:
         return rebuilt;
     }
 
-    // The exact mesh of positions x from scratch: clipping, then the
-    // triangles of the rings (screened and repaired: nothing to do when the
-    // clipping is right; both are counted in the report).
+    // The exact mesh of positions x from scratch: clipping, then the triangles of the rings
+    // (screened and repaired, a no-op when the clipping is right; both are counted in the report).
     template <class X>
     Report rebuild(const X& x, Timings* timings = nullptr) {
         if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh<2>: no particles");
@@ -173,10 +164,8 @@ public:
         if (cells_current_) return;
         if (!built()) throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
-        // As Mesh<3>: from the last step's lists up to one triangle created per
-        // five cells (tet_mesh::finish_incremental). Face numbers stay, so the
-        // table is the identity, but for the faces that flipped: they have
-        // no old number, and each is a new face.
+        // As Mesh<3>: from the last step's lists up to one triangle created per five cells (tet_mesh::finish_incremental).
+        // Face numbers stay, so the table is the identity except for flipped faces, which are new.
         const bool same_lists = lists_valid_ && updates_since_lists_ == 1 && !patched_;
         if (same_lists && state_.touched_count == 0) {
             tet_mesh::detail::sort_and_sum<2>(exec_, positions_, box_, geometry_, cells_, {}, {}, {}, owner(), neighbour(),
@@ -228,8 +217,7 @@ public:
     const tri_mesh::Triangles<Memory>& triangles() const { return mesh_; }
     const ep::Points<Memory, 2>& points() const { return point_; }
 
-    // Public only because CUDA device lambdas may not be defined in private
-    // member functions.
+    // Public only because CUDA device lambdas may not be defined in private member functions.
     template <class X>
     void snap(const X& x) {
         if (static_cast<int>(positions_.extent(0)) != n_) {

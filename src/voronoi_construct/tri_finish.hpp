@@ -8,14 +8,8 @@
 #include <utility>
 #include <vector>
 
-// The host fallback of the 2D repair: triangles stuck inverted are replaced,
-// with a patch of triangles around them, by the Delaunay triangles of the
-// patch's own corners (Bowyer-Watson in a local frame, exact and perturbed by
-// particle id). The result is accepted if it has the patch's boundary edge for
-// edge and as many triangles; else the patch grows. The patch keeps its slots
-// and face numbers. Its boundary edges go back to the device repair, which
-// settles what the patch changed around it. O(k^2) in the patch's size k,
-// a few dozen triangles.
+// Host fallback of the 2D repair: patches around triangles stuck inverted are replaced by the Delaunay triangles of the
+// patch's own corners (Bowyer-Watson, exact and perturbed by particle id); accepted if the boundary matches, else the patch grows.
 namespace tri_finish {
 
 namespace ep = exact_predicates;

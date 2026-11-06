@@ -8,17 +8,8 @@
 #include <stdexcept>
 #include <string>
 
-// The persistent 2D Delaunay triangulation of the generators on the torus:
-// exactly 2n triangles and 3n edges at all times, so slots and face numbers
-// never change: a 2-2 flip rewrites two triangles and one face in place. A
-// Voronoi face has two vertices, the circumcentres of the two triangles of
-// its edge, and needs no ring pool.
-//
-// Triangles are counter-clockwise, lowest particle id first (a flip keeps
-// this), so a circumcentre computed from the corners in order is the same
-// bits whatever history led to the triangle. Faces are computed from the side
-// of the lower apex, also independent of the history: geometry is a function
-// of the positions alone.
+// Persistent 2D Delaunay triangulation on the torus: 2n triangles and 3n edges, so slots and face numbers never change.
+// Triangles are counter-clockwise, lowest particle id first, so centres and faces depend on the positions alone.
 namespace tri_mesh {
 
 namespace ep = exact_predicates;
@@ -31,11 +22,9 @@ using Rows2 = Kokkos::View<double* [2], Kokkos::LayoutRight, MemorySpace>;
 
 template <class MemorySpace>
 struct Triangles {
-    // Row t: corners 0, 1, 2, then the apexes: the particle across the edge
-    // opposite corner k (3 + k). The screening reads only this row.
+    // Row t: corners 0, 1, 2, then the apex across the edge opposite corner k (3 + k).
     Sixes<MemorySpace> corners;
-    // Row t: the triangle across the edge opposite corner k, then its face
-    // number (3 + k).
+    // Row t: the triangle across the edge opposite corner k, then its face number (3 + k).
     Sixes<MemorySpace> links;
     Rows2<MemorySpace> centre;  // circumcentre, unwrapped near corner 0
     Kokkos::View<int*, MemorySpace> owner, neighbour;  // of face f, owner < neighbour
@@ -56,8 +45,7 @@ struct RingLookup {
             if (rings.ring(begin + m) == q) return rings.ring(begin + (m + 1 == degree ? 0 : m + 1));
         return -1;
     }
-    // The triangle (a, b, c), counter-clockwise, in any rotation, or -1: a
-    // particle's triangles are those it is the lowest of, in ring order.
+    // The triangle (a, b, c), counter-clockwise, in any rotation, or -1.
     KOKKOS_INLINE_FUNCTION int triangle(int a, int b, int c) const {
         int o = a, u = b, v = c;
         if (b < o && b < c) {
@@ -143,8 +131,7 @@ Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
         broken);
     if (broken > 0) throw std::runtime_error("tri_mesh::from_rings: rings that do not close");
 
-    // Faces: numbered by the triangle that has the lower apex, in triangle
-    // order; the other side reads the number across.
+    // Faces are numbered by the triangle with the lower apex, in triangle order; the other side reads it across.
     const auto owner = mesh.owner, neighbour = mesh.neighbour;
     int faces = 0;
     Kokkos::parallel_scan(
@@ -175,9 +162,8 @@ Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
     return mesh;
 }
 
-// The products of a triangle with corners 1 and 2 at offsets a, b from corner
-// 0, in grid steps, shared by the circumcentre and the in-circle filter. One
-// definition, so that every kernel gets the same bits.
+// Products of a triangle with corners 1, 2 at offsets a, b from corner 0 (grid steps), shared by the centre and the
+// in-circle filter so every kernel gets the same bits.
 struct Circle {
     double la, lb, mx, my, det;
     KOKKOS_INLINE_FUNCTION Circle(double ax, double ay, double bx, double by)
@@ -197,10 +183,8 @@ KOKKOS_INLINE_FUNCTION double steps(int from, int to, int period) {
     return d;
 }
 
-// Face geometry: the area vector, from owner to neighbour, is the edge between
-// the two circumcentres turned by a quarter; the centroid its midpoint,
-// relative to the owner. One thread per triangle; a face belongs to the side
-// of the lower apex. float rows (FaceRows) are written when allocated.
+// Face geometry, one thread per triangle: the area vector (owner to neighbour) is the edge between the two centres turned
+// a quarter, the centroid its midpoint, both relative to the owner. A face belongs to the side of the lower apex.
 template <class ExecSpace, class X>
 void faces(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
            const Triangles<typename ExecSpace::memory_space>& mesh,

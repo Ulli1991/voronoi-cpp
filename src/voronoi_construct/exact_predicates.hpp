@@ -8,17 +8,9 @@
 #include <string>
 #include <type_traits>
 
-// Exact geometric predicates on positions snapped to a grid of 2^30 steps
-// across the longest side of the periodic box, for host and device.
-//
-// Differences are exact integers (wrapped to the nearest periodic image).
-// Each predicate first evaluates its determinant in double together with a
-// bound on the rounding error, and decides there whenever the sign is
-// certain; otherwise it repeats the evaluation exactly, the orientation in
-// 128-bit integers and the in-sphere determinant in a 256-bit signed sum
-// (exact for coordinates below 2^40). In-sphere ties are broken by symbolic
-// perturbation, so every caller agrees on one triangulation even for
-// cospherical points.
+// Exact predicates on positions snapped to a 2³⁰-step grid across the longest box side, for host and device.
+// A double filter with an error bound decides first; otherwise exact (128-bit orient, 256-bit in-sphere below 2⁴⁰),
+// with in-sphere ties broken by symbolic perturbation so all callers agree.
 namespace exact_predicates {
 
 using i64 = long long;
@@ -39,16 +31,8 @@ using Offset = OffsetN<3>;
 
 constexpr i64 period = i64(1) << 30;  // grid steps across the (longest) side
 
-// A periodic box [0, side[0]) x ... x [0, side[D - 1]). One grid step,
-// the longest side / 2^30, serves every axis, and each side is a whole
-// number period[a] of steps: the grid is isotropic, so the integer in-sphere
-// test is the in-sphere test of the snapped points themselves. (Per-axis
-// steps, 2^30 on every side, would stretch the axes differently, and the
-// in-sphere test on the stretched integers would not be the one of the
-// points.) A side that is not a whole number of steps is rounded to one
-// (relative change below 2^-31 longest / side; none for sides in ratios of
-// powers of two, e.g. 2 x 2 x 1/16); side[] holds the rounded sides. A cubic
-// box is 2^30 steps on every axis.
+// A periodic box [0, side[0]) x ... x [0, side[D - 1]). One step (longest side / 2³⁰) serves every axis, so the integer
+// in-sphere test is that of the snapped points; each side is rounded to period[a] whole steps and side[] holds those.
 template <int D>
 struct BoxN {
     static_assert(D >= 1 && D <= 3, "exact_predicates::BoxN: 1, 2 or 3 dimensions");
@@ -96,13 +80,8 @@ private:
 };
 using Box = BoxN<3>;
 
-// The grid step of coordinate x along `axis` of `box`, in [0, period[axis]):
-// the one definition of "on the grid" every caller uses, the largest k with
-// k * step <= x, the product rounded as the mesh's positions k * step are, so
-// that snapping such a position gives k back. The quotient can round to just
-// below k when the step has a long mantissa; where the step is a power of two
-// or k * step is exact it never does, and in a cube x / step is
-// x / side * 2^30 to the bit (scaling by 2^30 is exact).
+// The grid step of x along `axis` of `box`, in [0, period[axis]): the largest k with k * step <= x, the product
+// rounded as the mesh's positions are, so snapping k * step gives k back.
 template <int D>
 KOKKOS_INLINE_FUNCTION int snap(double x, const BoxN<D>& box, int axis) {
     i64 s = static_cast<i64>(Kokkos::floor(x / box.step));
@@ -117,9 +96,7 @@ KOKKOS_INLINE_FUNCTION int snap(double x, double box) {
     return static_cast<int>(static_cast<i64>(Kokkos::floor(x / box * scale)) & (period - 1));
 }
 
-// b - a on the periodic grid of `steps` per side, to the nearest image; a
-// and b are snapped coordinates in [0, steps), so one shift suffices (no
-// 64-bit modulo).
+// b - a on the periodic grid of `steps` per side, to the nearest image; a, b in [0, steps) so one shift suffices.
 KOKKOS_INLINE_FUNCTION i64 delta(i64 a, i64 b, i64 steps = period) {
     i64 d = b - a;
     if (d >= steps / 2) d -= steps;
@@ -223,11 +200,8 @@ KOKKOS_INLINE_FUNCTION int orient(const Offset& a, const Offset& b, const Offset
     return exact > 0 ? 1 : exact < 0 ? -1 : 0;
 }
 
-// Whether p[4] lies inside the circumsphere of the tetrahedron p[0..3] (any
-// orientation, not flat), all in one frame; id are the points' particle ids.
-// Ties are broken by symbolic perturbation: the lift |p|^2 of each point
-// grows by eps^(its id), lower ids dominating. The perturbed test is never a
-// tie, because the term of p[4] is the tetrahedron's own orientation.
+// Whether p[4] lies inside the circumsphere of tetrahedron p[0..3] (any orientation, not flat), in one frame; id are
+// particle ids. Ties go by symbolic perturbation (lift |p|² grows by eps^id, lower ids dominate); never a tie.
 KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
     // D = det [1 p_i |p_i|^2] over the five points; e inside means
     // sign(D) = -orientation. Expanded along the lift column.
@@ -276,9 +250,8 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
     return d * o < 0;
 }
 
-// Snapped particle positions, point(i, a) for a < D, in [0, period[a]) so
-// 32 bits hold them exactly; in 3D padded to 16 bytes (one aligned load per
-// point). The periods are the box's (a unit cube unless given).
+// Snapped positions, point(i, a) for a < D, in [0, period[a]) so 32 bits are exact; padded to 16 bytes in 3D for one
+// aligned load. The periods are the box's (a unit cube unless given).
 template <class MemorySpace, int D = 3>
 struct Points {
     static constexpr int dimensions = D, columns = D == 3 ? 4 : D;

@@ -13,20 +13,8 @@
 #include <utility>
 #include <vector>
 
-// Fused natural-neighbour Voronoi construction in a periodic box.
-//
-// Each cell is built by walking grid cells around its generator, nearest
-// first, and clipping with every particle that can still cut it. A particle
-// at distance d cuts the cell only if d < 2R, where R is the largest distance
-// from the generator to a current vertex; the walk stops at the first grid
-// cell lying entirely beyond 2R, which certifies the cell. The grid level
-// fits the local density (see Stencil). There is no candidate table: the
-// particles are clipped nearest-first from a small private buffer.
-//
-// Output is lean: every cell stores its volume and centroid, and each face is
-// stored once, by the cell with the lower particle id (its owner), as face
-// geometry or as a face ring (Cells). Slots, positions and cell offsets come
-// from a built neighbor_search::CellList.
+// Fused natural-neighbour Voronoi construction in a periodic box: each cell is walked on a grid,
+// clipped nearest-first, and its volume, centroid and owned faces (or face rings) are stored.
 namespace shell_voronoi {
 
 enum Status : int {
@@ -136,16 +124,9 @@ Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList
     return g;
 }
 
-// The walk around a generator. Each cell is walked on the grid level whose
-// cells hold about one particle near it (CellList::level), grid cell by grid
-// cell in the order of a stencil. When the stencil of that level ends before
-// the cell is certified, the walk goes on one level coarser and skips the
-// grid cells the finer walk covered.
-//
-// Stencil: grid-cell offsets (4 bits per axis, biased by 8) sorted by the
-// squared smallest distance, in cell widths, that any point of the home cell
-// can have to them. The first ends(r) entries are the cells closer than r
-// widths.
+// The walk goes over grid cells on a level whose cells hold about one particle; if the stencil ends uncertified it
+// goes one level coarser, skipping covered cells. Stencil: offsets (4 bits per axis, biased by 8) sorted by squared
+// smallest distance in widths from the home cell; ends(r) counts those closer than r.
 constexpr int max_reach = 4;
 template <class MemorySpace>
 struct Stencil {
@@ -186,12 +167,9 @@ Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec) {
     return s;
 }
 
-// Cells closer than this many widths are walked at `level`: max_reach, or
-// less where fewer than 2 reach + 1 cells along the shortest axis (`fewest`
-// tiles) would visit a cell twice. So a cell is certified only within one
-// periodic image: its reach 2R must stay below 3/8 of the shortest side
-// (reach 3 at 8 cells across), else it is uncertified (too few particles
-// across a thin slab; voronoi::Mesh refuses such a box).
+// Cells closer than this many widths are walked at `level`: max_reach, or less where 2 reach + 1 cells
+// along the shortest axis (`fewest` tiles) would visit a cell twice. Certification therefore holds within one
+// periodic image only: 2R must stay below 3/8 of the shortest side, else the cell is uncertified.
 KOKKOS_INLINE_FUNCTION int level_reach(int level, int fewest = 1) {
     return Kokkos::min(int{max_reach}, ((fewest << level) - 1) / 2);
 }
@@ -262,20 +240,10 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
     return begin < end;
 }
 
-// Per-cell results, indexed by particle (CellList::order), as are the
-// neighbours and rings. Owned faces live in a pool of blocks, one per cell:
-// cell t's faces are face_start(t) + [0, owned_count(t)), each with its
-// neighbour, area vector (out of t) and centroid (relative to t's
-// generator). A build with face rings records rings in a second pool
-// instead (see rings) and no face geometry.
-//
-// The face pool has one counter; the warp kernel claims blocks of many
-// cells' faces at a time. The ring pool is split into equal chunks; cell t
-// claims its block in chunk pool_chunk(t) (one counter per chunk: a single
-// counter serializes the build when every cell claims; hashed so that no
-// chunk collects one side of a lattice). Cells whose chunk is full are
-// face_overflow; the construct functions then build again with a pool of
-// needed() entries.
+// Per-cell results indexed by particle (CellList::order), as are the neighbours and rings. Cell t's owned
+// faces are face_start(t) + [0, owned_count(t)), each with neighbour, area vector (out of t) and centroid
+// (relative to t's generator); a ring build records rings in a second pool and no face geometry. A cell whose
+// pool chunk is full is face_overflow, and the construct functions build again with a pool of needed() entries.
 template <class MemorySpace>
 struct Cells {
     Kokkos::View<int*, MemorySpace> status;
@@ -288,10 +256,9 @@ struct Cells {
     Kokkos::View<int*, MemorySpace> neighbour;
     Kokkos::View<double* [3], MemorySpace> area, face_centroid;
     Kokkos::View<unsigned*, MemorySpace> face_used;  // per chunk
-    // Face rings; size 0 = off. Cell t's owned faces, in order, start at
-    // rings(ring_start(t)), each as its neighbour, its ring length k and the
-    // k particles whose bisectors bound it, so that vertex m of the face is
-    // equidistant from the cell, the neighbour, ring[m] and ring[m + 1].
+    // Face rings, size 0 = off. Cell t's owned faces start at rings(ring_start(t)), each as neighbour, ring
+    // length k and the k particles whose bisectors bound it: vertex m is equidistant from the cell, the
+    // neighbour, ring[m] and ring[m + 1].
     Kokkos::View<int*, MemorySpace> rings;
     Kokkos::View<long long*, MemorySpace> ring_start;
     Kokkos::View<unsigned*, MemorySpace> ring_used;  // per chunk
@@ -419,30 +386,13 @@ namespace ep = exact_predicates;
 // every candidate that can cut the cell is unique in the periodic image.
 inline double start_half_width(const ep::Box& box) { return 0.25 * box.shortest(); }
 
-// Two kinds of cells under construction share the walk, the cut topology
-// and the face walk of construct_pass. Both keep planes (each with the
-// particle id beyond it; box planes are virtual particles from n on) and
-// vertices, each listing its three planes in the order that walks every
-// face the same way round and the three vertices across its edges
-// (adjacent[v][k] lies across the edge from corner k to corner k + 1). A cut
-// finds its hole and a face walk its next vertex through those links, and
-// vertices stay in their slots: removed ones are marked and their slots
-// reused (idea from Doug Rennehan's plume). Planes and Vertices are
-// capacities: the defaults fit almost every cell; the rare larger ones are
-// built again with big ones.
-//
-// RoundedCell: planes and vertices in double, relative to the generator; a
-// vertex is cut when it lies beyond the bisector by more than a rounding
-// tolerance. The warp kernel's fallback on CUDA, and the portable kernel.
-//
-// ExactCell: in grid steps relative to the snapped generator. Vertex v is
-// the circumcentre of the generator and the particles of its three planes,
-// -w / (2 o); a particle at e lies inside that sphere iff e.w + |e|^2 o has
-// the opposite sign of o (w and o are exact integers, stored rounded once),
-// decided by a filter and, when that is uncertain, by the exact perturbed
-// in-sphere sign. Neighbouring cells agree by construction: these are the
-// cells of the unique perturbed Delaunay tetrahedralization. The start's
-// patch (tet_start).
+// Cells under construction, shared by the walk, the cut topology and the face walk of construct_pass.
+// Both kinds keep planes (with the particle id beyond each; box planes are virtual particles from n on) and
+// vertices, each listing its three planes in face-walking order and the three vertices across its edges
+// (adjacent[v][k] lies across the edge from corner k to k + 1). Removed vertices are marked and their slots
+// reused. Planes and Vertices are capacities; the rare larger cells are built again with big ones.
+// RoundedCell: planes and vertices in double, relative to the generator; a vertex is cut when it lies beyond
+// the bisector by more than a rounding tolerance. The portable kernel and the warp kernel's CUDA fallback.
 template <int Planes, int Vertices>
 struct RoundedCell {
     static_assert(Planes <= 255, "plane indices are bytes");
@@ -471,6 +421,9 @@ struct RoundedCell {
     }
 };
 
+// ExactCell: in grid steps relative to the snapped generator. Vertex v is the circumcentre -w / (2 o) of the
+// generator and its three planes' particles; a particle at e is inside iff e.w + |e|^2 o has the opposite sign of o,
+// decided by a filter, else by the exact perturbed in-sphere sign, so neighbouring cells agree (the start's patch is tet_start).
 template <int Planes, int Vertices>
 struct ExactCell {
     using Index = std::conditional_t<(Planes <= 255 && Vertices <= 256), std::uint8_t, std::uint16_t>;
@@ -734,10 +687,9 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
         cell.starts[a] = cell.ends[b] = static_cast<Index>(s);
         hole[h].s = static_cast<Index>(s);
     }
-    // Across (b, plane) lies the new vertex whose hole edge starts at b,
-    // across (plane, a) the one whose hole edge ends at a. Rounding can make
-    // a hole touch a face twice; then these are not unique, and the cell is
-    // left degenerate rather than linked wrongly.
+    // Across (b, plane) lies the new vertex whose hole edge starts at b, across (plane, a) the one whose
+    // hole edge ends at a. Rounding can make a hole touch a face twice; then these are not unique and the
+    // cell is left degenerate rather than linked wrongly.
     for (int h = 0; h < holes; ++h) {
         const int a = hole[h].a, b = hole[h].b, s = hole[h].s;
         const int next = cell.starts[b], previous = cell.ends[a];
@@ -824,8 +776,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Candidate buffer[ring_buffer];
             int buffered = 0, batches = 0, clipped = 0, cuts = 0;
 
-            // Clip with the buffered particles nearest-first; stop as soon as
-            // the remaining ones are too far to cut.
+            // Clip with the buffered particles nearest-first, until the rest are too far to cut.
             auto flush = [&]() {
                 for (int a = 1; a < buffered; ++a) {
                     const Candidate c = buffer[a];
@@ -976,11 +927,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 } while (current != start);
                 if (status != ok) break;
                 area_sum = area_sum + area;
-                // Faces below rounding level (degenerate, e.g. cospherical
-                // generators) carry no flux and are left out of the face
-                // geometry, as the warp kernel does (their volume is kept).
-                // Rounded rings leave them out too; exact rings hold every
-                // face (topology).
+                // Faces below rounding level (e.g. cospherical generators) carry no flux and are left out of the face
+                // geometry, as in the warp kernel (their volume is kept); rounded rings omit them too, exact rings keep
+                // every face (topology).
                 const double magnitude = Kokkos::sqrt(dot(area, area));
                 if (!(Cell::exact && with_rings) && magnitude <= sliver) continue;
                 ++faces;

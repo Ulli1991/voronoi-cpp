@@ -1,21 +1,8 @@
 #pragma once
 
-// An oracle for the mesh that shares no code with the library: its own
-// periodic differences, exact orientation and in-sphere signs in plain
-// 128-bit arithmetic, and Voronoi cells by half-space clipping against every
-// generator in every periodic image, in long double. It takes data only
-// (integer grid positions, tetrahedra, faces). Brute force: tests only.
-//
-// A mesh is the Delaunay tetrahedralization on the torus when
-//   1. every corner of a tetrahedron is its own nearest image from every
-//      other corner (the library stores no images, so a tetrahedron wider
-//      than half a period has no meaning: `ambiguous`);
-//   2. the tetrahedra cover the torus: positively oriented, each triangle
-//      twice, adjacency equal to that pairing, every particle used, exact
-//      volumes summing to the box;
-//   3. no image of any particle lies strictly inside a circumsphere. Points
-//      on a sphere are allowed here: the tie-break is compared separately,
-//      with the fresh build of the same positions (different_tetrahedra).
+// Brute-force oracle sharing no code with the library: exact 128-bit predicates and long double
+// clipping over all periodic images, on data only. Checks Delaunay on the torus: ties are
+// compared separately (different_tetrahedra).
 
 #include <algorithm>
 #include <array>
@@ -61,8 +48,7 @@ inline i128 det(const Offset& a, const Offset& b, const Offset& c) {
 
 inline i128 lift(const Offset& a) { return i128(a[0]) * a[0] + i128(a[1]) * a[1] + i128(a[2]) * a[2]; }
 
-// Sign of s[0] t[0] + ... + s[3] t[3] with |s| < 2^66, |t| < 2^98: each t
-// split at 2^48, the two sums fit 128 bits.
+// Sign of s[0] t[0] + ... + s[3] t[3] for |s| < 2⁶⁶, |t| < 2⁹⁸: each t split at 2⁴⁸ so both sums fit 128 bits.
 inline int sign_of_sum(const i128* s, const i128* t) {
     const i128 unit = i128(1) << 48;
     i128 high = 0, low = 0;
@@ -85,9 +71,8 @@ inline int sign_of_sum(const i128* s, const i128* t) {
     return rest > 0 ? 1 : 0;
 }
 
-// +1 when e lies strictly inside the circumsphere of (0, a, b, c), -1
-// outside, 0 on it (a, b, c not coplanar). With the circumcentre
-// C = N / (2 det): inside iff |e|^2 < 2 e.C.
+// +1 when e lies strictly inside the circumsphere of (0, a, b, c), -1 outside, 0 on it
+// (a, b, c not coplanar); with circumcentre C = N / (2 det), inside iff |e|² < 2 e.C.
 inline int in_sphere(const Offset& a, const Offset& b, const Offset& c, const Offset& e) {
     const i128 d = det(a, b, c);
     const i128 lifts[4] = {lift(a), lift(b), lift(c), -lift(e)};
@@ -140,8 +125,7 @@ public:
         for (int i = 0; i < g.size(); ++i) items_[cursor[index(g.p[i])]++] = i;
     }
 
-    // f(particle, image position) for every image in the bins that overlap
-    // [lo, hi]; stops when f returns false.
+    // Calls f(particle, image position) for every image in bins overlapping [lo, hi]; stops on false.
     template <class F>
     bool visit(const std::array<long double, 3>& lo, const std::array<long double, 3>& hi, const F& f) const {
         std::array<long long, 3> first, last;
@@ -191,8 +175,7 @@ inline Verdict check(const Grid& g, const Tets& m) {
     std::vector<char> used(g.size(), 0);
     i128 volume6 = 0;
     const Bins bins(g);
-    // Half the box diagonal: a sphere of this radius covers the torus, so an
-    // empty one is no larger.
+    // Half the box diagonal: a sphere this large covers the torus.
     long double covering2 = 0;
     for (int a = 0; a < 3; ++a) covering2 += 0.25L * (long double)(g.period[a]) * (long double)(g.period[a]);
     for (int t = 0; t < m.count(); ++t) {
@@ -222,8 +205,7 @@ inline Verdict check(const Grid& g, const Tets& m) {
         v.inverted += d < 0;
         volume6 += d < 0 ? -d : d;
 
-        // Emptiness: the circumcentre in long double selects the images that
-        // may lie inside, the exact sign decides.
+        // The long double circumcentre selects candidate images, the exact sign decides.
         const long double la = (long double)(lift(a)), lb = (long double)(lift(b)), lc = (long double)(lift(c));
         const long double dd = (long double)(d);
         std::array<long double, 3> centre;
@@ -307,8 +289,7 @@ inline long long different_tetrahedra(const Tets& a, const Tets& b) {
     return static_cast<long long>(only.size());
 }
 
-// One Voronoi cell by half-space clipping, in long double, in grid steps
-// relative to its generator.
+// One Voronoi cell by half-space clipping, in long double grid steps relative to its generator.
 using Vec = std::array<long double, 3>;
 inline Vec minus(const Vec& a, const Vec& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
 inline long double dot(const Vec& a, const Vec& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
@@ -336,9 +317,7 @@ struct Cell {
     long double volume = 0;  // grid steps^3
     Vec moment{0, 0, 0};     // integral of the position over the cell
     long double reach = 0;   // largest distance from the generator to a corner
-    // Outward area vector (grid steps^2) per neighbour, images summed, and
-    // how many images of it share a face with this cell. The particle's own
-    // images appear under its own id.
+    // Outward area vector (grid steps²) per neighbour, images summed, and the image count; own images under its own id.
     std::map<int, Vec> area;
     std::map<int, int> images;
 };
@@ -394,9 +373,8 @@ inline long double reach_of(const std::vector<Polygon>& faces) {
     return std::sqrt(r2);
 }
 
-// The cell of particle i: the box around it, cut by every other particle in
-// every periodic image that can reach it. A duplicate of i has no bisector
-// and is skipped, so duplicates each get the whole shared cell.
+// The cell of particle i: the box around it cut by every other particle in every image that can reach it.
+// A duplicate of i has no bisector and is skipped, so duplicates each get the whole shared cell.
 inline Cell voronoi_cell(const Grid& g, int i) {
     const Vec half{g.period[0] / 2.0L, g.period[1] / 2.0L, g.period[2] / 2.0L};
     std::vector<Polygon> faces;

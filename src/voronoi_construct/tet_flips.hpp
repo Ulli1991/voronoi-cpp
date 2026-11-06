@@ -12,16 +12,8 @@
 #include <unordered_set>
 #include <vector>
 
-// Host fallback of tet_repair: restores the Delaunay property where the
-// device repair got stuck.
-//
-// A shared triangle is locally Delaunay when the far vertex of either
-// tetrahedron lies outside the other's circumsphere. The device repair
-// flips failing triangles while a flip is valid and closes its cavity; the
-// host rebuilds the surroundings of those it left (Bowyer-Watson on the
-// particles around them), and the device flips again. Every decision is an
-// exact sign on the snapped positions shared with the device, so a tie is
-// the same tie everywhere.
+// Host fallback of tet_repair: rebuilds locally (Bowyer-Watson) where the device flips got stuck, then the device
+// repairs again. All decisions are exact signs on the snapped positions the device uses, so ties agree.
 namespace tet_flips {
 
 namespace ep = exact_predicates;
@@ -50,10 +42,8 @@ inline std::array<int, 3> face_key(const Tet& t, int k) {
     return f;
 }
 
-// Replace the tetrahedra `old` by `fresh` (vertex sets, any orientation)
-// covering the same region: orient the new ones, reuse the old slots first,
-// and reconnect them to each other and to the outside through the old outer
-// faces. Returns the new tetrahedra.
+// Replace the tetrahedra `old` by `fresh` (vertex sets, any orientation) covering the same region: orients them,
+// reuses the old slots first and reconnects them to each other and the outside. Returns the new tetrahedra.
 inline std::vector<int> replace(Mesh& m, const std::vector<int>& old, std::vector<Tet> fresh) {
     std::map<std::array<int, 3>, std::pair<int, int>> outside;  // outer face -> (outer tet, its face index)
     for (int t : old)
@@ -102,10 +92,8 @@ inline std::vector<int> replace(Mesh& m, const std::vector<int>& old, std::vecto
     return slots;
 }
 
-// Delaunay tetrahedralization of a few points in one local frame by
-// Bowyer-Watson insertion into an enclosing tetrahedron, whose corners are
-// points n..n+3. Insert near-to-far: each point is located by walking from
-// the previous cavity, so the cost stays near linear. Returns the live
+// Delaunay tetrahedralization of a few points in one local frame by Bowyer-Watson insertion into an enclosing
+// tetrahedron (corners n..n+3), near to far, each located by walking from the previous cavity. Returns the live
 // tetrahedra, or nothing if point location fails.
 inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id) {
     const int n = static_cast<int>(p.size());
@@ -241,12 +229,10 @@ inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets)
     return v;
 }
 
-// Fallback for a triangle t|u that no flip repairs, or an inverted
-// tetrahedron t (u = -1): replace the stars of their particles by those of a
-// fresh Delaunay tetrahedralization of the particles two rings around, if
-// the new stars fit the old boundary exactly; otherwise add the particles of
-// the faces that did not fit to the stars and retry. Returns the new
-// tetrahedra, or nothing after eight tries or if a particle would be lost.
+// Fallback for a triangle t|u that no flip repairs, or an inverted tetrahedron t (u = -1): replaces the stars of
+// their particles by those of a fresh Delaunay tetrahedralization of the particles two rings around, if they fit
+// the old boundary exactly; otherwise adds the particles of the faces that did not fit and retries. Returns the
+// new tetrahedra, or nothing after eight tries or if a particle would be lost.
 inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     std::vector<int> seeds = vertices_of(m, u < 0 ? std::vector<int>{t} : std::vector<int>{t, u});
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -292,10 +278,8 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
         const bool fits = !fresh.empty() && !reaches_corner &&
                           std::all_of(boundary.begin(), boundary.end(), [](const auto& b) { return b.second == 0; });
         if (fits) {
-            // A particle the new stars lack would leave the mesh (it shares a
-            // grid position with another: no tetrahedron holds both, and flips
-            // never bring it back). No wider region helps; stuck, so a rebuild
-            // refuses the input.
+            // A particle the new stars lack would leave the mesh (it shares a grid position with another); no wider region
+            // helps, so it stays stuck and a rebuild refuses the input.
             std::vector<int> corners;
             for (const Tet& s : fresh) corners.insert(corners.end(), s.begin(), s.end());
             std::sort(corners.begin(), corners.end());
@@ -322,10 +306,8 @@ inline bool fails(const Mesh& m, int t, int u) {
 
 }  // namespace detail
 
-// Rebuild the surroundings of every inverted tetrahedron and failing
-// triangle of m locally, in up to eight passes while rebuilds succeed (the
-// device repair has done every flip it could before, and flips what the
-// rebuilds leave).
+// Rebuild the surroundings of every inverted tetrahedron and failing triangle of m locally, in up to eight passes
+// while rebuilds succeed.
 inline Stats repair(Mesh& m) {
     Stats stats;
     for (long long pass = 0, before = -1; pass < 8 && stats.rebuilt > before; ++pass) {
@@ -392,19 +374,11 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 
 }  // namespace detail
 
-// Finish a device repair that left stuck entries. The tetrahedra within a
-// few adjacency steps of them are copied to the host as a local mesh (its
-// own particle numbering, in the same order, so every exact decision is the
-// same; faces to the rest of the mesh are open), repaired there, and the
-// changed and new ones written back; new ones are appended after
-// state.count, so the device free list stays valid. Every tetrahedron the
-// host changed is touched and listed, each edge around them gets one
-// representative (the lowest-numbered tetrahedron around it; a tetrahedron
-// whose edge bits change is touched too), and the device repair runs again
-// from them and the stuck entries, to settle the region's border and to
-// find what the host could not repair. If that still leaves stuck entries
-// the region grows once (8, then 16 steps); what is left after that is
-// stats.stuck (voronoi::Mesh then rebuilds).
+// Finish a device repair that left stuck entries: the tetrahedra within a few adjacency steps of them are copied to
+// the host as a local mesh (same particle order, faces to the rest open), repaired there and written back, new ones
+// appended after state.count so the device free list stays valid. Changed tetrahedra are touched and listed, each
+// edge around them gets one representative, and the device repair reruns from them and the stuck entries. If entries
+// remain the region grows once (8, then 16 steps); the rest is stats.stuck (voronoi::Mesh then rebuilds).
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state) {

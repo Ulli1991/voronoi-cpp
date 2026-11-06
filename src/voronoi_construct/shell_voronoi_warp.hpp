@@ -9,19 +9,8 @@
 #include <utility>
 #include <vector>
 
-// Warp-per-cell variant of shell_voronoi::construct for CUDA.
-//
-// One warp builds one cell. The polyhedron lives in the warp's slice of shared
-// memory; lane l owns vertices l and l + 32 and planes l and l + 32. Every
-// vertex stores its three planes and the three vertices across its edges, so
-// a cut, the creation of new vertices and the walk around a face are each
-// constant work per vertex, done by all lanes at once. Particles of a grid
-// ring are tested 32 at a time and clipped nearest-first after a warp sort.
-// Teams of 16 or 8 lanes per cell were 2x and 3.6x slower on an A100.
-//
-// Cells that overflow the warp capacities, or that its walk cannot certify,
-// are rebuilt by the per-thread kernel. On other backends construct_warp
-// simply calls that kernel.
+// Warp-per-cell variant of shell_voronoi::construct for CUDA; one warp builds one cell in shared memory.
+// Cells that overflow its capacities or that it cannot certify are rebuilt by the per-thread kernel.
 namespace shell_voronoi {
 namespace warp {
 
@@ -29,21 +18,17 @@ constexpr int lanes = 32;
 constexpr int max_planes = 64;
 constexpr int max_vertices = 64;
 constexpr int per_lane = max_vertices / lanes;  // vertices (and planes) each lane owns
-// Four cells (warps) per block: their polyhedra (4.4 KB each) take
-// 18 KB of block scratch.
+// Four cells (warps) per block: their polyhedra take 18 KB of block scratch.
 constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
 constexpr int min_blocks_per_sm = 5;
 constexpr std::uint8_t none = 255;
 
-// One warp's polyhedron. Corners and adjacency hold three 8-bit indices each:
-// corner k is a plane, adjacency k is the vertex across the edge from corner
-// k to corner k + 1. Vertices stay in their slots: a cut puts its new
-// vertices into free slots and rewires only the edges it crosses. A 64-bit
-// mask (in registers) marks the slots in use.
+// One warp's polyhedron. Corners and adjacency hold three 8-bit indices each: corner k is a plane,
+// adjacency k the vertex across the edge from corner k to k + 1. A cut reuses free slots; a 64-bit
+// register mask marks the slots in use.
 struct alignas(16) Polyhedron {
-    // Plane normals only weight the face centroids: a rounded normal scales
-    // every triangle of a face alike, so float is enough.
+    // Plane normals only weight the face centroids, so float is enough.
     float nx[max_planes], ny[max_planes], nz[max_planes];
     int neighbour[max_planes];
     double x[max_vertices], y[max_vertices], z[max_vertices];
@@ -58,9 +43,7 @@ struct alignas(16) Polyhedron {
     float candidate_distance2[lanes];
     int candidate_slot[lanes];
     int candidate_image[lanes];
-    // Owned faces without rings: the warp claims face_block entries of the
-    // pool at a time, so the pool's counter sees one atomic per block
-    // instead of one per cell; this warp's block is [face_at, face_end).
+    // Owned faces without rings: the warp claims face_block pool entries at a time; its block is [face_at, face_end).
     long long face_at, face_end;
 };
 
@@ -90,8 +73,7 @@ __device__ T warp_max(T v) {
     return v;
 }
 
-// Largest of the lanes' non-negative values. Their bit patterns order like
-// unsigned integers, so 32-bit warp reductions find it exactly.
+// Largest of the lanes' non-negative values: their bit patterns order like unsigned integers.
 __device__ inline float warp_max_nonnegative(float v) {
     return __uint_as_float(__reduce_max_sync(all_lanes, __float_as_uint(v)));
 }
@@ -192,9 +174,8 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     if (planes == max_planes) return plane_overflow;
     __syncwarp(all_lanes);
 
-    // Each edge from a removed vertex to a kept one crosses the plane and
-    // becomes a new vertex. One ballot per edge numbers them; lane j builds
-    // new vertices j and j + 32.
+    // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers
+    // them, and lane j builds new vertices j and j + 32.
     const unsigned below = (1u << l) - 1;
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
@@ -300,11 +281,9 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 #endif  // __CUDA_ARCH__
 
 #if defined(KOKKOS_ENABLE_CUDA)
-// Adaptive: walk each cell at its level (CellList::level); otherwise at the
-// base level only, leaving cells it cannot certify to the thread kernel.
-// with_rings: record face rings (Cells::with_rings) instead of face geometry.
-// local: build only the cells of `selection` (otherwise it is unused).
-// cubic: the grid is one cube (Grid::cube()): the walk's shorter arithmetic.
+// Adaptive: walk each cell at its level (CellList::level), else only at the base level and leave
+// uncertified cells to the thread kernel. with_rings: record face rings instead of face geometry.
+// local: build only the cells of `selection`. cubic: the grid is one cube (Grid::cube()).
 template <class MemorySpace, bool adaptive, bool with_rings, bool local = false, bool cubic = false>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
@@ -312,9 +291,7 @@ struct Kernel {
     Cells<MemorySpace> out;
     double half_width;
     Stencil<MemorySpace> stencil;
-    // Persistent warps (about two waves of resident blocks) take cells from
-    // this counter until none are left, so a slow cell holds up only its own
-    // warp: 1.06x on uniform random points over one block per four cells.
+    // Persistent warps take cells from this counter until none are left, so a slow cell holds up only its own warp.
     Kokkos::View<int, MemorySpace> next_cell;
     Selection<MemorySpace> selection;
 
@@ -380,11 +357,9 @@ struct Kernel {
             buffered = 0;
         };
 
-        // Visit the grid cells of the walk (see shell_voronoi.hpp) in order of
-        // their smallest possible distance, 32 at a time: each lane checks one
-        // cell against 2R and reads its particles, so the memory accesses
-        // overlap. A level is certified once the next cell's lower bound
-        // exceeds 2R.
+        // Visit the grid cells of the walk (see shell_voronoi.hpp) 32 at a time: each lane checks one cell
+        // against 2R and reads its particles, so the loads overlap. A level is certified once the next
+        // cell's lower bound exceeds 2R.
         int level = adaptive ? int(grid.level(t)) : grid.levels, home[3], finer = -1;
         home_cell<cubic>(p, grid, level, home);
         while (status == ok) {
@@ -488,9 +463,8 @@ struct Kernel {
             const int start = c.first[plane];
             const Vec3 normal{double(c.nx[plane]), double(c.ny[plane]), double(c.nz[plane])};
             const Vec3 first{c.x[start], c.y[start], c.z[start]};
-            // Fan triangles (first, previous, x): twice the area vector, and
-            // the sum of (previous + x) weighted by the triangles' areas
-            // projected on the normal; divided once per face.
+            // Fan triangles (first, previous, x): twice the area vector, and the sum of (previous + x)
+            // weighted by areas projected on the normal; divided once per face.
             Vec3 previous = first, twice_area{0, 0, 0}, weighted{0, 0, 0};
             double weight = 0;
             int vertex = start, steps = 0;
@@ -515,9 +489,7 @@ struct Kernel {
             const Vec3 area = twice_area * 0.5;
             // A sliver face has no meaningful centroid; use a vertex.
             const Vec3 centroid = weight > 0 ? (first + weighted * (1.0 / weight)) * (1.0 / 3.0) : first;
-            // The pyramid over the face from the generator: volume A.first / 3,
-            // centroid at 3/4 of the face centroid (idea from Doug Rennehan's
-            // plume, commit 6cbb429).
+            // The pyramid over the face from the generator: volume A.first / 3, centroid at 3/4 of the face centroid.
             const double pyramid = dot(area, first) * (1.0 / 3.0);
             volume += pyramid;
             moment = moment + centroid * (0.75 * pyramid);
@@ -545,9 +517,8 @@ struct Kernel {
         int offset = exclusive_scan(owned_here, owned);
         if (status == ok && !(volume > 0)) status = degenerate;
 
-        // The owned faces go to one block per cell that lane 0 claims: with
-        // rings each face as its neighbour, ring length and ring (see
-        // Cells::rings), otherwise its neighbour, area and centroid.
+        // The owned faces go to one block per cell that lane 0 claims: with rings, each face as neighbour,
+        // ring length and ring (Cells::rings), otherwise neighbour, area and centroid.
         int fits = 1;
         long long block = 0;
         if constexpr (with_rings) {
@@ -582,8 +553,7 @@ struct Kernel {
                     out.rings(at) = c.neighbour[plane];
                     out.rings(at + 1) = owned_length[m];
                     at += 2;
-                    // Walk the face again; the plane shared with the next
-                    // vertex bounds the face there.
+                    // Walk the face again; the plane shared with the next vertex bounds it.
                     for (int vertex = c.first[plane], k = 0; k < owned_length[m]; ++k) {
                         int corner = 0;
                         while (byte(c.corner[vertex], corner) != plane) ++corner;
@@ -626,10 +596,8 @@ struct Kernel {
 
 }  // namespace warp
 
-// Build the selected cells (default: all) with one warp per cell, then
-// rebuild cells that overflowed the warp capacities with the per-thread
-// kernel; with face rings if `out` records them (Cells::with_rings). Other
-// backends use the per-thread kernel throughout.
+// Build the selected cells (default: all) with one warp per cell, then rebuild the ones that overflowed
+// with the per-thread kernel; with face rings if `out` records them. Other backends use that kernel throughout.
 template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     Cells<typename ExecSpace::memory_space>& out,
@@ -654,9 +622,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                            Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
             policy(exec, blocks, warp::cells_per_block, warp::lanes);
         policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron)));
-        // Near-uniform input (every particle at the base level) takes the
-        // kernel without level changes and fine-cell searches: its smaller
-        // code is 4 % faster on uniform random points.
+        // Near-uniform input (every particle at the base level) takes the kernel without level changes.
         int off_base = 0;
         const auto level = grid.level;
         const int base = grid.levels;

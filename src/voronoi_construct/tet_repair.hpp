@@ -3,21 +3,8 @@
 #include "exact_predicates.hpp"
 #include "tet_mesh.hpp"
 
-// Delaunay repair by bistellar flips on the device, after the particles of a
-// persistent tetrahedralization (tet_mesh::Mesh, positively oriented) moved.
-//
-// Each round
-//   1. finds the shared triangles that fail the local Delaunay test (exact,
-//      ties perturbed) among the tetrahedra marked dirty,
-//   2. plans a 2->3 flip (convex pair) or a 3->2 flip (an edge of the
-//      triangle with three tetrahedra around it) for each,
-//   3. lets every plan vote, with a hash of its index, on the tetrahedra it
-//      would rewrite and their outer neighbours (largest vote wins), and
-//   4. applies the plans that won all their votes; their new tetrahedra
-//      are dirty for the next round, losing plans retry.
-// Triangles no flip repairs (none is valid, or none closes its cavity) and
-// tetrahedra seen inverted are listed as stuck, for the host fallback
-// (tet_flips::finish) or a rebuild.
+// Device Delaunay repair by bistellar flips (2->3, 3->2) after particles of a tet_mesh::Mesh moved: plans vote on
+// the tetrahedra they rewrite and the winners apply. Entries no flip repairs are listed as stuck for tet_flips::finish.
 namespace tet_repair {
 
 namespace ep = exact_predicates;
@@ -27,10 +14,8 @@ namespace detail {
 struct Packed;
 }
 
-// Entries of State::counters: failing triangles found this round, stuck
-// entries, slots freed this round (in move_screened: slivers), dirty
-// tetrahedra listed, free slots popped, new slots, flips of each kind,
-// tetrahedra created this step (touched_list).
+// Entries of State::counters: failing triangles this round, stuck entries, slots freed (in move_screened: slivers),
+// dirty tetrahedra listed, free slots popped, new slots, flips of each kind, tetrahedra created this step.
 namespace counter {
 constexpr int work = 0, stuck = 1, freed = 2, listed = 3, pops = 4, growth = 5, flips23 = 6, flips32 = 7, created = 8,
               count = 9;
@@ -46,15 +31,11 @@ struct State {
     ep::Points<MemorySpace> point;  // snapped positions
     Kokkos::View<char*, MemorySpace> alive;
     Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
-    // The tetrahedra flips created since the last move (each once, but for
-    // the host fallback's repeats): touched_entries of them, -1 if more
-    // than fit.
+    // The tetrahedra flips created since the last move: touched_entries of them, -1 if more than fit.
     Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
-    // Votes: round in the high 32 bits, a bijective hash of the plan index
-    // below (detail::priority), so a vote of an earlier round always loses
-    // and locks never need resetting.
+    // Votes: round in the high 32 bits, a bijective hash of the plan index below, so earlier rounds always lose.
     Kokkos::View<unsigned long long*, MemorySpace> lock;
     Kokkos::View<int*, MemorySpace> free_slots;  // popped from the top
     Kokkos::View<int* [2], MemorySpace> work;   // failing triangles of a round
@@ -100,11 +81,8 @@ KOKKOS_INLINE_FUNCTION int outer_faces(const M& m, const int* old, int olds, int
     return outers;
 }
 
-// Whether new tetrahedra `fresh` close the cavity of the old ones `old` of
-// mesh m exactly: six outer faces, each face of a new tetrahedron matched
-// once (outside or by another new one), each outer face used once, and no
-// new tetrahedron duplicating the outer one it attaches to. Near-degenerate
-// configurations can break this.
+// Whether new tetrahedra `fresh` close the cavity of the old ones `old` of mesh m exactly: six outer faces, each
+// new face matched once, each outer face used once, no new tetrahedron duplicating the outer one it attaches to.
 template <class M>
 KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const int (*fresh)[4], int freshes) {
     int outer_key[8][3], outer_tet[8];
@@ -147,10 +125,8 @@ struct Plan {
     int olds = 0, freshes = 0;
 };
 
-// A plan as kept between planning and applying (36 instead of 72 bytes):
-// the kind, the old tetrahedra and the five particles of the new ones,
-// {a, far, f0, f1, f2} for a 2->3 flip (new: a, far, f[e], f[e + 1]) and
-// {p, q, o0, o1, o2} for a 3->2 flip (new: p or q, o0, o1, o2).
+// A plan as kept between planning and applying: the kind, the old tetrahedra and five particles, {a, far, f0, f1, f2}
+// for 2->3 (new: a, far, f[e], f[e + 1]) or {p, q, o0, o1, o2} for 3->2 (new: p or q, o0, o1, o2).
 struct Packed {
     int kind;
     int old[3];
@@ -251,11 +227,9 @@ KOKKOS_INLINE_FUNCTION bool flip32(const Mesh& m, const Point& point, int t, int
     return true;
 }
 
-// Plan the repair of triangle t|u (t's face opposite corner k) if it fails
-// the local Delaunay test: the first of the 2->3 flip and the 3->2 flips
-// around its three edges that is valid (and, if `closing`, closes its
-// cavity); else unflippable (none is valid) or rejected (none of the valid
-// ones closes).
+// Plan the repair of triangle t|u (t's face opposite corner k) if it fails the local Delaunay test: the first valid
+// of the 2->3 flip and the 3->2 flips around its three edges (that closes its cavity, if `closing`); else
+// unflippable (none valid) or rejected (none of the valid ones closes).
 template <class Mesh, class Point>
 KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k, bool closing) {
     Plan p;
@@ -277,10 +251,7 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
     return p;
 }
 
-// The vote of plan i: a bijective hash of i, so that the winners of
-// overlapping plans do not follow the order of the work list (listed in
-// space order on one thread, where the largest index winning everywhere
-// let a lattice's first step make almost no progress per round).
+// The vote of plan i: a bijective hash of i, so winners of overlapping plans do not follow the work list's order.
 KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
     unsigned x = static_cast<unsigned>(i) * 0x9e3779b1u;  // odd multiplier: a bijection
     x ^= x >> 16;
@@ -323,11 +294,8 @@ void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity
     Kokkos::resize(s.free_slots, capacity);
 }
 
-// Snapped positions and positive orientation of every tetrahedron; allocates
-// the bookkeeping for `capacity` tetrahedra (the mesh views are grown to it)
-// and `work_capacity` failing triangles per round and stuck entries. Repair
-// grows all of them when needed, and the list of created tetrahedra (a
-// quarter of the capacity at first) after a step it overflowed.
+// Snapped positions and positive orientation of every tetrahedron; allocates the bookkeeping for `capacity`
+// tetrahedra and `work_capacity` failing triangles per round and stuck entries (repair grows all when needed).
 template <class ExecSpace, class X>
 State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& x, const ep::Box& box,
                                                 tet_mesh::Mesh<typename ExecSpace::memory_space>& m, int capacity,
@@ -374,13 +342,9 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
     return s;
 }
 
-// New positions x: snaps them, computes the circumcentres (m.centre) of
-// the live tetrahedra (in the screening kernel, slivers exactly in a second
-// pass), and lists those that may need repair, screened in double precision
-// with these circumcentres: those with a neighbour's far vertex inside or near the
-// circumsphere, and the badly shaped ones (possibly flat or inverted). The
-// margin covers the snapping of positions to the exact grid; what it lists
-// is decided exactly by repair.
+// New positions x: snaps them, computes the circumcentres (m.centre) of the live tetrahedra (slivers exactly in a
+// second pass) and lists those that may need repair: a neighbour's far vertex inside or near the circumsphere, or
+// badly shaped. The margin covers the snapping; repair decides exactly.
 template <class ExecSpace, class X>
 void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
                    const tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
@@ -572,9 +536,8 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 detail::Plan p;
                 const int u = adjacent(t, k);
                 if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k, false);
-                // The first valid flip nearly always closes its cavity; if
-                // not, the first of the others that does (checking each
-                // candidate inside one plan() made steps 2 % slower).
+                // The first valid flip nearly always closes its cavity; else the first of the others that does (checking
+                // each inside one plan() made steps 2 % slower).
                 if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) p = detail::plan(m, point, t, k, true);
                 plans(i) = detail::pack(p);
                 if (p.kind < 0) detail::list_stuck(counters, stuck, t, p.kind == detail::Plan::rejected ? rejected : k);
@@ -601,9 +564,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     for (int j = 0; j < 4 && won; ++j)
                         if (adjacent(o, j) >= 0) won = lock(adjacent(o, j)) == vote;
                 }
-                // Slots: reuse the old ones, then pop free slots or grow. A
-                // flip that finds no room retries next round, after the
-                // capacity has grown.
+                // Slots: reuse the old ones, then pop free slots or grow; a flip with no room retries next round.
                 int slot[3];
                 for (int r = 0; r < p.freshes && won; ++r) {
                     if (r < p.olds) {
@@ -692,9 +653,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         }
                     }
                 }
-                // List the new tetrahedra: slots from the free list always, reused
-                // ones unless touched (so listed) before this step. A round's flips
-                // share no tetrahedra, so this does not race.
+                // List the new tetrahedra: free-list slots always, reused ones unless already touched. A round's flips share none.
                 int listing[3], listings = 0;
                 for (int r = 0; r < p.freshes; ++r)
                     if (r >= p.olds || !st.touched(slot[r])) listing[listings++] = slot[r];

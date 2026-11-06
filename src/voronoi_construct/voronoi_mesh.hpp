@@ -18,32 +18,9 @@
 #include <utility>
 #include <vector>
 
-// The Voronoi mesh of particles in a periodic box, kept exact as they move:
-// the interface of the hydro code to this library.
-//
-// Particles are named by their index in the caller's position array (the
-// particle id); every output uses these ids, and every tie between
-// cospherical particles is broken by them (symbolic perturbation), at the
-// start and in the repair alike. Positions are snapped to the 2^30 grid of
-// the exact predicates inside; topology and geometry both come from the
-// snapped positions, so they always agree.
-//
-// Faces are stored once, by the particle with the lower id (the owner),
-// with the area vector pointing from owner to neighbour and the centroid
-// relative to the owner. update() gives faces and cell volumes (summed with
-// atomics: the last bits may differ run to run). update_cells() adds the
-// per-cell face lists, each cell's faces in a fixed order (increasing id of
-// the other particle), and sums volumes and centroids in that order, so
-// they are reproducible bit for bit.
-// Faces are numbered by the tetrahedra that represent them, which follow
-// the particles' order at the start: faces then come nearly sorted by owner
-// when the caller's particle order is spatial (Morton, say).
-//
-// Hidden: the cell list, the clipping, the tetrahedra and their repair, the
-// face rings. Room is left for later work: ghost (not owned) particles of a
-// multi-GPU run would be particles like the others, with ids above the
-// owned ones; repair limited to an active region would take the `active`
-// list of update(); neither is implemented.
+// The Voronoi mesh of particles in a periodic box, kept exact as they move: the hydro code's interface to the library.
+// Particles are named by index (the id); ties between cospherical particles break by id; positions are snapped to the
+// 2³⁰ grid and topology and geometry both come from the snapped positions. Faces are stored once, by the lower id.
 namespace voronoi {
 
 namespace ep = exact_predicates;
@@ -70,10 +47,8 @@ double total_volume(const ExecSpace& exec, const Volume& volume) {
     return total;
 }
 
-// Particles on one position of the 2^30 grid, found by sorting on the host
-// (a refusal only): "" if there are none, else the error naming a pair. Two
-// such particles have no bisector between them, so no Voronoi cell, and
-// voronoi::Mesh refuses them.
+// Particles on one position of the 2³⁰ grid, found by sorting on the host (a refusal only): "" if none, else the
+// error naming a pair. Such particles have no bisector, so no cell, and voronoi::Mesh refuses them.
 template <class Positions>
 std::string coincident(const Positions& positions) {
     const auto x = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, positions);
@@ -141,27 +116,15 @@ struct Timings {
     double repair = 0, fallback = 0, geometry = 0, build = 0, cells = 0;
 };
 
-// What update() does when the device repair leaves triangles it cannot
-// repair: repair the region around them on the host (tet_flips; a rebuild
-// if that does not finish either), build the mesh again from scratch on the
-// device, or (cheapest) choose by the number of stuck entries. Measured on an
-// A100 at 2.1M cells: a rebuild 0.17-0.5 s (about 0.24 us per cell); the host
-// 0.12 ms per stuck entry on a wave lattice (20.8 s for 178k) but 37-54 ms in a
-// converging flow, where the neighbourhoods are dense and stuck entries come
-// from. So the cheapest plans for the dear case: the host only up to
-// n / 200000 entries, 10 at 2.1M, none below 200000 cells. No clock decides:
-// the same input takes the same path.
+// What update() does when the device repair leaves triangles it cannot repair: repair around them on the host
+// (tet_flips; a rebuild if that does not finish), rebuild from scratch on the device, or (cheapest) choose by the
+// number of stuck entries (host only up to n / 200000, none below 200000 cells). No clock decides: the same input
+// takes the same path.
 enum class Fallback { cheapest, host, rebuild };
 
-// The mesh in D dimensions: one interface, an engine per D (3D: the
-// tetrahedra below; 2D: triangles, voronoi_mesh_2d.hpp; 1D: the sorted order,
-// sorted_mesh.hpp).
-// FaceReal = float adds one float row per face (face_rows(): area vector,
-// centroid, owner, neighbour in 32 bytes) for a reduced-precision hydro
-// (hydro/precision.hpp); everything else stays double. Weight = float or
-// double adds the least-squares gradient weights of every per-cell list entry
-// (gradient_weights(), tet_mesh::gradient_weights), computed by
-// update_cells(); void: none.
+// The mesh in D dimensions: one interface, an engine per D (3D tetrahedra, 2D voronoi_mesh_2d.hpp, 1D sorted_mesh.hpp).
+// FaceReal = float adds one float row per face (face_rows()) for a reduced-precision hydro; Weight = float or double
+// adds the least-squares gradient weights of every per-cell list entry (computed by update_cells()); void: none.
 template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class FaceReal = double, class Weight = void>
 class Mesh;
 
@@ -189,15 +152,10 @@ public:
     Mesh(const ExecSpace& exec, const ep::Box& box) : exec_(exec), box_(box) {}
     Mesh(const ExecSpace& exec, double box) : exec_(exec), box_(box) {}
 
-    // New positions of all particles, x(i, a) in [0, side[a]) for particle i
-    // (any view on the device). Repairs the mesh, or builds it on the first
-    // call or when the number of particles changed; exact on return either
-    // way, or a std::runtime_error saying what is wrong with the positions.
-    // After such a refusal there is no mesh (no faces, no particles) and
-    // the next update() builds from scratch. No particles at all are a
-    // std::invalid_argument, and leave the object as it was. `active` (particle ids) is
-    // accepted for a later repair limited to an active region; today every
-    // particle is repaired.
+    // New positions of all particles, x(i, a) in [0, side[a]) (any device view). Repairs the mesh, or builds it on the
+    // first call or when the particle count changed; exact on return, or a std::runtime_error saying what is wrong.
+    // After a refusal there is no mesh and the next update() builds from scratch; no particles is a std::invalid_argument
+    // and leaves the object as it was. `active` (particle ids) is accepted for a later regional repair; unused today.
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -274,10 +232,7 @@ public:
                 throw std::runtime_error(why);
             }
         }
-        // Capacities: 1/8 more tetrahedra and 1/32 more faces than the
-        // starting mesh has (ring pools 1/2 more: room to append between
-        // compactions); the repair and the face rings grow them when a step
-        // needs more.
+        // Capacities: 1/8 more tetrahedra and 1/32 more faces than the starting mesh (ring pools 1/2 more); repair grows them.
         const int tets = static_cast<int>(tets_.vertex.extent(0));
         const int faces = static_cast<int>(tets_.owner.extent(0)) + static_cast<int>(tets_.owner.extent(0)) / 32;
         const int entries = static_cast<int>(tets_.ring.extent(0));
@@ -294,11 +249,9 @@ public:
         return report;
     }
 
-    // Local rebuild by clipping: the cells of the particles `cells` at
-    // positions x, independent of the persistent mesh. Each face of a
-    // listed cell is returned once: by the lower id when both cells are
-    // listed, else by the listed one (Cells: owned faces of each listed
-    // particle, neighbour ids, area vectors, centroids relative to it).
+    // Local rebuild by clipping: the cells of the particles `cells` at positions x, independent of the persistent mesh.
+    // Each face of a listed cell is returned once: by the lower id if both are listed, else by the listed one (Cells:
+    // owned faces of each listed particle, neighbour ids, area vectors, centroids relative to it).
     template <class X>
     const shell_voronoi::Cells<Memory>& clip(const X& x, const View<const int*>& cells) {
         if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh::clip: no particles");
@@ -323,11 +276,8 @@ public:
         return local_;
     }
 
-    // Scratch memory the caller may use between updates: the spare face-ring
-    // pool, grown to `bytes` if smaller (the growth is kept). Valid only until
-    // the next update(), rebuild() or update_cells(), which reuse the pool and
-    // may move it: ask again after each of them, and keep nothing in it
-    // across them (clip() does not touch it).
+    // Scratch memory the caller may use between updates: the spare ring pool, grown to `bytes` if smaller. Valid only
+    // until the next update(), rebuild() or update_cells() (ask again after each); clip() does not touch it.
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         auto& spare = rings_.pool[1 - rings_.in_use];
@@ -343,10 +293,8 @@ public:
         if (cells_current_) return;
         if (!built()) throw std::logic_error("voronoi::Mesh::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
-        // Its temporaries live in the spare ring pool (see scratch).
-        // After few flips from the last step's lists (with the spare pool, see
-        // tet_mesh::cells_incremental); beyond about one tetrahedron created
-        // per five cells rebuilding them is as fast (measured at 2.1M).
+        // Its temporaries live in the spare ring pool (see scratch). Incremental from the last lists (tet_mesh::cells_incremental)
+        // after few flips; beyond about one created tetrahedron per five cells a full rebuild is as fast.
         const auto& spare = rings_.pool[1 - rings_.in_use];
         const std::size_t table = sizeof(int) * (static_cast<std::size_t>(rings_.renumbered) + rings_.dirty_count);
         if (lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&

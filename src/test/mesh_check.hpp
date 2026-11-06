@@ -1,8 +1,7 @@
 #pragma once
 
-// A voronoi::Mesh against the independent oracle (oracle.hpp): the
-// tetrahedra, the faces and volumes, a sample of cells against brute-force
-// clipping, and the same tetrahedra as a fresh build of the same positions.
+// A voronoi::Mesh against the independent oracle (oracle.hpp): tetrahedra, faces, volumes, a sample of cells against
+// brute-force clipping, and the same tetrahedra as a fresh build.
 
 #include "oracle.hpp"
 #include "support.hpp"
@@ -69,10 +68,8 @@ struct Result {
     long long negative = 0;       // cells of volume <= 0
     long long duplicates = 0;     // particles on the grid position of another: no mesh should come back
     double closure = 0, total = 0, brute_volume = 0, brute_area = 0, fresh_volume = 0;
-    // Relative volume error times the cell's size in grid steps. Positions are
-    // doubles near 1, so geometry rounds at about 4e-8 grid steps whatever the
-    // cell: the relative error of a cell h steps wide is about 4e-8 / h
-    // (measured, clumps of 512 to 2^20 steps wide, contrast.grid_scale).
+    // Relative volume error times the cell's size in grid steps: positions are doubles near 1, so geometry rounds at
+    // about 4e-8 grid steps whatever the cell (measured, clumps 512 to 2^20 steps wide, contrast.grid_scale).
     double brute_floor = 0;
     bool brute_within_rounding() const { return brute_volume < 1e-9 || brute_floor < 2e-7; }
     bool ok() const {
@@ -204,11 +201,8 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
     return r;
 }
 
-// A mesh and the clipping disagree on faces: who is right? The largest faces
-// the clipping lacks, each against brute-force clipping of its owner cell.
-// True when brute force sides with the mesh on all of them: the plain clipping
-// is the one wrong (a cell of aspect ratio 1e5 can come back `degenerate`
-// with volume 0; the start patches such cells, this reference does not).
+// A mesh and the clipping disagree on faces: who is right? Checks the largest faces the clipping lacks against brute-force
+// clipping of their owner cell; true when brute force sides with the mesh on all (the plain clipping is the one wrong).
 template <class M>
 bool arbitrate(const M& mesh, std::ostream& out, int faces = 8) {
     const Positions x = snapped(mesh);

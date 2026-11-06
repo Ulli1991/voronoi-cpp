@@ -1,32 +1,6 @@
-// Timing and debugging of the mesh pipeline (not a test).
-//
-//   voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--width=<factor>] [--no-check]
-//       Full rebuild by clipping. Variants thread, exact and warp, selected
-//       by substring. Every variant's cells are checked (support::check_cells,
-//       PASS/FAIL; brute force on a sample, seconds at 2.1M) unless --no-check.
-//   voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--debug] [--fallback=host|rebuild]
-//       The persistent mesh (voronoi::Mesh): the start kernels (clipping
-//       with rings, from_rings, tet_start::build) and the mesh's start, then
-//       `steps` steps of the flow, `displacement` spacings each: device
-//       repair (screened), the fallback when stuck (host or rebuild,
-//       default: the cheaper one, voronoi::Fallback),
-//       circumcentres, face rings, faces and cells. --verify compares every
-//       step with an exact rebuild (support::compare_with_rebuild); --debug
-//       adds adjacency and stuck details.
-//   --memory (both modes): device memory per phase (Kokkos allocations:
-//       current, peak, and the live allocations at the peak by label).
-//   --kernels (step): time per kernel label, mean over the steps after the
-//       first (run with CUDA_LAUNCH_BLOCKING=1 on CUDA, else launches only).
-//   --touched (step): per step, the cells at a corner of a tetrahedron created
-//       by flips and the cells whose set of faces changed (host, slow).
-//   --checksum (step): per step, a checksum of the volume and centroid bits.
-//   --box=<Lx>,<Ly>,<Lz> (both modes; default 1,1,1): a periodic box of
-//       these sides; lattices get about equal spacings along every axis
-//       (e.g. --box=2,2,0.0625 with 4194304 jittered points is a
-//       512 x 512 x 16 slab), the other distributions stretch with the box.
-//
-// Distributions: uniform, jittered, lattice, wave, clustered, halo, or
-// <sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>.
+// Timing and debugging of the mesh pipeline (not a test): `rebuild <n> <distribution>` times full clipping builds,
+// `step <n> <distribution> <displacement>` the persistent voronoi::Mesh; flags and distributions are listed in
+// docs/design.md (Benchmark drivers).
 
 #include "support.hpp"
 
@@ -45,9 +19,7 @@ namespace {
 
 using namespace support;
 
-// Device memory accounting through the Kokkos Tools allocation callbacks:
-// bytes in the default memory space now and at the peak of the current
-// phase, and the live allocations (summed by label) at that peak.
+// Device memory accounting through the Kokkos Tools allocation callbacks: current and peak bytes per phase, and the live allocations at the peak.
 struct DeviceMemory {
     static inline bool on = false;
     static inline std::unordered_map<const void*, std::pair<std::string, std::uint64_t>> live;
@@ -364,9 +336,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
               << "\n";
 
     {
-        // The start kernels: clipping with rings, from_rings, and the exact
-        // start (tet_start::build: check, patch); build rewrites rings, so it
-        // is timed together with a fresh clipping.
+        // The start kernels: clipping with rings, from_rings and the exact start (tet_start::build, which rewrites rings, so timed with a fresh clipping).
         const auto list = cell_list(x, box);
         const auto grid = shell_voronoi::make_grid(list);
         auto cells = cells_with_rings(list);  // sizes the ring pool
@@ -410,8 +380,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         voronoi::Timings t;
         const voronoi::Report r = mesh.update(x, {}, &t);
         mesh.update_cells(&t);
-        // step_ms: the device step (repair, geometry) without a fallback;
-        // cells_ms (face lists, ordered volumes and centroids) comes on top.
+        // step_ms: the device step (repair, geometry) without a fallback; cells_ms (face lists, volumes, centroids) is on top.
         const double step_ms = t.repair + t.geometry;
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
                   << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips

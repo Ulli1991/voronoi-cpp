@@ -23,9 +23,8 @@ i128 det(const Offset& a, const Offset& b, const Offset& c) {
 
 int sign(i128 v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 
-// Reference in-sphere for small coordinates, from the circumcentre: with p0
-// at the origin, e is inside iff |e|^2 < 2 e.C, C = N / (2 det(a, b, c)).
-// Returns +1 inside, -1 outside, 0 on the sphere.
+// Reference in-sphere for small coordinates from the circumcentre (p0 at the origin: inside iff |e|² < 2 e.C);
+// returns +1 inside, -1 outside, 0 on the sphere.
 int reference_in_sphere(const Offset* p) {
     Offset q[4];
     for (int k = 0; k < 4; ++k) q[k] = ep::minus(p[k + 1], p[0]);
@@ -82,9 +81,7 @@ int main(int argc, char** argv) {
     check.expect(ep::delta(0, period - 1) == -1 && ep::delta(period - 1, 0) == 1 && ep::delta(5, 9) == 4,
                  "delta takes the nearest periodic image");
 
-    // Boxes of three sides: one step for every axis (the longest side /
-    // 2^30), each side a whole number of steps; a cube is 2^30 per side and
-    // snaps as before.
+    // Boxes of three sides: one step per axis (longest side / 2³⁰), each side whole steps; a cube snaps as before.
     {
         const ep::Box slab(2, 2, 0.0625), odd(1, 2, 3), cube(3.0);
         check.expect(slab.period[0] == period && slab.period[2] == period / 32 && slab.side[2] == 0.0625 &&
@@ -117,9 +114,7 @@ int main(int argc, char** argv) {
         check.expect(exact, "a 1 x 2 x 3 box: grid positions snap to themselves");
     }
 
-    // Orientation equals the exact determinant's sign, also for nearly
-    // coplanar points with large coordinates where the double filter cannot
-    // decide.
+    // Orientation equals the exact determinant's sign, also for nearly coplanar large points the filter cannot decide.
     int wrong = 0, coplanar = 0;
     for (int i = 0; i < 20000; ++i) {
         const Offset a = random_offset(rng, 1 << 29), b = random_offset(rng, 1 << 29);
@@ -163,9 +158,8 @@ int main(int argc, char** argv) {
         check.expect(inside && outside, "in_sphere resolves one grid step at radius 2^28");
     }
 
-    // Ties: for five cospherical points the perturbed answer must not depend
-    // on the order of the tetrahedron's corners, and a triangle abc with d
-    // and e on opposite sides is locally Delaunay from both sides alike.
+    // Ties: for five cospherical points the answer must not depend on corner order, and abc with d, e on opposite
+    // sides is locally Delaunay from both sides alike.
     int order_dependent = 0, one_sided = 0, cospherical = 0;
     const Offset sphere[] = {{3, 0, 0}, {-3, 0, 0}, {0, 3, 0}, {0, -3, 0}, {0, 0, 3}, {0, 0, -3}, {1, 2, 2},
                              {-1, 2, 2}, {1, -2, 2}, {1, 2, -2}, {2, 1, -2}, {-2, -2, 1}, {2, -1, 2}};
@@ -204,8 +198,7 @@ int main(int argc, char** argv) {
                                            " cospherical sets)");
     check.expect(one_sided == 0, "ties agree on both sides of a shared triangle");
 
-    // Particle-level predicates on snapped positions take the nearest image:
-    // a tetrahedron across the periodic boundary keeps its orientation.
+    // Particle predicates take the nearest image: a tetrahedron across the periodic boundary keeps its orientation.
     {
         ep::Points<Kokkos::HostSpace> point("point", 5);
         const double x[5][3] = {{0.999, 0.5, 0.5}, {0.001, 0.5, 0.5}, {0.999, 0.502, 0.5}, {0.999, 0.5, 0.502},
@@ -217,9 +210,8 @@ int main(int argc, char** argv) {
                      "orient on particles across the periodic boundary");
         check.expect(ep::in_sphere(point, tet, 4), "in_sphere on particles across the periodic boundary");
 
-        // The same across the thin side of a slab (z period 2^25 steps): the
-        // points with the axes rolled (y, z, x), x across the boundary as z;
-        // the same signs as the copy shifted by half the slab, inside it.
+        // Across the thin side of a slab (z period 2²⁵ steps), axes rolled (y, z, x) with x across the boundary: same signs
+        // as the copy shifted by half the slab.
         const ep::Box slab(2, 2, 0.0625);
         ep::Points<Kokkos::HostSpace> thin("thin", 5, slab), inside("inside", 5, slab);
         for (int i = 0; i < 5; ++i) {

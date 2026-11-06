@@ -1,10 +1,6 @@
-// Full rebuild by clipping: on jittered, uniform random, lattice, clustered
-// and halo points every cell is certified, volumes are positive and fill the
-// box, cells close, faces are consistent between neighbours and lie on the
-// bisectors (support::check_cells). The thread, warp and exact kernels give
-// the same cells, and so does a cell list with a coarser base grid (other
-// slots). A face pool too small grows to what the build needs. Particles
-// at NaN or infinity never cut another cell.
+// Full rebuild by clipping on jittered, random, lattice, clustered and halo points: certified cells that fill the box, with consistent faces
+// (support::check_cells); thread, warp and exact kernels agree, also on a coarser base grid; small face pools grow; NaN or infinite
+// particles never cut another cell.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -64,12 +60,8 @@ int main(int argc, char** argv) {
                          " faces per cell, same cells");
     }
 
-    // Non-finite positions: a particle at NaN and one at infinity are never
-    // a candidate (their distances never fall below the reach), so every
-    // other cell is the cell without them: the same neighbours, the same
-    // volume (to the last bit unless the two extra particles change the
-    // walk's grid levels nearby, which reorders the cuts). (Test idea from
-    // Doug Rennehan, PR #2.)
+    // Non-finite positions are never a candidate, so every other cell is the cell without them: the same neighbours and volume
+    // (to the last bit unless the extra particles change the walk's grid levels nearby). (Test idea from Doug Rennehan, PR #2.)
     {
         Points points = make_points("uniform", n);
         const Positions clean = to_device(points);

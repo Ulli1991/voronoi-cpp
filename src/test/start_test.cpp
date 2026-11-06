@@ -1,19 +1,6 @@
-// The starting mesh is the Delaunay tetrahedralization of the snapped
-// positions with ties broken by symbolic perturbation, for random,
-// clustered, lattice and degenerate inputs. Independent host oracle, brute
-// force (test only, O(tetrahedra x particles)):
-//   1. a triangulation of the box: no flat tetrahedron, every triangle in
-//      exactly two tetrahedra whose apexes lie on opposite sides, adjacency
-//      equal to that pairing, every particle used, and the exact volumes
-//      summing to the box;
-//   2. every circumsphere empty of every other particle (exact, perturbed).
-// Both hold only for the Delaunay tetrahedralization, which the perturbation
-// makes unique. Also every edge of the tetrahedra has exactly one
-// representative (a Voronoi face), also where the clipping dropped a
-// rounding-level face (wave, 32768 particles: 59 edges had none). Boxes:
-// cubes of side 1, 2, 3, a 1 x 1 x 0.125 slab (8 cells across) and a
-// 1 x 2 x 3 box. The emptiness test scans only the particles whose x lies
-// within the circumradius (sorted by x; brute force otherwise).
+// The starting mesh is the Delaunay tetrahedralization of the snapped positions, perturbed ties, on random, clustered,
+// lattice and degenerate input, checked by a brute-force host oracle (triangulation of the box, empty circumspheres)
+// and by exactly one representative per edge.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -152,12 +139,8 @@ int main(int argc, char** argv) {
         int n = 4096;
         std::string name = "";  // of the box
     };
-    // Boxes of side 2 and 3 as well: snapping divides by the box (box 3
-    // positions are not on the grid; the start is exact on their snapped
-    // positions all the same). Non-cubic boxes: a slab of aspect 1:1:0.125
-    // with 8 lattice cells across (64 x 64 x 8; fewer would leave cells
-    // uncertified, see voronoi_mesh_test), with a degenerate lattice, and a
-    // 1:2:3 box (sides not whole numbers of grid steps: rounded).
+    // Boxes of side 2 and 3 (snapping divides by the box; box 3 is off the grid), a 64 x 64 x 8 slab (8 cells across,
+    // fewer leave cells uncertified, see voronoi_mesh_test) with a degenerate lattice, and a 1:2:3 box.
     const Box slab(1, 1, 0.125), box123(1, 2, 3);
     for (const Case& c : {Case{"jittered", 1}, Case{"uniform", 1}, Case{"clustered", 1}, Case{"lattice", 1},
                          Case{"wave", 1}, Case{"sc@1e-6", 1}, Case{"bcc@0", 1}, Case{"fcc@0", 1}, Case{"fcc@1e-6", 1},

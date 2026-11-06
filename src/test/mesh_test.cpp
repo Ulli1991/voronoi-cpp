@@ -1,9 +1,6 @@
-// Persistent tetrahedra from a clipping build: from_rings yields the same
-// tetrahedra as a host construction from the rings, with consistent
-// adjacency and one representative per edge; the Voronoi geometry from
-// their circumcentres (on the stored rings, and on rings walked from the
-// edge representatives) matches the clipped cells, and the exact check
-// (tet_start::check) passes. The circumcentre of a sliver is exact.
+// Persistent tetrahedra from a clipping build: from_rings equals a host construction from the rings, adjacency and edge
+// representatives are consistent, the Voronoi geometry from circumcentres matches the clipped cells, tet_start::check passes.
+// A sliver's circumcentre is exact.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -177,11 +174,9 @@ int main(int argc, char** argv) {
                                                        sci(error / std::sqrt(r2)) + ")");
     }
     {
-        // The 2D pieces of stage 0, before a 2D engine uses them: the cell
-        // list in 2D sorts by tile and Morton key (checked against a host
-        // sort of keys computed here), and tet_mesh::cells in 2D sums the
-        // faces of a square lattice (given by hand) to cells of area h^2
-        // and centroid 0 at their generators (pyramid 1/4, centroid 2/3).
+        // The 2D pieces of stage 0: the 2D cell list sorts by tile and Morton key (against a host sort),
+        // and tet_mesh::cells in 2D sums a square lattice's faces to cells of area h^2 and centroid 0
+        // (pyramid 1/4, centroid 2/3).
         constexpr int m = 24, n = m * m;
         const exact_predicates::BoxN<2> box(2.0, 1.0);  // 2 x 1 tiles
         Kokkos::View<double* [2], Memory> x("x2", n);
