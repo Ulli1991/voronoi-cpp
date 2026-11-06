@@ -7,10 +7,13 @@ and gets back faces (owner, neighbour, area vector, centroid), cell volumes and
 centroids, and per-cell face lists; the mesh is kept exact as the particles
 move. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
 
+The topology is exact. Cell geometry is not yet right in every case: two open bugs give wrong
+volumes with no error, see [Limitations](#limitations-and-open-items).
+
 The hydro moved to [luna-cpp](https://github.com/Ulli1991/luna-cpp), which uses
 this library as a submodule through `voronoi::Mesh` alone. The copy in
 `src/hydro/` still builds here, as the bit check of mesh changes, and goes when
-the split is finished (#16); nothing is developed in it.
+the split is finished ([#16](https://github.com/Ulli1991/voronoi-cpp/issues/16)); nothing is developed in it.
 
 BSD 3-Clause, see [LICENSE](LICENSE).
 
@@ -97,7 +100,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 - Every cell must be certified within one periodic image: a cell's radius
   must stay below about 3/16 of the shortest side (in practice about 8 or
   more particles across it; a slab of 16 cells is fine). Otherwise
-  `update()` throws, saying so.
+  `update()` throws, saying so. It can throw below 3/16 too ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `update()` repairs (the first call, or a change of n, builds); exact on
   return. When the device repair leaves stuck triangles it finishes on
   the host or rebuilds on the device, whichever is cheaper
@@ -109,7 +112,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
   run, and gives the per-cell face lists for gathers.
 - `clip(x, cells)` rebuilds the listed cells by clipping, independent of
   the persistent mesh, and returns each of their faces once (a local mode
-  for substeps of active cells).
+  for substeps of active cells). It can return a wrong volume ([#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)).
 - `rebuild(x)` builds the exact mesh from scratch on demand.
 - `scratch(bytes)` lends device memory between updates (the spare ring
   pool).
@@ -212,7 +215,7 @@ Non-cubic: a Kelvin-Helmholtz-like slab (Lx = Ly = 2, Lz = 16 spacings,
 `--box=2,2,0.0625`, 512 x 512 x 16 = 4.2M, and `--box=2,2,0.03125`,
 1024 x 1024 x 16 = 16.8M; job 31702953) rebuilds at the cube's rate:
 warp rebuild jittered 39.9 / 39.9 M cells/s, uniform 19.9 / 20.0 M
-cells/s; exact start 0.36 / 1.40 s; steps at 0.03 spacings 39.9 / 155 ms
+cells/s; exact start 11.6 / 12.0 M cells/s; steps at 0.03 spacings 105 / 108 M cells/s
 (the bench flow, stretched with the box, shears across the 16-cell
 thickness: 4x the flips per cell of the cube); peak 2192 B/cell at 16.8M
 (research_notes/box3_2026-10-31.md). The cubic case is bit-identical to
@@ -227,6 +230,13 @@ degenerate start (wave lattice, 2.1M) is repaired on the device alone in
 0.81 s (job 31701509; research_notes/shrink_2026-10-31.md), while
 icosahedral shells@1e-9 still leave ~8k of 262k stuck (host or rebuild). The per-cell face lists account for most of the step peak above
 2fd8b50's 2080 B/cell (about 140 B/cell; not measured separately).
+
+### Long runs
+
+The rates above are early steps. On a smooth flow where every cell moves, the mesh loses its
+memory order, and the step falls from 118 M cells/s at step 100 to 59 at step 500 (128³,
+0.1 spacings, job 31953232; [#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)). The mesh has no re-sort yet. Flows with little bulk motion
+do not show it: on Sedov the loss is at most 4.5 % over a run.
 
 ### GPU against a full CPU node, same code
 
@@ -307,9 +317,24 @@ Distributions: uniform, jittered, lattice, wave, clustered, halo, or
 
 ## Limitations and open items
 
+Open bugs, found by fuzzing the mesh against an oracle that shares no code with it:
+
+- **Wrong cell volumes with no error, up to 9.4 %,** on valid input in boxes whose grid step is
+  not a power of two ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)). The topology is right, and the volumes still sum to the box, so
+  the check in `update()` does not catch it. How common it is on realistic input is not known.
+- **`clip()` returns a volume 5 % low with status ok,** in a unit cube ([#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)). The cause is not
+  known. The persistent mesh was exact in those runs.
+- **Non-finite or negative geometry with no error** at extreme box sizes ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)). The fuzz drew sides
+  from 1e-140 to 1e141; the usable range is not measured or stated yet.
+- Valid input can be refused below the stated 3/16 limit, with largest radii from 0.112 of the
+  shortest side ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
+- `Fallback::host` has no bound on its work: minutes on hundreds of particles ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
+
+Other limits:
+
 - Bit-reproducible moving runs cost 2.5-4.7 % on the mesh step alone
   (canonical circumcentres and face-ring order).
-- CUDA and Serial give different last bits of volumes and centroids (#27).
+- CUDA and Serial give different last bits of volumes and centroids ([#27](https://github.com/Ulli1991/voronoi-cpp/issues/27)).
 - Clipping alone is not watertight on uniform random input at 2.1M cells;
   the exact start makes the mesh exact.
 - Particles on one grid position (grid step box / 2³⁰) have no Voronoi cell, so
@@ -332,12 +357,12 @@ Distributions: uniform, jittered, lattice, wave, clustered, halo, or
   (`Report::overlapped`). That check is on the volume alone: a wrong mesh whose
   volumes still add up to the box within 1e-6 would pass it.
 - On CUDA a build in a cube of side 3.086e24 aborts with an illegal device
-  address (#26, open); the other sides tested and OpenMP do not.
+  address ([#26](https://github.com/Ulli1991/voronoi-cpp/issues/26), open); the other sides tested and OpenMP do not.
 - `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries
   (10 at 2.1M cells, none below 200000), the rest is a rebuild, which needs the
   memory of a start.
-- Geometry rounds with the positions: the relative volume of a cell h grid
-  steps wide is good to about 4e-8 / h. Exact down to clumps of 512 steps
+- Geometry rounds with the positions: with a power-of-two step, the relative volume of a cell h grid
+  steps wide is good to about 4e-8 / h (other steps: [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)). Exact down to clumps of 512 steps
   (error 8e-10), and particles one grid step apart are still exact.
 - The device repair breaks down near one spacing of motion per step
   (stuck triangles, host or rebuild fallback); substepping helps.
@@ -350,26 +375,30 @@ Distributions: uniform, jittered, lattice, wave, clustered, halo, or
   by name, cells out of certified reach, no particles; a refused update leaves no
   mesh and the next builds. Its repair is checked by the sum of the signed areas
   (`Report::overlapped`). `volume()` is current after `update_cells()` only.
-- Memory limits 3D on one A100 to about 256³ today (#28).
+- Memory limits 3D on one A100 to about 256³ today: 2319 B/cell with the hydro, of which the start
+  peak alone is 1728. The target is 384³, about 720 B/cell ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)).
 
 ## Roadmap
 
 Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the
 refusals above.
 
-1. Cut memory to 384³ on one A100 (#28): float faces, `tet_centre`, repair lists, start peak.
-2. Point insertion and removal (#25), 1D first.
-3. Mesh speed: repair rounds, the fixed cost per step.
-4. Clustered rebuild tuning.
-5. Multi-GPU: overlapped against blocking communication across two nodes first.
-6. Refinement and derefinement in 3D.
+1. Fix the wrong volumes ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), then state the box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)), the reach limit ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)) and a
+   bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
+2. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
+3. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)), 1D first.
+4. Mesh speed: a re-sort when the order has decayed ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)), faces numbered by owner, then repair
+   rounds and the fixed cost per step.
+5. Clustered rebuild tuning.
+6. Multi-GPU: overlapped against blocking communication across two nodes first.
+7. Refinement and derefinement in 3D.
 
 ## Repository layout
 
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests, `support.hpp` (inputs, references, the
   comparison with an exact rebuild), `check.hpp`.
-- `src/bench/`: `voronoi_bench`, `mesh2d_bench`. `src/hydro/`, `hydro_sedov`, `hydro_1d`: the copy that goes (#16).
+- `src/bench/`: `voronoi_bench`, `mesh2d_bench`. `src/hydro/`, `hydro_sedov`, `hydro_1d`: the copy that goes ([#16](https://github.com/Ulli1991/voronoi-cpp/issues/16)).
 - `scripts/`: `lint_cpp.sh`, `bench_a100.sh`, `dim_gate_a100.sh`, `dim2d_a100.sh`, `mesh_tests_a100.sh`, `mesh_speed_a100.sh`.
 - `research_notes/`, `reports/`: status notes and surveys.
 
