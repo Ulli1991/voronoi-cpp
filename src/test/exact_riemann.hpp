@@ -1,10 +1,7 @@
 #pragma once
 
-// The exact solution of the 1D Riemann problem of an ideal gas (Toro 2009,
-// ch. 4: the pressure function, Newton's method for the star pressure, the
-// sampling), for tests: Sod's tube against the exact cell averages, as
-// LUNA's exact_riemann.cell_average (src/luna/hydro/exact_riemann.py:105-113:
-// conservative averages of sub-samples per cell).
+// The exact solution of the 1D Riemann problem of an ideal gas (Toro 2009, ch. 4), for tests:
+// Sod's tube against the exact cell averages, as LUNA's exact_riemann.cell_average.
 
 #include <algorithm>
 #include <array>

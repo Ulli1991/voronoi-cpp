@@ -1,32 +1,5 @@
-// LUNA's 1D tests on the 1D Voronoi mesh (hydro::FiniteVolume<1>), timed.
-//
-//   hydro_1d <sod|shu-osher|woodward-colella> <N> [--moving] [--riemann=hllc|hll] [--order=0|1]
-//            [--dt=luna|arepo|fixed] [--courant=<c>] [--fixed-dt=<dt>] [--jitter=<spacings>]
-//            [--limiter=face|cell|none] [--steps=<max>] [--repeats=<r>] [--phases] [--memory]
-//            [--no-regularise] [--unfused] [--out=<file.npy>] [--series=<name>]
-//
-// Setups are LUNA's (scripts/luna_1d_run.py has the file:line of each):
-// Sod (Toro 1: (1, 0, 1) | (0.125, 0, 0.1) at 0.5 on [0, 1], t = 0.25,
-// zero-gradient walls), Shu-Osher (LEFT = (3.857143, 2.629369, 10.33333)
-// for x < -4, (1 + 0.2 sin 5x, 0, 1) beyond, on [-5, 5], t = 1.8,
-// zero-gradient walls), Woodward-Colella (rho = 1, u = 0, p = 1000 | 0.01
-// | 100 split at 0.1 and 0.9 on [0, 1], t = 0.038, reflective walls);
-// gamma 1.4. Every cell starts from the exact average of the initial state
-// over its own interval (LUNA's: cell averages over its uniform cells;
-// equal on a uniform line). N points on a uniform lattice, or moved by up to
-// --jitter / 2 spacings. --dt: LUNA's rule, the default of a static run
-// (--courant default 0.8), AREPO's, the default of a moving run (default
-// 0.4), or a constant --fixed-dt; the last step lands on t_end. --steps stops after that many steps (throughput).
-//
-// The run is made --repeats times (default 2) in one process, from the same
-// initial state; every run is printed, and the fastest gives the summary
-// (M cell updates/s = N * steps / wall time of the stepping loop, time steps
-// included). The state hash must be the same in every run. LUNA's rule runs
-// fused, one launch per step (--unfused: time_step() and step() apart).
-// --phases, always unfused, fences the phases of a step and prints their rates. --memory adds the peak of the device allocations.
-// --out writes an .npy of N rows (generator, centroid, V, rho, u, p) in x
-// order, x in the problem's coordinates; with --series also <file.npy>.json
-// (series, problem, N, steps, wall_s, peak_MB, file) for scripts/compare_1d.py.
+// LUNA's 1D tests (sod, shu-osher, woodward-colella) on the 1D Voronoi mesh, timed.
+// Usage: hydro_1d <problem> <N> [--moving] [--riemann=] [--order=] [--dt=] [--steps=] [--out=]; options in main().
 
 #include "finite_volume_1d.hpp"
 #include "problems_1d.hpp"

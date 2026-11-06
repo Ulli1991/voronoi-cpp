@@ -374,11 +374,8 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 
 }  // namespace detail
 
-// Finish a device repair that left stuck entries: the tetrahedra within a few adjacency steps of them are copied to
-// the host as a local mesh (same particle order, faces to the rest open), repaired there and written back, new ones
-// appended after state.count so the device free list stays valid. Changed tetrahedra are touched and listed, each
-// edge around them gets one representative, and the device repair reruns from them and the stuck entries. If entries
-// remain the region grows once (8, then 16 steps); the rest is stats.stuck (voronoi::Mesh then rebuilds).
+// Finish a device repair that left stuck entries: repair the tetrahedra near them on the host, write back,
+// rerun the device repair; entries that remain grow the region once, the rest is stats.stuck.
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state) {

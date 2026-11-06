@@ -125,11 +125,8 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     return report;
 }
 
-// The Delaunay tetrahedralization from a clipping build with face rings (shell_voronoi::construct of `grid`): from_rings,
-// check, and where it fails rebuild the cells of the bad tetrahedra and their neighbours by exact clipping, assemble and
-// check again. Many bad cells, or a second failure, rebuild every cell. Rebuilt cells claim new blocks in the ring pool of
-// `cells` (Cells::with_rings); one that does not fit is face_overflow and the result is not exact: build again with a pool
-// of Cells::needed().
+// The Delaunay tetrahedralization from a clipping build with face rings: from_rings, check, and where it fails
+// rebuild the bad cells by exact clipping and check again. face_overflow means build again with a pool of Cells::needed().
 template <class ExecSpace>
 Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
             const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,

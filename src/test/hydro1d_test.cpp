@@ -1,15 +1,5 @@
-// The 1D hydro (hydro::FiniteVolume<1>, finite_volume_1d.hpp) on the 1D
-// mesh: a uniform state (with a bulk velocity on a periodic line; at rest
-// between reflective walls) stays uniform, static and moving, to rounding;
-// mass, momentum and energy of a rough state are conserved on a periodic
-// line, and mass and energy between reflective walls (to rounding); two
-// identical moving runs give the same bits; inflow keeps its state; Sod's
-// tube (Toro test 1) against the exact solution's cell averages within
-// LUNA's bounds at 128 and 256 cells (test_hydro_accuracy_shocktube.py:14),
-// on static and moving meshes, uniform and jittered; LUNA's own final states
-// of Sod, Shu-Osher and Woodward-Colella at N = 16 on a static uniform line
-// (values printed by LUNA, walls included), to 1e-12; Shu-Osher on a moving
-// mesh: the regularised points never cross, the unregularised ones do.
+// Tests of the 1D hydro: uniform state stays uniform, conservation, determinism, Sod against the exact solution,
+// LUNA's final states at N = 16, Shu-Osher on a moving mesh.
 
 #include "check.hpp"
 #include "exact_riemann.hpp"

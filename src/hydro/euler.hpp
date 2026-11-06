@@ -5,23 +5,8 @@
 #include <cstddef>
 #include <utility>
 
-// The Euler equations of an ideal gas in D = 1, 2 or 3 dimensions, per cell
-// and per face: conversions, the MUSCL-Hancock half step and the HLL and
-// HLLC fluxes along a face normal.
-//
-// Conventions are LUNA's (src/luna/hydro/conversions.py:1): primitives
-// W = (rho, v_1 .. v_D, P), conserved U = (rho, rho v_1 .. rho v_D, E) per
-// unit volume, D + 2 entries (LUNA's layout, ic.py:141). Line references
-// (LUNA file:line, AREPO file:line) are in
-// research_notes/hydro_stage1_2026-10-31.md.
-//
-// Every expression is written so that D = 3 is the arithmetic, in the same
-// order and the same form, of the 3D-only code before: dot products written
-// out left to right, vectors and states built as brace initializers
-// {f(0), .., f(N - 1)} (braced) where that code had them, loops over d < D
-// where it looped over d < 3. Compilers contract a * b + c into FMAs
-// depending on that form, so a loop where an initializer was gives other
-// bits (measured on the A100 and with gcc).
+// The Euler equations of an ideal gas in D = 1, 2 or 3: conversions, MUSCL-Hancock half step, HLL and HLLC fluxes.
+// Primitives W = (rho, v, P), conserved U = (rho, rho v, E) per unit volume (LUNA's conventions).
 namespace hydro {
 
 template <int D, class T = double>
@@ -160,23 +145,9 @@ KOKKOS_INLINE_FUNCTION State<D> half_step(const Kokkos::Array<double, N>& W, con
     return half;
 }
 
-// Riemann solvers along the unit normal n of a face moving with velocity w
-// (w = 0 on a static mesh): the states' velocities are taken relative to
-// w, the Riemann problem is solved along n, and the flux returned is the
-// lab-frame flux through the moving face (F(U) - (w.n) U for equal
-// states). Flux per unit area, from L to R. Wave speeds after Davis as
-// LUNA (fluxes.py:146-147, 65-66).
-//
-// LUNA rotates the states into (normal, two tangents), solves, and rotates
-// the flux back (fluxes.py:9-48). Here the vectors stay in box axes: every
-// branch of HLL and HLLC is chosen by scalars (S_L, S_M, S_R) that do not
-// depend on the frame, and within a branch each flux component is the same
-// linear combination of the corresponding components of F, U and U*, so
-// rotating is the identity up to rounding; for HLLC the star momentum is
-// rho* (v_t + S_M n), the tangential velocity v_t = v - (v.n) n carried
-// through, which is LUNA's rho* (S_M, vt1, vt2) in box axes (in 1D, n = +-1
-// and v_t = 0). CTest `hydro` checks both against LUNA's values and under
-// random rotations.
+// Riemann solvers along the unit normal n of a face moving with velocity w: flux per unit area from L to R,
+// the lab-frame flux through the moving face; states are in box axes, not rotated.
+// Wave speeds after Davis.
 namespace detail {
 
 template <int D, class T>

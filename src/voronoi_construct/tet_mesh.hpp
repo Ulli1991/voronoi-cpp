@@ -640,11 +640,8 @@ int number_faces(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_sp
 }
 }  // namespace detail
 
-// Renumber the faces after a repair and update their rings in place: a face keeps its ring unless a tetrahedron touched
-// by a flip lies on it, then its edge is walked and the new ring appended to the pool. Those faces are found from
-// `touched_list` (any order, repeats allowed; empty handle: all t with touched(t) != 0). Requires that untouched
-// tetrahedra keep their edge bits. A full pool is compacted into the spare; arrays and pools grow (1/32, 1/4) when too
-// small. Sets mesh.owner/neighbour/ring_start/ring_length/ring; returns the number of faces.
+// Renumber the faces after a repair and update their rings in place: a face keeps its ring unless a touched
+// tetrahedron lies on it (`touched_list`; empty handle: all touched). Sets mesh.owner/neighbour/ring_*; returns the face count.
 template <class ExecSpace>
 int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_space>& mesh, int count,
                       const Kokkos::View<char*, typename ExecSpace::memory_space>& touched,
@@ -1381,10 +1378,8 @@ void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicate
 
 }  // namespace detail
 
-// 3'. cells() after a repair, from the last step's lists, bit for bit the same. Only a corner of a tetrahedron a flip
-// created (list `created`) can have lost or gained a face; other cells keep faces and order under new numbers (`renumber`,
-// from update_face_rings, -1: none) and only sum again. A marked cell takes its old entries that still have a number plus
-// the faces without one (~f in rings.dirty) and sorts. Areas and centroids are new every step, so every cell sums.
+// 3'. cells() after a repair, from the last step's lists, bit for bit the same: only cells with a corner of a
+// tetrahedron created by a flip (list `created`) can change faces; the others renumber (`renumber`) and sum again.
 template <class ExecSpace, class X>
 void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,

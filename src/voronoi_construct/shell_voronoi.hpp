@@ -584,12 +584,9 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
     return freed;
 }
 
-// Clip by the bisector of the generator `self` and particle `id` (at e in
-// grid steps for an exact cell, at d in box units for a rounded one):
-// remove the vertices it cuts off and close the hole with a new face.
-// Returns ok when the plane does not cut, or after the cut. After anything
-// else the cell may be half cut, with a claimed vertex slot never written:
-// it must not be read again.
+// Clip by the bisector of the generator `self` and particle `id` (at e in grid steps, or d in box units):
+// removes the cut vertices, closes the hole with a new face. Returns ok when the plane does not cut or after the cut;
+// after anything else the cell must not be read again.
 template <class C>
 KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int id, int self) {
     using Index = typename C::Index;
