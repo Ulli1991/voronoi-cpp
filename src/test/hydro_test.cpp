@@ -56,8 +56,8 @@ const LunaCase luna_hll[] = {
     {2, {1.1, -4.0, 0.0, 0.5, 0.5}, {1.3, -3.5, 0.1, 0.2, 0.4}, {0.3956780378220708, -1.7908409418191646, -0.04162575810617627, 0.7953580101016026, 4.6019572824376}},
 };
 
-// From LUNA's hllc_flux_primitive(W_L, W_R, axis, gamma = 5/3), jax x64: the
-// same states and a pair with a contact at rest.
+// From LUNA's hllc_flux_primitive(W_L, W_R, axis, gamma = 5/3), jax x64: the same states and a pair with a contact at
+// rest.
 const LunaCase luna_hllc[] = {
     {0, {1.0, 0.75, -0.2, 0.1, 1.0}, {0.125, 0.0, 0.3, -0.4, 0.1}, {0.9196817777792649, 1.3665683598451346, -0.183936355555853, 0.0919681777779265, 2.2324199149234163}},
     {1, {1.0, 0.75, -0.2, 0.1, 1.0}, {0.125, 0.0, 0.3, -0.4, 0.1}, {0.3130650464627618, 0.2347987848470714, 0.27502286388364394, 0.03130650464627618, 0.5623838935957439}},
@@ -191,7 +191,7 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
         for (const auto update : {hydro::Update::per_cell, hydro::Update::per_face}) {
             const std::string what = solver + ", " + kind + ", order " + std::to_string(order) + ", " + name(update);
             FV fv(Exec{}, mesh, gas, order, update);
-            {  // uniform state
+            {
                 const State W{1.3, 0.3, -0.2, 0.1, 0.7};
                 const State U = hydro::conserved(W, gas);
                 HostCells h("uniform", n);
@@ -206,7 +206,7 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
                 const double tolerance = FV::Mesh::float_rows ? 1e-6 : 1e-13;
                 check.expect(worst < tolerance, what + ": a uniform state stays uniform over 3 steps (" + sci(worst) + ")");
             }
-            {  // conservation, a rough state
+            {
                 set_state(fv, mesh, rough_state(n, gas));
                 auto sums = [&](const HostCells& h) {
                     std::array<long double, 5> s{};
@@ -241,9 +241,8 @@ void mesh_tests(Check& check, const std::string& kind, const std::string& solver
     auto same = [&](const HostCells& a, const HostCells& b) { return std::memcmp(a.data(), b.data(), sizeof(double) * 5 * n) == 0; };
     check.expect(same(result[0][0], result[0][1]) && same(result[1][0], result[1][1]),
                  solver + ", " + kind + ": two runs give the same bits (both loops, order 1, 10 steps)");
-    // The loops compile the same face flux into different kernels, where the
-    // compiler may contract multiply-adds differently: equal to rounding,
-    // not necessarily bit for bit.
+    // The loops compile the same face flux into different kernels, where the compiler may contract multiply-adds
+    // differently: equal to rounding, not necessarily bit for bit.
     double loops = 0;
     for (int i = 0; i < n; ++i)
         loops = std::max(loops, relative({result[0][0](i, 0), result[0][0](i, 1), result[0][0](i, 2), result[0][0](i, 3), result[0][0](i, 4)},
@@ -315,7 +314,7 @@ void moving_tests(Check& check) {
         for (int i = 0; i < n; ++i)
             for (int v = 0; v < 5; ++v) h(i, v) = U[v];
         set_state(run.fv, run.mesh, h);
-        const double dt = std::ldexp(1.0, -12);  // v dt: 2^18, 2^17, 2^16 grid steps
+        const double dt = std::ldexp(1.0, -12);
         double cfl = 1;
         for (int s = 0; s < 5; ++s) {
             cfl = std::min(cfl, run.fv.time_step(0.3));
@@ -412,7 +411,7 @@ void moving_tests(Check& check) {
             for (int i = 0; i < m; ++i)
                 for (int v = 0; v < 5; ++v) h(i, v) = U[v];
             set_state(run.fv, run.mesh, h);
-            const double dt = std::ldexp(1.0, -12);  // v dt: whole grid steps (box.step = 2^-29)
+            const double dt = std::ldexp(1.0, -12);
             for (int s = 0; s < 5; ++s) {
                 run.fv.time_step(0.3);
                 run.fv.step(dt);
@@ -449,7 +448,7 @@ void moving_tests(Check& check) {
         }
     }
     {  // Galilean invariance: a blast at rest and the same blast moving with the box
-        const double bulk = 16, dt = std::ldexp(1.0, -12);  // bulk dt = 2^-8 of the box
+        const double bulk = 16, dt = std::ldexp(1.0, -12);
         const int steps = 40;
         double moving_error = 0, cfl = 1;
         double profile_error[2] = {};
@@ -464,7 +463,7 @@ void moving_tests(Check& check) {
             }
             const HostCells a = host_state(rest.fv, rest.mesh), b = host_state(flow.fv, flow.mesh);
             if (motion == hydro::Motion::moving)
-                for (int i = 0; i < n; ++i) {  // cell by cell: the same cells, moved by bulk t
+                for (int i = 0; i < n; ++i) {
                     const State Wa = hydro::primitive(State{a(i, 0), a(i, 1), a(i, 2), a(i, 3), a(i, 4)}, gas);
                     State Wb = hydro::primitive(State{b(i, 0), b(i, 1), b(i, 2), b(i, 3), b(i, 4)}, gas);
                     Wb[1] -= bulk;
@@ -481,8 +480,7 @@ void moving_tests(Check& check) {
             profile_error[motion == hydro::Motion::static_mesh] = diff / total;
         }
         check.expect(dt <= cfl, "Galilean test: the fixed step " + sci(dt) + " is within the time-step criterion (" + sci(cfl) + ")");
-        // Rounding (v - bulk is not exact) grows through the nonlinear blast
-        // and the limiter; measured 7e-8 on the CPU.
+        // Rounding (v - bulk is not exact) grows through the nonlinear blast and the limiter; measured 7e-8 on the CPU.
         check.expect(moving_error < 1e-6, "moving mesh: a blast moving with the box equals the blast at rest, cell by cell, after " +
                                                std::to_string(steps) + " steps (" + sci(moving_error) + ")");
         check.expect(profile_error[0] < 1e-10 && profile_error[1] > 1e3 * profile_error[0],
@@ -504,7 +502,7 @@ void lattice_tests(Check& check, const std::string& solver) {
         for (int order = 0; order <= 1; ++order)
             for (const auto update : {hydro::Update::per_cell, hydro::Update::per_face}) {
                 const bool moving = motion == hydro::Motion::moving;
-                if (moving && order == 0) continue;  // the moving mesh is second order
+                if (moving && order == 0) continue;
                 const std::string what = solver + ", lattice, " + (moving ? "moving" : "static") + ", order " +
                                          std::to_string(order) + ", " + name(update);
                 typename FV::Mesh mesh(Exec{}, 1.0);
@@ -553,8 +551,8 @@ int main(int argc, char** argv) {
     mesh_tests<hydro::HLLC>(check, "jittered", "HLLC");
     mesh_tests<hydro::HLLC>(check, "uniform", "HLLC");
     mesh_tests<hydro::HLL>(check, "jittered", "HLL");
-    // Precision options: gradient weights from the mesh (float); everything
-    // reduced (float face rows and weights, FP16 gradients, float fluxes and Riemann).
+    // Precision options: gradient weights from the mesh (float); everything reduced (float face rows and weights, FP16
+    // gradients, float fluxes and Riemann).
     mesh_tests<hydro::HLLC, hydro::Precision<double, float>>(check, "jittered", "HLLC weight32");
     mesh_tests<hydro::HLLC, hydro::Precision<float, float, hydro::Half, float, float>>(check, "jittered", "HLLC lowweights");
     moving_tests(check);

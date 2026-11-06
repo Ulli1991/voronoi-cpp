@@ -1,6 +1,5 @@
-// Exact predicates: orientation and in-sphere signs equal an independent
-// integer evaluation, near-degenerate and large inputs included; ties are
-// broken consistently; periodic offsets take the nearest image.
+// Exact predicates: orientation and in-sphere signs equal an independent integer evaluation, near-degenerate and large
+// inputs included; ties are broken consistently; periodic offsets take the nearest image.
 
 #include "check.hpp"
 #include "exact_predicates.hpp"
@@ -119,7 +118,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 20000; ++i) {
         const Offset a = random_offset(rng, 1 << 29), b = random_offset(rng, 1 << 29);
         Offset c = random_offset(rng, 1 << 29);
-        if (i % 2) {  // c = a + b, or one grid step off it
+        if (i % 2) {
             const Offset s = random_offset(rng, 1);
             for (int k = 0; k < 3; ++k) c[k] = a[k] + b[k] + (i % 4 == 1 ? 0 : s[k]);
         }
@@ -133,7 +132,7 @@ int main(int argc, char** argv) {
     wrong = 0;
     int ties = 0;
     for (int i = 0; i < 20000; ++i) {
-        const long long range = i % 2 ? 8 : 1000;  // small range: many cospherical sets
+        const long long range = i % 2 ? 8 : 1000;
         Offset p[5];
         for (auto& q : p) q = random_offset(rng, range);
         if (ep::orient(ep::minus(p[1], p[0]), ep::minus(p[2], p[0]), ep::minus(p[3], p[0])) == 0) continue;
@@ -158,8 +157,8 @@ int main(int argc, char** argv) {
         check.expect(inside && outside, "in_sphere resolves one grid step at radius 2^28");
     }
 
-    // Ties: for five cospherical points the answer must not depend on corner order, and abc with d, e on opposite
-    // sides is locally Delaunay from both sides alike.
+    // Ties: for five cospherical points the answer must not depend on corner order, and abc with d, e on opposite sides
+    // is locally Delaunay from both sides alike.
     int order_dependent = 0, one_sided = 0, cospherical = 0;
     const Offset sphere[] = {{3, 0, 0}, {-3, 0, 0}, {0, 3, 0}, {0, -3, 0}, {0, 0, 3}, {0, 0, -3}, {1, 2, 2},
                              {-1, 2, 2}, {1, -2, 2}, {1, 2, -2}, {2, 1, -2}, {-2, -2, 1}, {2, -1, 2}};
@@ -188,7 +187,7 @@ int main(int argc, char** argv) {
         const Offset rotated[5] = {p[1], p[2], p[3], p[0], p[4]};
         const int rotated_id[5] = {id[1], id[2], id[3], id[0], id[4]};
         order_dependent += ep::in_sphere(rotated, rotated_id) != answer;
-        if (side_d != side_e) {  // abcd with e, and abce with d
+        if (side_d != side_e) {
             const Offset other[5] = {p[0], p[1], p[2], p[4], p[3]};
             const int other_id[5] = {id[0], id[1], id[2], id[4], id[3]};
             one_sided += ep::in_sphere(other, other_id) != answer;

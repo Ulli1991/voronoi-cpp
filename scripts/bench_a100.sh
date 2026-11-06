@@ -1,7 +1,5 @@
 #!/bin/bash
-# The A100 checks of TESTING.md and the standard measurements. Submit from
-# the repository root with a built CUDA directory; logs must be on a shared
-# file system:
+# The A100 checks of TESTING.md and the standard measurements; logs on a shared file system.
 #   sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda
 #SBATCH -J voronoi_bench
 #SBATCH -p gpu1

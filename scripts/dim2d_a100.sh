@@ -1,10 +1,6 @@
 #!/bin/bash
-# The 2D mesh on one A100. From the repository root:
+# The 2D mesh on one A100; modes build [targets] and mesh (the mesh table at 2^20 and 2^24 cells).
 #   sbatch --export=ALL,REPO=$PWD,BUILD=<build dir> -o <logs>/dim2d-%j.out scripts/dim2d_a100.sh <mode> [targets]
-# Modes:
-#   build [targets]  configure if needed, build wide (18 CPUs), ctest
-#   mesh             the mesh table: build and steps on every input, 2^20 and 2^24 cells
-# The clock and the node go into the log (nvidia-smi, one line per 5 s, into BUILD/runs/clock-<job>.csv).
 #SBATCH -J dim2d
 #SBATCH -p gpu1,gpudev
 #SBATCH --gres=gpu:a100:1

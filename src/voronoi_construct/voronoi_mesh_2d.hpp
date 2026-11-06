@@ -51,7 +51,7 @@ public:
                 tri_finish::Stats host;
                 try {
                     host = tri_finish::finish(exec_, point_, mesh_, state_);
-                } catch (const std::exception&) {  // out of local room: the rebuild decides
+                } catch (const std::exception&) {
                     break;
                 }
                 report.host_flips += host.triangles;
@@ -100,7 +100,7 @@ public:
             polygon_clip::Rings<Memory> rings;
             try {
                 rings = polygon_clip::construct(exec_, polygon_clip::make_grid(list_), stencil_);
-            } catch (const std::runtime_error& e) {  // also two particles on one position: no bisector
+            } catch (const std::runtime_error& e) {
                 refuse(e.what());
             }
             const long long uncertified = polygon_clip::count_status(exec_, rings, polygon_clip::uncertified);
@@ -149,8 +149,8 @@ public:
         return polygon_clip::construct(exec_, polygon_clip::make_grid(list_), stencil_, slots_of(cells));
     }
 
-    // Scratch memory the caller may use between updates, grown to `bytes`:
-    // valid until the next update_cells(), which uses it too.
+    // Scratch memory the caller may use between updates, grown to `bytes`: valid until the next update_cells(), which
+    // uses it too.
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         if (scratch_.extent(0) < bytes)
@@ -164,8 +164,8 @@ public:
         if (cells_current_) return;
         if (!built()) throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
-        // As Mesh<3>: from the last step's lists up to one triangle created per five cells (tet_mesh::finish_incremental).
-        // Face numbers stay, so the table is the identity except for flipped faces, which are new.
+        // As Mesh<3>: from the last step's lists up to one triangle created per five cells
+        // (tet_mesh::finish_incremental).
         const bool same_lists = lists_valid_ && updates_since_lists_ == 1 && !patched_;
         if (same_lists && state_.touched_count == 0) {
             tet_mesh::detail::sort_and_sum<2>(exec_, positions_, box_, geometry_, cells_, {}, {}, {}, owner(), neighbour(),
@@ -247,7 +247,7 @@ public:
         const auto lists = tet_mesh::detail::begin_incremental<ExecSpace, 2>(
             exec_, reinterpret_cast<int*>(scratch(tet_mesh::incremental_scratch_bytes(n_, all, all)).data()), n_, all, all, cells_);
         const auto table = renumber_;
-        const auto dirty = state_.flipped;  // ~f for the first entry of a face, f for the others
+        const auto dirty = state_.flipped;
         const auto touched = state_.touched;
         const auto corners = mesh_.corners;
         const auto marked = lists.marked;
@@ -284,7 +284,7 @@ private:
 
     // No mesh any more: the next update() builds from scratch.
     void forget() {
-        exec_.fence();  // kernels in flight may still read what goes here
+        exec_.fence();
         mesh_ = tri_mesh::Triangles<Memory>{};
         state_ = tri_repair::State<Memory>{};
         geometry_ = tet_mesh::Geometry<Memory, 2>{};

@@ -1,6 +1,4 @@
-// 3D special cases of the mesh against the oracle (oracle.hpp via mesh_check.hpp); `list` prints
-// the names, `<prefix> ...` runs the cases starting with a prefix. A case needs the exact mesh or
-// a refusal, never a wrong mesh without an error; known open issues run with --known only.
+// 3D special cases of the mesh against the oracle (oracle.hpp via mesh_check.hpp);
 
 #include "check.hpp"
 #include "distortion.hpp"
@@ -132,7 +130,7 @@ void coincident_cases() {
         add("coincident.start.collapse" + on, [=](Check& c) {
             Points p = make_points(kind, 4096);
             p[7] = p[1000];
-            p[7][0] += 0.25 * grid_step;  // apart in double, one position on the grid
+            p[7][0] += 0.25 * grid_step;
             Mesh m(Exec{}, 1.0);
             build(c, "two doubles on one grid position", m, p, Expect::exact_or_refused);
         });
@@ -182,7 +180,7 @@ void coincident_cases() {
                 const auto& [i, t] = targets[k];
                 for (int a = 0; a < 3; ++a) p[i][a] = wrap(from[k][a] + f * nearest_image(t[a] - from[k][a]));
             }
-            if (s > steps + stay)  // leave again
+            if (s > steps + stay)
                 for (const auto& [i, t] : targets) p[i][0] = wrap(p[i][0] + (s - steps - stay) * 1e-3);
             step_or_refused(c, name + ", step " + std::to_string(s), m, p, refused);
         }
@@ -232,8 +230,7 @@ void coincident_cases() {
             step_or_refused(c, "swap step " + std::to_string(s), m, p, refused);
         }
     });
-    // Each fallback, a pair and a few pairs landing in one step, then what a
-    // duplicate does to the next steps.
+    // Each fallback, a pair and a few pairs landing in one step, then what a duplicate does to the next steps.
     const std::pair<voronoi::Fallback, std::string> fallbacks[] = {{voronoi::Fallback::cheapest, "cheapest"},
                                                                    {voronoi::Fallback::host, "host"},
                                                                    {voronoi::Fallback::rebuild, "rebuild"}};
@@ -251,7 +248,7 @@ void coincident_cases() {
                 if (refused) return;
                 const Flow flow;
                 for (int s = 1; s <= 2 && !refused; ++s) {
-                    for (auto& q : p) q[0] = wrap(q[0] + 1e-3);  // rigid: the pairs stay
+                    for (auto& q : p) q[0] = wrap(q[0] + 1e-3);
                     step_or_refused(c, "the pairs move on, step " + std::to_string(s), m, p, refused);
                 }
             });
@@ -267,8 +264,7 @@ void coincident_cases() {
             step_or_refused(c, "a pair lands on one position, default fallback, n=" + std::to_string(n), m, p, refused, 4);
             c.expect(refused, "refused");
         });
-    // The refusal says what is wrong: the pair, by id. At the start, at each
-    // fallback during a step, and with the pair apart in double.
+    // The refusal says what is wrong: the pair, by id.
     auto names_pair = [](Check& c, const std::string& name, Mesh& m, const Points& p, int a, int b) {
         const std::string pa = std::to_string(a), pb = std::to_string(b);
         try {
@@ -474,8 +470,8 @@ void contrast_cases() {
             add_shell(p, rng, {0.3, 0.6, 0.45}, 0.1, k);
             diagnose(c, std::to_string(k) + " particles on a sphere", p);
         });
-    // Half the particles in a ball of radius 0.05: fine at small n, the start of
-    // the `expansion` flow at 128^3. Too slow for ctest: not in a group it runs.
+    // Half the particles in a ball of radius 0.05: fine at small n, the start of the `expansion` flow at 128^3. Too
+    // slow for ctest: not in a group it runs.
     for (const int n : {524288, 1048576, 2097152})
         add("dense_ball." + std::to_string(n), [=](Check& c) {
             Points p = make_points("jittered", n);
@@ -491,8 +487,8 @@ void contrast_cases() {
             diagnose(c, "half of " + std::to_string(n) + " in a ball", p);
         });
     add("contrast.refusal_messages", [](Check& c) {
-        // What each status of the clipping is reported as. Made by hand: a cell
-        // of more planes than the exact clipping holds costs minutes to reach.
+        // What each status of the clipping is reported as.
+        // Made by hand: a cell of more planes than the exact clipping holds costs minutes to reach.
         const Positions x = to_device(make_points("jittered", 64));
         tet_mesh::Points4<Memory> snapped("snapped", 64);
         Kokkos::parallel_for("snapped", Kokkos::RangePolicy<Exec>(0, 64), KOKKOS_LAMBDA(int i) {
@@ -615,8 +611,8 @@ void box_cases() {
         Mesh m(Exec{}, box);
         build(c, "8 x 8 x 512 jittered in a 1:1:64 box", m, p, Expect::exact_or_refused, 64);
     });
-    // One void in a uniform background, its centre empty or with one
-    // particle: the cells around it reach further with the radius.
+    // One void in a uniform background, its centre empty or with one particle: the cells around it reach further with
+    // the radius.
     for (const double radius : {0.1, 0.15, 0.18, 0.2, 0.22, 0.25, 0.3, 0.35, 0.4, 0.45})
         for (const bool centre : {false, true})
             add(std::string("box.void.") + (centre ? "centre." : "empty.") + sci(radius), [=](Check& c) {
@@ -657,7 +653,7 @@ void box_cases() {
         Mesh m(Exec{}, 1.0);
         build(c, "start", m, p, Expect::exact);
         for (int s = 1; s <= 4; ++s) {
-            Points q = p;  // not wrapped: x runs past the side of the box
+            Points q = p;
             for (auto& a : q) a[0] += 0.3 * s;
             step(c, "unwrapped positions, step " + std::to_string(s), m, q);
         }
@@ -667,14 +663,13 @@ void box_cases() {
     });
     for (const double scale : {1e-9, 1e-3, 3.0, 1e3, 1e9})
         add("box.scale." + sci(scale), [=](Check& c) {
-            // The same points in a cube of any side: the same grid positions,
-            // the same tetrahedra, volumes scaled.
+            // The same points in a cube of any side: the same grid positions, the same tetrahedra, volumes scaled.
             const Points p = make_points("clustered", 4096);
             Mesh unit(Exec{}, 1.0), other(Exec{}, scale);
             unit.update(to_device(p));
             Points q = p;
             for (auto& a : q)
-                for (double& v : a) v = (v + 0.5 * grid_step) * scale;  // inside its grid cell, whatever the rounding
+                for (double& v : a) v = (v + 0.5 * grid_step) * scale;
             other.update(to_device(q));
             const long long differ = oracle::different_tetrahedra(mc::tets_of(unit), mc::tets_of(other));
             c.expect(differ == 0, "box " + sci(scale) + ": the tetrahedra of the unit box (" + std::to_string(differ) + " differ)");
@@ -699,8 +694,8 @@ void box_cases() {
                 }
             c.expect(moved == 0, "side " + sci(side) + ": " + std::to_string(moved) + " of " + std::to_string(3 * p.size()) +
                                      " coordinates move when snapped twice");
-            // On a lattice a step decides ties: the mesh of the positions the
-            // caller gave, by the oracle (no tie-break, every image).
+            // On a lattice a step decides ties: the mesh of the positions the caller gave, by the oracle (no tie-break,
+            // every image).
             Points lattice = scaled(exact_lattice(16, {{0.5, 0.5, 0.5}}), box);
             for (auto& q : lattice)
                 for (int a = 0; a < 3; ++a) q[a] = (exact_predicates::snap(q[a], box, a) + 0.5) * box.step;
@@ -765,8 +760,8 @@ void degenerate_cases() {
             }
         });
         add("degenerate.rigid.off_grid." + name, [=](Check& c) {
-            // Rigid in double: snapping rounds each particle by up to a grid
-            // step, so the lattice is near-degenerate after every step.
+            // Rigid in double: snapping rounds each particle by up to a grid step, so the lattice is near-degenerate
+            // after every step.
             Points p = start;
             Mesh m(Exec{}, 1.0);
             build(c, name + " start", m, p, Expect::exact);
@@ -777,8 +772,8 @@ void degenerate_cases() {
             }
         });
         add("degenerate.shear.layers." + name, [=](Check& c) {
-            // Layers shift by whole lattice spacings every 8 steps, so an
-            // exact lattice recurs; periodic (triangular profile).
+            // Layers shift by whole lattice spacings every 8 steps, so an exact lattice recurs; periodic (triangular
+            // profile).
             Points p = start;
             Mesh m(Exec{}, 1.0);
             build(c, name + " start", m, p, Expect::exact);
@@ -849,8 +844,8 @@ void degenerate_cases() {
         });
     }
     add("degenerate.two_lattices", [](Check& c) {
-        // sc lattice 2 slides through sc lattice 1 along z, shifted in x and
-        // y: all planes coplanar every 8 steps, bcc on the way.
+        // sc lattice 2 slides through sc lattice 1 along z, shifted in x and y: all planes coplanar every 8 steps, bcc
+        // on the way.
         const Points a = exact_lattice(8, sc_basis);
         Points p = a;
         for (auto q : a) p.push_back({wrap(q[0] + 0.0625), wrap(q[1] + 0.03125), q[2]});
@@ -862,11 +857,11 @@ void degenerate_cases() {
         }
     });
     add("degenerate.mover", [](Check& c) {
-        // One particle walks along lattice directions: through face centres
-        // (coplanar), edge midpoints and cube centres (cospherical with 8).
+        // One particle walks along lattice directions: through face centres (coplanar), edge midpoints and cube centres
+        // (cospherical with 8).
         Points p = exact_lattice(16, sc_basis);
         const double h = 1.0 / 16;
-        p.push_back({0.5625, 0.5625, 0.5625});  // a cube centre: sites are at (i + 1/2) / 16
+        p.push_back({0.5625, 0.5625, 0.5625});
         const Point from = p.back();
         Mesh m(Exec{}, 1.0);
         build(c, "start", m, p, Expect::exact);
@@ -882,8 +877,8 @@ void degenerate_cases() {
             }
     });
     add("degenerate.octahedra", [](Check& c) {
-        // Octahedra pulsing with different phases: their 6 points are exactly
-        // cospherical whenever the phases meet, every 8 steps.
+        // Octahedra pulsing with different phases: their 6 points are exactly cospherical whenever the phases meet,
+        // every 8 steps.
         const int side = 8;
         const double h = 1.0 / side, big = h / 4, small = h / 64;
         auto at = [&](int s) {
@@ -907,8 +902,8 @@ void degenerate_cases() {
         for (int s = 1; s <= 8; ++s) step(c, "pulse " + std::to_string(s), m, at(s), 8);
     });
     add("degenerate.integer_sphere", [](Check& c) {
-        // Grid points exactly on one sphere: x^2 + y^2 + z^2 = R^2 in integers
-        // (scaled solutions of a^2 + b^2 + c^2 = 81^2 etc.), exact cospherical.
+        // Grid points exactly on one sphere: x^2 + y^2 + z^2 = R^2 in integers (scaled solutions of a^2 + b^2 + c^2 =
+        // 81^2 etc.), exact cospherical.
         std::vector<std::array<int, 3>> roots;
         const int R = 169;
         for (int a = 0; a <= R; ++a)
@@ -1053,7 +1048,7 @@ void large_cases() {
             Points p = make_points("jittered", 4096);
             Mesh m(Exec{}, 1.0);
             build(c, "start", m, p, Expect::exact);
-            const Flow flow;  // compressive: a step of many spacings can empty a region
+            const Flow flow;
             bool refused = false;
             for (int s = 1; s <= 4 && !refused; ++s) {
                 flow.advect(p, d / 16);
@@ -1075,8 +1070,7 @@ void large_cases() {
                 step(c, "random walk " + sci(d) + ", step " + std::to_string(s), m, p);
             }
         });
-    // Kicks as a fraction of the box, several seeds: the mesh is exact, or the
-    // update refuses.
+    // Kicks as a fraction of the box, several seeds: the mesh is exact, or the update refuses.
     for (const int n : {4096, 32768})
         for (const double kick : {0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.65, 1.0})
             add("kicks." + std::to_string(n) + "." + sci(kick), [=](Check& c) {
@@ -1243,8 +1237,8 @@ void large_cases() {
         c.expect(threw && m.faces() == 0, "update_cells before any update says so");
     });
     add("large.long_run", [](Check& c) {
-        // Thousands of small steps of a solenoidal flow (no void ends it): no
-        // drift in faces, tetrahedra, slots, ring pools, memory.
+        // Thousands of small steps of a solenoidal flow (no void ends it): no drift in faces, tetrahedra, slots, ring
+        // pools, memory.
         using namespace distortion;
         DeviceBytes::start();
         const char* const long_run = std::getenv("MESH_LONG_RUN");
@@ -1320,8 +1314,8 @@ void large_cases() {
 
 void fallback_cases() {
     add("fallback.cheapest.small_n", [](Check& c) {
-        // The cheapest fallback at small n is a rebuild: the host costs up to
-        // 50 ms per stuck entry, a rebuild of 32768 cells far less than one.
+        // The cheapest fallback at small n is a rebuild: the host costs up to 50 ms per stuck entry, a rebuild of 32768
+        // cells far less than one.
         int stuck_steps = 0;
         for (const double d : {2.0, 4.0})  // a few particles jump: a few stuck entries
             for (int seed = 0; seed < 2; ++seed) {
@@ -1387,9 +1381,8 @@ void fallback_cases() {
             }
         });
         add("fallback.growth." + label, [=](Check& c) {
-            // From a lattice (few tetrahedra) to two skew segments in one
-            // step: more tetrahedra, faces and ring entries than the build
-            // sized anything for.
+            // From a lattice (few tetrahedra) to two skew segments in one step: more tetrahedra, faces and ring entries
+            // than the build sized anything for.
             Points p = make_points("lattice", 1728);
             Mesh m(Exec{}, 1.0);
             m.set_fallback(fallback);
@@ -1489,8 +1482,8 @@ void fallback_cases() {
 // -------------------------------------------------- predicates on real sets
 
 void predicate_cases() {
-    // Library predicates on the quintuples a mesh really asks about, against
-    // the oracle's integers: each tetrahedron with the apex across each face.
+    // Library predicates on the quintuples a mesh really asks about, against the oracle's integers: each tetrahedron
+    // with the apex across each face.
     auto compare = [](Check& c, const std::string& name, const Points& p) {
         Mesh m(Exec{}, 1.0);
         try {
@@ -1552,16 +1545,16 @@ void predicate_cases() {
         }
     });
     add("predicates.wide", [=](Check& c) {
-        // Coordinates over the whole grid, tetrahedra up to a large part of
-        // the box: a mesh of few particles, and the last grid positions.
+        // Coordinates over the whole grid, tetrahedra up to a large part of the box: a mesh of few particles, and the
+        // last grid positions.
         Points p = make_points("jittered", 512);
         for (auto& q : p)
-            for (double& v : q) v = 1 - grid_step * (1 + std::floor((1 - v) * 3e6));  // the top 3e6 steps wrap into 0
+            for (double& v : q) v = 1 - grid_step * (1 + std::floor((1 - v) * 3e6));
         Points w = make_points("jittered", 512);
         compare(c, "512 jittered", w);
         Points tiny = make_points("uniform", 4096);
         for (auto& q : tiny)
-            for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;  // a box of 2048 steps inside the big one
+            for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;
         tiny.push_back({0.1, 0.1, 0.1});
         for (int i = 1; i < 512; ++i) tiny.push_back({wrap(0.1 + std::sqrt(2.0) * i), wrap(0.2 + std::sqrt(3.0) * i), wrap(0.3 + std::sqrt(5.0) * i)});
         compare(c, "4096 particles on 2048^3 grid positions (no duplicates assumed)", tiny);
@@ -1639,7 +1632,6 @@ void reproducibility_cases() {
 #endif
         add("repro.dump." + name, [=](Check& c) {
             // Hashes for a comparison across builds and thread counts:
-            // MESH_REPRO_DUMP=<file> appends "<case> <step> <topology> <geometry>".
             const char* path = std::getenv("MESH_REPRO_DUMP");
             const auto a = trace<Exec>(make_points(name, 4096), d, 20);
             if (path) {
@@ -1681,8 +1673,7 @@ int main(int argc, char** argv) {
         for (const auto& c : cases()) std::cout << c.name << (c.issue ? " known" : "") << "\n";
         return 0;
     }
-    // ctest runs a subset within its time budget; MESH_CASES_FULL=1 (the A100
-    // job) runs the whole matrix, and a case asked for by its full name runs.
+    // ctest runs a subset within its time budget;
     const bool full = std::getenv("MESH_CASES_FULL") != nullptr;
     auto subset_skips = [&](const std::string& name) {
         static const std::vector<std::string> only_full{

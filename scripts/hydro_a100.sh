@@ -1,26 +1,6 @@
 #!/bin/bash
-# Hydro stage 1 on one A100. Submit from the repository root with a built
-# CUDA directory and an output directory on a shared file system:
+# Hydro stage 1 on one A100; the modes (validate, limiters, throughput, ...) are the cases below; LUNA via LUNA_DIR and LUNA_ENV.
 #   sbatch -o <logs>/hydro-%j.out scripts/hydro_a100.sh <build-cuda> <out> <mode>
-# Modes:
-#   validate     ctest; Sedov 128^3 with snapshots, ours and LUNA, HLLC and
-#                HLL, second and first order
-#   limiters     ours, Sedov 128^3 with snapshots, HLLC, the limiter at face
-#                centroids, at cell centroids, none; uniform random points
-#   throughput   ours at 128^3 (both loops, both orders, both solvers,
-#                --memory; whole MUSCL-Hancock runs) and LUNA at 128^3
-#                (XLA and Pallas kernels, whole runs), no snapshots
-#   throughput256  the same at 256^3 (LUNA: 100 steps)
-#   sedov_moving ctest; Sedov 128^3 with snapshots: ours on a moving and a
-#                static mesh, LUNA ORDER=1 HLLC
-#   blast_moving the same with the whole box moving at 500 km/s along x
-#                (LUNA: scripts/luna_sedov_bulk.py, periodic)
-#   moving256    ours, moving and static, 40 steps at 256^3 (--memory)
-#   static256, moving256full  ours, the whole Sedov at 256^3 on a static or
-#                moving mesh, final snapshot
-#   luna256      LUNA's whole Sedov at 256^3 (HLLC, Pallas), final snapshot
-# LUNA: LUNA_DIR (default /raven/u/uli/LUNA) with its environment LUNA_ENV
-# (default ~/jax-env), as LUNA's submit/ scripts use them; FP64, minmod.
 #SBATCH -J hydro_a100
 #SBATCH -p gpu1,gpudev
 #SBATCH --gres=gpu:a100:1
@@ -202,10 +182,7 @@ elif [[ "$mode" == ours128 ]]; then
         ours 128 jittered $mesh --out="$out/voronoi128${mesh:+_moving}"
     done
 elif [[ "$mode" == luna_resolution ]]; then
-    # LUNA's whole Sedov at NX^3 (HLLC, Pallas, FP64), checkpointed every 5.5
-    # minutes of wall time (outputs.py:325-360) so that a run longer than one
-    # job continues with RESTART=1 from the newest checkpoint
-    # (docs/CONFIG.md:672-674); then the analysis of the final snapshot.
+    # LUNA's whole Sedov at NX^3, checkpointed every 5.5 min so RESTART=1 continues a run longer than one job.
     nx="${NX:?}"
     dir="$out/luna${nx}_hllc"
     echo "== LUNA ${nx}^3 ORDER=1 hllc pallas restart=${RESTART:-0}"

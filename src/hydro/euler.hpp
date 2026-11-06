@@ -220,8 +220,8 @@ struct HLLC {
     KOKKOS_INLINE_FUNCTION static StateT<D, T> flux(const StateT<D, T>& L, const StateT<D, T>& R, Vec<D, T> n,
                                                     Vec<D, T> w, const Gas& gas) {
         constexpr int P = D + 1;
-        // Wave speeds and the contact speed from the normal velocities and
-        // sound speeds alone; the flux is then built for one side only.
+        // Wave speeds and the contact speed from the normal velocities and sound speeds alone; the flux is then built
+        // for one side only.
         const T vnL = dot(velocity(L) - w, n), vnR = dot(velocity(R) - w, n);
         const T c2L = T(gas.gamma) * L[P] / L[0], c2R = T(gas.gamma) * R[P] / R[0];
         const bool ok = c2L >= 0 && c2R >= 0;

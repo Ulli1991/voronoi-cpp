@@ -1,6 +1,5 @@
 // Persistent tetrahedra from a clipping build: from_rings equals a host construction from the rings, adjacency and edge
-// representatives are consistent, the Voronoi geometry from circumcentres matches the clipped cells, tet_start::check passes.
-// A sliver's circumcentre is exact.
+// representatives are consistent, and the Voronoi geometry matches the clipped cells.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -55,7 +54,7 @@ int main(int argc, char** argv) {
         const auto cells = cells_with_rings(x);
         const auto status = to_host(cells.status);
         check.expect(std::count(status.data(), status.data() + n, int(shell_voronoi::ok)) == n, "clipping build ok");
-        {  // a ring pool too small grows to what the build needs
+        {
             auto small = shell_voronoi::Cells<Memory>::with_rings(n, 1000);
             shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(cell_list(x)), small);
             const long long needed = small.needed(), entries = cells.needed();
@@ -116,7 +115,7 @@ int main(int argc, char** argv) {
 
         // Geometry on the stored rings, then on rings walked around the edges.
         tet_mesh::Points4<Memory> padded("padded", n);
-        voronoi::detail::snap_positions(exec, x, 1.0, padded);  // x is on the grid: the same positions
+        voronoi::detail::snap_positions(exec, x, 1.0, padded);
         tet_mesh::circumcentres(exec, padded, 1.0, mesh);
         const int faces = static_cast<int>(owned_faces.size());
         tet_mesh::Geometry<Memory> geometry{Kokkos::View<double* [3], Kokkos::LayoutRight, Memory>("area", faces),
@@ -130,7 +129,7 @@ int main(int argc, char** argv) {
         Kokkos::View<int*, Memory> marked("marked", n);
         check.expect(tet_start::check(exec, mesh, point, count, marked).ok(), "the exact check passes");
 
-        auto walked = tet_mesh::make_face_rings<Memory>(count, faces, 8 * faces);  // no rings yet: walk all
+        auto walked = tet_mesh::make_face_rings<Memory>(count, faces, 8 * faces);
         Kokkos::View<char*, Memory> touched("touched", count);
         check.expect(tet_mesh::update_face_rings(exec, mesh, count, touched, {}, walked) == faces,
                      "walking the represented edges finds every face");
@@ -139,9 +138,7 @@ int main(int argc, char** argv) {
         check.expect(worst < 1e-12, "volumes from walked rings match clipping (" + sci(worst) + ")");
     }
 
-    // A sliver: three corners on a circle in a grid plane, the fourth one grid
-    // step above a point near that circle. Its circumcentre in grid units is
-    // (A / 2, B / 2, (C^2 + D^2 + 1 - A C - B D) / 2) from corner 0.
+    // A sliver: three corners on a circle in a grid plane, the fourth one grid step above a point near that circle.
     {
         using ep_i128 = exact_predicates::i128;
         const long long A = 3000017, B = 2000003;
@@ -178,7 +175,7 @@ int main(int argc, char** argv) {
         // and tet_mesh::cells in 2D sums a square lattice's faces to cells of area h^2 and centroid 0
         // (pyramid 1/4, centroid 2/3).
         constexpr int m = 24, n = m * m;
-        const exact_predicates::BoxN<2> box(2.0, 1.0);  // 2 x 1 tiles
+        const exact_predicates::BoxN<2> box(2.0, 1.0);
         Kokkos::View<double* [2], Memory> x("x2", n);
         auto hx = Kokkos::create_mirror_view(x);
         std::mt19937_64 rng(3);
@@ -211,8 +208,8 @@ int main(int argc, char** argv) {
         for (int q = 0; q < n; ++q) sorted = sorted && order(q) == keys[q].second;
         check.expect(sorted, "2D cell list: 2 x 1 tiles, slots in (tile, Morton key, id) order");
 
-        // Square lattice m x m in a unit square, spacing h; faces to the
-        // right and upper neighbours, owned by the lower id.
+        // Square lattice m x m in a unit square, spacing h; faces to the right and upper neighbours, owned by the lower
+        // id.
         const double h = 1.0 / m;
         const exact_predicates::BoxN<2> square(1.0);
         Kokkos::View<double* [2], Memory> p("p2", n);
@@ -232,12 +229,12 @@ int main(int argc, char** argv) {
             const int across[2] = {(ix + 1) % m + iy * m, ix + ((iy + 1) % m) * m};
             for (int a = 0; a < 2; ++a) {
                 const int f = 2 * i + a, j = across[a];
-                const double sign = i < j ? 1.0 : -1.0;  // owner to neighbour
+                const double sign = i < j ? 1.0 : -1.0;
                 ho(f) = std::min(i, j);
                 hn(f) = std::max(i, j);
                 ha(f, a) = sign * h;
                 ha(f, 1 - a) = 0;
-                hc(f, a) = sign * 0.5 * h;  // relative to the owner
+                hc(f, a) = sign * 0.5 * h;
                 hc(f, 1 - a) = 0;
             }
         }

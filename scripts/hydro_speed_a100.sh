@@ -1,25 +1,6 @@
 #!/bin/bash
-# Hydro speed and precision options on one A100 (research_notes/hydro_speed_2026-11-04.md).
-# MAIN and FIX are two CUDA build directories (main and this branch), passed
-# with sbatch --export=ALL,MAIN=...,FIX=... (Raven's sbatch does not export
-# the environment otherwise). Submit from the repository root:
+# Hydro speed and precision options on one A100 (research_notes/hydro_speed_2026-11-04.md); MAIN and FIX are two CUDA builds, modes are the cases below.
 #   MAIN=<build> FIX=<build> sbatch -p gpudev -o <logs>/speed-%j.out scripts/hydro_speed_a100.sh <out> <mode>
-# Modes:
-#   speed128   MAIN and FIX interleaved (MAIN FIX MAIN FIX), 128^3, static and
-#              moving, 40 steps, --memory; then every precision option of FIX
-#              (static and moving, 40 steps, twice)
-#   speed256   the same at 256^3: MAIN and FIX once each, then the options
-#              (PRECISIONS, default "mixed mixed16 low")
-#   accuracy   FIX, every option (PRECISIONS, default all): the whole Sedov at
-#              128^3, static and moving, final snapshot in <out>/<option>_<mesh>
-#   stream     FIX, every option: uniform streams (--no-blast) at 10 and 500
-#              km/s, 40 static and 40 moving steps
-#   repro      FIX, every option: two identical runs (static 100 steps, moving
-#              100 steps), checksums of the final state, positions, volumes
-#   bits       MAIN and FIX: final-state hashes of five paths (50 steps, 128^3)
-#   ctest      ctest of FIX
-#   ncu        Nsight Compute of FIX's hydro kernels, 128^3, static and moving
-#              (PRECISIONS, default "default")
 #SBATCH -J hydro_speed
 #SBATCH -p gpudev
 #SBATCH --gres=gpu:a100:1

@@ -1,5 +1,4 @@
 // LUNA's 1D tests (sod, shu-osher, woodward-colella) on the 1D Voronoi mesh, timed.
-// Usage: hydro_1d <problem> <N> [--moving] [--riemann=] [--order=] [--dt=] [--steps=] [--out=]; options in main().
 
 #include "finite_volume_1d.hpp"
 #include "problems_1d.hpp"

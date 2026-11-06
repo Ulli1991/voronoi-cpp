@@ -20,7 +20,7 @@ public:
         cL_ = std::sqrt(g_ * L_.p / L_.rho);
         cR_ = std::sqrt(g_ * R_.p / R_.rho);
         if (2 * (cL_ + cR_) / (g_ - 1) <= R_.u - L_.u) throw std::invalid_argument("exact_riemann: vacuum");
-        double p = std::max(1e-12, 0.5 * (L_.p + R_.p));  // Newton from the arithmetic mean
+        double p = std::max(1e-12, 0.5 * (L_.p + R_.p));
         for (int it = 0; it < 100; ++it) {
             double fL, dL, fR, dR;
             f(p, L_, cL_, fL, dL);
@@ -40,8 +40,8 @@ public:
     // The solution at s = (x - x0) / t.
     Primitive sample(double s) const {
         const double g = g_;
-        if (s <= u_) {  // left of the contact
-            if (p_ > L_.p) {  // left shock
+        if (s <= u_) {
+            if (p_ > L_.p) {
                 const double SL = L_.u - cL_ * std::sqrt((g + 1) / (2 * g) * p_ / L_.p + (g - 1) / (2 * g));
                 if (s <= SL) return L_;
                 const double r = p_ / L_.p, k = (g - 1) / (g + 1);
@@ -54,7 +54,7 @@ public:
             const double u = 2 / (g + 1) * (cL_ + (g - 1) / 2 * L_.u + s);
             return {L_.rho * std::pow(c / cL_, 2 / (g - 1)), u, L_.p * std::pow(c / cL_, 2 * g / (g - 1))};
         }
-        if (p_ > R_.p) {  // right shock
+        if (p_ > R_.p) {
             const double SR = R_.u + cR_ * std::sqrt((g + 1) / (2 * g) * p_ / R_.p + (g - 1) / (2 * g));
             if (s >= SR) return R_;
             const double r = p_ / R_.p, k = (g - 1) / (g + 1);

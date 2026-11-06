@@ -1,8 +1,7 @@
 #pragma once
 
-// Prescribed velocity fields that distort the mesh without hydro, and a driver that runs them
-// through voronoi::Mesh measuring robustness, accuracy, speed and memory per step.
-// Fields live in the unit box with peak speed about 1 and are integrated by the midpoint rule.
+// Prescribed velocity fields that distort the mesh without hydro, and a driver that runs them through voronoi::Mesh
+// measuring robustness, accuracy, speed and memory per step.
 
 #include "mesh_check.hpp"
 
@@ -79,7 +78,7 @@ struct Field {
             omega[m] = two_pi * std::pow(norm2, 1.0 / 3);
         }
         for (int m = 0; m < modes; ++m)
-            for (int d = 0; d < 3; ++d) a[m][d] *= 3 / sum;  // peak speed about 1: rms sums, not all modes in phase
+            for (int d = 0; d < 3; ++d) a[m][d] *= 3 / sum;
     }
 
     // v at (x, y, z) in the unit box at time t; `side` is the particle's stream (streams only).
@@ -98,7 +97,7 @@ struct Field {
             case Kind::vortex: {
                 const double r = Kokkos::sqrt(dx * dx + dy * dy);
                 if (r < 0.45) {
-                    const double f = 1 - r / 0.45, omega = 8 * f * f;  // peak speed about 1 at r = 0.15
+                    const double f = 1 - r / 0.45, omega = 8 * f * f;
                     v[0] = -omega * dy;
                     v[1] = omega * dx;
                 }

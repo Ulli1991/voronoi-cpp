@@ -1,6 +1,5 @@
-// Repair of the persistent mesh as particles move (jittered, lattice, wave lattice, icosahedral shells; cubes, 2, 1:2:3
-// and slab boxes) under a smooth flow: after each step the mesh must be Delaunay, match an exact clipped rebuild's
-// neighbours, and its face volumes must match the clipped cells.
+// Repair of the persistent mesh as particles move under a smooth flow: after each step it is Delaunay and matches an exact
+// clipped rebuild in neighbours and face volumes.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -32,7 +31,7 @@ int main(int argc, char** argv) {
                   << (*c.name ? c.name : "1") << ":\n";
         // Cubes: points in the unit box, scaled; other boxes: in the box.
         Points points = cube ? make_points(c.kind, c.n) : make_points(c.kind, c.n, c.box);
-        const int n = static_cast<int>(points.size());  // lattices round to their own sizes
+        const int n = static_cast<int>(points.size());
         const double spacing = cube ? std::cbrt(1.0 / n) : std::cbrt(c.box.volume() / n);
         Positions x = to_device(cube ? scaled(points, c.box) : points);
         Mesh mesh(Exec{}, c.box);

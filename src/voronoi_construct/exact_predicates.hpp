@@ -203,8 +203,7 @@ KOKKOS_INLINE_FUNCTION int orient(const Offset& a, const Offset& b, const Offset
 // Whether p[4] lies inside the circumsphere of tetrahedron p[0..3] (any orientation, not flat), in one frame; id are
 // particle ids. Ties go by symbolic perturbation (lift |p|² grows by eps^id, lower ids dominate); never a tie.
 KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
-    // D = det [1 p_i |p_i|^2] over the five points; e inside means
-    // sign(D) = -orientation. Expanded along the lift column.
+    // D = det [1 p_i |p_i|^2] over the five points; e inside means sign(D) = -orientation.
     const Offset a = minus(p[1], p[0]), b = minus(p[2], p[0]), c = minus(p[3], p[0]), e = minus(p[4], p[0]);
     const int o = orient(a, b, c);
     int d = 0;
@@ -230,8 +229,7 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
         d = sign(w);
     }
     if (d == 0) {
-        // Cofactor of lift i: (-1)^i times the orientation of the other four,
-        // taken in order of increasing particle id.
+        // Cofactor of lift i:
         int order[5] = {0, 1, 2, 3, 4};
         for (int i = 1; i < 5; ++i)
             for (int j = i; j > 0 && id[order[j - 1]] > id[order[j]]; --j) {

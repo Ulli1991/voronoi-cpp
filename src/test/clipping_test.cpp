@@ -1,6 +1,5 @@
-// Full rebuild by clipping on jittered, random, lattice, clustered and halo points: certified cells that fill the box, with consistent faces
-// (support::check_cells); thread, warp and exact kernels agree, also on a coarser base grid; small face pools grow; NaN or infinite
-// particles never cut another cell.
+// Full rebuild by clipping on jittered, random, lattice, clustered and halo points: certified cells that fill the box with
+// consistent faces; thread, warp and exact kernels agree.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -28,7 +27,7 @@ int main(int argc, char** argv) {
             std::ostringstream summary;
             const bool valid = check_cells(cells, x, summary) == 0;
             std::string details = summary.str();
-            details.pop_back();  // the newline
+            details.pop_back();
             check.expect(valid, std::string(name) + " kernel cells valid\n" + details);
         }
         const Reference reference = by_particle(thread);
@@ -60,8 +59,8 @@ int main(int argc, char** argv) {
                          " faces per cell, same cells");
     }
 
-    // Non-finite positions are never a candidate, so every other cell is the cell without them: the same neighbours and volume
-    // (to the last bit unless the extra particles change the walk's grid levels nearby). (Test idea from Doug Rennehan, PR #2.)
+    // Non-finite positions are never a candidate, so every other cell is the cell without them: the same neighbours and
+    // volume (to the last bit unless the extra particles change the walk's grid levels nearby).
     {
         Points points = make_points("uniform", n);
         const Positions clean = to_device(points);

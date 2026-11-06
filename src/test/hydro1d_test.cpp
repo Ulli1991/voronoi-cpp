@@ -1,5 +1,5 @@
-// Tests of the 1D hydro: uniform state stays uniform, conservation, determinism, Sod against the exact solution,
-// LUNA's final states at N = 16, Shu-Osher on a moving mesh.
+// Tests of the 1D hydro: uniform state stays uniform, conservation, determinism, Sod against the exact solution, LUNA's
+// final states at N = 16, Shu-Osher on a moving mesh.
 
 #include "check.hpp"
 #include "exact_riemann.hpp"
@@ -159,7 +159,7 @@ int main(int argc, char* argv[]) {
                 std::vector<State> W(300);
                 for (State& w : W) w = State{1 + 0.3 * unit(rng), 0.5 * unit(rng), 1 + 0.3 * unit(rng)};
                 set(fv, mesh, [&](double a, double b) {
-                    const int k = std::min(299, static_cast<int>(150 * (a + b)));  // a blast in the middle
+                    const int k = std::min(299, static_cast<int>(150 * (a + b)));
                     State w = W[k];
                     if (std::abs(0.5 * (a + b) - 1.0) < 0.1) w[2] *= 100;
                     const State U = hydro::conserved(w, gas);
@@ -288,9 +288,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // The fused step: static, time_step() + step() to rounding; moving, a
-    // rough state conserved, the same bits twice, close to the separate
-    // kernels (whose time step knows the new drift).
+    // The fused step: static, time_step() + step() to rounding; moving, a rough state conserved, the same bits twice,
+    // close to the separate kernels (whose time step knows the new drift).
     for (const Motion motion : motions)
         for (const bool periodic : {true, false}) {
             const std::string name = std::string(motion == Motion::moving ? "moving" : "static") + (periodic ? ", periodic" : ", walls");
@@ -336,8 +335,8 @@ int main(int argc, char* argv[]) {
                              ", energy " + sci(energy) + ", the same bits twice");
         }
 
-    // Shu-Osher on a moving mesh: without the regularisation the end cell,
-    // grown by the inflow, runs into its neighbour; with it no points cross.
+    // Shu-Osher on a moving mesh: without the regularisation the end cell, grown by the inflow, runs into its
+    // neighbour; with it no points cross.
     {
         namespace pr = hydro::problems_1d;
         const pr::Problem problem = pr::problem("shu-osher");

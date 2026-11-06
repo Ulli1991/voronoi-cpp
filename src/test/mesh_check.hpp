@@ -131,9 +131,7 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
         if (magnitude[i] > 0) r.closure = std::max(r.closure, closing / magnitude[i]);
     }
 
-    // Brute clipping of a sample: volume and every face of real area, in
-    // units of the cell's surface. A face the mesh keeps at rounding level
-    // may be absent from the clipping, and the other way round.
+    // Brute clipping of a sample: volume and every face of real area, in units of the cell's surface.
     const int stride = std::max(1, n / std::max(cells, 1));
     std::vector<std::vector<std::pair<int, int>>> at(n);  // (other particle, face), sampled cells only
     for (int f = 0; f < mesh.faces(); ++f) {

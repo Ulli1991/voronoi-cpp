@@ -1,6 +1,5 @@
-// Mesh under flows that distort it (distortion.hpp): prescribed velocities, no hydro, then with a drift to the centroids.
-// A run may end in a refusal; every mesh it returns must pass the oracle (sampled steps).
-// Flags: [flow ...] --steps --n --d --every --rebuild-every --cells --no-drift --drift --fallback --print --seconds --shape-every --final-oracle --dump
+// Mesh under flows that distort it (distortion.hpp): prescribed velocities, no hydro, then with a drift to the
+// centroids.
 
 #include "check.hpp"
 #include "distortion.hpp"

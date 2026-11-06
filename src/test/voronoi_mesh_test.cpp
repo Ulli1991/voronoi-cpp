@@ -1,6 +1,5 @@
-// The contract of voronoi::Mesh on positions off the snapping grid in a box of side 2: after each update the faces
-// are those of an exact rebuild (also with Fallback::host and ::rebuild), stored once and closing every cell,
-// and ids, determinism, local rebuilds, scratch reuse and thin boxes behave as the blocks below state.
+// The contract of voronoi::Mesh on positions off the snapping grid: after each update the faces are those of an exact
+// rebuild (also with Fallback::host and ::rebuild), stored once and closing every cell.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -128,7 +127,7 @@ int main(int argc, char** argv) {
             same = same && v1(i) == v2(i) && c1(i, 0) == c2(i, 0) && c1(i, 1) == c2(i, 1) && c1(i, 2) == c2(i, 2);
         check.expect(same, "the same input gives the same volumes and centroids, bit for bit");
 
-        std::vector<int> permutation(n);  // particle k of the permuted input is particle permutation[k]
+        std::vector<int> permutation(n);
         for (int k = 0; k < n; ++k) permutation[k] = static_cast<int>((7919LL * k + 13) % n);
         Points permuted(n);
         for (int k = 0; k < n; ++k) permuted[k] = points[permutation[k]];
@@ -233,7 +232,7 @@ int main(int argc, char** argv) {
         }
     }
     {  // a box of three sides; a slab too thin for its particles
-        const Box slab(2, 2, 0.25);  // 32 x 32 x 4 jittered cells: 2R reaches past what one image certifies
+        const Box slab(2, 2, 0.25);
         const Box box123(1, 2, 3);
         Mesh odd(Exec{}, box123);
         const Positions xo = to_device(make_points("jittered", 4096, box123));

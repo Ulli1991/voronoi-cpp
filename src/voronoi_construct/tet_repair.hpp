@@ -43,8 +43,7 @@ struct State {
     Kokkos::View<int*, MemorySpace> freed;
     // What the last repair left (see inverted, rejected).
     Kokkos::View<int* [2], MemorySpace> stuck;
-    // Device counters (see counter), and their pinned host copy, read once
-    // or twice per round.
+    // Device counters (see counter), and their pinned host copy, read once or twice per round.
     Kokkos::View<int*, MemorySpace> counters;
     Kokkos::View<int*, Kokkos::SharedHostPinnedSpace> host_counters;
     int count = 0;  // tetrahedra slots in use
@@ -363,9 +362,8 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             st.dirty(t) = 0;
             if (!st.alive(t)) return;
             auto from = [&](Vec3 c, int v) { return tet_mesh::wrap(tet_mesh::row(x, v) - c, box); };
-            // Corners sorted by particle id and the centre in rounded
-            // arithmetic, as tet_mesh::stored_centre for created tetrahedra:
-            // the same bits whichever kernel and corner order computed it.
+            // Corners sorted by particle id and the centre in rounded arithmetic, as tet_mesh::stored_centre for
+            // created tetrahedra: the same bits whichever kernel and corner order computed it.
             int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
             const int parity = tet_mesh::sort_corners(v);
             Vec3 d[3];
@@ -378,8 +376,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
                 detail::mark(st, t);
                 return;
             }
-            // Well shaped and clearly positive (in the stored corner order),
-            // else decide exactly.
+            // Well shaped and clearly positive (in the stored corner order), else decide exactly.
             bool suspect = !(parity * volume6 > 1e-3 * shape);
             const Vec3 c = tet_mesh::rounded_circumcentre(d, volume6);
             tet_mesh::store_centre(x, v[0], c, centre, t);
@@ -388,8 +385,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);
-                // A triangle fails from both sides or from neither: the
-                // side with the lower index decides.
+                // A triangle fails from both sides or from neither: the side with the lower index decides.
                 if (u < t) continue;
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
@@ -430,8 +426,8 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         exec.fence();
     };
     auto clear = [&](int k) { Kokkos::deep_copy(exec, Kokkos::subview(counters, k), 0); };
-    // The work and stuck lists never drop entries: before a kernel could
-    // overrun them they grow (the stuck list keeps its entries).
+    // The work and stuck lists never drop entries: before a kernel could overrun them they grow (the stuck list keeps
+    // its entries).
     auto grow = [&](int work_needed, int stuck_needed) {
         if (work_needed > work_capacity) {
             work_capacity = work_needed + work_needed / 2;
@@ -465,12 +461,12 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const auto lock = s.lock;
         const auto free_slots = s.free_slots;
         const auto edges = m.edges;
-        // 1. Failing triangles among the listed dirty tetrahedra (each triangle
-        // once: from the dirty side, or from the lower index when both are).
+        // 1. Failing triangles among the listed dirty tetrahedra (each triangle once: from the dirty side, or from the
+        // lower index when both are).
         clear(counter::freed);
         const int stuck_before = host(counter::stuck);
-        grow(0, stuck_before + dirty_count);  // find lists at most one inverted entry per tetrahedron
-        for (bool again = true; again;) {  // until the work list holds every failing triangle
+        grow(0, stuck_before + dirty_count);
+        for (bool again = true; again;) {
             clear(counter::work);
             Kokkos::parallel_for(
                 "tet_repair::find", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int i) {
@@ -507,8 +503,8 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const int items = host(counter::work);
         stats.checked += items;
         if (items == 0) {
-            // A triangle stuck earlier may have become flippable since: look
-            // at the stuck ones again while that still makes progress.
+            // A triangle stuck earlier may have become flippable since: look at the stuck ones again while that still
+            // makes progress.
             const long long flips = stats.flips23 + stats.flips32;
             finished = host(counter::stuck) == 0 || flips == flips_at_last_retry;
             if (finished) break;
@@ -536,8 +532,8 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 detail::Plan p;
                 const int u = adjacent(t, k);
                 if (alive(t) && u >= 0 && alive(u)) p = detail::plan(m, point, t, k, false);
-                // The first valid flip nearly always closes its cavity; else the first of the others that does (checking
-                // each inside one plan() made steps 2 % slower).
+                // The first valid flip nearly always closes its cavity; else the first of the others that does
+                // (checking each inside one plan() made steps 2 % slower).
                 if (p.kind > 0 && !closes(m, p.old, p.olds, p.fresh, p.freshes)) p = detail::plan(m, point, t, k, true);
                 plans(i) = detail::pack(p);
                 if (p.kind < 0) detail::list_stuck(counters, stuck, t, p.kind == detail::Plan::rejected ? rejected : k);
@@ -577,7 +573,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     }
                 }
                 if (!won) {
-                    detail::mark(st, p.old[0]);  // retry next round
+                    detail::mark(st, p.old[0]);
                     return;
                 }
                 // Outer faces of the old tetrahedra (six: the plan closes).
@@ -598,7 +594,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     }
                     edges(o) = 0;
                 }
-                if (p.kind == detail::Plan::flip23) {  // the new edge a-far
+                if (p.kind == detail::Plan::flip23) {
                     kept_edge[kept_edges][0] = p.fresh[0][0];
                     kept_edge[kept_edges][1] = p.fresh[0][1];
                     ++kept_edges;
@@ -686,8 +682,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
     stats.unfinished = !finished;
     stats.stuck = Kokkos::min(host(counter::stuck), static_cast<int>(s.stuck.extent(0)));
     s.touched_entries = host(counter::created) <= static_cast<int>(s.touched_list.extent(0)) ? host(counter::created) : -1;
-    // The created tetrahedra did not fit their list (this step updates all
-    // faces): room for 1/4 more next time.
+    // The created tetrahedra did not fit their list (this step updates all faces): room for 1/4 more next time.
     if (s.touched_entries < 0) Kokkos::resize(s.touched_list, host(counter::created) + host(counter::created) / 4);
     // Room for the tetrahedra a host fallback may add.
     const int spare = s.count / 64 + 1024;

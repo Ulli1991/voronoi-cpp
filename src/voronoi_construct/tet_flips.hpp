@@ -159,7 +159,7 @@ inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id)
                 const int o = adj[c][f];
                 if (o >= 0 && in_cavity[o]) continue;
                 Tet s = tet[c];
-                s[f] = q;  // same orientation as c
+                s[f] = q;
                 const int fresh = static_cast<int>(tet.size());
                 tet.push_back(s);
                 adj.push_back({-1, -1, -1, -1});
@@ -273,21 +273,20 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
         for (const Tet& s : fresh)
             for (int k = 0; k < 4; ++k) {
                 const auto key = face_key(s, k);
-                if (--boundary[key] == -2) boundary[key] = 0;  // inner face, seen twice
+                if (--boundary[key] == -2) boundary[key] = 0;
             }
         const bool fits = !fresh.empty() && !reaches_corner &&
                           std::all_of(boundary.begin(), boundary.end(), [](const auto& b) { return b.second == 0; });
         if (fits) {
-            // A particle the new stars lack would leave the mesh (it shares a grid position with another); no wider region
-            // helps, so it stays stuck and a rebuild refuses the input.
+            // A particle the new stars lack would leave the mesh (it shares a grid position with another); no wider
+            // region helps, so it stays stuck and a rebuild refuses the input.
             std::vector<int> corners;
             for (const Tet& s : fresh) corners.insert(corners.end(), s.begin(), s.end());
             std::sort(corners.begin(), corners.end());
             if (!std::includes(corners.begin(), corners.end(), ring.begin(), ring.end())) return {};
             return replace(m, old, fresh);
         }
-        // Widen the stars over the particles of the faces that did not fit
-        // (over the whole ring if that adds none).
+        // Widen the stars over the particles of the faces that did not fit (over the whole ring if that adds none).
         const std::size_t before = seeds.size();
         for (const auto& [key, count] : boundary)
             if (count != 0) seeds.insert(seeds.end(), key.begin(), key.end());
@@ -314,7 +313,7 @@ inline Stats repair(Mesh& m) {
         before = stats.rebuilt;
         for (int t = 0; t < m.count; ++t) {
             if (!m.alive(t)) continue;
-            int u = -1;  // the failing triangle t|u, or t inverted
+            int u = -1;
             if (ep::orient(m.point, detail::tet(m, t).data()) > 0) {
                 for (int k = 0; k < 4 && u < 0; ++k)
                     if (m.adjacent(t, k) >= 0 && detail::fails(m, t, m.adjacent(t, k))) u = m.adjacent(t, k);
@@ -446,7 +445,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         if (state.count + added > static_cast<int>(state.alive.extent(0)))
             tet_repair::reserve(dm, state, state.count + added + (state.count + added) / 64);
         auto global = [&](int l) { return l < size ? host_listed(l) : state.count + l - size; };
-        std::vector<int> changed;  // rows: slot, alive, 4 vertices, 4 neighbours, open-face bits
+        std::vector<int> changed;
         for (int l = 0; l < m.count; ++l) {
             bool same = l < size && m.alive(l);
             for (int k = 0; k < 4 && same; ++k)
@@ -477,8 +476,8 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const auto vertex = dm.vertex, adjacent = dm.adjacent;
         const auto edges = dm.edges;
         const auto alive = state.alive, touched = state.touched;
-        // Every tetrahedron touched here is listed in touched_list too
-        // (the created count past its capacity: the list is unknown).
+        // Every tetrahedron touched here is listed in touched_list too (the created count past its capacity: the list
+        // is unknown).
         const auto list = state.touched_list, counters = state.counters;
         const int list_capacity = static_cast<int>(list.extent(0));
         Kokkos::deep_copy(exec, Kokkos::subview(counters, tet_repair::counter::created),
@@ -529,7 +528,7 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                             const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
                             const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
                                                            : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
-                            if ((before & bit) != (u == lowest ? bit : 0)) touch(u);  // renumbered faces
+                            if ((before & bit) != (u == lowest ? bit : 0)) touch(u);
                         }
                         const int next = tet_mesh::next_around_edge(dm, u, previous, a, b);
                         previous = u;
@@ -537,8 +536,8 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                     } while (u >= 0 && u != t);
                 }
             });
-        // Repair on the device from the changed ones and the stuck ones (what
-        // the host could not repair is stuck again).
+        // Repair on the device from the changed ones and the stuck ones (what the host could not repair is stuck
+        // again).
         Kokkos::deep_copy(exec, Kokkos::subview(counters, tet_repair::counter::listed), 0);
         const auto& st = state;
         Kokkos::parallel_for(

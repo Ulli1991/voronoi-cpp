@@ -1,8 +1,7 @@
 #pragma once
 
-// Brute-force oracle sharing no code with the library: exact 128-bit predicates and long double
-// clipping over all periodic images, on data only. Checks Delaunay on the torus: ties are
-// compared separately (different_tetrahedra).
+// Brute-force oracle sharing no code with the library: exact 128-bit predicates and long double clipping over all
+// periodic images, on data only.
 
 #include <algorithm>
 #include <array>
@@ -416,7 +415,7 @@ inline Cell voronoi_cell(const Grid& g, int i) {
             for (int v = -2; v <= 2; ++v)
                 for (int w = -2; w <= 2; ++w) {
                     if (u == 0 && v == 0 && w == 0) continue;
-                    if (j == i && std::abs(u) + std::abs(v) + std::abs(w) == 1) continue;  // the box sides
+                    if (j == i && std::abs(u) + std::abs(v) + std::abs(w) == 1) continue;
                     const Vec q{(long double)(d[0] + u * g.period[0]), (long double)(d[1] + v * g.period[1]),
                                 (long double)(d[2] + w * g.period[2])};
                     if (dot(q, q) <= 4 * r * r) clip(faces, q, j, image_number(u, v, w));

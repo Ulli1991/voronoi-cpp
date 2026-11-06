@@ -1,17 +1,6 @@
 #!/bin/bash
-# Stage 1 (1D) on one A100, both codes in one job on one node. From the repository root:
+# Stage 1 (1D) on one A100, both codes in one job; modes (build, ladder, set, gaps, speed, reference, throughput) are the cases below.
 #   sbatch --export=ALL,REPO=$PWD,BUILD=<build dir>,OUT=<runs dir> -o <logs>/dim1d-%j.out scripts/dim1d_a100.sh <mode> [args]
-# Modes:
-#   build            configure if needed, build everything wide (18 CPUs), ctest
-#   ladder <problem> <b> [<b> ...]   both codes on N = 2^b: LUNA (MC, HLLC, CFL 0.8, Pallas), ours
-#                    static and moving (LUNA's rule 0.8; AREPO's rule 0.3 up to 2^16), .npy/.npz + .json
-#                    into OUT; repeats give the fastest; hashes must agree
-#   set <problem> <b ...>   LUNA, static and the moving default at each 2^b, in one job at one clock (give it its own OUT)
-#   gaps <problem> <b ...> -- <b ...>   moving with AREPO's rule, then LUNA's rule at 0.4, repeats 1
-#   speed            throughput, BASELINE's rates, the smallest ladders
-#   reference <problem> <N> <seconds>   LUNA MC at N for that long, resumable (state in OUT)
-#   throughput       hydro only and whole moving step at 2^12 .. 2^24, ours and LUNA
-# The clock and the node go into the log (nvidia-smi, one line per 5 s, into OUT/clock-<job>.csv).
 #SBATCH -J dim1d
 #SBATCH -p gpu1,gpudev
 #SBATCH --gres=gpu:a100:1

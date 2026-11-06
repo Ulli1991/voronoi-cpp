@@ -1,17 +1,6 @@
 #!/bin/bash
-# The mesh's special cases and distorting flows on one A100 (TESTING.md).
-# Submit from the repository root with a built CUDA directory and a mode;
-# logs must be on a shared file system:
-#   sbatch -o <dir>/cases-%j.out scripts/mesh_tests_a100.sh <build-cuda> cases "coincident|few"   # a filter of names
-#   sbatch -o <dir>/flows128-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows128
-#   sbatch -o <dir>/flows128b-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows128b
-#   sbatch -o <dir>/flows256-%j.out scripts/mesh_tests_a100.sh <build-cuda> flows256   # also flows256b
-#   sbatch -o <dir>/smooth-%j.out scripts/mesh_tests_a100.sh <build-cuda> smooth
-#   sbatch -o <dir>/drift-%j.out scripts/mesh_tests_a100.sh <build-cuda> drift
-#   sbatch -o <dir>/oracle-%j.out scripts/mesh_tests_a100.sh <build-cuda> oracle
-#   sbatch -o <dir>/reach-%j.out scripts/mesh_tests_a100.sh <build-cuda> large
-# Each line of a flow is one step (flips, rounds, stuck, fallbacks, M cells/s,
-# faces, B/cell, aspect, reach, max faces); each ends in an `ok` or `FAIL` line.
+# The mesh's special cases and distorting flows on one A100 (TESTING.md); modes cases, flows128, flows256, smooth, drift, oracle, large.
+#   sbatch -o <dir>/cases-%j.out scripts/mesh_tests_a100.sh <build-cuda> <mode> [name filter]
 #SBATCH -J mesh_tests
 #SBATCH -p gpu1
 #SBATCH --gres=gpu:a100:1

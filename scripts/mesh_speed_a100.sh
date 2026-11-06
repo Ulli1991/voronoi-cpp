@@ -1,16 +1,6 @@
 #!/bin/bash
-# Mesh-step speed on one A100 (research_notes/mesh_speed_2026-11-04.md). BUILDS
-# lists CUDA build directories, interleaved command by command in one job on
-# one node; pass with sbatch --export=ALL,BUILDS="a b".
-#   sbatch -p gpu1,gpudev -o <logs>/mesh-%j.out scripts/mesh_speed_a100.sh <out> <mode>
-# Modes:
-#   kernels   time per kernel and touched cells, 128^3 at 0.03/0.1/0.3 spacings
-#   speed128  steps at 0.03/0.1/0.3, 128^3 (10 steps, --memory), three rounds;
-#             moving hydro step, 128^3 (40 steps), two rounds
-#   speed256  the same at 256^3 (one round of steps, one moving hydro run)
-#   bits      hashes of the final U, x, volume on the paths of the gate (50 steps)
-#   verify    step 262144 <kind> 0.3 3 --verify on the six inputs
-#   ctest     ctest of each build
+# Mesh-step speed on one A100 (research_notes/mesh_speed_2026-11-04.md); BUILDS lists CUDA builds, modes are the cases below.
+#   sbatch --export=ALL,BUILDS="a b" -p gpu1,gpudev -o <logs>/mesh-%j.out scripts/mesh_speed_a100.sh <out> <mode>
 #SBATCH -J mesh_speed
 #SBATCH -p gpu1,gpudev
 #SBATCH --gres=gpu:a100:1

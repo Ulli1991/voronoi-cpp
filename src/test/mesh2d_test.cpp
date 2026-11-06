@@ -1,6 +1,5 @@
-// The 2D mesh (voronoi::Mesh<2>) against oracles that share no code with it: predicates, brute-force triangulation and cells,
-// moving meshes equal to fresh builds bit for bit, and refusals. Brute force is O(n^2): test oracles only.
-// The oracle details are in docs/design.md.
+// The 2D mesh (voronoi::Mesh<2>) against oracles that share no code with it: predicates, brute-force triangulation and
+// cells, moving meshes equal to fresh builds bit for bit, and refusals.
 
 #include "check.hpp"
 #include "voronoi_mesh.hpp"
@@ -144,8 +143,8 @@ void test_predicates(Check& check) {
                         const int ids[4] = {id[order[0]], id[order[1]], id[order[2]], id[order[3]]};
                         const ep::i64 flat = ep::cross(ep::minus(q[1], q[0]), ep::minus(q[2], q[0]));
                         if (flat == 0) continue;
-                        // Swapping the tested point (d in (a, b, c) versus a in (b, c, d)) follows the lifted facet's orientation rule,
-                        // but a permutation of the triangle alone must not change the answer.
+                        // Swapping the tested point (d in (a, b, c) versus a in (b, c, d)) follows the lifted facet's
+                        // orientation rule, but a permutation of the triangle alone must not change the answer.
                         if (order[3] == 3 && ep::in_circle(q, ids) != inside) ++inconsistent;
                     } while (std::next_permutation(order, order + 4));
                 } else if ((det > 0) != inside) {
@@ -157,8 +156,8 @@ void test_predicates(Check& check) {
     check.expect(wrong == 0, "in_circle agrees with an integer determinant on " + std::to_string(cases) + " cases");
     check.expect(ties > 1000, "ties are exercised (" + std::to_string(ties) + ")");
     check.expect(inconsistent == 0, "the perturbed test does not depend on the triangle's corner order");
-    // 4 cocircular points: diagonal ac is judged alike from its two triangles, and
-    // exactly one of the two diagonals is Delaunay under the perturbation.
+    // 4 cocircular points: diagonal ac is judged alike from its two triangles, and exactly one of the two diagonals is
+    // Delaunay under the perturbation.
     const ep::Offset2 a{0, 0}, b{2, 0}, c{2, 2}, d{0, 2};
     const ep::Offset2 abc_d[4] = {a, b, c, d}, acd_b[4] = {a, c, d, b}, abd_c[4] = {a, b, d, c};
     const int id1[4] = {0, 1, 2, 3}, id2[4] = {0, 2, 3, 1}, id3[4] = {0, 1, 3, 2};
@@ -175,8 +174,8 @@ struct Cell {
 // every bisector of every image of every particle.
 Cell brute_cell(int i, const Points& p, const Box& box) {
     struct Edge {
-        Long x, y;  // point on the polygon
-        int other;  // particle of the edge from this point to the next
+        Long x, y;
+        int other;
     };
     const Long lx = box.side[0], ly = box.side[1], extent = 2 * (lx + ly);
     std::vector<Edge> poly = {{-extent, -extent, -1}, {extent, -extent, -1}, {extent, extent, -1}, {-extent, extent, -1}};
@@ -416,7 +415,7 @@ void test_refusals(Check& check) {
     }
     for (const auto fallback : {voronoi::Fallback::cheapest, voronoi::Fallback::host, voronoi::Fallback::rebuild}) {
         const std::string name = fallback == voronoi::Fallback::host ? "host" : fallback == voronoi::Fallback::rebuild ? "rebuild" : "cheapest";
-        for (const int gap : {7, 1100}) {  // the pair: near neighbours, or far apart
+        for (const int gap : {7, 1100}) {
             Points p = on_grid(good, box);
             Mesh mesh(Exec(), box);
             mesh.set_fallback(fallback);
@@ -455,8 +454,8 @@ void test_refusals(Check& check) {
         check_triangles(check, mesh, box, "another n, then a step");
         check_cells(check, mesh, on_grid(p, box), box, "another n, then a step");
     }
-    // x -> 2 x: every triangle stays positive and locally Delaunay, and the
-    // mesh would cover the torus four times; the areas tell.
+    // x -> 2 x: every triangle stays positive and locally Delaunay, and the mesh would cover the torus four times; the
+    // areas tell.
     {
         Points p = on_grid(make_points("hexagonal", 2500, box), box);
         Mesh mesh(Exec(), box);
@@ -471,7 +470,7 @@ void test_refusals(Check& check) {
         try {
             report = mesh.update(device(p));
         } catch (const std::runtime_error&) {
-            done = false;  // a doubled lattice may land on itself: a refusal is fine, a wrong mesh is not
+            done = false;
         }
         if (done) {
             mesh.update_cells();

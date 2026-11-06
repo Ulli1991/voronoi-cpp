@@ -36,9 +36,8 @@ public:
     using i64 = exact_predicates::i64;
     using Keys = Kokkos::View<sorted_mesh::Key*, Memory>;
 
-    // mesh: built (update()). Walls must be given exactly when the mesh has
-    // them. Moving: this object owns the positions (starting from the
-    // mesh's snapped ones) and updates the mesh's order.
+    // mesh: built (update()).
+    // Walls must be given exactly when the mesh has them.
     FiniteVolume(const ExecSpace& exec, Mesh& mesh, const Gas& gas, int order, Limiter limiter = Limiter::face_centroid,
                  Motion motion = Motion::static_mesh, const Walls& walls = {}, bool regularise = true)
         : exec_(exec), mesh_(&mesh), gas_(gas), order_(order), limiter_(limiter), motion_(motion), walls_(walls),
@@ -120,10 +119,10 @@ public:
             for (int k = 0; k < M; ++k) {
                 if (slot[k] >= 0) continue;
                 cell[k].real = false;
-                const int end = k < R ? k + 1 : k - 1;  // the slot towards s
+                const int end = k < R ? k + 1 : k - 1;
                 if (slot[end] < 0) continue;
                 cell[k].W = ghost(cell[end].W, k < R);
-                cell[k].c = -cell[end].c;  // the mirror's centroid
+                cell[k].c = -cell[end].c;
             }
             for (int k = 0; k < M - 1; ++k) {
                 const int a = slot[k], b = slot[k + 1];
@@ -136,12 +135,12 @@ public:
         template <int R>
         KOKKOS_INLINE_FUNCTION void load_inner(int s, Cell (&cell)[2 * R + 1], double (&gap)[2 * R]) const {
             constexpr int M = 2 * R + 1;
-            double steps[M + 1];  // steps[k]: grid steps from slot s - R - 1 + k to the next
+            double steps[M + 1];
             i64 previous = static_cast<i64>(line.key(s - R - 1));
             for (int k = 0; k <= M; ++k) {
                 const i64 here = static_cast<i64>(line.key(s - R + k));
                 const i64 d = here - previous;
-                steps[k] = static_cast<double>(d < 0 ? d + line.period : d);  // a periodic line's seam
+                steps[k] = static_cast<double>(d < 0 ? d + line.period : d);
                 previous = here;
             }
             for (int k = 0; k < M; ++k) {
@@ -224,7 +223,7 @@ public:
                     smallest = Kokkos::fmin(smallest, courant * volume / (vi + ci));
                     return;
                 }
-                const double r = 0.5 * volume;  // the half length of the cell
+                const double r = 0.5 * volume;
                 double step = r / (ci + vi);
                 for (int side = -1; side <= 1; side += 2) {
                     const int t = st.line.slot(s, side);
@@ -259,9 +258,8 @@ public:
         }
     }
 
-    // One step of length dt in one launch (see the head of this file);
-    // returns the time step of the next one by LUNA's rule at this Courant
-    // number. Static: time_step(courant, luna) after step(dt), to rounding.
+    // One step of length dt in one launch (see the head of this file); returns the time step of the next one by LUNA's
+    // rule at this Courant number.
     double step_and_time_step(double dt, double courant) {
         if (x_.extent(0) > 0 && x_next_.extent(0) == 0)
             x_next_ = Points(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("hydro_x_next")), n_);
@@ -346,13 +344,11 @@ public:
                 if constexpr (Moving)
                     point[k] = cell[k].W[1] + st.drift(cell[k].W, grad[k][0], cell[k].c, 0.5 * (gap[k - 1] + gap[k]));
             }
-            // The fluxes through the faces left (k = 1 | 2) and right (2 | 3)
-            // of s, positive along +x.
+            // The fluxes through the faces left (k = 1 | 2) and right (2 | 3) of s, positive along +x.
             State F[2];
             for (int f = 0; f < 2; ++f) {
-                const int a = 1 + f, b = 2 + f;  // the cells left and right of the face
-                // A wall face is static; a face between cells moves with
-                // the mean of their point velocities.
+                const int a = 1 + f, b = 2 + f;
+                // A wall face is static; a face between cells moves with the mean of their point velocities.
                 double w = 0;
                 if constexpr (Moving)
                     if (Inner || (cell[a].real && cell[b].real)) w = 0.5 * (point[a] + point[b]);

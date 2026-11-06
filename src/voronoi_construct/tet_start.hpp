@@ -75,7 +75,7 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
             const int orientation = ep::orient(o[1], o[2], o[3]);
             volume += Kokkos::abs(double(ep::det3(o[1], o[2], o[3]))) * unit3 / 6;
             bool fine = orientation != 0;
-            if (orientation < 0) {  // as tet_repair::prepare orients it
+            if (orientation < 0) {
                 Kokkos::kokkos_swap(v[2], v[3]);
                 Kokkos::kokkos_swap(adj[2], adj[3]);
             }
@@ -160,14 +160,14 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
         if (round == 0) stats.bad_tets = report.bad_tets;
         stats.tets = count;
         if (report.ok()) {
-            tet_mesh::represent_dropped(exec, mesh, face_start);  // walks: only on a checked mesh
+            tet_mesh::represent_dropped(exec, mesh, face_start);
             stats.exact = true;
             break;
         }
         if (all || round == 2) break;
         detail::grow(exec, mesh, marked, grown);
         int listed = 0;
-        Kokkos::parallel_scan(  // the slots of the grown particles
+        Kokkos::parallel_scan(
             "tet_start::list", Range(exec, 0, n),
             KOKKOS_LAMBDA(int q, int& at, bool last) {
                 if (!grown(order(q))) return;
@@ -181,7 +181,7 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
             Kokkos::parallel_for(
                 "tet_start::all", Range(exec, 0, n), KOKKOS_LAMBDA(int i) { todo(i) = i; });
             listed = n;
-            Kokkos::deep_copy(exec, cells.ring_used, 0u);  // every block is written again
+            Kokkos::deep_copy(exec, cells.ring_used, 0u);
         }
         namespace sv = shell_voronoi::detail;
         sv::construct_cells<sv::ExactCell>(exec, grid, stencil, cells, sv::Pass::all,

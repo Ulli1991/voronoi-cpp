@@ -289,7 +289,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             auto particle = [&](int slot) { return slot < 0 ? slot : grid.order(slot); };
             Candidate buffer[candidates];
             int buffered = 0;
-            auto flush = [&]() {  // nearest first; the rest may be out of reach
+            auto flush = [&]() {
                 for (int a = 1; a < buffered; ++a) {
                     const Candidate k = buffer[a];
                     int b = a;
@@ -337,7 +337,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         gap2 += g * g;
                     }
                     bool skip = gap2 > polygon.reach2;
-                    if (!skip && finer >= 0) {  // inside the finished walk one level finer?
+                    if (!skip && finer >= 0) {
                         int gaps = 0;
                         for (int a = 0; a < 2; ++a) {
                             const int child = 2 * (u[a] - home[a]) - ((finer >> a) & 1);
@@ -348,7 +348,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     }
                     if (!skip) {
                         int w[2];
-                        double image[2];  // of the slots' coordinates, in steps
+                        double image[2];
                         for (int a = 0; a < 2; ++a) {
                             const int cells = grid.tiles[a] << level;
                             const int shift = u[a] < 0 ? -1 : u[a] >= cells ? 1 : 0;
@@ -376,7 +376,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     certified = true;
                     break;
                 }
-                if (level == 2) break;  // no coarser grid fits the box
+                if (level == 2) break;
                 finer = (home[0] & 1) | (home[1] & 1) << 1;
                 home[0] >>= 1;
                 home[1] >>= 1;

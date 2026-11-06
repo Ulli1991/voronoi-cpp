@@ -159,7 +159,7 @@ void configure(CellList<ExecSpace, D>& s, int n, const exact_predicates::BoxN<D>
     for (int a = 0; a < D; ++a) {
         s.tiles[a] = static_cast<int>(std::max(1LL, std::llround(box.side[a] / shortest)));
         tiles *= s.tiles[a];
-        most = std::min(most, 30 - bits(s.tiles[a]) - fine_levels);  // grid coordinates fit an int
+        most = std::min(most, 30 - bits(s.tiles[a]) - fine_levels);
     }
     most = std::min({most, (64 - bits(tiles)) / D - fine_levels, (30 - bits(tiles)) / D});
     if (most < 2)
@@ -207,7 +207,7 @@ void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPosit
             tile[a] = g >> depth;
             c[a] = g & ((1 << depth) - 1);
         }
-        std::uint64_t key;  // (CUDA lambdas may not first capture inside if constexpr)
+        std::uint64_t key;
         if constexpr (D == 3) {
             const std::uint64_t t = (static_cast<std::uint64_t>(tile[0]) * tiles[1] + tile[1]) * tiles[2] + tile[2];
             key = t << (3 * depth) | morton(c[0], c[1], c[2]);
@@ -256,8 +256,8 @@ void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPosit
             fine(q) = static_cast<std::uint32_t>(keys[q] & fine_mask);
         }
     });
-    // Per-slot level: the deepest node around q holding at least `enough` particles, refined by the (2^D)-th
-    // root of its count; coarser nodes are blocks of base cells, finer ones come from the fine keys.
+    // Per-slot level: the deepest node around q holding at least `enough` particles, refined by the (2^D)-th root of
+    // its count; coarser nodes are blocks of base cells, finer ones come from the fine keys.
     Kokkos::parallel_for("cell_list::levels", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
         constexpr int enough = 64;
         const int cell = static_cast<int>(keys[q] >> (D * fine_levels));

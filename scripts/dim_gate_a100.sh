@@ -1,14 +1,5 @@
 #!/bin/bash
-# The 3D gate of a dimension stage (research_notes/dimension_design_2026-11-02.md,
-# 6.3) on one A100: two CUDA builds, MAIN and FIX (paths), interleaved
-# command by command (timed commands twice, MAIN FIX MAIN FIX):
-#   ctest of FIX; warp rebuild of 2.1M points on six inputs (check_cells,
-#   times); `step 262144 <kind> 0.3 3 --verify` on six inputs; steps at
-#   0.03 / 0.1 / 0.3 spacings at 2.1M (start, step phases, update_cells,
-#   cells_checksum, --memory); the moving hydro step at 128^3 (40 steps,
-#   --memory); two moving runs per build at 128^3 (STEPS steps, default 200)
-#   writing their final state, compared bit for bit afterwards.
-# Submit from the repository root, logs on a shared file system:
+# The 3D gate of a dimension stage on one A100: builds MAIN and FIX interleaved command by command (see research_notes/dimension_design_2026-11-02.md, 6.3).
 #   MAIN=<build> FIX=<build> sbatch -o <logs>/gate-%j.out scripts/dim_gate_a100.sh <out>
 #SBATCH -J dim_gate
 #SBATCH -p gpu1,gpudev

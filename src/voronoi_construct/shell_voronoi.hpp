@@ -213,8 +213,7 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
     }
     if (gap2 >= reach2) return false;
     if (finer >= 0) {
-        // Covered if all 8 children of u are: per axis the farther child,
-        // seen from the finer home cell.
+        // Covered if all 8 children of u are: per axis the farther child, seen from the finer home cell.
         int gaps = 0;
         for (int a = 0; a < 3; ++a) {
             const int child = 2 * (u[a] - home[a]) - ((finer >> a) & 1);
@@ -256,24 +255,19 @@ struct Cells {
     Kokkos::View<int*, MemorySpace> neighbour;
     Kokkos::View<double* [3], MemorySpace> area, face_centroid;
     Kokkos::View<unsigned*, MemorySpace> face_used;  // per chunk
-    // Face rings, size 0 = off. Cell t's owned faces start at rings(ring_start(t)), each as neighbour, ring
-    // length k and the k particles whose bisectors bound it: vertex m is equidistant from the cell, the
-    // neighbour, ring[m] and ring[m + 1].
+    // Face rings, size 0 = off.
     Kokkos::View<int*, MemorySpace> rings;
     Kokkos::View<long long*, MemorySpace> ring_start;
     Kokkos::View<unsigned*, MemorySpace> ring_used;  // per chunk
-    // Optional diagnostics, size 0 = off: |sum of area vectors| / sum of
-    // |area|, and work per cell (batches of grid cells walked, candidates
-    // clipped, cuts).
+    // Optional diagnostics, size 0 = off: |sum of area vectors| / sum of |area|, and work per cell (batches of grid
+    // cells walked, candidates clipped, cuts).
     Kokkos::View<double*, MemorySpace> closure;
     Kokkos::View<int* [3], MemorySpace> work;
 
     Cells() = default;
 
-    // Cells of n particles with owned faces, room for faces_per_cell per
-    // built cell on average (about 8 are needed) and a part-used block per
-    // warp; `built` cells are built (all by default; fewer for a local
-    // rebuild).
+    // Cells of n particles with owned faces, room for faces_per_cell per built cell on average (about 8 are needed) and
+    // a part-used block per warp;
     Cells(int n, bool with_diagnostics, int faces_per_cell = 10, int built = -1) : Cells(n) {
         if (built < 0) built = n;
         face_start = Kokkos::View<int*, MemorySpace>(uninitialized("cell_face_start"), n);
@@ -547,8 +541,7 @@ KOKKOS_INLINE_FUNCTION void start_cube(C& cell, double h, double unit, int n) {
             cell.vertex[c] = {sx ? -h : h, sy ? -h : h, sz ? -h : h};
         }
     }
-    // Across the edge from corner k to k + 1 lies the corner that differs
-    // along the axis of corner k + 2.
+    // Across the edge from corner k to k + 1 lies the corner that differs along the axis of corner k + 2.
     for (int c = 0; c < 8; ++c)
         for (int k = 0; k < 3; ++k)
             cell.adjacent[c][k] = static_cast<Index>(c ^ (1 << (cell.corner[c][(k + 2) % 3] / 2)));
@@ -598,8 +591,7 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
         offset = 0.5 * dot(d, d);
         tolerance = 64 * Kokkos::Experimental::epsilon_v<double> * Kokkos::sqrt(dot(d, d) * cell.radius2);
     }
-    // A removed vertex of a rounded cell sits at the generator, which no
-    // bisector cuts off.
+    // A removed vertex of a rounded cell sits at the generator, which no bisector cuts off.
     for (int v = 0; v < cell.vertices; ++v) {
         if constexpr (C::exact)
             cut[v] = live(cell, v) && inside(cell, v, e, id, self);
@@ -640,8 +632,7 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
         cell.normal[plane] = d;
         cell.offset[plane] = offset;
     }
-    // r2: the largest squared distance of a kept vertex (removed ones count
-    // 0), then of any.
+    // r2: the largest squared distance of a kept vertex (removed ones count 0), then of any.
     double r2 = 0;
     for (int w = 0; w < cell.vertices; ++w) {
         if (cut[w]) {
@@ -658,8 +649,7 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             r2 = Kokkos::max(r2, dot(cell.vertex[w], cell.vertex[w]));
     }
 
-    // New vertex (a, b, plane) on each hole edge, in a free slot; the edge
-    // back from u now ends at it.
+    // New vertex (a, b, plane) on each hole edge, in a free slot; the edge back from u now ends at it.
     for (int h = 0; h < holes; ++h) {
         const int a = hole[h].a, b = hole[h].b, u = hole[h].u;
         const int s = cell.free_count > 0 ? cell.free_slot[--cell.free_count] : cell.vertices++;
@@ -680,9 +670,8 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
         cell.starts[a] = cell.ends[b] = static_cast<Index>(s);
         hole[h].s = static_cast<Index>(s);
     }
-    // Across (b, plane) lies the new vertex whose hole edge starts at b, across (plane, a) the one whose
-    // hole edge ends at a. Rounding can make a hole touch a face twice; then these are not unique and the
-    // cell is left degenerate rather than linked wrongly.
+    // Across (b, plane) lies the new vertex whose hole edge starts at b, across (plane, a) the one whose hole edge ends
+    // at a.
     for (int h = 0; h < holes; ++h) {
         const int a = hole[h].a, b = hole[h].b, s = hole[h].s;
         const int next = cell.starts[b], previous = cell.ends[a];
@@ -749,7 +738,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(n)),
         KOKKOS_LAMBDA(int i) {
             const int t = selection.slot(i);
-            const int id = grid.order(t);  // the particle
+            const int id = grid.order(t);
             const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
             if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
@@ -790,8 +779,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                              positions(c.slot, 1) + c.image[1] * box.side[1] - p.y,
                              positions(c.slot, 2) + c.image[2] * box.side[2] - p.z};
                     const int planes_before = cell.planes, vertices_before = cell.vertices;
-                    // Exact cuts break ties by particle id; rounded cells keep
-                    // the slot until the walk is done (one load fewer per cut).
+                    // Exact cuts break ties by particle id; rounded cells keep the slot until the walk is done (one
+                    // load fewer per cut).
                     status = clip(cell, e, d, Cell::exact ? grid.order(c.slot) : c.slot, id);
                     ++clipped;
                     if (cell.planes == planes_before && cell.vertices == vertices_before) continue;
@@ -838,7 +827,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     certified = true;
                     break;
                 }
-                if (level == 2) break;  // no coarser grid fits the box
+                if (level == 2) break;
                 finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
                 for (int k = 0; k < 3; ++k) home[k] >>= 1;
                 --level;
@@ -851,12 +840,12 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if (!Cell::exact)
                 for (int plane = box_planes; plane < cell.planes; ++plane) cell.id[plane] = grid.order(cell.id[plane]);
 
-            // A block for the owned faces: one entry per owned plane, or with
-            // rings a neighbour, a length and one entry per vertex each.
+            // A block for the owned faces: one entry per owned plane, or with rings a neighbour, a length and one entry
+            // per vertex each.
             long long ring_at = 0;
             int face_at = 0;
             if (status == ok) {
-                compact_planes(cell);  // only planes that bound a face
+                compact_planes(cell);
                 int need = 0;
                 for (int plane = box_planes; plane < cell.planes; ++plane)
                     need += (with_rings ? 2 : 1) * selection.owns(id, cell.id[plane]);
@@ -871,14 +860,14 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     face_at = out.face_start(id);
             }
 
-            // Faces: walk each plane's vertices in order, integrating the face
-            // area vector and centroid and the cell volume and centroid.
+            // Faces: walk each plane's vertices in order, integrating the face area vector and centroid and the cell
+            // volume and centroid.
             int faces = 0, owned = 0, ring_used = 0;
             double volume = 0, area_magnitude = 0;
             Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
             const double sliver = 64 * Kokkos::Experimental::epsilon_v<double> * cell.radius2_in_box(unit);
-            std::int16_t first_vertex[Cell::planes_capacity];  // a vertex on each face, or -1
-            if (status == ok) {  // a failed cell may have stopped halfway through a cut: see clip
+            std::int16_t first_vertex[Cell::planes_capacity];
+            if (status == ok) {
                 for (int plane = 0; plane < cell.planes; ++plane) first_vertex[plane] = -1;
                 for (int v = 0; v < cell.vertices; ++v)
                     if (live(cell, v))
@@ -886,7 +875,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             }
             for (int plane = box_planes; plane < cell.planes && status == ok; ++plane) {
                 const int start = first_vertex[plane];
-                if (start < 0) continue;  // plane later cut away completely
+                if (start < 0) continue;
 
                 const Vec3 normal = cell.face_normal(plane);
                 const Vec3 first = cell.position(start, unit);
@@ -920,9 +909,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 } while (current != start);
                 if (status != ok) break;
                 area_sum = area_sum + area;
-                // Faces below rounding level (e.g. cospherical generators) carry no flux and are left out of the face
-                // geometry, as in the warp kernel (their volume is kept); rounded rings omit them too, exact rings keep
-                // every face (topology).
+                // Faces below rounding level (cospherical generators) carry no flux and are left out of the face
+                // geometry; exact rings keep every face (topology).
                 const double magnitude = Kokkos::sqrt(dot(area, area));
                 if (!(Cell::exact && with_rings) && magnitude <= sliver) continue;
                 ++faces;

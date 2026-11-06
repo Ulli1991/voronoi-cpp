@@ -147,8 +147,8 @@ public:
     // Row k: the weight vector of list entry k (cell_face(k)).
     using Weights = Kokkos::View<const WeightReal* [3], Kokkos::LayoutRight, Memory>;
 
-    // A periodic box of sides box.side[a] (see exact_predicates::Box: sides
-    // are rounded to whole grid steps, side[] holds them), or a cube.
+    // A periodic box of sides box.side[a] (see exact_predicates::Box: sides are rounded to whole grid steps, side[]
+    // holds them), or a cube.
     Mesh(const ExecSpace& exec, const ep::Box& box) : exec_(exec), box_(box) {}
     Mesh(const ExecSpace& exec, double box) : exec_(exec), box_(box) {}
 
@@ -175,7 +175,7 @@ public:
             tet_flips::Stats host;
             try {
                 host = tet_flips::finish(exec_, tets_, state_);
-            } catch (const std::exception&) {  // out of local room: the rebuild decides
+            } catch (const std::exception&) {
                 host.stuck = 1;
             }
             report.host_flips = host.flips23 + host.flips32;
@@ -185,9 +185,8 @@ public:
         }
         if (!stuck) {
             report.faces = geometry(timings);
-            // A step of order the box leaves tetrahedra whose corners see each
-            // other through different images: every local test passes and the
-            // mesh covers the torus many times. Their volumes do not add up.
+            // A step of order the box leaves tetrahedra whose corners see each other through different images: every
+            // local test passes and the mesh covers the torus many times.
             report.overlapped = !(Kokkos::abs(total_volume_ / box_.volume() - 1) < 1e-6);
             if (!report.overlapped) return report;
         }
@@ -211,7 +210,7 @@ public:
         Report report;
         report.rebuilt = true;
         const int particles = static_cast<int>(x.extent(0));
-        forget();  // the old mesh's pools make room for the build
+        forget();
         n_ = particles;
         snap(x);
         {
@@ -220,7 +219,7 @@ public:
             const auto grid = shell_voronoi::make_grid(list_);
             shell_voronoi::construct_warp(exec_, grid, cells);
             report.start = tet_start::build(exec_, grid, cells, tets_);
-            if (!report.start.exact && cells.needed() > cells.capacity()) {  // the patches did not fit
+            if (!report.start.exact && cells.needed() > cells.capacity()) {
                 cells = shell_voronoi::Cells<Memory>::with_rings(n_, cells.needed() + cells.needed() / 16);
                 shell_voronoi::construct_warp(exec_, grid, cells);
                 report.start = tet_start::build(exec_, grid, cells, tets_);
@@ -236,7 +235,7 @@ public:
         const int tets = static_cast<int>(tets_.vertex.extent(0));
         const int faces = static_cast<int>(tets_.owner.extent(0)) + static_cast<int>(tets_.owner.extent(0)) / 32;
         const int entries = static_cast<int>(tets_.ring.extent(0));
-        tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};  // walked again below
+        tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
         rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
         using Areas = typename tet_mesh::Geometry<Memory>::Areas;
@@ -276,12 +275,11 @@ public:
         return local_;
     }
 
-    // Scratch memory the caller may use between updates: the spare ring pool, grown to `bytes` if smaller. Valid only
-    // until the next update(), rebuild() or update_cells() (ask again after each); clip() does not touch it.
+    // Scratch memory the caller may use between updates: the spare ring pool, grown to `bytes` if smaller.
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         auto& spare = rings_.pool[1 - rings_.in_use];
-        if (spare.extent(0) * sizeof(int) < bytes)  // with room for the faces to grow, so not every step
+        if (spare.extent(0) * sizeof(int) < bytes)
             Kokkos::realloc(Kokkos::WithoutInitializing, spare, (bytes + bytes / 64) / sizeof(int) + 1);
         return Scratch(reinterpret_cast<char*>(spare.data()), bytes);
     }
@@ -293,8 +291,7 @@ public:
         if (cells_current_) return;
         if (!built()) throw std::logic_error("voronoi::Mesh::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
-        // Its temporaries live in the spare ring pool (see scratch). Incremental from the last lists (tet_mesh::cells_incremental)
-        // after few flips; beyond about one created tetrahedron per five cells a full rebuild is as fast.
+        // Its temporaries live in the spare ring pool (see scratch).
         const auto& spare = rings_.pool[1 - rings_.in_use];
         const std::size_t table = sizeof(int) * (static_cast<std::size_t>(rings_.renumbered) + rings_.dirty_count);
         if (lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
@@ -364,7 +361,7 @@ private:
 
     // No mesh any more: the next update() builds from scratch.
     void forget() {
-        exec_.fence();  // kernels in flight may still read what goes here
+        exec_.fence();
         tets_ = tet_mesh::Mesh<Memory>{};
         state_ = tet_repair::State<Memory>{};
         rings_ = tet_mesh::FaceRings<Memory>{};
@@ -411,7 +408,7 @@ private:
             state_.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
                                        : Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries));
         if (rings_.faces < 0)
-            tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count);  // a new mesh: every centre
+            tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count);
         else
             tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count, created);
         const int faces = tet_mesh::update_face_rings(exec_, tets_, state_.count, state_.touched, created, rings_);

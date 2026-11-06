@@ -1,6 +1,4 @@
 // The 2D mesh timed: a build from nothing and moving steps, on one device, in M cells/s.
-// Usage: mesh2d_bench <jittered|random|clustered|lattice> <n> [--steps=<k>] [--move=<spacings per step>]
-// [--repeats=<r>] [--box=<lx>x<ly>] [--unsorted]; the flow and options are described in docs/design.md.
 
 #include "device_memory.hpp"
 #include "voronoi_mesh.hpp"

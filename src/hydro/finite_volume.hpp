@@ -66,9 +66,8 @@ public:
     // REGULARIZE_MESH_CM_DRIFT, _USE_SOUNDSPEED, _FACE_ANGLE; param.txt:93-94).
     static constexpr double cell_shaping_speed = 0.5, cell_max_angle_factor = 2.25;
 
-    // mesh: built, with update_cells() done. Static: its geometry must not
-    // change while this object is used. Moving: this object owns the
-    // positions (starting from the mesh's snapped ones) and updates the mesh.
+    // mesh: built, with update_cells() done.
+    // Static: its geometry must not change while this object is used.
     FiniteVolume(const ExecSpace& exec, Mesh& mesh, const Gas& gas, int order, Update update,
                  Limiter limiter = Limiter::face_centroid, Motion motion = Motion::static_mesh)
         : exec_(exec), mesh_(&mesh), gas_(gas), order_(order), update_(update), limiter_(limiter), motion_(motion),
@@ -97,8 +96,8 @@ public:
     const Gas& gas() const { return gas_; }
     const MeshStats& mesh_stats() const { return mesh_stats_; }
 
-    // The global time step: the smallest of AREPO-ng's cell time steps, without the power-of-two bins;
-    // the sweep before it sets the point velocities (moving) and the gradients that step() uses.
+    // The global time step: the smallest of AREPO-ng's cell time steps, without the power-of-two bins; the sweep before
+    // it sets the point velocities (moving) and the gradients that step() uses.
     double time_step(double courant, Timings* timings = nullptr) {
         timer_.reset();
         refresh();
@@ -158,10 +157,10 @@ public:
         Kokkos::View<const int*, Memory> owner, neighbour, start, face;
         typename Mesh::Rows area, face_centroid, centroid;
         typename Mesh::FaceRows rows;
-        typename Mesh::Weights weights;  // gradient weights of list entry k
+        typename Mesh::Weights weights;
         Kokkos::View<const double*, Memory> volume;
         typename Mesh::Positions positions;
-        exact_predicates::BoxN<D> box;  // the periodic box, sides per axis (Mesh::sides())
+        exact_predicates::BoxN<D> box;
 
         template <class Rows>
         KOKKOS_INLINE_FUNCTION Vec row(const Rows& v, int i) const {
@@ -214,8 +213,7 @@ public:
         }
     };
 
-    // The phases, public only because CUDA device lambdas may not be
-    // defined in private member functions.
+    // The phases, public only because CUDA device lambdas may not be defined in private member functions.
 
     // Ends a timed phase (fenced) when timings are wanted.
     void phase_end(Timings* timings, double Timings::*part) {
@@ -301,8 +299,7 @@ public:
             const State Wi = primitive_row(prim, i);
             double surface = 0, smallest_face = Kokkos::Experimental::infinity_v<double>, max_angle = 0;
             Gradient<D, G> grad;
-            // The neighbours' range: values W_j (double), or differences
-            // W_j - W_i (reduced precision: rounded once).
+            // The neighbours' range: values W_j (double), or differences W_j - W_i (reduced precision: rounded once).
             G lo[V], hi[V];
             for (int v = 0; v < V; ++v) {
                 grad[v] = hydro::Vec<D, G>{};
@@ -330,7 +327,7 @@ public:
                         for (int c = 0; c < D; ++c) weight[c] = static_cast<G>(geo.weights(k, c));
                     } else {
                         const Vec between = d + geo.row(geo.centroid, j) - centroid;
-                        X[0] = 1;  // the regressors (1, d), weighted by the area
+                        X[0] = 1;
                         for (int p = 1; p < U; ++p) X[p] = static_cast<G>(between[p - 1]);
                         const G w = static_cast<G>(magnitude);
                         for (int p = 0; p < U; ++p)
@@ -350,9 +347,7 @@ public:
                     }
                 }
             }
-            // Rare: a face below 1e-6 of the surface does not count for the
-            // range or the limiter. The common case needs no loop for the
-            // surface and no face area in the limiter's loop.
+            // Rare: a face below 1e-6 of the surface does not count for the range or the limiter.
             const double tiny = 1e-6 * surface;
             const bool any_tiny = smallest_face < tiny;
             if constexpr (Grad) {
@@ -366,7 +361,7 @@ public:
                                    ? cell_shaping_speed
                                    : cell_shaping_speed * (max_angle - 0.75 * cell_max_angle_factor) / (0.25 * cell_max_angle_factor);
                 Vec wi = velocity(Wi);
-                const Vec c = centroid;  // centroid - generator = -dx of AREPO
+                const Vec c = centroid;
                 const double cd = Kokkos::sqrt(dot(c, c));
                 if (cd > 0 && fraction > 0) wi = wi + c * (fraction * prim(i, V) / cd);
                 for (int a = 0; a < D; ++a) w(i, a) = wi[a];
@@ -548,7 +543,7 @@ public:
                 }
             });
         phase_end(timings, &Timings::drift);
-        geometry_ = {};  // no reference to what the update may reallocate
+        geometry_ = {};
         const voronoi::Report report = mesh_->update(x_);
         mesh_stats_.updates += 1;
         mesh_stats_.rebuilds += report.rebuilt;
@@ -680,9 +675,8 @@ public:
         const Geometry geo = geometry_;
         const auto q = q_;
         if (update_ == Update::per_cell) {
-            // In place at order 1: the fluxes read only the primitive and
-            // gradient rows; order 0 reads Q (FaceFlux::side), so into next_.
-            // Each cell counts the fallbacks of its own sides.
+            // In place at order 1: the fluxes read only the primitive and gradient rows; order 0 reads Q
+            // (FaceFlux::side), so into next_. Each cell counts the fallbacks of its own sides.
             const auto next = Order == 0 ? next_ : q_;
             Kokkos::parallel_reduce(
                 "hydro::fluxes_and_update", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),

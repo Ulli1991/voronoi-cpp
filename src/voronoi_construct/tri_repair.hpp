@@ -102,7 +102,7 @@ struct Screen {
             if (corners(t, k) > d) continue;
             const double ex = tri_mesh::steps(x0, point(d, 0), px), ey = tri_mesh::steps(y0, point(d, 1), py);
             const double le = ex * ex + ey * ey;
-            const double D = ey * mx - ex * my + le * det;  // < 0: inside (positive triangle)
+            const double D = ey * mx - ex * my + le * det;
             if (D > 16 * ep::epsilon * (Kokkos::abs(ey) * pmx + Kokkos::abs(ex) * pmy + le * spread)) continue;
             // Inside, or within rounding of the circle: the repair decides exactly.
             ++failing;
@@ -182,7 +182,7 @@ struct Plan {
         const int j1 = (j + 1) % 3, j2 = (j + 2) % 3;
         const int outer[4] = {links(t, k1), links(t, k2), links(u, j1), links(u, j2)};
         for (int o = 0; o < 4; ++o)
-            if (outer[o] == t || outer[o] == u) {  // a corner of degree 3: no such flip
+            if (outer[o] == t || outer[o] == u) {
                 list(s) = -1;
                 return;
             }
@@ -234,7 +234,6 @@ struct Apply {
         const int t = e >> 2, k = e & 3;
         const unsigned long long key = token | detail::hash(static_cast<unsigned>(e) ^ static_cast<unsigned>(token >> 29));
         // A flip writes rows only with its lock, so while the locks read so far are ours the planned rows are current.
-        // The first lock is taken for good: an edge may be listed twice.
         bool won = Kokkos::atomic_compare_exchange(&lock(t), key, token) == key;
         int u = -1, j = 0;
         if (won) {

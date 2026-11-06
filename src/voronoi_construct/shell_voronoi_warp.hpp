@@ -174,12 +174,12 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     if (planes == max_planes) return plane_overflow;
     __syncwarp(all_lanes);
 
-    // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers
-    // them, and lane j builds new vertices j and j + 32.
+    // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers them, and lane j
+    // builds new vertices j and j + 32.
     const unsigned below = (1u << l) - 1;
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
-        if (!(removed >> (k * lanes))) continue;  // the whole warp: no removed vertex here
+        if (!(removed >> (k * lanes))) continue;
         const int w = l + k * lanes;
         std::uint32_t corner = 0, adjacent = 0;
         if (out[k]) {
@@ -205,8 +205,7 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     const int free = max_vertices - in_use;
     __syncwarp(all_lanes);
 
-    // New vertex j lies on the edge from removed w to kept u, between planes
-    // a and b. It takes a free slot; u's edge back now ends at it.
+    // New vertex j lies on the edge from removed w to kept u, between planes a and b.
     int slot[per_lane], kept_end[per_lane], a[per_lane], b[per_lane];
     std::uint64_t made = 0;  // slots this lane filled
     for (int k = 0; k < per_lane; ++k) {
@@ -236,8 +235,8 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     const unsigned made_low = __reduce_or_sync(all_lanes, static_cast<unsigned>(made));
     const unsigned made_high = __reduce_or_sync(all_lanes, static_cast<unsigned>(made >> 32));
     __syncwarp(all_lanes);
-    // Across (a, b) is u, across (b, plane) the new vertex whose hole edge
-    // starts at b, across (plane, a) the one whose hole edge ends at a.
+    // Across (a, b) is u, across (b, plane) the new vertex whose hole edge starts at b, across (plane, a) the one whose
+    // hole edge ends at a.
     for (int k = 0; k < per_lane; ++k)
         if (l + k * lanes < created) c.adjacent[slot[k]] = pack(kept_end[k], c.starts[b[k]], c.ends[a[k]]);
     // Removed slots go back on the stack.
@@ -305,7 +304,7 @@ struct Kernel {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
             const int t = __shfl_sync(all_lanes, taken, 0);
-            if (t >= (local ? selection.count(grid.n) : grid.n)) return;  // the whole warp
+            if (t >= (local ? selection.count(grid.n) : grid.n)) return;
             build(c, local ? selection.slot(t) : t);
         }
 #else
@@ -323,14 +322,13 @@ struct Kernel {
         const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
 
         int planes = 0;
-        std::uint64_t live = 0;  // slots holding vertices
+        std::uint64_t live = 0;
         double radius2 = 3 * half_width * half_width;
         start_cube(c, half_width, planes, live);
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
 
-        // Sort the buffered candidates, then clip nearest-first while they
-        // can still cut the cell.
+        // Sort the buffered candidates, then clip nearest-first while they can still cut the cell.
         auto flush = [&]() {
             float key = l < buffered ? c.candidate_distance2[l] : 3.0e38f;
             int slot = l < buffered ? c.candidate_slot[l] : 0x7fffffff;
@@ -357,9 +355,8 @@ struct Kernel {
             buffered = 0;
         };
 
-        // Visit the grid cells of the walk (see shell_voronoi.hpp) 32 at a time: each lane checks one cell
-        // against 2R and reads its particles, so the loads overlap. A level is certified once the next
-        // cell's lower bound exceeds 2R.
+        // Visit the grid cells of the walk (see shell_voronoi.hpp) 32 at a time: each lane checks one cell against 2R
+        // and reads its particles, so the loads overlap.
         int level = adaptive ? int(grid.level(t)) : grid.levels, home[3], finer = -1;
         home_cell<cubic>(p, grid, level, home);
         while (status == ok) {
@@ -409,7 +406,7 @@ struct Kernel {
                 certified = true;
                 break;
             }
-            if (!adaptive || level == 2) break;  // no coarser grid fits the box
+            if (!adaptive || level == 2) break;
             finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
             for (int a = 0; a < 3; ++a) home[a] >>= 1;
             --level;
@@ -427,8 +424,7 @@ struct Kernel {
             if (__any_sync(all_lanes, touches)) status = uncertified;
         }
 
-        // Outputs and the owner rule use particle ids: the planes' slots
-        // become the particles there.
+        // Outputs and the owner rule use particle ids: the planes' slots become the particles there.
         const int id = grid.order(t);
         for (int k = 0; k < per_lane; ++k) {
             const int plane = l + k * lanes;
@@ -463,8 +459,8 @@ struct Kernel {
             const int start = c.first[plane];
             const Vec3 normal{double(c.nx[plane]), double(c.ny[plane]), double(c.nz[plane])};
             const Vec3 first{c.x[start], c.y[start], c.z[start]};
-            // Fan triangles (first, previous, x): twice the area vector, and the sum of (previous + x)
-            // weighted by areas projected on the normal; divided once per face.
+            // Fan triangles (first, previous, x): twice the area vector, and the sum of (previous + x) weighted by
+            // areas projected on the normal; divided once per face.
             Vec3 previous = first, twice_area{0, 0, 0}, weighted{0, 0, 0};
             double weight = 0;
             int vertex = start, steps = 0;
@@ -517,8 +513,8 @@ struct Kernel {
         int offset = exclusive_scan(owned_here, owned);
         if (status == ok && !(volume > 0)) status = degenerate;
 
-        // The owned faces go to one block per cell that lane 0 claims: with rings, each face as neighbour,
-        // ring length and ring (Cells::rings), otherwise neighbour, area and centroid.
+        // The owned faces go to one block per cell that lane 0 claims: with rings, each face as neighbour, ring length
+        // and ring (Cells::rings), otherwise neighbour, area and centroid.
         int fits = 1;
         long long block = 0;
         if constexpr (with_rings) {
@@ -531,7 +527,7 @@ struct Kernel {
                 block = out.ring_start(id);
             }
         } else if (l == 0 && status == ok) {
-            if (c.face_at + owned > c.face_end) {  // a new block for this warp
+            if (c.face_at + owned > c.face_end) {
                 const int size = Kokkos::max(owned, int{face_block});
                 long long at = 0;
                 fits = claim(out.face_used, static_cast<long long>(out.neighbour.extent(0)), 0, size, at);
@@ -604,13 +600,13 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     const Selection<typename ExecSpace::memory_space>& selection = {}) {
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
-        if (!selection.all() && out.with_rings()) {  // not needed: the per-thread kernel
+        if (!selection.all() && out.with_rings()) {
             construct(exec, grid, out, selection);
             return;
         }
         if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
             throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
-        const bool rings = out.with_rings(), cube = grid.cube();  // cube: the plain kernels' shorter walk
+        const bool rings = out.with_rings(), cube = grid.cube();
         const double half_width = detail::start_half_width(grid.box);
         using Memory = typename ExecSpace::memory_space;
         const Stencil<Memory> stencil = make_stencil(exec);

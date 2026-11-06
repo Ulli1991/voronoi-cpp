@@ -1,6 +1,5 @@
-// The starting mesh is the Delaunay tetrahedralization of the snapped positions, perturbed ties, on random, clustered,
-// lattice and degenerate input, checked by a brute-force host oracle (triangulation of the box, empty circumspheres)
-// and by exactly one representative per edge.
+// The starting mesh is the Delaunay tetrahedralization of the snapped positions (perturbed ties) on random, clustered,
+// lattice and degenerate input, checked by a brute-force host oracle.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -63,8 +62,8 @@ Verdict oracle(const Positions& x, const Box& box, const tet_mesh::Mesh<Memory>&
     std::vector<std::pair<ep::i64, int>> by_x(n);  // particles sorted by snapped x
     for (int i = 0; i < n; ++i) by_x[i] = {point(i, 0), i};
     std::sort(by_x.begin(), by_x.end());
-    // Emptiness: the circumcentre from exact integers (rounded once), so a
-    // particle clearly outside needs no exact test.
+    // Emptiness: the circumcentre from exact integers (rounded once), so a particle clearly outside needs no exact
+    // test.
     auto cross = [](const ep::Offset& p, const ep::Offset& q, ep::i128* r) {
         r[0] = ep::i128(p[1]) * q[2] - ep::i128(p[2]) * q[1];
         r[1] = ep::i128(p[2]) * q[0] - ep::i128(p[0]) * q[2];
@@ -92,8 +91,8 @@ Verdict oracle(const Positions& x, const Box& box, const tet_mesh::Mesh<Memory>&
             for (int k = 0; k < 3; ++k) d2 += (double(d[k]) - centre[k]) * (double(d[k]) - centre[k]);
             if (d2 <= r2 * (1 + 1e-9) + 1) empty = !ep::in_sphere(point, v, e);
         };
-        // Particles with x within the radius (and a margin) of the centre,
-        // in every periodic image; all of them if that spans the box.
+        // Particles with x within the radius (and a margin) of the centre, in every periodic image; all of them if that
+        // spans the box.
         const double period = double(box.period[0]), reach = std::sqrt(r2 * (1 + 1e-9) + 1) + 2;
         const double lo = point(v[0], 0) + centre[0] - reach, hi = point(v[0], 0) + centre[0] + reach;
         if (hi - lo >= period) {
@@ -168,8 +167,7 @@ int main(int argc, char** argv) {
                                             ", several " + std::to_string(many) + ")");
         // Random input needs no patch: the clipping's rings are already right.
         if (kind == "jittered") check.expect(stats.patched == 0, "jittered: nothing patched");
-        // The oracle is not blind: it rejects the mesh with one corner moved
-        // to another particle.
+        // The oracle is not blind: it rejects the mesh with one corner moved to another particle.
         if (kind == "jittered") {
             tet_mesh::Mesh<Memory> broken = mesh;
             broken.vertex = tet_mesh::Quads<Memory>("broken", mesh.vertex.extent(0));

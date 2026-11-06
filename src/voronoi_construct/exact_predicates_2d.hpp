@@ -38,8 +38,8 @@ KOKKOS_INLINE_FUNCTION bool in_circle(const Offset2* p, const int* id) {
     const int o = sign_of(cross(a, b));
     int d = circle_sign(a, b, e);
     if (d == 0) {
-        // Cofactor of lift i: -(-1)^i times the orientation of the other three,
-        // taken in order of increasing particle id.
+        // Cofactor of lift i: -(-1)^i times the orientation of the other three, taken in order of increasing particle
+        // id.
         int order[4] = {0, 1, 2, 3};
         for (int i = 1; i < 4; ++i)
             for (int j = i; j > 0 && id[order[j - 1]] > id[order[j]]; --j) {

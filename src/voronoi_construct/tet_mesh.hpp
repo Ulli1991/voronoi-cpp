@@ -425,8 +425,8 @@ int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpac
         },
         unresolved);
 
-    // Neighbours: across a triangle through edge i-j, the next tetrahedron in
-    // that ring; across the other two triangles, look up their own rings.
+    // Neighbours: across a triangle through edge i-j, the next tetrahedron in that ring; across the other two
+    // triangles, look up their own rings.
     int open = 0;
     Kokkos::parallel_reduce(
         "tet_mesh::adjacency", Range(exec, 0, faces),
@@ -435,10 +435,10 @@ int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpac
             for (int m = 0; m < k; ++m) {
                 if (!emits(g, m)) continue;
                 const int e = ring(base + m);
-                adjacent(e, 2) = ring(base + (m + 1) % k);      // opposite p: triangle (i, j, q)
-                adjacent(e, 3) = ring(base + (m + k - 1) % k);  // opposite q: triangle (i, j, p)
+                adjacent(e, 2) = ring(base + (m + 1) % k);
+                adjacent(e, 3) = ring(base + (m + k - 1) % k);
                 const int v[4] = {vertex(e, 0), vertex(e, 1), vertex(e, 2), vertex(e, 3)};
-                for (int drop = 0; drop < 2; ++drop) {  // opposite i, then j
+                for (int drop = 0; drop < 2; ++drop) {
                     int tri[3];
                     sorted_face(v, drop, tri);
                     const int h = face_of(tri[0], tri[1]);
@@ -532,8 +532,8 @@ struct FaceRings {
     int used = 0;         // its entries in use, superseded rings included
     int tets = 0;         // tetrahedra numbered by the last update
     int dirty_count = 0;  // entries of `dirty`
-    // Whether the spare pool holds, from its start, the new number of every face of the last update but one
-    // (-1: gone), `renumbered` faces.
+    // Whether the spare pool holds, from its start, the new number of every face of the last update but one (-1: gone),
+    // `renumbered` faces.
     bool renumber_valid = false;
     int renumbered = 0;
 };
@@ -691,8 +691,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     rings.dirty = all ? Borrowed() : Borrowed(rings.pool[1 - rings.in_use].data() + rings.faces, faces);
     const auto dirty = rings.dirty;
 
-    // Dirty faces (a touched tetrahedron on their ring): ring_start
-    // ~representative, listed once in `dirty`.
+    // Dirty faces (a touched tetrahedron on their ring): ring_start ~representative, listed once in `dirty`.
     Kokkos::deep_copy(exec, listed, 0);
     int dirty_faces = 0;
     if (!all) {
@@ -718,8 +717,8 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
             },
             dirty_faces);
     }
-    // The dirty faces' rings, one kernel: walked, room claimed in the pool, walked again canonically;
-    // a ring without room stays dirty for the compaction.
+    // The dirty faces' rings, one kernel: walked, room claimed in the pool, walked again canonically; a ring without
+    // room stays dirty for the compaction.
     int dirty_entries = 0;
     if (!all) {
         const auto pool = rings.pool[rings.in_use];
@@ -778,8 +777,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                 entries);
             rings.used = entries;
         }
-        // The emptied pool is the next spare. If it is the smaller (the spare had been grown as scratch), the rings move back
-        // into it, grown to hold them plus half as much to append, and the larger stays the spare: two scratch-sized pools would double it.
+        // The emptied pool is the next spare.
         auto& spare = rings.pool[1 - rings.in_use];
         const auto& pool = rings.pool[rings.in_use];
         if (spare.extent(0) < pool.extent(0)) {
@@ -851,8 +849,7 @@ KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
 KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x), mul(a.y, b.y)), mul(a.z, b.z)); }
 }  // namespace rounded
 
-// The pieces of a stored circumcentre (Mesh::centre), each operation rounded on its own (`rounded`). The screening
-// (tet_repair::move_screened) and circumcentres() use them on corners sorted by id: the same bits whichever computes it.
+// The pieces of a stored circumcentre (Mesh::centre), each operation rounded on its own (`rounded`).
 
 namespace R = rounded;
 
@@ -957,8 +954,8 @@ void faces(const ExecSpace& exec, const X& x, const Box& box,
             const Vec3 p = row(x, i);
             auto vertex = [&](int m) { return wrap(row(mesh.centre, mesh.ring(m)) - p, box); };
             const Vec3 dj = wrap(row(x, j) - p, box);
-            // Fan triangles (first, previous, v): twice the area vector and (previous + v) weighted by the triangle's area projected
-            // on dj, divided once per face (idea from Doug Rennehan's plume, commit 6cbb429).
+            // Fan triangles (first, previous, v): twice the area vector and (previous + v) weighted by the triangle's
+            // area projected on dj, divided once per face (idea from Doug Rennehan's plume, commit 6cbb429).
             const Vec3 first = vertex(begin);
             Vec3 previous = vertex(begin + 1), twice_area{0, 0, 0}, weighted{0, 0, 0};
             double weight = 0;
@@ -972,7 +969,7 @@ void faces(const ExecSpace& exec, const X& x, const Box& box,
                 previous = v;
             }
             Vec3 area = twice_area * 0.5;
-            double projected = dot(area, dj);  // |A| |dj|, A parallel to dj up to rounding
+            double projected = dot(area, dj);
             if (projected < 0) {
                 area = area * -1.0;
                 projected = -projected;
@@ -1112,12 +1109,12 @@ struct CellSortWarp {
 
     KOKKOS_FUNCTION void operator()(const typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& member) const {
         const int i = member.league_rank() * warps + member.team_rank();
-        if (i >= n || !(all || marked(i) == 2)) return;  // the whole warp
+        if (i >= n || !(all || marked(i) == 2)) return;
 #if defined(__CUDA_ARCH__)
         const int begin = start(i), end = start(i + 1);
         constexpr unsigned everyone = 0xffffffffu;
         const int l = threadIdx.x;
-        if (end - begin > 32) {  // rare: one thread
+        if (end - begin > 32) {
             if (l == 0) sort_list(face, other, owner, neighbour, i, begin, end);
             return;
         }
@@ -1158,7 +1155,7 @@ struct CellSumsWarp {
         const int begin = real ? lists.start(i) : 0, length = real ? lists.start(i + 1) - begin : 0;
         const int from = real && !lists.all ? lists.old_start(i) : 0;
         const bool is_kept = real && lists.kept(i);
-        int batches = (length + lanes - 1) / lanes;  // the same for the whole warp
+        int batches = (length + lanes - 1) / lanes;
         for (int stride = lanes; stride < 32; stride <<= 1)
             batches = Kokkos::max(batches, __shfl_xor_sync(everyone, batches, stride));
         double v = 0;
@@ -1369,7 +1366,7 @@ void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicate
             const int o = owner(f), j = neighbour(f);
             face(Kokkos::atomic_fetch_inc(&cursor(o))) = f;
             face(Kokkos::atomic_fetch_inc(&cursor(j))) = f;
-            marked(o) = 2;  // to sort: its kept entries alone stand sorted
+            marked(o) = 2;
             marked(j) = 2;
         });
     sort_and_sum<D>(exec, x, box, geometry, out, old_start, old_face, renumber, owner, neighbour, other,

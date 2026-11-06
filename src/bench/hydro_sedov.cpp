@@ -1,5 +1,4 @@
 // The Sedov-Taylor blast of LUNA on the Voronoi mesh (hydro::FiniteVolume), static or moving, with phase timings.
-// Usage: hydro_sedov <side> <jittered|uniform> [--order=] [--moving] [--bulk=] [--box=] [--out=] [--steps=]; options in main().
 
 
 #include "finite_volume.hpp"
@@ -182,8 +181,7 @@ template <class P, class R>
 void run(const Options& o, Points points) {
     using FV = hydro::FiniteVolume<3, Exec, R, P>;
     using Mesh = typename FV::Mesh;  // with the float face rows and gradient weights P asks for
-    // CourantFac of AREPO next generation's Sedov examples
-    // (examples/sedov_3d/sedov_globaltstp_3d/param.txt:52).
+    // CourantFac of AREPO next generation's Sedov examples (examples/sedov_3d/sedov_globaltstp_3d/param.txt:52).
     const double courant = 0.3;
     const Sedov sedov;
     const Box& box = o.box;
@@ -257,8 +255,8 @@ void run(const Options& o, Points points) {
     snap.order = o.order;
     snap.gas = gas;
     snap.units = sedov.units;
-    // The radius of the disturbed region (density or pressure off the background by 1e-6);
-    // for a uniform stream, the largest relative deviation of rho, P and v.
+    // The radius of the disturbed region (density or pressure off the background by 1e-6); for a uniform stream, the
+    // largest relative deviation of rho, P and v.
     auto write = [&](int index, double t) {
         const auto Q = to_host(fv.state());
         const auto x = to_host(mesh.positions());
@@ -321,7 +319,7 @@ void run(const Options& o, Points points) {
         mesh_ms.push_back(timings.mesh);
         cells_ms.push_back(timings.cells);
         gpu_ms += timings.primitives + timings.sweep + timings.fluxes + timings.update + timings.drift + timings.mesh + timings.cells;
-        fallbacks = fv.fallbacks() < 0 ? -1 : fallbacks + fv.fallbacks();  // -1: not counted (per-cell loop)
+        fallbacks = fv.fallbacks() < 0 ? -1 : fallbacks + fv.fallbacks();
         most_fallbacks = std::max(most_fallbacks, fv.fallbacks());
         steps_with_fallbacks += fv.fallbacks() > 0;
         t = snapshot ? t_next : t + dt;
@@ -427,8 +425,8 @@ int main(int argc, char** argv) {
     o.snapshots = std::stoi(flag(argc, argv, "--snapshots", "10"));
     o.max_steps = std::stoll(flag(argc, argv, "--steps", "0"));
     o.input_order = flag(argc, argv, "--input-order", "") == "1";
-    // The periodic box: --box=fx,fy,fz times the 50 pc of LUNA's set-up (a
-    // cube by default); the lattice keeps about equal spacings per axis.
+    // The periodic box: --box=fx,fy,fz times the 50 pc of LUNA's set-up (a cube by default); the lattice keeps about
+    // equal spacings per axis.
     const Sedov sedov;
     const std::string shape_arg = flag(argc, argv, "--box", "1,1,1");
     double f[3] = {1, 1, 1};

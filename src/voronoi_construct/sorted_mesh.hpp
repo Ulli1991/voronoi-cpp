@@ -120,7 +120,7 @@ public:
             return;
         }
 #endif
-        (void)bits;  // the host sort compares whole keys
+        (void)bits;
         if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, Memory>::accessible) {
             exec.fence();
             Key* k = keys.data();
@@ -206,7 +206,7 @@ public:
         } else if (!still_sorted(x)) {
             snap_all(x);
             sorter_.sort(exec_, keys_, ids_, line_);
-            report.rebuilt = true;  // sorted again
+            report.rebuilt = true;
             ++sorts_;
         }
         current_ = false;
@@ -242,7 +242,7 @@ public:
         Kokkos::parallel_for(
             "mesh1::locate", Kokkos::RangePolicy<ExecSpace>(exec_, 0, requested), KOKKOS_LAMBDA(int r) {
                 const sorted_mesh::Key key = sorted_mesh::snap(points(r, 0), grid, periodic);
-                int lo = 0, hi = n;  // the first slot past `key`, counted from the smallest key
+                int lo = 0, hi = n;
                 while (lo < hi) {
                     const int mid = lo + (hi - lo) / 2, slot = mid + start >= n ? mid + start - n : mid + start;
                     if (line.key(slot) <= key)
@@ -252,10 +252,10 @@ public:
                 }
                 keys(r) = key;
                 const int before = lo == 0 ? 0 : (lo - 1 + start >= n ? lo - 1 + start - n : lo - 1 + start);
-                rank(r) = lo == 0 || line.key(before) != key ? lo : -1;  // -1: on a generator
+                rank(r) = lo == 0 || line.key(before) != key ? lo : -1;
             });
-        // Which ones go ahead, decided on the host: a request per gap, the
-        // earliest in order of position, then of request.
+        // Which ones go ahead, decided on the host: a request per gap, the earliest in order of position, then of
+        // request.
         const auto rank_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, rank);
         const auto key_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, keys);
         std::vector<int> by_place(static_cast<std::size_t>(requested));
@@ -311,7 +311,7 @@ public:
                 const int at = rank(r);
                 const sorted_mesh::i64 p = static_cast<sorted_mesh::i64>(keys(r));
                 const bool wall_left = !periodic && at == 0, wall_right = !periodic && at == n;
-                const int a = (at - 1 + start + n) % n, b = (at + start) % n;  // the slots around the new point
+                const int a = (at - 1 + start + n) % n, b = (at + start) % n;
                 const sorted_mesh::i64 ka = static_cast<sorted_mesh::i64>(line.key(a)), kb = static_cast<sorted_mesh::i64>(line.key(b));
                 const double half = 0.5 * line.step;
                 if (!wall_left) {
@@ -332,8 +332,8 @@ public:
                     overlap(r, 1) = static_cast<double>(from_b < 0 ? from_b + line.period : from_b) * half;
                 }
             });
-        // The old slots move up by the new points before them; ids_ and keys_
-        // are spare, and the line starts at its smallest key from here on.
+        // The old slots move up by the new points before them; ids_ and keys_ are spare, and the line starts at its
+        // smallest key from here on.
         const auto next_order = ids_;
         const auto next_key = keys_;
         const int accepted = done;
@@ -366,7 +366,7 @@ public:
         const Line line = line_;
         const int n = n_;
         const bool periodic = periodic_;
-        const auto slot_of = ids_;  // spare: by id
+        const auto slot_of = ids_;
         Kokkos::parallel_for(
             "mesh1::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n), KOKKOS_LAMBDA(int s) { slot_of(line.order(s)) = s; });
         const auto rank = rank_;
@@ -384,7 +384,7 @@ public:
         for (const int r : by_slot) {
             const int s = slot_host(r);
             if (s < 0 || s == last || s == last + 1 || n - done <= 3) continue;
-            if (periodic && s == n - 1 && first_slot_gone == 0) continue;  // the seam
+            if (periodic && s == n - 1 && first_slot_gone == 0) continue;
             go[static_cast<std::size_t>(r)] = 1;
             last = s;
             if (done++ == 0) first_slot_gone = s;
@@ -412,7 +412,7 @@ public:
         }
         std::sort(holes.begin(), holes.end());
         const auto moved_host = Kokkos::create_mirror_view(changes_.moved);
-        const auto new_id = sorted_ids_;  // by (id - kept)
+        const auto new_id = sorted_ids_;
         const auto new_id_host = Kokkos::create_mirror_view(new_id);
         int moves = 0;
         for (int i = kept; i < n; ++i) {
@@ -669,7 +669,7 @@ public:
                     owner(n) = i;
                     neighbour(n) = -2;
                     area(n, 0) = 1.0;
-                    face_centroid(n, 0) = half;  // half the gap to the mirror: the wall
+                    face_centroid(n, 0) = half;
                 }
                 if (l < 0) {
                     owner(n - 1) = i;

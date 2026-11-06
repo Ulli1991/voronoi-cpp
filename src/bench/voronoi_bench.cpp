@@ -1,6 +1,4 @@
-// Timing and debugging of the mesh pipeline (not a test): `rebuild <n> <distribution>` times full clipping builds,
-// `step <n> <distribution> <displacement>` the persistent voronoi::Mesh; flags and distributions are listed in
-// docs/design.md (Benchmark drivers).
+// Timing and debugging of the mesh pipeline (not a test):
 
 #include "support.hpp"
 
@@ -339,7 +337,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         // The start kernels: clipping with rings, from_rings and the exact start (tet_start::build, which rewrites rings, so timed with a fresh clipping).
         const auto list = cell_list(x, box);
         const auto grid = shell_voronoi::make_grid(list);
-        auto cells = cells_with_rings(list);  // sizes the ring pool
+        auto cells = cells_with_rings(list);
         tet_mesh::Mesh<Memory> mesh;
         tet_start::Stats start;
         const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });

@@ -1,6 +1,5 @@
 // The 1D mesh (voronoi::Mesh<1>, sorted_mesh.hpp) against a host oracle in integers (quarter grid steps): order, cells,
 // faces, wall cases, and after every step (order kept or crossed, wrapping) equal to a fresh build bit for bit.
-// Insertion and removal against the oracle, a fresh build and brute-force overlaps; details in docs/design.md.
 
 #include "check.hpp"
 #include "voronoi_mesh.hpp"
@@ -216,9 +215,9 @@ void changes_on(Check& check, bool periodic, const Exec& exec, std::mt19937_64& 
             std::vector<double> points;
             const int k = 1 + static_cast<int>(rng() % 12);
             for (int r = 0; r < k; ++r) points.push_back(L * unit(rng));
-            points.push_back(x[rng() % x.size()]);                      // on a generator
-            points.push_back(std::nextafter(points[0], L) + grid.step);  // the gap of points[0]
-            if (!periodic) points.push_back(0.1 * L / static_cast<double>(x.size()) * unit(rng));  // near a wall
+            points.push_back(x[rng() % x.size()]);
+            points.push_back(std::nextafter(points[0], L) + grid.step);
+            if (!periodic) points.push_back(0.1 * L / static_cast<double>(x.size()) * unit(rng));
             if (!periodic) points.push_back(L * (1 - 0.1 * unit(rng) / static_cast<double>(x.size())));
             const X requests = device(points);
             const std::size_t old_n = x.size();
@@ -366,7 +365,7 @@ int main(int argc, char* argv[]) {
             std::vector<double> x(n);
             for (double& v : x) v = L * unit(rng);
             inputs.emplace_back("uniform", x);
-            for (int i = 0; i < n; ++i) x[i] = L * ((n - 1 - i) + 0.5) / n;  // reversed ids
+            for (int i = 0; i < n; ++i) x[i] = L * ((n - 1 - i) + 0.5) / n;
             inputs.emplace_back("lattice", x);
             for (int i = 0; i < n; ++i) x[i] = L * std::floor(20 * unit(rng)) / 20 + 0.1 * grid.step * unit(rng);
             inputs.emplace_back("duplicates", x);
@@ -377,8 +376,8 @@ int main(int argc, char* argv[]) {
                 check.expect(bad.empty(), "build: " + ends + " L=" + std::to_string(int(L)) + " " + name +
                                               ": the oracle's order, cells and faces" + (bad.empty() ? "" : " (" + bad + ")"));
             }
-            // Moving: steps of 0.01 spacings (order kept), then 0.7 spacings (points cross),
-            // with a drift that wraps (periodic) or is clamped at the walls.
+            // Moving: steps of 0.01 spacings (order kept), then 0.7 spacings (points cross), with a drift that wraps
+            // (periodic) or is clamped at the walls.
             std::vector<double> y = inputs[0].second;
             Mesh mesh(exec, box, periodic ? voronoi::Ends::periodic : voronoi::Ends::walls);
             mesh.update(device(y));
@@ -388,8 +387,8 @@ int main(int argc, char* argv[]) {
             std::uniform_real_distribution<double> jitter(-1.0, 1.0);
             for (int stepno = 0; stepno < 12; ++stepno) {
                 const bool large = stepno >= 6;
-                // Small steps: a monotone map (a smooth compression, plus a
-                // shift through L when periodic) that keeps the order.
+                // Small steps: a monotone map (a smooth compression, plus a shift through L when periodic) that keeps
+                // the order.
                 for (double& v : y) {
                     v += large ? spacing * 0.7 * jitter(rng)
                                : 0.5 * spacing * std::sin(2 * M_PI * v / L) + (periodic ? 0.03 * L : 0.0);

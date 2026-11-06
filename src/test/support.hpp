@@ -1,7 +1,6 @@
 #pragma once
 
 // Inputs, reference results and comparisons shared by the tests and the benchmark.
-// The reference checks are brute force: test oracles only.
 
 #include "neighbor_search.hpp"
 #include "shell_voronoi_warp.hpp"
@@ -471,7 +470,7 @@ using Mesh = voronoi::Mesh<3, Exec>;
 template <class M>  // any voronoi::Mesh<3, Exec, ...>
 tet_flips::Mesh host_tetrahedra(const M& mesh) {
     auto copy = [](const auto& v) {
-        auto h = Kokkos::create_mirror(Kokkos::HostSpace{}, v);  // a copy even on host backends
+        auto h = Kokkos::create_mirror(Kokkos::HostSpace{}, v);
         Kokkos::deep_copy(h, v);
         return h;
     };

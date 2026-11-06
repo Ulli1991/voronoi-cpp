@@ -34,7 +34,7 @@ inline std::vector<Triple> delaunay(const std::vector<ep::Offset2>& p, const std
                 kept.push_back(t);
                 continue;
             }
-            for (int k = 0; k < 3; ++k) {  // an edge of two cavity triangles is no rim
+            for (int k = 0; k < 3; ++k) {
                 const Edge edge{t[(k + 1) % 3], t[(k + 2) % 3]};
                 const auto twin = std::find(rim.begin(), rim.end(), Edge{edge.second, edge.first});
                 if (twin == rim.end())
@@ -105,7 +105,7 @@ Stats finish(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
             constexpr ep::i64 far = ep::i64(1) << 28;
             p = {{-far, -far}, {3 * far, -far}, {-far, 3 * far}};
             id = {-3, -2, -1};
-            std::map<Edge, std::pair<int, int>> rim;  // directed edge: outer triangle, face
+            std::map<Edge, std::pair<int, int>> rim;
             std::vector<int> inner;
             bool fits = true;
             for (const int t : patch)
@@ -116,7 +116,7 @@ Stats finish(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
                         id.push_back(a);
                         fits = fits && std::abs(p.back()[0]) < far / 2 && std::abs(p.back()[1]) < far / 2;
                     }
-                    if (!in_patch[u])  // an edge twice (flips at inversions can leave that): not yet a disc
+                    if (!in_patch[u])
                         fits = rim.insert({{a, b}, {u, links(t, 3 + k)}}).second && fits;
                     else if (t < u)
                         inner.push_back(links(t, 3 + k));
@@ -125,7 +125,7 @@ Stats finish(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
 
             // The Delaunay triangles inside the boundary: flood from it.
             const std::vector<Triple> all = delaunay(p, id);
-            std::map<Edge, int> holder;  // directed edge in particles: triangle of `all`
+            std::map<Edge, int> holder;
             for (int m = 0; m < static_cast<int>(all.size()); ++m)
                 for (int k = 0; k < 3; ++k) holder[{id[all[m][(k + 1) % 3]], id[all[m][(k + 2) % 3]]}] = m;
             std::vector<char> inside(all.size(), 0);
