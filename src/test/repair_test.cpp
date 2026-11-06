@@ -4,12 +4,74 @@
 #include "check.hpp"
 #include "support.hpp"
 
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <map>
+#include <random>
 #include <sstream>
+
+namespace {
+
+// Local rebuilds in a small region with open faces reach a bounding corner, which used to become the frame's origin,
+// particle -1 (#35). The positions start a page after a guard page, so such a read ends the program in any build.
+void test_local_rebuild_near_a_corner(Check& check) {
+    using Host = Kokkos::HostSpace;
+    namespace ep = exact_predicates;
+    constexpr int n = 12;
+    const long page = sysconf(_SC_PAGESIZE);
+    void* pages = mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check.expect(pages != MAP_FAILED && mprotect(pages, page, PROT_NONE) == 0, "a guard page before the positions");
+    int* rows = reinterpret_cast<int*>(static_cast<char*>(pages) + page);
+    std::mt19937 rng(5);
+    std::vector<ep::Offset> local;
+    std::vector<int> id;
+    for (int i = 0; i < n; ++i) {
+        for (int a = 0; a < 3; ++a) rows[4 * i + a] = 1000 + static_cast<int>(rng() % 1000);
+        local.push_back({rows[4 * i], rows[4 * i + 1], rows[4 * i + 2]});
+        id.push_back(i);
+    }
+    std::vector<tet_flips::Tet> tets;
+    for (const auto& t : tet_flips::detail::delaunay(local, id))
+        if (*std::max_element(t.begin(), t.end()) < n) tets.push_back(t);
+    const int count = static_cast<int>(tets.size()), capacity = 4 * count + 256;
+    const ep::Box box(1.0);
+    long long rebuilt = 0;
+    for (int seed = 0; seed < count; ++seed) {
+        tet_flips::Mesh m{tet_mesh::Quads<Host>("vertex", capacity), tet_mesh::Quads<Host>("adjacent", capacity),
+                          Kokkos::View<char*, Host>("alive", capacity), {ep::Points<Host>::View(rows, n), box.period}, count};
+        std::map<std::array<int, 3>, std::pair<int, int>> open;
+        for (int t = 0; t < count; ++t) {
+            m.alive(t) = 1;
+            for (int k = 0; k < 4; ++k) {
+                m.vertex(t, k) = tets[t][k];
+                m.adjacent(t, k) = -1;
+            }
+            for (int k = 0; k < 4; ++k) {
+                const auto key = tet_flips::detail::face_key(tets[t], k);
+                const auto it = open.find(key);
+                if (it == open.end()) {
+                    open[key] = {t, k};
+                    continue;
+                }
+                m.adjacent(t, k) = it->second.first;
+                m.adjacent(it->second.first, it->second.second) = t;
+            }
+        }
+        rebuilt += !tet_flips::detail::rebuild(m, seed, -1).empty();
+    }
+    check.expect(count > 0, "local rebuilds near a bounding corner read no particle -1 (" + std::to_string(count) + " seeds, " +
+                                std::to_string(rebuilt) + " replaced)");
+    munmap(pages, 2 * page);
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     using namespace support;
     Check check;
+    test_local_rebuild_near_a_corner(check);
     const Flow flow;
     // One flow run: point kind, spacings moved per step, step count, box, particle count, label for the box.
     struct Case {

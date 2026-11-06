@@ -298,7 +298,9 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
         // Widen the stars over the particles of the faces that did not fit (over the whole ring if that adds none).
         const std::size_t before = seeds.size();
         for (const auto& [key, count] : boundary)
-            if (count != 0) seeds.insert(seeds.end(), key.begin(), key.end());
+            if (count != 0)
+                for (const int v : key)
+                    if (v >= 0) seeds.push_back(v);  // -1 is a bounding corner, no particle
         std::sort(seeds.begin(), seeds.end());
         seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
         if (seeds.size() == before) seeds = ring;
