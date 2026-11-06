@@ -133,7 +133,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
 | `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the pipeline below behind one interface |
-| `sorted_mesh.hpp` | `voronoi::Mesh<1>`: generators sorted on a 2^52 grid, ties by id, periodic or with walls; the order is checked every step and sorted only when points crossed |
+| `sorted_mesh.hpp` | `voronoi::Mesh<1>`: generators sorted on a 2^52 grid, ties by id, periodic or with walls; the order is checked every step and sorted only when points crossed; `insert()` and `remove()` change the line between updates, with a report of the ids and of which old cells overlap which new ones |
 
 **Clipping.** Each cell is built by walking the grid cells of its level
 around its generator, nearest first, clipping with every particle that
@@ -412,9 +412,10 @@ research_notes/stage1_1d_2026-11-04.md.
   `active` list for later.
 - Periodic boxes only (any three sides; see the certification limit
   above for thin slabs); only 1D has walls.
-- 1D moving mesh, inflow: no refinement, so the gas that enters from an
-  inflow wall fills a few grown cells. That gas is not uniform in general
-  (Shu-Osher: acoustic waves cross it), so the error there does not converge.
+- 1D moving mesh, inflow: the hydro in this repository does not use the mesh's
+  `insert()`, so the gas that enters from an inflow wall fills a few grown
+  cells and the error there does not converge (Shu-Osher). luna-cpp, where the
+  hydro now lives, supplies cells at the wall.
 - 1D moving mesh: the error of Woodward-Colella stops falling near
   N = 2^15, at every Courant number tried
   (research_notes/stage1_1d_2026-11-04.md).
