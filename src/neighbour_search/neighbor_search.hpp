@@ -82,6 +82,8 @@ KOKKOS_INLINE_FUNCTION std::uint32_t spread3_short(std::uint32_t v) {
     v = (v | v << 2) & 0x9249249u;
     return v;
 }
+// 3D Morton code of (x, y, z), each of at most 10 bits: bit k of x goes to bit 3k + 2, of y to 3k + 1, of z to 3k.
+// Used by: Grid::cell, Grid::range (shell_grid.hpp).
 KOKKOS_INLINE_FUNCTION std::uint32_t morton_short(std::uint32_t x, std::uint32_t y, std::uint32_t z) {
     return spread3_short(x) << 2 | spread3_short(y) << 1 | spread3_short(z);
 }
@@ -135,6 +137,8 @@ struct SortBuffers {
     std::uint64_t* keys[2];
     int* ids[2];
 };
+// Carves the SortBuffers out of `storage` (room for n particles); with nullptr only the layout is computed.
+// Used by: configure, build.
 inline SortBuffers sort_buffers(double* storage, int n) {
     auto* keys = reinterpret_cast<std::uint64_t*>(storage);
     auto* ids = reinterpret_cast<int*>(keys + 2 * static_cast<std::size_t>(n));

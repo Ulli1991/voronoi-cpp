@@ -22,6 +22,8 @@ namespace polygon_clip {
 namespace ep = exact_predicates;
 namespace sv = shell_voronoi;
 
+// Per-cell outcome code of the 2D clipping walk; the 3D codes are shell_voronoi::Status in shell_limits.hpp.
+// Used by: polygon_clip::construct_pass.
 enum Status : int {
     ok = 0,
     uncertified = 1,  // the walk reached the coarsest grid the box allows

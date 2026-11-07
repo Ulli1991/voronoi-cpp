@@ -88,7 +88,10 @@ Source map, in the order `Mesh<3>::update` calls it (stage numbers as in the fil
 | 0 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the entry point, `update`, `rebuild`, `update_cells`, `clip`; the pipeline behind one interface |
 | 1 | snapping | `Mesh::snap` in `voronoi_mesh.hpp`: positions to the 2³⁰ grid |
 | 2 | `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
-| 3 | `shell_voronoi.hpp` | clipping with a thread per cell: the walk, rounded and exact cells |
+| 3 | `shell_limits.hpp` | the cell status codes and the plane and vertex capacities |
+| 3 | `shell_grid.hpp` | the vectors, `Grid`, `Stencil` and the stencil-walk helpers shared by both kernels |
+| 3 | `shell_cell.hpp` | the rounded and exact cell under construction and the clip step |
+| 3 | `shell_voronoi.hpp` | clipping with a thread per cell: the walk and the construct passes |
 | 3 | `shell_voronoi_warp.hpp` | clipping with a warp per cell on CUDA, writing faces or face rings |
 | 3 | `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of cells around errors |
 | 4a | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
@@ -237,4 +240,4 @@ Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, th
 - `scripts/`: lint and A100 benchmark and test scripts.
 - `research_notes/`, `reports/`: status notes and surveys.
 
-CI (`.github/workflows/checks.yml`) checks the comment rules and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
+CI (`.github/workflows/checks.yml`) checks the comment rules (a header per file, a docstring on every multi-line library definition, comment runs of 3 lines at most) and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
