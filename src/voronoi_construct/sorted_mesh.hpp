@@ -18,7 +18,7 @@
 #endif
 
 // The 1D path of voronoi::Mesh<1> (included by voronoi_mesh.hpp): snap -> sort -> geometry, no clipping or repair.
-// Called by the hydro code (finite_volume_1d.hpp); feeds it faces, volumes and centroids.
+// Called by the finite-volume code of luna-cpp; feeds it faces, volumes and centroids.
 // The 1D Voronoi mesh: generators sorted by snapped position (ties by particle id), faces at the midpoints,
 // exact because distances are whole grid steps; periodic, or with walls via mirrored end generators.
 namespace sorted_mesh {
@@ -29,7 +29,7 @@ using i64 = ep::i64;
 using Key = std::uint64_t;
 
 // The grid of a line of length `side`.
-// Used by: Mesh<1>, snap, hydro/finite_volume_1d.hpp.
+// Used by: Mesh<1>, snap.
 struct Grid {
 #ifndef VORONOI_1D_BITS
 #define VORONOI_1D_BITS 52

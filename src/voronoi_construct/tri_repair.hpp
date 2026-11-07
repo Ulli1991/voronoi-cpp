@@ -57,6 +57,8 @@ void reserve(V& v, std::size_t size, bool keep) {
     else
         Kokkos::realloc(Kokkos::WithoutInitializing, v, size + size / 2);
 }
+// 32-bit integer hash (multiply/xorshift mix) used to spread a flip token over the lock keys.
+// Used by: Screen::operator(), Apply::operator().
 KOKKOS_INLINE_FUNCTION unsigned hash(unsigned x) {
     x *= 0x9e3779b1u;
     x ^= x >> 16;

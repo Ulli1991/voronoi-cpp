@@ -51,9 +51,13 @@ struct alignas(16) Polyhedron {
 
 // Used by: the Polyhedron accessors in clip.
 KOKKOS_INLINE_FUNCTION int byte(std::uint32_t packed, int k) { return (packed >> (8 * k)) & 255; }
+// Packs three byte-sized indices a, b, c into bits 0-7, 8-15, 16-23 of a word (byte() reads them back).
+// Used by: build, clip (corner and adjacent words).
 KOKKOS_INLINE_FUNCTION std::uint32_t pack(int a, int b, int c) {
     return std::uint32_t(a) | std::uint32_t(b) << 8 | std::uint32_t(c) << 16;
 }
+// Returns packed with byte k replaced by value.
+// Used by: build (adjacent words).
 KOKKOS_INLINE_FUNCTION std::uint32_t with_byte(std::uint32_t packed, int k, int value) {
     return (packed & ~(std::uint32_t(255) << (8 * k))) | std::uint32_t(value) << (8 * k);
 }
@@ -70,6 +74,8 @@ __device__ inline std::uint64_t vertex_ballot(const bool (&out)[per_lane]) {
     return bits;
 }
 
+// Maximum of v over all lanes of the warp (xor-shuffle butterfly); every lane gets the result.
+// Used by: build (the longest per-lane work list).
 template <class T>
 __device__ T warp_max(T v) {
     for (int o = lanes / 2; o > 0; o >>= 1) v = Kokkos::max(v, __shfl_xor_sync(all_lanes, v, o));
@@ -88,6 +94,8 @@ __device__ inline double warp_max_nonnegative(double v) {
     return __longlong_as_double(static_cast<long long>(static_cast<unsigned long long>(high) << 32 | low));
 }
 
+// Sum of v over all lanes of the warp (xor-shuffle butterfly); every lane gets the result.
+// Used by: the cell integrals (volume, moment, area sums, face count) at the end of the warp kernel.
 template <class T>
 __device__ T warp_sum(T v) {
     for (int o = lanes / 2; o > 0; o >>= 1) v += __shfl_xor_sync(all_lanes, v, o);

@@ -4,7 +4,7 @@ A C++ library that builds exact Voronoi meshes of moving particles on GPUs. You 
 
 The topology is exact. The cell geometry is not yet right in every case: two open bugs give wrong volumes with no error, see [Limitations](#limitations-and-open-items).
 
-The hydro lives in [luna-cpp](https://github.com/Ulli1991/luna-cpp), which uses this library as a submodule. The old copy in `src/hydro/` still builds here as a bit check of mesh changes and goes when the split is finished ([#16](https://github.com/Ulli1991/voronoi-cpp/issues/16)).
+The finite-volume hydro is a separate code, [luna-cpp](https://github.com/Ulli1991/luna-cpp), which takes only the mesh from here (as a submodule, through `voronoi_library` and `voronoi::Mesh`); this repository contains no solver.
 
 BSD 3-Clause, see [LICENSE](LICENSE).
 
@@ -88,7 +88,10 @@ Source map, in the order `Mesh<3>::update` calls it (stage numbers as in the fil
 | 0 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the entry point, `update`, `rebuild`, `update_cells`, `clip`; the pipeline behind one interface |
 | 1 | snapping | `Mesh::snap` in `voronoi_mesh.hpp`: positions to the 2³⁰ grid |
 | 2 | `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
-| 3 | `shell_voronoi.hpp` | clipping with a thread per cell: the walk, rounded and exact cells |
+| 3 | `shell_limits.hpp` | the cell status codes and the plane and vertex capacities |
+| 3 | `shell_grid.hpp` | the vectors, `Grid`, `Stencil` and the stencil-walk helpers shared by both kernels |
+| 3 | `shell_cell.hpp` | the rounded and exact cell under construction and the clip step |
+| 3 | `shell_voronoi.hpp` | clipping with a thread per cell: the walk and the construct passes |
 | 3 | `shell_voronoi_warp.hpp` | clipping with a warp per cell on CUDA, writing faces or face rings |
 | 3 | `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of cells around errors |
 | 4a | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
@@ -157,7 +160,7 @@ Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak
 
 ## Tests
 
-Twelve CTest programs specify the library and, until the split ends, the hydro copy. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
+Ten CTest programs specify the library. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
 |---|---|
@@ -166,11 +169,10 @@ Twelve CTest programs specify the library and, until the split ends, the hydro c
 | `mesh` | `from_rings` against a host construction; adjacency, exact check, volumes |
 | `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and several boxes |
 | `repair` | after every step of a flow the mesh equals an exact rebuild |
-| `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
+| `voronoi_mesh` | the contract of `voronoi::Mesh` that luna-cpp relies on |
 | `mesh_cases.*` | 3D special cases against an oracle that shares no code with the library: coincident points, extreme contrast, thin boxes, high valence, large motion, fallbacks, bits across backends |
-| `distortion` | flows that wind the mesh up, no hydro: shear, vortex, Taylor-Green, turbulence, collapse, expansion |
+| `distortion` | flows that wind the mesh up, with no solver: shear, vortex, Taylor-Green, turbulence, collapse, expansion |
 | `mesh2d` | the 2D mesh against independent oracles; a repaired mesh equals a fresh build bit for bit |
-| `hydro` | the hydro copy: HLLC and HLL fluxes, conservation, bit-identical runs, moving-mesh invariances |
 
 ```sh
 ctest --test-dir build-cuda --output-on-failure         # A100: ~5 minutes
@@ -234,8 +236,8 @@ Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, th
 
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests and their support code; `mesh_cases_test` has its groups in `src/test/mesh_cases/` (one file per group, shared helpers in `common.hpp`). `src/bench/`: `voronoi_bench`, `mesh2d_bench`.
-- `src/hydro/`, `hydro_sedov`, `hydro_1d`: the copy that goes ([#16](https://github.com/Ulli1991/voronoi-cpp/issues/16)).
+- Used by luna-cpp, keep: `voronoi_library`, `src/test/check.hpp`, `src/test/support.hpp` (and what it includes), `src/bench/device_memory.hpp`.
 - `scripts/`: lint and A100 benchmark and test scripts.
 - `research_notes/`, `reports/`: status notes and surveys.
 
-CI (`.github/workflows/checks.yml`) checks the comment rules and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
+CI (`.github/workflows/checks.yml`) checks the comment rules (a header per file, a docstring on every multi-line library definition, comment runs of 3 lines at most) and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.

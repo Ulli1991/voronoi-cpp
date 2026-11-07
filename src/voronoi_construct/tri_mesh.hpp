@@ -17,8 +17,12 @@ namespace tri_mesh {
 namespace ep = exact_predicates;
 using tet_mesh::Vec2;
 
+// Row-major view of one 6-int row per triangle (corners and links).
+// Used by: Mesh<2>, tri_mesh::Mesh (corners, links).
 template <class MemorySpace>
 using Sixes = Kokkos::View<int* [6], Kokkos::LayoutRight, MemorySpace>;
+// Row-major view of one 2D point per row (circumcentres, positions).
+// Used by: tri_mesh::Mesh (centre), tri_repair::State, Mesh<2> (Positions).
 template <class MemorySpace>
 using Rows2 = Kokkos::View<double* [2], Kokkos::LayoutRight, MemorySpace>;
 
