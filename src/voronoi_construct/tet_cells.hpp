@@ -28,6 +28,8 @@ namespace detail {
 // centroid (3D: 1/6 and 3/4).
 template <int D>
 constexpr double pyramid_volume = 1.0 / (2 * D);
+// Fraction of the generator-to-face-centroid distance at which a pyramid's centroid lies, D / (D + 1).
+// Used by: CellLists::finish.
 template <int D>
 constexpr double pyramid_centroid = static_cast<double>(D) / (D + 1);
 

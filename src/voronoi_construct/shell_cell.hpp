@@ -29,15 +29,15 @@ struct RoundedCell {
     static constexpr int planes_capacity = Planes, vertices_capacity = Vertices;
     static constexpr bool exact = false;
     static constexpr Index removed = 255;  // corner[v][0] of a removed vertex: no plane index reaches it
-    Vec3 normal[Planes];  // the cell is {x : normal . x <= offset}
+    Vec3 normal[Planes];                   // the cell is {x : normal . x <= offset}
     double offset[Planes];
     int id[Planes];
     Vec3 vertex[Vertices];
     Index corner[Vertices][3], adjacent[Vertices][3];
-    Index free_slot[Vertices];           // stack of the removed vertices' slots
-    Index starts[Planes], ends[Planes];  // a cut's new vertex whose hole edge starts / ends at a plane
+    Index free_slot[Vertices];                     // stack of the removed vertices' slots
+    Index starts[Planes], ends[Planes];            // a cut's new vertex whose hole edge starts / ends at a plane
     int planes = 0, vertices = 0, free_count = 0;  // vertices: slots ever used, free_count of them on the stack
-    double radius2 = 0;  // largest squared vertex distance from the generator
+    double radius2 = 0;                            // largest squared vertex distance from the generator
 
     KOKKOS_INLINE_FUNCTION Vec3 position(int v, double) const { return vertex[v]; }
     KOKKOS_INLINE_FUNCTION Vec3 face_normal(int plane) const { return normal[plane]; }
@@ -61,7 +61,7 @@ struct ExactCell {
     static constexpr int planes_capacity = Planes, vertices_capacity = Vertices;
     static constexpr bool exact = true;
     static constexpr Index removed = static_cast<Index>(-1);  // no plane index reaches it
-    ep::Offset offset[Planes];  // generator to the plane's particle
+    ep::Offset offset[Planes];                                // generator to the plane's particle
     int id[Planes];
     Index corner[Vertices][3], adjacent[Vertices][3];
     Index free_slot[Vertices];
@@ -134,8 +134,7 @@ KOKKOS_INLINE_FUNCTION bool inside(const C& cell, int v, const ep::Offset& e, in
     const double le = ex * ex + ey * ey + ez * ez;
     const double t0 = ex * cell.w[v][0], t1 = ey * cell.w[v][1], t2 = ez * cell.w[v][2], t3 = le * cell.o[v];
     const double value = t0 + t1 + t2 + t3;
-    const double bound =
-        16 * ep::epsilon * (Kokkos::abs(t0) + Kokkos::abs(t1) + Kokkos::abs(t2) + Kokkos::abs(t3));
+    const double bound = 16 * ep::epsilon * (Kokkos::abs(t0) + Kokkos::abs(t1) + Kokkos::abs(t2) + Kokkos::abs(t3));
     if (value > bound) return cell.o[v] < 0;
     if (value < -bound) return cell.o[v] > 0;
     const int a = cell.corner[v][0], b = cell.corner[v][1], c = cell.corner[v][2];
@@ -144,6 +143,8 @@ KOKKOS_INLINE_FUNCTION bool inside(const C& cell, int v, const ep::Offset& e, in
     return ep::in_sphere(p, ids);
 }
 
+// True if vertex v of the cell has not been removed by a clip (corner[v][0] == C::removed marks a dead slot).
+// Used by: shell_voronoi::construct_pass (live vertices of the ring count and the uncertified check).
 template <class C>
 KOKKOS_INLINE_FUNCTION bool live(const C& cell, int v) {
     return cell.corner[v][0] != C::removed;
@@ -264,7 +265,10 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             if (holes == max_holes) return vertex_overflow;
             const Index* across = cell.adjacent[u];
             hole[holes++] = {cell.corner[w][k], cell.corner[w][(k + 1) % 3], u,
-                             static_cast<Index>(across[0] == w ? 0 : across[1] == w ? 1 : 2), 0};
+                             static_cast<Index>(across[0] == w   ? 0
+                                                : across[1] == w ? 1
+                                                                 : 2),
+                             0};
         }
     }
     const int kept = cell.vertices - cell.free_count - cuts;

@@ -24,6 +24,8 @@ using Quads = Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace>;
 template <class MemorySpace>
 using Points4 = Kokkos::View<double* [4], Kokkos::LayoutRight, MemorySpace>;
 
+// The tetrahedral mesh of the particles: vertices, adjacency, circumcentres, and the owned Voronoi faces with their rings.
+// Used by: voronoi_mesh::Mesh<3>, tet_start, tet_repair, tet_flips.
 template <class MemorySpace>
 struct Mesh {
     Quads<MemorySpace> vertex;     // particles
@@ -56,6 +58,8 @@ KOKKOS_INLINE_FUNCTION void edge_ends(int k, int& a, int& b) {
     a = k < 3 ? 0 : k < 5 ? 1 : 2;
     b = k < 3 ? k + 1 : k < 5 ? k - 1 : 3;
 }
+// Index 0..5 of the edge joining corners a and b, the inverse of edge_ends.
+// Used by: assemble, edge_face, tet_repair::move_screened, tet_flips::finish.
 KOKKOS_INLINE_FUNCTION int edge_index(int a, int b) {  // corners a != b
     if (a > b) Kokkos::kokkos_swap(a, b);
     return a == 0 ? b - 1 : a == 1 ? b + 1 : 5;
@@ -250,10 +254,14 @@ using Box = exact_predicates::Box;
 KOKKOS_INLINE_FUNCTION double wrap(double d, double side, double inverse) {
     return d - side * Kokkos::nearbyint(d * inverse);
 }
+// The 3D wrap of a vector d to the nearest image in `box`.
+// Used by: faces, tet_repair::move_screened.
 KOKKOS_INLINE_FUNCTION Vec3 wrap(Vec3 d, const Box& box) {
     return {wrap(d.x, box.side[0], box.inverse[0]), wrap(d.y, box.side[1], box.inverse[1]),
             wrap(d.z, box.side[2], box.inverse[2])};
 }
+// The 2D wrap of a vector d to the nearest image in `box`.
+// Used by: tri_mesh::faces.
 KOKKOS_INLINE_FUNCTION Vec2 wrap(Vec2 d, const exact_predicates::BoxN<2>& box) {
     return {wrap(d.x, box.side[0], box.inverse[0]), wrap(d.y, box.side[1], box.inverse[1])};
 }
@@ -273,6 +281,8 @@ KOKKOS_INLINE_FUNCTION void store(const X& x, int i, Vec3 v) {
     x(i, 1) = v.y;
     x(i, 2) = v.z;
 }
+// Stores the 2D v as row i of x.
+// Used by: tri_mesh::faces, tri_repair::centres, tri_repair::Screen, CellLists::finish (D = 2).
 template <class X>
 KOKKOS_INLINE_FUNCTION void store(const X& x, int i, Vec2 v) {
     x(i, 0) = v.x;
@@ -542,6 +552,8 @@ struct FaceRings {
     int renumbered = 0;
 };
 
+// An empty FaceRings sized for `tets` tetrahedra, `faces` faces and `entries` ring entries (both pools).
+// Used by: Mesh<3>::rebuild (voronoi_mesh.hpp).
 template <class MemorySpace>
 FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
     using Ints = Kokkos::View<int*, MemorySpace>;
@@ -826,6 +838,7 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* 
 
 // Operations rounded one by one (no fused multiply-add), so inlined into different kernels they give the same bits.
 namespace rounded {
+// a * b, rounded. Used by: rounded_offsets, rounded_sliver, rounded_circumcentre, and cross/dot below.
 KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
 #if defined(__CUDA_ARCH__)
     return __dmul_rn(a, b);
@@ -834,6 +847,7 @@ KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
     return r;
 #endif
 }
+// a + b, rounded. Used by: rounded_circumcentre, dot.
 KOKKOS_INLINE_FUNCTION double add(double a, double b) {
 #if defined(__CUDA_ARCH__)
     return __dadd_rn(a, b);
@@ -841,6 +855,7 @@ KOKKOS_INLINE_FUNCTION double add(double a, double b) {
     return a + b;
 #endif
 }
+// a - b, rounded. Used by: rounded_offsets, cross.
 KOKKOS_INLINE_FUNCTION double sub(double a, double b) {
 #if defined(__CUDA_ARCH__)
     return __dsub_rn(a, b);
@@ -848,6 +863,7 @@ KOKKOS_INLINE_FUNCTION double sub(double a, double b) {
     return a - b;
 #endif
 }
+// Cross product of a and b, each operation rounded. Used by: rounded_sliver, rounded_circumcentre.
 KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
     return {sub(mul(a.y, b.z), mul(a.z, b.y)), sub(mul(a.z, b.x), mul(a.x, b.z)), sub(mul(a.x, b.y), mul(a.y, b.x))};
 }

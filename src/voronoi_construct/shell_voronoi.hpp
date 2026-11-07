@@ -149,10 +149,14 @@ KOKKOS_INLINE_FUNCTION bool claim(const Used& used, long long capacity, int t, i
     return static_cast<long long>(at) + need <= chunk;
 }
 
+// Claims need ring entries of cell t from the shared ring pool; false if its chunk is full.
+// Used by: construct_pass, the warp kernel (shell_voronoi_warp.hpp).
 template <class MemorySpace>
 KOKKOS_INLINE_FUNCTION bool claim_rings(const Cells<MemorySpace>& out, int t, int need) {
     return claim(out.ring_used, static_cast<long long>(out.rings.extent(0)), t, need, out.ring_start(t));
 }
+// Claims need face entries of cell t from the shared face pool; false if its chunk is full.
+// Used by: construct_pass.
 template <class MemorySpace>
 KOKKOS_INLINE_FUNCTION bool claim_faces(const Cells<MemorySpace>& out, int t, int need) {
     return claim(out.face_used, static_cast<long long>(out.neighbour.extent(0)), t, need, out.face_start(t));
@@ -177,10 +181,13 @@ enum class Pass { all, failed, overflowed };
 
 // A thread's cell: on its stack, the host's huge ones (over a megabyte) on
 // the heap, as an OpenMP thread may have little more than that.
+// Used by: construct_pass (the per-thread `holder`).
 template <class Cell, bool on_heap = (sizeof(Cell) > (1 << 20))>
 struct Held {
     Cell cell;
 };
+// Heap specialization: allocates the cell on the host in the constructor and frees it in the destructor.
+// Used by: Held<Cell> in construct_pass.
 template <class Cell>
 struct Held<Cell, true> {
     Cell* held;

@@ -24,6 +24,8 @@ KOKKOS_INLINE_FUNCTION Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y +
 KOKKOS_INLINE_FUNCTION Vec3 operator-(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 KOKKOS_INLINE_FUNCTION Vec3 operator*(Vec3 a, double s) { return {a.x * s, a.y * s, a.z * s}; }
 KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+// Cross product a x b of two 3D vectors; the Vec3 operators above are plain componentwise arithmetic.
+// Used by: the Vec3 geometry of shell_cell, shell_voronoi and shell_voronoi_warp.
 KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
     return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
@@ -35,6 +37,7 @@ KOKKOS_INLINE_FUNCTION Vec2 operator+(Vec2 a, Vec2 b) { return {a.x + b.x, a.y +
 KOKKOS_INLINE_FUNCTION Vec2 operator-(Vec2 a, Vec2 b) { return {a.x - b.x, a.y - b.y}; }
 KOKKOS_INLINE_FUNCTION Vec2 operator*(Vec2 a, double s) { return {a.x * s, a.y * s}; }
 KOKKOS_INLINE_FUNCTION double dot(Vec2 a, Vec2 b) { return a.x * b.x + a.y * b.y; }
+// The point type of dimension D: Vec2 for D == 2, Vec3 for D == 3.
 template <int D>
 using VecN = std::conditional_t<D == 2, Vec2, Vec3>;
 
@@ -43,17 +46,17 @@ using VecN = std::conditional_t<D == 2, Vec2, Vec3>;
 template <class MemorySpace>
 struct Grid {
     Kokkos::View<double* [3], MemorySpace> positions;
-    Kokkos::View<int*, MemorySpace> order;  // the particle in each slot
+    Kokkos::View<int*, MemorySpace> order;         // the particle in each slot
     Kokkos::View<int*, MemorySpace> cell_offsets;  // base cells in Morton order
     Kokkos::View<std::uint32_t*, MemorySpace> fine;
     Kokkos::View<std::uint8_t*, MemorySpace> level;
     int n = 0;
     int levels = 2;  // base grid: 2^levels cells per tile side
     exact_predicates::Box box;
-    int tiles[3] = {1, 1, 1};  // tiles per axis (neighbor_search::CellList)
+    int tiles[3] = {1, 1, 1};     // tiles per axis (neighbor_search::CellList)
     double width[3] = {1, 1, 1};  // tile widths, box.side[a] / tiles[a]
-    double narrowest = 1;  // the smallest width
-    int fewest = 1;        // the fewest tiles along an axis
+    double narrowest = 1;         // the smallest width
+    int fewest = 1;               // the fewest tiles along an axis
 
     // One tile, a cube: the walk can take the cube's shorter arithmetic.
     bool cube() const { return tiles[0] * tiles[1] * tiles[2] == 1 && box.cubic(); }
@@ -65,8 +68,8 @@ struct Grid {
         if constexpr (cubic) return static_cast<int>(neighbor_search::morton_short(x, y, z)) << (3 * (levels - level));
         const int mask = (1 << level) - 1;
         const int tile = ((x >> level) * tiles[1] + (y >> level)) * tiles[2] + (z >> level);
-        return tile << (3 * levels) |
-               static_cast<int>(neighbor_search::morton_short(x & mask, y & mask, z & mask)) << (3 * (levels - level));
+        return tile << (3 * levels) | static_cast<int>(neighbor_search::morton_short(x & mask, y & mask, z & mask))
+                                          << (3 * (levels - level));
     }
 
     // The slots [begin, end) of grid cell (x, y, z) at `level` (2^level
@@ -96,8 +99,8 @@ struct Grid {
 // Used by: Mesh<3>::update (start), Mesh<3>::clip, tet_start::build.
 template <class ExecSpace>
 Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList<ExecSpace>& list) {
-    Grid<typename ExecSpace::memory_space> g{list.positions, list.order, list.cell_offsets, list.fine, list.level,
-                                             list.n, list.levels, list.box};
+    Grid<typename ExecSpace::memory_space> g{list.positions, list.order, list.cell_offsets, list.fine,
+                                             list.level,     list.n,     list.levels,       list.box};
     g.narrowest = list.box.side[0];
     g.fewest = list.tiles[0];
     for (int a = 0; a < 3; ++a) {
@@ -113,6 +116,8 @@ Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList
 // goes one level coarser, skipping covered cells. Stencil: offsets (4 bits per axis, biased by 8) sorted by squared
 // smallest distance in widths from the home cell; ends(r) counts those closer than r.
 constexpr int max_reach = 4;
+// The sorted stencil: offsets[i] is a packed cell offset, bound2[i] its squared smallest distance in widths.
+// Used by: make_stencil (builds it), construct_pass, the warp kernel (shell_voronoi_warp.hpp), polygon_clip.hpp (2D).
 template <class MemorySpace>
 struct Stencil {
     Kokkos::View<int*, MemorySpace> offsets;
@@ -162,6 +167,8 @@ KOKKOS_INLINE_FUNCTION int level_reach(int level, int fewest = 1) {
     return Kokkos::min(int{max_reach}, ((fewest << level) - 1) / 2);
 }
 
+// Squared gap, in child widths, between a finer home cell and a child at offset d (0 if they touch or coincide).
+// Used by: stencil_cell, polygon_clip::construct_pass (the covered-cell test).
 KOKKOS_INLINE_FUNCTION int beyond2(int d) {
     const int b = Kokkos::max(Kokkos::abs(d) - 1, 0);
     return b * b;
@@ -190,8 +197,7 @@ KOKKOS_INLINE_FUNCTION void home_cell(const Vec3& p, const Grid<MemorySpace>& gr
 // Used by: the walk in construct_pass and the warp kernel.
 template <bool adaptive = true, bool cubic = false, class MemorySpace>
 KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int level, const int (&home)[3], int finer,
-                                         int code, const Vec3& p, double reach2, int& begin, int& end,
-                                         int& packed) {
+                                         int code, const Vec3& p, double reach2, int& begin, int& end, int& packed) {
     const double fraction = 1.0 / (1 << level);  // of a tile
     const int u[3] = {home[0] + (code & 15) - 8, home[1] + ((code >> 4) & 15) - 8, home[2] + ((code >> 8) & 15) - 8};
     const double q[3] = {p.x, p.y, p.z};

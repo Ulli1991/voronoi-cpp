@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fail on a run of more than 3 full-line // comments unless it sits directly above a declaration, or on a file
-without a header comment in its first 30 lines. `--report` lists multi-line library definitions without a docstring."""
+without a header comment in its first 30 lines, or on a multi-line library definition without a docstring."""
 import re
 import sys
 from pathlib import Path
@@ -62,8 +62,6 @@ def check(path):
 
 
 def main(argv):
-    report = "--report" in argv
-    argv = [a for a in argv if a != "--report"]
     root = Path(__file__).resolve().parent.parent
     files = [Path(a) for a in argv] or sorted(p for p in (root / "src").rglob("*") if p.suffix in (".hpp", ".cpp", ".h", ".cu"))
     failed = 0
@@ -74,9 +72,10 @@ def main(argv):
         for line, length in check(path):
             print("%s:%d: %d-line comment run (max %d)" % (path, line, length, LIMIT))
             failed += 1
-        if report and path.parent.name in LIBRARY:
+        if path.parent.name in LIBRARY:
             for line in undocumented(path):
                 print("%s:%d: no docstring" % (path, line))
+                failed += 1
     return 1 if failed else 0
 
 

@@ -143,6 +143,8 @@ enum class Fallback { cheapest, host, rebuild };
 template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class FaceReal = double, class Weight = void>
 class Mesh;
 
+// Mesh<3>: the 3D Voronoi mesh (tets + shell clipping); the contract is described above.
+// Used by: luna-cpp and the tests, through Mesh<3>; Mesh<2> is in voronoi_mesh_2d.hpp.
 template <class ExecSpace, class FaceReal, class Weight>
 class Mesh<3, ExecSpace, FaceReal, Weight> {
 public:

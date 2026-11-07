@@ -240,4 +240,4 @@ Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, th
 - `scripts/`: lint and A100 benchmark and test scripts.
 - `research_notes/`, `reports/`: status notes and surveys.
 
-CI (`.github/workflows/checks.yml`) checks the comment rules and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
+CI (`.github/workflows/checks.yml`) checks the comment rules (a header per file, a docstring on every multi-line library definition, comment runs of 3 lines at most) and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.

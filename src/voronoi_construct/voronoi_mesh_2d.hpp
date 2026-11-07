@@ -8,6 +8,8 @@
 // Faces are numbered at the start (always 3n); volume() is current after update_cells() only.
 namespace voronoi {
 
+// Mesh<2>: the 2D Voronoi mesh (triangulation + polygon clipping), same interface as Mesh<3>.
+// Used by: voronoi_mesh.hpp (included at its end), for D = 2.
 template <class ExecSpace, class FaceReal, class Weight>
 class Mesh<2, ExecSpace, FaceReal, Weight> {
 public:

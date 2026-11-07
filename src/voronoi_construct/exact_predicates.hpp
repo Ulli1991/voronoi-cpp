@@ -109,6 +109,8 @@ KOKKOS_INLINE_FUNCTION i64 delta(i64 a, i64 b, i64 steps = period) {
     return d;
 }
 
+// The offset a - b, component by component.
+// Used by: in_sphere (from five points), tet_flips::delaunay.
 KOKKOS_INLINE_FUNCTION Offset minus(const Offset& a, const Offset& b) {
     return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
 }
@@ -150,11 +152,15 @@ KOKKOS_INLINE_FUNCTION void add_product(Wide& w, i128 a, i128 b) {
     }
 }
 
+// Sign (-1, 0, 1) of the two's-complement 256-bit integer w.
+// Used by: in_sphere (the exact fallback).
 KOKKOS_INLINE_FUNCTION int sign(const Wide& w) {
     if (static_cast<long long>(w.limb[3]) < 0) return -1;
     return (w.limb[0] | w.limb[1] | w.limb[2] | w.limb[3]) ? 1 : 0;
 }
 
+// Exact determinant of the rows a, b, c (six times the signed volume of the tetrahedron 0, a, b, c).
+// Used by: orient, in_sphere, tet_start::check.
 KOKKOS_INLINE_FUNCTION i128 det3(const Offset& a, const Offset& b, const Offset& c) {
     return i128(a[0]) * (i128(b[1]) * c[2] - i128(b[2]) * c[1]) - i128(a[1]) * (i128(b[0]) * c[2] - i128(b[2]) * c[0]) +
            i128(a[2]) * (i128(b[0]) * c[1] - i128(b[1]) * c[0]);
@@ -167,6 +173,8 @@ KOKKOS_INLINE_FUNCTION void cross(const Offset& p, const Offset& q, i128* r) {
     r[2] = i128(p[0]) * q[1] - i128(p[1]) * q[0];
 }
 
+// Squared length of a (its height on the paraboloid).
+// Used by: circumcentre, in_sphere, tet_flips::rebuild.
 KOKKOS_INLINE_FUNCTION i128 lift(const Offset& a) {
     return i128(a[0]) * a[0] + i128(a[1]) * a[1] + i128(a[2]) * a[2];
 }
@@ -316,6 +324,8 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const P& point, const int* v, const Offset
     return in_sphere(p, id);
 }
 
+// The same, computing the offsets of v's corners from v[0] itself.
+// Used by: tet_repair::plan, tet_flips::fails.
 template <class P>
 KOKKOS_INLINE_FUNCTION bool in_sphere(const P& point, const int* v, int e) {
     const Offset o[4] = {{0, 0, 0}, offset(point, v[0], v[1]), offset(point, v[0], v[2]), offset(point, v[0], v[3])};
