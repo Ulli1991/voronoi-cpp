@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-// Top level (hydro code's interface): Mesh<3>::update drives snap -> index -> start -> repair -> geometry (tet_*.hpp).
+// Top level (the interface luna-cpp's finite-volume code calls): Mesh<3>::update drives snap -> index -> start -> repair -> geometry (tet_*.hpp).
 // Particles are named by id (index); cospherical ties break by id; topology and geometry both come from positions
 // snapped to the 2³⁰ grid. Faces are stored once, by the lower id.
 namespace voronoi {
@@ -138,7 +138,7 @@ enum class Fallback { cheapest, host, rebuild };
 //   accessors        faces(), owner(), neighbour(), area(), volume(), ... read the last update's result.
 //   clip(x, cells)   independent of the above: snap -> index -> clipping of the listed cells only.
 //
-// FaceReal = float adds one float row per face (face_rows()) for a reduced-precision hydro; Weight = float or double
+// FaceReal = float adds one float row per face (face_rows()) for a reduced-precision solver; Weight = float or double
 // adds the least-squares gradient weights of every per-cell list entry (computed by update_cells()); void: none.
 template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class FaceReal = double, class Weight = void>
 class Mesh;
@@ -266,7 +266,7 @@ public:
     // Local rebuild by clipping: the cells of the particles `cells` at positions x, independent of the persistent mesh.
     // Each face of a listed cell is returned once: by the lower id if both are listed, else by the listed one (Cells:
     // owned faces of each listed particle, neighbour ids, area vectors, centroids relative to it).
-    // Used by: callers (hydro code); not part of update().
+    // Used by: callers such as luna-cpp; not part of update().
     template <class X>
     const shell_voronoi::Cells<Memory>& clip(const X& x, const View<const int*>& cells) {
         if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh::clip: no particles");

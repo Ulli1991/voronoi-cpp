@@ -4,7 +4,7 @@ A C++ library that builds exact Voronoi meshes of moving particles on GPUs. You 
 
 The topology is exact. The cell geometry is not yet right in every case: two open bugs give wrong volumes with no error, see [Limitations](#limitations-and-open-items).
 
-The hydro lives in [luna-cpp](https://github.com/Ulli1991/luna-cpp), which uses this library as a submodule. The old copy in `src/hydro/` still builds here as a bit check of mesh changes and goes when the split is finished ([#16](https://github.com/Ulli1991/voronoi-cpp/issues/16)).
+The finite-volume hydro is a separate code, [luna-cpp](https://github.com/Ulli1991/luna-cpp), which takes only the mesh from here (as a submodule, through `voronoi_library` and `voronoi::Mesh`); this repository contains no solver.
 
 BSD 3-Clause, see [LICENSE](LICENSE).
 
@@ -157,7 +157,7 @@ Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak
 
 ## Tests
 
-Twelve CTest programs specify the library and, until the split ends, the hydro copy. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
+Ten CTest programs specify the library. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
 |---|---|
@@ -166,11 +166,10 @@ Twelve CTest programs specify the library and, until the split ends, the hydro c
 | `mesh` | `from_rings` against a host construction; adjacency, exact check, volumes |
 | `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and several boxes |
 | `repair` | after every step of a flow the mesh equals an exact rebuild |
-| `voronoi_mesh` | the hydro contract of `voronoi::Mesh` |
+| `voronoi_mesh` | the contract of `voronoi::Mesh` that luna-cpp relies on |
 | `mesh_cases.*` | 3D special cases against an oracle that shares no code with the library: coincident points, extreme contrast, thin boxes, high valence, large motion, fallbacks, bits across backends |
-| `distortion` | flows that wind the mesh up, no hydro: shear, vortex, Taylor-Green, turbulence, collapse, expansion |
+| `distortion` | flows that wind the mesh up, with no solver: shear, vortex, Taylor-Green, turbulence, collapse, expansion |
 | `mesh2d` | the 2D mesh against independent oracles; a repaired mesh equals a fresh build bit for bit |
-| `hydro` | the hydro copy: HLLC and HLL fluxes, conservation, bit-identical runs, moving-mesh invariances |
 
 ```sh
 ctest --test-dir build-cuda --output-on-failure         # A100: ~5 minutes
@@ -234,7 +233,7 @@ Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, th
 
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests and their support code; `mesh_cases_test` has its groups in `src/test/mesh_cases/` (one file per group, shared helpers in `common.hpp`). `src/bench/`: `voronoi_bench`, `mesh2d_bench`.
-- `src/hydro/`, `hydro_sedov`, `hydro_1d`: the copy that goes ([#16](https://github.com/Ulli1991/voronoi-cpp/issues/16)).
+- Used by luna-cpp, keep: `voronoi_library`, `src/test/check.hpp`, `src/test/support.hpp` (and what it includes), `src/bench/device_memory.hpp`.
 - `scripts/`: lint and A100 benchmark and test scripts.
 - `research_notes/`, `reports/`: status notes and surveys.
 

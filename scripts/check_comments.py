@@ -7,7 +7,7 @@ from pathlib import Path
 
 LIMIT = 3
 HEADER_LINES = 30
-LIBRARY = ("neighbour_search", "voronoi_construct", "hydro")
+LIBRARY = ("neighbour_search", "voronoi_construct")
 CONTROL = re.compile(r"(return|if|for|while|else|switch|case|throw|do|using)\b|[}#]|//")
 KEYWORD = re.compile(r"(template|struct|class|enum|inline|static|KOKKOS|constexpr|\[\[|namespace)\b")
 SIGNATURE = re.compile(r"^[\w:<>,\*&\s]+[\s\*&]\**&?[\w:~]+\(")

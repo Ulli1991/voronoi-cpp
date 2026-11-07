@@ -1,5 +1,5 @@
-// Bench for the mesh pipeline (the voronoi::Mesh stage of the hydro step), not a test: `rebuild` and `step`;
-// flags in docs/design.md. step mirrors a moving hydro run: advect points -> Mesh::update -> update_cells.
+// Bench for the mesh pipeline (the voronoi::Mesh stage of a solver step), not a test: `rebuild` and `step`;
+// flags in docs/design.md. step mirrors a moving run: advect points -> Mesh::update -> update_cells.
 
 #include "support.hpp"
 
@@ -332,7 +332,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     const double displacement = std::stod(args.at(3));
     const int steps = args.size() > 4 ? std::stoi(args[4]) : 10;
     const int repeats = 3;
-    // In slot order: a spatial particle order, as a hydro code keeps it.
+    // In slot order: a spatial particle order, as a solver keeps it.
     Points points = in_slot_order(make_points(kind, requested, box), box);
     const int n = static_cast<int>(points.size());
     const double spacing = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
