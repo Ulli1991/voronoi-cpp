@@ -125,7 +125,7 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
 }
 
 // Points in the unit box of the given `kind`: uniform, jittered, lattice, wave, clustered, halo or a degenerate layout.
-// Used by: make_points, scaled; directly by hydro_test and voronoi_mesh_test (off-grid, snapped by the mesh).
+// Used by: make_points, scaled; directly by voronoi_mesh_test (off-grid, snapped by the mesh).
 // Lattices round n to a cube, or with `shape` to equal spacings once scaled to that box.
 inline Points make_points_off_grid(const std::string& kind, int n, const Shape& shape = {1, 1, 1}) {
     if (const auto at = kind.find('@'); at != std::string::npos)
@@ -500,7 +500,7 @@ tet_flips::Mesh host_tetrahedra(const M& mesh) {
 
 // Inverted tetrahedra plus shared triangles that fail the local Delaunay
 // test (each failing triangle counted from both sides); brute force over
-// every tetrahedron, exact. Used by: compare_with_rebuild (so repair_test, voronoi_mesh_test, hydro_test).
+// every tetrahedron, exact. Used by: compare_with_rebuild (so repair_test, voronoi_mesh_test).
 inline long long failing(const tet_flips::Mesh& m) {
     long long bad = 0;
     for (int t = 0; t < m.count; ++t) {
@@ -520,7 +520,7 @@ inline long long failing(const tet_flips::Mesh& m) {
 
 // The mesh's face area vectors on the host, rows [0, faces()) (packed on
 // the device first: the face arrays hold more rows).
-// Used by: hydro_test, voronoi_mesh_test, mesh_cases_test.
+// Used by: voronoi_mesh_test, mesh_cases_test.
 template <class M>
 Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(const M& mesh) {
     Kokkos::View<double* [3], Kokkos::LayoutRight, Memory> packed("face_areas", mesh.faces());
@@ -537,7 +537,7 @@ Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(con
 // mesh lacks), extra (mesh faces clipping lacks, extra_area their largest area in spacings²;
 // clipping drops faces below rounding level), volume (largest relative difference), total (box
 // volumes), wrong_lists (per-cell list entries out of order or one-sided, after update_cells()).
-// Filled by compare_with_rebuild. Used by: repair_test, voronoi_mesh_test, hydro_test, voronoi_bench.
+// Filled by compare_with_rebuild. Used by: repair_test, voronoi_mesh_test, voronoi_bench.
 struct Comparison {
     long long failing = 0, mismatched = 0, missing = 0, extra = 0, faces = 0, clipped_faces = 0, wrong_lists = 0;
     double extra_area = 0, volume = 0, total = 0;
