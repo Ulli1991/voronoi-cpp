@@ -7,13 +7,15 @@
 #include <stdexcept>
 #include <string>
 
-// LUNA's three 1D tests: scripts/luna_1d_run.py has the file:line of each.
+// LUNA's three 1D tests (scripts/luna_1d_run.py has the file:line of each): initial states for hydro_1d.
+// Used by: bench/hydro_1d.cpp (problem(name) -> simulate).
 namespace hydro::problems_1d {
 
 constexpr double gamma_gas = 1.4;
 
 // One of LUNA's problems: the line, its walls, t_end, and the exact average
 // of the conserved initial state over [a, b] (in the problem's coordinates).
+// Used by: problem(), then hydro_1d's simulate().
 struct Problem {
     double L, origin, t_end;
     Walls walls;
@@ -45,6 +47,8 @@ inline State<1> woodward_colella(double a, double b) {
     return {1.0, 0.0, p / (gamma_gas - 1)};
 }
 
+// The Problem called `name` (sod, shu-osher, woodward-colella); throws on an unknown name.
+// Used by: hydro_1d main.
 inline Problem problem(const std::string& name) {
     const Walls outflow{Wall::outflow, Wall::outflow};
     if (name == "sod") return {1.0, 0.0, 0.25, outflow, sod};

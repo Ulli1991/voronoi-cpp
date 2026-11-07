@@ -5,7 +5,8 @@
 #include <cstddef>
 #include <utility>
 
-// The Euler equations of an ideal gas in D = 1, 2 or 3: conversions, MUSCL-Hancock half step, HLL and HLLC fluxes.
+// Euler equations of an ideal gas (D = 1, 2, 3): conversions, MUSCL-Hancock half step, HLL/HLLC fluxes.
+// Called by FiniteVolume (reconstruct -> flux stages) in finite_volume.hpp and finite_volume_1d.hpp.
 // Primitives W = (rho, v, P), conserved U = (rho, rho v, E) per unit volume (LUNA's conventions).
 namespace hydro {
 
@@ -17,6 +18,8 @@ using State = StateT<D, double>;
 template <std::size_t N>
 constexpr int dimension_of = static_cast<int>(N) - 2;
 
+// A small fixed-size D-vector usable on host and device (positions, velocities, areas, gradients).
+// Used by: FiniteVolume and the Riemann solvers.
 template <int D, class T = double>
 struct Vec {
     T v[D];
@@ -25,7 +28,8 @@ struct Vec {
 };
 using Vec3 = Vec<3>;
 
-// T{f(0), f(1), .., f(N - 1)}: a brace initializer for any N.
+// T{f(0), f(1), .., f(N - 1)}: a brace initializer for any N (braced builds it, braced_from unpacks the indices).
+// Used by: make_vec, make_state.
 template <class T, class F, std::size_t... I>
 KOKKOS_INLINE_FUNCTION T braced_from(const F& f, std::index_sequence<I...>) {
     return T{f(static_cast<int>(I))...};
@@ -34,6 +38,8 @@ template <class T, std::size_t N, class F>
 KOKKOS_INLINE_FUNCTION T braced(const F& f) {
     return braced_from<T>(f, std::make_index_sequence<N>{});
 }
+// Vec / state whose k-th entry is f(k).
+// Used by: the kernels of FiniteVolume, primitive, conserved, detail::side.
 template <int D, class T = double, class F>
 KOKKOS_INLINE_FUNCTION Vec<D, T> make_vec(const F& f) {
     return braced<Vec<D, T>, D>(f);
@@ -76,12 +82,14 @@ KOKKOS_INLINE_FUNCTION Vec<D, T> velocity(const Kokkos::Array<T, N>& W) {
 // Ideal gas with LUNA's RAMSES floors (template_config.py:41-42): density
 // at least smallr, specific internal energy at least smallc^2 / (gamma
 // (gamma - 1)); applied to primitives, never to the conserved state.
+// Used by: every function below taking `gas`; held by FiniteVolume.
 struct Gas {
     double gamma = 5.0 / 3.0;
     double smallr = 1e-10, smallc = 1e-10;
 };
 
-// U -> W with the floors (conversions.py:28-36, cons_to_prim_floored).
+// U -> W with the floors (conversions.py:28-36, cons_to_prim_floored); U per unit volume.
+// Used by: FiniteVolume::primitives, the 1D kernel, hydro_sedov and hydro_1d diagnostics.
 template <std::size_t N, int D = dimension_of<N>>
 KOKKOS_INLINE_FUNCTION State<D> primitive(const Kokkos::Array<double, N>& U, const Gas& gas) {
     const double rho = Kokkos::fmax(U[0], gas.smallr);
@@ -94,6 +102,7 @@ KOKKOS_INLINE_FUNCTION State<D> primitive(const Kokkos::Array<double, N>& U, con
 }
 
 // W -> U (conversions.py:39-48).
+// Used by: hydro_sedov (initial state); problems_1d.hpp has its own conserved().
 template <std::size_t N, int D = dimension_of<N>>
 KOKKOS_INLINE_FUNCTION State<D> conserved(const Kokkos::Array<double, N>& W, const Gas& gas) {
     const double rho = W[0];
@@ -103,6 +112,8 @@ KOKKOS_INLINE_FUNCTION State<D> conserved(const Kokkos::Array<double, N>& W, con
         [&](int k) { return k == 0 ? rho : k == D + 1 ? W[D + 1] / (gas.gamma - 1.0) + kinetic : rho * W[k]; });
 }
 
+// c = sqrt(gamma P / rho) of a primitive state.
+// Used by: FiniteVolume::primitives (stored per cell for the time step).
 template <std::size_t N, int D = dimension_of<N>>
 KOKKOS_INLINE_FUNCTION double sound_speed(const Kokkos::Array<double, N>& W, const Gas& gas) {
     return Kokkos::sqrt(gas.gamma * W[D + 1] / W[0]);
@@ -114,7 +125,8 @@ using Gradient = Kokkos::Array<Vec<D, T>, D + 2>;
 
 // The rate of the MUSCL-Hancock half step, sum_d A_d(W) dW/dx_d, with the
 // primitive-variable Jacobians of jacobian.py:84-97 summed over the axes in
-// order as muscl_hancock.py:105-116 does.
+// order as muscl_hancock.py:105-116 does. W: cell primitives, g: their limited gradients.
+// Used by: half_step, FiniteVolume's face kernel (reduced-precision path).
 template <class T, std::size_t N, int D = dimension_of<N>>
 KOKKOS_INLINE_FUNCTION StateT<D, T> half_step_rate(const Kokkos::Array<T, N>& W, const Gradient<D, T>& g,
                                                    const Gas& gas) {
@@ -135,7 +147,8 @@ KOKKOS_INLINE_FUNCTION StateT<D, T> half_step_rate(const Kokkos::Array<T, N>& W,
     return A;
 }
 
-// MUSCL-Hancock half step: W - dt/2 sum_d A_d(W) dW/dx_d.
+// MUSCL-Hancock half step: W - dt/2 sum_d A_d(W) dW/dx_d (time-extrapolated cell state before face extrapolation).
+// Used by: FiniteVolume's face kernel (double path) and the 1D kernel.
 template <std::size_t N, int D = dimension_of<N>>
 KOKKOS_INLINE_FUNCTION State<D> half_step(const Kokkos::Array<double, N>& W, const Gradient<D>& g, double dt,
                                           const Gas& gas) {
@@ -150,6 +163,8 @@ KOKKOS_INLINE_FUNCTION State<D> half_step(const Kokkos::Array<double, N>& W, con
 // Wave speeds after Davis.
 namespace detail {
 
+// One side of a face in the face frame, shared by HLL and HLLC.
+// Used by: HLL::flux, HLLC::flux.
 template <int D, class T>
 struct Side {
     Vec<D, T> v;        // velocity relative to the face
@@ -157,6 +172,8 @@ struct Side {
     StateT<D, T> F, U;  // flux along n and conserved state
 };
 
+// The Side of state W for normal n and face velocity w.
+// Used by: HLL::flux, HLLC::flux.
 template <int D, class T>
 KOKKOS_INLINE_FUNCTION Side<D, T> side(const StateT<D, T>& W, Vec<D, T> n, Vec<D, T> w, const Gas& gas) {
     constexpr int P = D + 1;
@@ -175,6 +192,7 @@ KOKKOS_INLINE_FUNCTION Side<D, T> side(const StateT<D, T>& W, Vec<D, T> n, Vec<D
 // From the face frame to the lab frame, as AREPO next generation's
 // flux_convert_to_lab_frame (mesh_fluxes.cc:492-498): energy + w.F_momentum
 // + |w|^2 / 2 F_rho, momentum + w F_rho.
+// Used by: HLL::flux, HLLC::flux (last step of each).
 template <int D, class T>
 KOKKOS_INLINE_FUNCTION StateT<D, T> to_lab(StateT<D, T> F, Vec<D, T> w) {
     if constexpr (D == 1) F[2] += w[0] * F[1] + T(0.5) * dot(w, w) * F[0];
@@ -186,7 +204,8 @@ KOKKOS_INLINE_FUNCTION StateT<D, T> to_lab(StateT<D, T> F, Vec<D, T> w) {
 
 }  // namespace detail
 
-// HLL, LUNA's _hll_core (fluxes.py:135-167).
+// HLL, LUNA's _hll_core (fluxes.py:135-167): flux(L, R, n, w, gas) of the face-state pair L, R.
+// Used by: FiniteVolume (Riemann = HLL) face flux; benches select it.
 struct HLL {
     template <int D, class T>
     KOKKOS_INLINE_FUNCTION static StateT<D, T> flux(const StateT<D, T>& L, const StateT<D, T>& R, Vec<D, T> n,
@@ -210,6 +229,7 @@ struct HLL {
 // HLLC, LUNA's _hllc_core (fluxes.py:51-106; Toro 2009, ch. 10), with its
 // guards: c^2 < 0 on either side takes F_R (fluxes.py:62, 88-94),
 // divisions are kept off zero by 1e-20 (fluxes.py:71-72).
+// Used by: FiniteVolume (default Riemann) face flux; benches select it.
 struct HLLC {
     template <class T>
     KOKKOS_INLINE_FUNCTION static T nonzero(T d) {
