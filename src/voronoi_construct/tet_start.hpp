@@ -6,12 +6,14 @@
 
 #include <cstdint>
 
-// The starting tetrahedralization: exactly the Delaunay one of the snapped positions, ties broken by the symbolic
-// perturbation of exact_predicates; a clipping guess is checked exactly and wrong cells rebuilt by exact clipping.
+// Stage 3 (start): called by voronoi::Mesh<3>::rebuild after shell_voronoi clipping; feeds tet_repair::prepare.
+// Exactly the Delaunay tetrahedralization of the snapped positions (ties: symbolic perturbation of exact_predicates);
+// a clipping guess is checked exactly and wrong cells rebuilt by exact clipping.
 namespace tet_start {
 
 namespace ep = exact_predicates;
 
+// What build() did. Used by: Mesh::rebuild (Report::start; `exact` false -> refusal via not_exact).
 struct Stats {
     int rounds = 0;              // checks of a guess (1: the clipping's rings were right)
     long long bad_tets = 0;      // tetrahedra failing the first check
@@ -20,9 +22,9 @@ struct Stats {
     bool exact = false;          // the result passed the check
 };
 
-// Result of check(): tetrahedra that are flat, lack a neighbour, disagree
-// with one, fold over one or fail the local Delaunay test; particles in no
-// tetrahedron; and the total volume (box volumes).
+// Result of check(): tetrahedra that are flat, lack a neighbour, disagree with one, fold over one or fail the local
+// Delaunay test; particles in no tetrahedron; and the total volume (box volumes).
+// Used by: build.
 struct Report {
     long long bad_tets = 0, unused = 0;
     double volume = 0;
@@ -31,7 +33,8 @@ struct Report {
 
 namespace detail {
 
-// Particles in tetrahedra holding a marked particle: marked -> grown.
+// Particles in tetrahedra holding a marked particle: marked -> grown (the cells to re-clip around a bad one).
+// Used by: build.
 template <class ExecSpace>
 void grow(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& mesh,
           const Kokkos::View<int*, typename ExecSpace::memory_space>& marked,
@@ -51,7 +54,8 @@ void grow(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory
 // Exact check of a tetrahedralization of all n particles, one thread per tetrahedron: it is not flat; across each face
 // lies a tetrahedron sharing it and pointing back, its far vertex on the other side and outside this circumsphere
 // (local Delaunay, perturbed); every particle is used; the volumes sum to the box. Marks the particles of bad
-// tetrahedra and the unused ones in `marked` (1), leaving other entries as they are.
+// tetrahedra and the unused ones in `marked` (1), leaving other entries as they are. `count` = tetrahedra to check.
+// Used by: build.
 template <class ExecSpace>
 Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& mesh,
              const ep::Points<typename ExecSpace::memory_space>& point, int count,
@@ -126,7 +130,9 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
 }
 
 // The Delaunay tetrahedralization from a clipping build with face rings: from_rings, check, and where it fails
-// rebuild the bad cells by exact clipping and check again. face_overflow means build again with a pool of Cells::needed().
+// rebuild the bad cells by exact clipping and check again (3 rounds at most). `cells` are the clipping's output, `mesh`
+// the result. face_overflow means build again with a pool of Cells::needed().
+// Used by: voronoi::Mesh<3>::rebuild.
 template <class ExecSpace>
 Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
             const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
@@ -135,7 +141,7 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = grid.n;
     Stats stats;
-    // Snapped positions by particle.
+    // Grid positions indexed by particle id (grid.positions is in the cell list's sorted order).
     ep::Points<Memory> point("tet_start_point", n, grid.box);
     const auto positions = grid.positions;
     const auto order = grid.order;

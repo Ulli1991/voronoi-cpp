@@ -12,14 +12,16 @@
 #include <unordered_set>
 #include <vector>
 
-// Host fallback of tet_repair: rebuilds locally (Bowyer-Watson) where the device flips got stuck, then the device
-// repairs again. All decisions are exact signs on the snapped positions the device uses, so ties agree.
+// Stage 4b (repair, host fallback): called by voronoi::Mesh<3>::update when tet_repair::repair leaves stuck entries.
+// Rebuilds locally (Bowyer-Watson) where the device flips got stuck, then the device repairs again. All decisions are
+// exact signs on the snapped positions the device uses, so ties agree.
 namespace tet_flips {
 
 namespace ep = exact_predicates;
 using Tet = std::array<int, 4>;
 
-// A host copy of the device mesh, edited in place.
+// A host copy of (a region of) the device mesh, edited in place; `count` slots of `vertex`/`adjacent` are in use.
+// Used by: finish (builds it), repair, detail::rebuild/replace.
 struct Mesh {
     tet_mesh::Quads<Kokkos::HostSpace> vertex, adjacent;  // capacity rows; positively oriented
     Kokkos::View<char*, Kokkos::HostSpace> alive;
@@ -27,6 +29,7 @@ struct Mesh {
     int count = 0;  // slots in use
 };
 
+// What finish() did (flips23/flips32 are the device repairs it reran). Used by: Mesh::update (Report::host_*).
 struct Stats {
     long long flips23 = 0, flips32 = 0, rebuilt = 0;  // device flips and local rebuilds
     int stuck = 0;                                    // entries finish() left
@@ -34,8 +37,10 @@ struct Stats {
 
 namespace detail {
 
+// Vertices of slot t. Used by: replace, rebuild, repair, finish.
 inline Tet tet(const Mesh& m, int t) { return {m.vertex(t, 0), m.vertex(t, 1), m.vertex(t, 2), m.vertex(t, 3)}; }
 
+// Face k of tetrahedron t as sorted vertex ids, to match faces between tetrahedra. Used by: replace, rebuild, finish.
 inline std::array<int, 3> face_key(const Tet& t, int k) {
     std::array<int, 3> f;
     tet_mesh::sorted_face(t.data(), k, f.data());
@@ -44,6 +49,7 @@ inline std::array<int, 3> face_key(const Tet& t, int k) {
 
 // Replace the tetrahedra `old` by `fresh` (vertex sets, any orientation) covering the same region: orients them,
 // reuses the old slots first and reconnects them to each other and the outside. Returns the new tetrahedra.
+// Used by: rebuild.
 inline std::vector<int> replace(Mesh& m, const std::vector<int>& old, std::vector<Tet> fresh) {
     std::map<std::array<int, 3>, std::pair<int, int>> outside;  // outer face -> (outer tet, its face index)
     for (int t : old)
@@ -94,7 +100,8 @@ inline std::vector<int> replace(Mesh& m, const std::vector<int>& old, std::vecto
 
 // Delaunay tetrahedralization of a few points in one local frame by Bowyer-Watson insertion into an enclosing
 // tetrahedron (corners n..n+3), near to far, each located by walking from the previous cavity. Returns the live
-// tetrahedra, or nothing if point location fails.
+// tetrahedra, or nothing if point location fails. `p` are offsets from the local origin, `id` their particle ids.
+// Used by: rebuild.
 inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id) {
     const int n = static_cast<int>(p.size());
     long long extent = 1;
@@ -197,7 +204,7 @@ inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id)
 }
 
 // Tetrahedra holding any of the particles in `seeds`, found from t through
-// adjacency. `seeds` must be sorted.
+// adjacency. `seeds` must be sorted. Used by: rebuild.
 inline std::vector<int> stars(const Mesh& m, int t, const std::vector<int>& seeds) {
     auto touches = [&](int s) {
         for (int k = 0; k < 4; ++k)
@@ -220,6 +227,7 @@ inline std::vector<int> stars(const Mesh& m, int t, const std::vector<int>& seed
     return found;
 }
 
+// The sorted distinct particles of the tetrahedra `tets`. Used by: rebuild.
 inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets) {
     std::vector<int> v;
     for (int t : tets)
@@ -232,7 +240,8 @@ inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets)
 // Fallback for a triangle t|u that no flip repairs, or an inverted tetrahedron t (u = -1): replaces the stars of
 // their particles by those of a fresh Delaunay tetrahedralization of the particles two rings around, if they fit
 // the old boundary exactly; otherwise adds the particles of the faces that did not fit and retries. Returns the
-// new tetrahedra, or nothing after eight tries or if a particle would be lost.
+// new tetrahedra, or nothing after eight tries or if a particle would be lost. t, u: the stuck triangle's tetrahedra.
+// Used by: repair.
 inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     std::vector<int> seeds = vertices_of(m, u < 0 ? std::vector<int>{t} : std::vector<int>{t, u});
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -297,7 +306,7 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
     return {};
 }
 
-// Whether the triangle between neighbours t and u fails the local Delaunay test.
+// Whether the triangle between neighbours t and u fails the local Delaunay test. Used by: repair.
 inline bool fails(const Mesh& m, int t, int u) {
     const int far = tet_mesh::far_vertex(m, t, u);
     return far >= 0 && ep::in_sphere(m.point, detail::tet(m, t).data(), far);
@@ -306,7 +315,7 @@ inline bool fails(const Mesh& m, int t, int u) {
 }  // namespace detail
 
 // Rebuild the surroundings of every inverted tetrahedron and failing triangle of m locally, in up to eight passes
-// while rebuilds succeed.
+// while rebuilds succeed. m is the host region copy. Used by: finish.
 inline Stats repair(Mesh& m) {
     Stats stats;
     for (long long pass = 0, before = -1; pass < 8 && stats.rebuilt > before; ++pass) {
@@ -327,7 +336,7 @@ inline Stats repair(Mesh& m) {
 
 namespace detail {
 
-// Mark the tetrahedra of stuck entry i dirty (both sides of a triangle).
+// Mark the tetrahedra of stuck entry i dirty (both sides of a triangle). Used by: stuck_region.
 template <class State, class Adjacent>
 KOKKOS_INLINE_FUNCTION void mark_stuck(const State& st, const Adjacent& adjacent, int i) {
     const int t = st.stuck(i, 0), k = st.stuck(i, 1);
@@ -338,7 +347,7 @@ KOKKOS_INLINE_FUNCTION void mark_stuck(const State& st, const Adjacent& adjacent
 }
 
 // The live tetrahedra within `hops` adjacency steps of the stuck entries, in
-// state.listed[0, returned); state.dirty is reset for them afterwards.
+// state.listed[0, returned); state.dirty is reset for them afterwards. Used by: finish.
 template <class ExecSpace>
 int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
                  tet_repair::State<typename ExecSpace::memory_space>& state, int stuck, int hops) {
@@ -375,6 +384,7 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 
 // Finish a device repair that left stuck entries: repair the tetrahedra near them on the host, write back,
 // rerun the device repair; entries that remain grow the region once, the rest is stats.stuck.
+// Used by: voronoi::Mesh<3>::update (when the device repair is stuck and the fallback policy allows the host).
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
              tet_repair::State<typename ExecSpace::memory_space>& state) {

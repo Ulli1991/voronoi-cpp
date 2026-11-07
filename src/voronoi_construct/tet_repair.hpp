@@ -3,8 +3,9 @@
 #include "exact_predicates.hpp"
 #include "tet_mesh.hpp"
 
-// Device Delaunay repair by bistellar flips (2->3, 3->2) after particles of a tet_mesh::Mesh moved: plans vote on
-// the tetrahedra they rewrite and the winners apply. Entries no flip repairs are listed as stuck for tet_flips::finish.
+// Stage 4a (repair, device): called by voronoi::Mesh<3>::update (prepare: rebuild) after snap; feeds geometry (tet_mesh).
+// Delaunay repair by bistellar flips (2->3, 3->2) after particles moved: plans vote on the tetrahedra they rewrite and
+// the winners apply. Entries no flip repairs are listed as stuck for tet_flips::finish.
 namespace tet_repair {
 
 namespace ep = exact_predicates;
@@ -26,6 +27,8 @@ constexpr int work = 0, stuck = 1, freed = 2, listed = 3, pops = 4, growth = 5, 
 constexpr int inverted = -1;  // t is flat or inside out
 constexpr int rejected = -2;  // the planned flip would not close its cavity
 
+// Device bookkeeping of the repair, persistent between updates (see the member comments).
+// Used by: prepare (creates), move_screened, repair, tet_flips::finish; Mesh::update_cells (touched_list).
 template <class MemorySpace>
 struct State {
     ep::Points<MemorySpace> point;  // snapped positions
@@ -52,15 +55,16 @@ struct State {
     unsigned long long round = 0;
 };
 
+// What repair() did. Used by: Mesh::update, tet_flips::finish.
 struct Stats {
     long long rounds = 0, checked = 0, flips23 = 0, flips32 = 0;
     int stuck = 0;  // entries listed in State::stuck
     bool unfinished = false;  // out of rounds with triangles left: the mesh may fail anywhere
 };
 
-// The outer faces of the cavity of tetrahedra old[0, olds): the sorted
-// particles of each and the tetrahedron across it (-1 if none). Returns
-// their number, or -1 if there are more than 8.
+// The outer faces of the cavity of tetrahedra old[0, olds): the sorted particles of each (key) and the tetrahedron
+// across it (across, -1 if none). Returns their number, or -1 if there are more than 8.
+// Used by: closes, repair (apply step).
 template <class M>
 KOKKOS_INLINE_FUNCTION int outer_faces(const M& m, const int* old, int olds, int (*key)[3], int* across) {
     int outers = 0;
@@ -82,6 +86,7 @@ KOKKOS_INLINE_FUNCTION int outer_faces(const M& m, const int* old, int olds, int
 
 // Whether new tetrahedra `fresh` close the cavity of the old ones `old` of mesh m exactly: six outer faces, each
 // new face matched once, each outer face used once, no new tetrahedron duplicating the outer one it attaches to.
+// Used by: plan, repair (plan step).
 template <class M>
 KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const int (*fresh)[4], int freshes) {
     int outer_key[8][3], outer_tet[8];
@@ -115,7 +120,7 @@ KOKKOS_INLINE_FUNCTION bool closes(const M& m, const int* old, int olds, const i
 
 namespace detail {
 
-// A planned flip: the old tetrahedra and the new ones (vertex lists).
+// A planned flip: the old tetrahedra and the new ones (vertex lists). Used by: plan, pack, unpack.
 struct Plan {
     enum Kind : int { none = 0, flip23 = 2, flip32 = 3, unflippable = -1, rejected = -2 };
     int kind = none;
@@ -126,12 +131,14 @@ struct Plan {
 
 // A plan as kept between planning and applying: the kind, the old tetrahedra and five particles, {a, far, f0, f1, f2}
 // for 2->3 (new: a, far, f[e], f[e + 1]) or {p, q, o0, o1, o2} for 3->2 (new: p or q, o0, o1, o2).
+// Used by: State::plans; pack, unpack (repair's plan and apply steps).
 struct Packed {
     int kind;
     int old[3];
     int v[5];
 };
 
+// Plan -> Packed (repair, plan step).
 KOKKOS_INLINE_FUNCTION Packed pack(const Plan& p) {
     Packed s{p.kind, {p.old[0], p.old[1], p.old[2]}, {}};
     if (p.kind == Plan::flip23) {
@@ -146,6 +153,7 @@ KOKKOS_INLINE_FUNCTION Packed pack(const Plan& p) {
     return s;
 }
 
+// Packed -> Plan (repair, apply step).
 KOKKOS_INLINE_FUNCTION Plan unpack(const Packed& s) {
     Plan p;
     p.kind = s.kind;
@@ -168,9 +176,8 @@ KOKKOS_INLINE_FUNCTION Plan unpack(const Packed& s) {
     return p;
 }
 
-// The 2->3 flip of triangle t|u, apex a of t and far vertex far of u, f the
-// triangle: valid when segment a-far crosses the triangle, i.e. the three
-// new tetrahedra share one orientation.
+// The 2->3 flip of triangle t|u, apex a of t and far vertex far of u, f the triangle: valid when segment a-far
+// crosses the triangle, i.e. the three new tetrahedra share one orientation. Used by: plan.
 template <class Point>
 KOKKOS_INLINE_FUNCTION bool flip23(const Point& point, int t, int u, int a, int far, const int* f, Plan& p) {
     p = {Plan::flip23, {t, u, -1}, {}, 2, 3};
@@ -185,9 +192,8 @@ KOKKOS_INLINE_FUNCTION bool flip23(const Point& point, int t, int u, int a, int 
     return positive == 3 || negative == 3;
 }
 
-// The 3->2 flip around edge pv-qv of triangle t|u: valid when exactly three
-// tetrahedra, u among them, share the edge and pv and qv lie on opposite
-// sides of the triangle of their other particles.
+// The 3->2 flip around edge pv-qv of triangle t|u: valid when exactly three tetrahedra, u among them, share the edge
+// and pv and qv lie on opposite sides of the triangle of their other particles. Used by: plan.
 template <class Mesh, class Point>
 KOKKOS_INLINE_FUNCTION bool flip32(const Mesh& m, const Point& point, int t, int u, int pv, int qv, Plan& p) {
     int ring[3] = {t, -1, -1}, size = 1;
@@ -228,7 +234,7 @@ KOKKOS_INLINE_FUNCTION bool flip32(const Mesh& m, const Point& point, int t, int
 
 // Plan the repair of triangle t|u (t's face opposite corner k) if it fails the local Delaunay test: the first valid
 // of the 2->3 flip and the 3->2 flips around its three edges (that closes its cavity, if `closing`); else
-// unflippable (none valid) or rejected (none of the valid ones closes).
+// unflippable (none valid) or rejected (none of the valid ones closes). Used by: repair (plan step).
 template <class Mesh, class Point>
 KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k, bool closing) {
     Plan p;
@@ -251,6 +257,7 @@ KOKKOS_INLINE_FUNCTION Plan plan(const Mesh& m, const Point& point, int t, int k
 }
 
 // The vote of plan i: a bijective hash of i, so winners of overlapping plans do not follow the work list's order.
+// Used by: repair (vote and apply steps).
 KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
     unsigned x = static_cast<unsigned>(i) * 0x9e3779b1u;  // odd multiplier: a bijection
     x ^= x >> 16;
@@ -259,7 +266,7 @@ KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
     return x;
 }
 
-// Add stuck entry (t, k).
+// Add stuck entry (t, k) to State::stuck (k: corner, or inverted/rejected). Used by: repair.
 template <class Counters, class Stuck>
 KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& stuck, int t, int k) {
     const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
@@ -269,7 +276,7 @@ KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& st
     }
 }
 
-// List t as dirty unless it already is.
+// List t as dirty unless it already is. Used by: move_screened, repair, tet_flips::detail::mark_stuck/finish.
 template <class State>
 KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
     if (Kokkos::atomic_exchange(&s.dirty(t), 1) == 0) s.listed(Kokkos::atomic_fetch_add(&s.counters(counter::listed), 1)) = t;
@@ -277,8 +284,8 @@ KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
 
 }  // namespace detail
 
-// Room for `capacity` tetrahedra in the mesh and the per-tetrahedron state;
-// contents are kept, new slots are zero (not alive, not dirty).
+// Room for `capacity` tetrahedra in the mesh and the per-tetrahedron state; contents are kept, new slots are zero
+// (not alive, not dirty). Used by: prepare, repair (growth), tet_flips::finish.
 template <class MemorySpace>
 void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity) {
     Kokkos::resize(m.vertex, capacity);
@@ -295,6 +302,7 @@ void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity
 
 // Snapped positions and positive orientation of every tetrahedron; allocates the bookkeeping for `capacity`
 // tetrahedra and `work_capacity` failing triangles per round and stuck entries (repair grows all when needed).
+// Used by: voronoi::Mesh<3>::rebuild, once after tet_start::build.
 template <class ExecSpace, class X>
 State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& x, const ep::Box& box,
                                                 tet_mesh::Mesh<typename ExecSpace::memory_space>& m, int capacity,
@@ -344,6 +352,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
 // New positions x: snaps them, computes the circumcentres (m.centre) of the live tetrahedra (slivers exactly in a
 // second pass) and lists those that may need repair: a neighbour's far vertex inside or near the circumsphere, or
 // badly shaped. The margin covers the snapping; repair decides exactly.
+// Used by: voronoi::Mesh<3>::update, before repair.
 template <class ExecSpace, class X>
 void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
                    const tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
@@ -407,6 +416,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
 
 // Flip until no dirty tetrahedron fails or no plan can proceed; what is left
 // is listed in s.stuck (stats.stuck entries). At most `rounds` rounds.
+// Used by: voronoi::Mesh<3>::update; tet_flips::finish (re-runs it after the host rebuilds).
 template <class ExecSpace>
 Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
              State<typename ExecSpace::memory_space>& s, int rounds = 1000) {

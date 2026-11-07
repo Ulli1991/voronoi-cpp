@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <string>
 
+// 2D start and geometry stages: from_rings turns polygon_clip's rings into triangles (Mesh<2>::rebuild); faces() computes
+// the geometry (Mesh<2>::geometry). tri_repair/tri_finish keep the triangles Delaunay in between.
 // Persistent 2D Delaunay triangulation on the torus: 2n triangles and 3n edges, so slots and face numbers never change.
 // Triangles are counter-clockwise, lowest particle id first, so centres and faces depend on the positions alone.
 namespace tri_mesh {
@@ -20,6 +22,7 @@ using Sixes = Kokkos::View<int* [6], Kokkos::LayoutRight, MemorySpace>;
 template <class MemorySpace>
 using Rows2 = Kokkos::View<double* [2], Kokkos::LayoutRight, MemorySpace>;
 
+// Used by: Mesh<2>, tri_repair, tri_finish, faces.
 template <class MemorySpace>
 struct Triangles {
     // Row t: corners 0, 1, 2, then the apex across the edge opposite corner k (3 + k).
@@ -33,6 +36,7 @@ struct Triangles {
 };
 
 namespace detail {
+// Used by: from_rings.
 template <class Memory>
 struct RingLookup {
     polygon_clip::Rings<Memory> rings;
@@ -71,6 +75,7 @@ struct RingLookup {
 
 // The triangles and faces of the rings of an exact clipping. Throws if the
 // rings do not close (never for exact rings on distinct points).
+// Used by: Mesh<2>::rebuild (start).
 template <class ExecSpace>
 Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
                                                        const polygon_clip::Rings<typename ExecSpace::memory_space>& rings) {
@@ -164,6 +169,7 @@ Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
 
 // Products of a triangle with corners 1, 2 at offsets a, b from corner 0 (grid steps), shared by the centre and the
 // in-circle filter so every kernel gets the same bits.
+// Used by: centres in tri_repair, the screen, total_area, centre of each triangle.
 struct Circle {
     double la, lb, mx, my, det;
     KOKKOS_INLINE_FUNCTION Circle(double ax, double ay, double bx, double by)
@@ -185,6 +191,7 @@ KOKKOS_INLINE_FUNCTION double steps(int from, int to, int period) {
 
 // Face geometry, one thread per triangle: the area vector (owner to neighbour) is the edge between the two centres turned
 // a quarter, the centroid its midpoint, both relative to the owner. A face belongs to the side of the lower apex.
+// Used by: Mesh<2>::geometry.
 template <class ExecSpace, class X>
 void faces(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
            const Triangles<typename ExecSpace::memory_space>& mesh,

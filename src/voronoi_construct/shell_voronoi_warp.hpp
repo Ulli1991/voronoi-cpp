@@ -9,8 +9,9 @@
 #include <utility>
 #include <vector>
 
-// Warp-per-cell variant of shell_voronoi::construct for CUDA; one warp builds one cell in shared memory.
-// Cells that overflow its capacities or that it cannot certify are rebuilt by the per-thread kernel.
+// Clipping, the CUDA warp-per-cell variant of shell_voronoi::construct: one warp builds one cell in shared memory.
+// Called by Mesh<3>::update (start, rebuild) and Mesh::clip; feeds tet_start::build. Overflow/uncertified cells
+// are rebuilt by the per-thread kernel.
 namespace shell_voronoi {
 namespace warp {
 
@@ -27,6 +28,7 @@ constexpr std::uint8_t none = 255;
 // One warp's polyhedron. Corners and adjacency hold three 8-bit indices each: corner k is a plane,
 // adjacency k the vertex across the edge from corner k to k + 1. A cut reuses free slots; a 64-bit
 // register mask marks the slots in use.
+// Used by: Kernel::build, start_cube, clip.
 struct alignas(16) Polyhedron {
     // Plane normals only weight the face centroids, so float is enough.
     float nx[max_planes], ny[max_planes], nz[max_planes];
@@ -47,6 +49,7 @@ struct alignas(16) Polyhedron {
     long long face_at, face_end;
 };
 
+// Used by: the Polyhedron accessors in clip.
 KOKKOS_INLINE_FUNCTION int byte(std::uint32_t packed, int k) { return (packed >> (8 * k)) & 255; }
 KOKKOS_INLINE_FUNCTION std::uint32_t pack(int a, int b, int c) {
     return std::uint32_t(a) | std::uint32_t(b) << 8 | std::uint32_t(c) << 16;
@@ -108,6 +111,8 @@ __device__ inline void store_byte(std::uint32_t& packed, int k, int value) {
     reinterpret_cast<std::uint8_t*>(&packed)[k] = static_cast<std::uint8_t>(value);
 }
 
+// The starting cube of half-width h around the generator; sets planes and the live-vertex mask.
+// Used by: Kernel (cell setup).
 __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uint64_t& live) {
     const int l = lane();
     if (l < box_planes) {
@@ -151,6 +156,7 @@ __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uin
 
 // Clip by the bisector with a particle at offset d (all lanes pass the same
 // d). Returns ok when the plane does not cut or after the cut is applied.
+// Used by: Kernel, once per candidate particle.
 __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, double& radius2, Vec3 d,
                     int neighbour) {
     const int l = lane();
@@ -258,6 +264,7 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
 
 // Warp bitonic sort of one (key, slot, image) entry per lane, ascending by
 // key and then slot so the order is deterministic.
+// Used by: Kernel, to order each batch of candidates nearest first.
 __device__ inline void sort_candidates(float& key, int& slot, int& packed_image) {
     const int l = lane();
     for (int size = 2; size <= lanes; size <<= 1) {
@@ -283,6 +290,7 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 // Adaptive: walk each cell at its level (CellList::level), else only at the base level and leave
 // uncertified cells to the thread kernel. with_rings: record face rings instead of face geometry.
 // local: build only the cells of `selection`. cubic: the grid is one cube (Grid::cube()).
+// Used by: construct_warp.
 template <class MemorySpace, bool adaptive, bool with_rings, bool local = false, bool cubic = false>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
@@ -594,6 +602,7 @@ struct Kernel {
 
 // Build the selected cells (default: all) with one warp per cell, then rebuild the ones that overflowed
 // with the per-thread kernel; with face rings if `out` records them. Other backends use that kernel throughout.
+// Used by: Mesh<3>::update, Mesh<3>::clip.
 template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     Cells<typename ExecSpace::memory_space>& out,
