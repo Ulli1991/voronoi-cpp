@@ -1,6 +1,14 @@
 # Kokkos reference-counted Views are not modeled by NewDeleteLeaks.
 # AddressSanitizer/LeakSanitizer in CI checks real lifetime errors.
-Checks: '-*,clang-analyzer-*,-clang-analyzer-cplusplus.NewDeleteLeaks,bugprone-sizeof-expression,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation,performance-unnecessary-copy-initialization'
+# bugprone-* and performance-* are on; the exclusions below are deliberate patterns of this code base:
+#  - easily-swappable-parameters, narrowing-conversions, implicit-widening-of-multiplication-result: index arithmetic;
+#  - signed-bitwise, enum-size: bit tricks (hashes, ~f marks) and plain enums;
+#  - exception-escape: main of a test or bench throws to fail; random-generator-seed: fixed seeds make tests repeat;
+#  - unchecked-string-to-number-conversion, throwing-static-initialization, nondeterministic-pointer-iteration-order:
+#    flag parsing and timers in the benches;
+#  - incorrect-roundings, suspicious-memory-comparison: the bit-for-bit reproducibility the library promises;
+#  - inefficient-vector-operation, inefficient-string-concatenation, no-automatic-move: test code and a refusal message.
+Checks: '-*,clang-analyzer-*,-clang-analyzer-cplusplus.NewDeleteLeaks,bugprone-*,performance-*,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions,-bugprone-implicit-widening-of-multiplication-result,-bugprone-signed-bitwise,-performance-enum-size,-bugprone-exception-escape,-bugprone-random-generator-seed,-bugprone-unchecked-string-to-number-conversion,-bugprone-throwing-static-initialization,-bugprone-nondeterministic-pointer-iteration-order,-bugprone-incorrect-roundings,-bugprone-suspicious-memory-comparison,-performance-inefficient-vector-operation,-performance-inefficient-string-concatenation,-performance-no-automatic-move'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*src/(neighbour_search|voronoi_construct|hydro)/.*'
 FormatStyle: none
