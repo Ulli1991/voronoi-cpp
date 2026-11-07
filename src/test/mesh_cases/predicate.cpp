@@ -53,8 +53,9 @@ void predicate_cases() {
                 near += s != 0 && size < (oracle::i128(1) << 60) && size > -(oracle::i128(1) << 60);
             }
         }
-        c.expect(wrong == 0, name + ": " + std::to_string(checked) + " in-sphere, " + std::to_string(ties) + " exact ties, " +
-                                 std::to_string(near) + " with a small determinant: " + std::to_string(wrong) + " wrong");
+        c.expect(wrong == 0, name + ": " + std::to_string(checked) + " in-sphere, " + std::to_string(ties) +
+                                 " exact ties, " + std::to_string(near) +
+                                 " with a small determinant: " + std::to_string(wrong) + " wrong");
     };
     add("predicates.sets", [=](Check& c) {
         for (const char* kind : {"jittered", "clustered", "halo", "lattice", "wave", "sc@0", "fcc@1e-6", "pairs@1e-6"})
@@ -82,7 +83,9 @@ void predicate_cases() {
         for (auto& q : tiny)
             for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;
         tiny.push_back({0.1, 0.1, 0.1});
-        for (int i = 1; i < 512; ++i) tiny.push_back({wrap(0.1 + std::sqrt(2.0) * i), wrap(0.2 + std::sqrt(3.0) * i), wrap(0.3 + std::sqrt(5.0) * i)});
+        for (int i = 1; i < 512; ++i)
+            tiny.push_back(
+                {wrap(0.1 + std::sqrt(2.0) * i), wrap(0.2 + std::sqrt(3.0) * i), wrap(0.3 + std::sqrt(5.0) * i)});
         compare(c, "4096 particles on 2048^3 grid positions (no duplicates assumed)", tiny);
     });
 }

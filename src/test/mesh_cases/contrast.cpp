@@ -75,7 +75,9 @@ void contrast_cases() {
             std::sort(seen.begin(), seen.end());
             const long long same = std::distance(std::unique(seen.begin(), seen.end()), seen.end());
             Mesh m(Exec{}, 1.0);
-            build(c, "3072 particles on " + std::to_string(steps) + "^3 grid positions, " + std::to_string(same) + " duplicates",
+            build(c,
+                  "3072 particles on " + std::to_string(steps) + "^3 grid positions, " + std::to_string(same) +
+                      " duplicates",
                   m, p, same ? Expect::exact_or_refused : Expect::exact, 16);
         });
     // Why a start fails: statuses of the clipping and the checks of tet_start.
@@ -127,9 +129,10 @@ void contrast_cases() {
         // Made by hand: a cell of more planes than the exact clipping holds costs minutes to reach.
         const Positions x = to_device(make_points("jittered", 64));
         tet_mesh::Points4<Memory> snapped("snapped", 64);
-        Kokkos::parallel_for("snapped", Kokkos::RangePolicy<Exec>(0, 64), KOKKOS_LAMBDA(int i) {
-            for (int a = 0; a < 3; ++a) snapped(i, a) = x(i, a);
-        });
+        Kokkos::parallel_for(
+            "snapped", Kokkos::RangePolicy<Exec>(0, 64), KOKKOS_LAMBDA(int i) {
+                for (int a = 0; a < 3; ++a) snapped(i, a) = x(i, a);
+            });
         auto says = [&](int status, const std::string& word) {
             auto cells = shell_voronoi::Cells<Memory>::with_rings(64, 1024);
             Kokkos::deep_copy(Kokkos::subview(cells.status, 3), status);
@@ -148,7 +151,9 @@ void contrast_cases() {
         for (auto& q : tiny)
             for (double& v : q) v = 0.5 + (v - 0.5) * 2048 * grid_step;
         Points line;
-        for (int i = 1; i < 512; ++i) line.push_back({wrap(0.1 + std::sqrt(2.0) * i), wrap(0.2 + std::sqrt(3.0) * i), wrap(0.3 + std::sqrt(5.0) * i)});
+        for (int i = 1; i < 512; ++i)
+            line.push_back(
+                {wrap(0.1 + std::sqrt(2.0) * i), wrap(0.2 + std::sqrt(3.0) * i), wrap(0.3 + std::sqrt(5.0) * i)});
         diagnose(c, "the line alone", line);
         Points both = tiny;
         both.insert(both.end(), line.begin(), line.end());

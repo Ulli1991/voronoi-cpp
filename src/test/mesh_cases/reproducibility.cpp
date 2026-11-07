@@ -53,7 +53,8 @@ std::vector<std::uint64_t> trace(const Points& start, double displacement, int s
 
 // The same run twice, against Serial, and a hash dump to compare builds and thread counts.
 void reproducibility_cases() {
-    const std::vector<std::pair<std::string, double>> runs{{"jittered", 0.3}, {"clustered", 0.3}, {"lattice", 0.1}, {"wave", 0.3}};
+    const std::vector<std::pair<std::string, double>> runs{
+        {"jittered", 0.3}, {"clustered", 0.3}, {"lattice", 0.1}, {"wave", 0.3}};
     for (const auto& [kind, displacement] : runs) {
         const std::string name = kind;
         const double d = displacement;
@@ -63,18 +64,23 @@ void reproducibility_cases() {
             c.expect(a == b, name + ": two runs give the same bits, 20 steps");
         });
 #ifdef KOKKOS_ENABLE_SERIAL
-        add("repro.serial." + name, [=](Check& c) {
-            const Points p = make_points(name, 4096);
-            const auto a = trace<Exec>(p, d, 20);
-            const auto b = trace<Kokkos::Serial>(p, d, 20);
-            long long topology = 0, geometry = 0;
-            for (std::size_t i = 0; i < a.size(); i += 2) {
-                topology += a[i] != b[i];
-                geometry += a[i + 1] != b[i + 1];
-            }
-            c.expect(topology == 0, name + ": faces of " + Exec::name() + " and Serial agree (" + std::to_string(topology) + " of 21 steps differ)");
-            c.expect(geometry == 0, name + ": bits of volumes and centroids agree (" + std::to_string(geometry) + " of 21 steps differ)");
-        }, on_cuda(27));
+        add(
+            "repro.serial." + name,
+            [=](Check& c) {
+                const Points p = make_points(name, 4096);
+                const auto a = trace<Exec>(p, d, 20);
+                const auto b = trace<Kokkos::Serial>(p, d, 20);
+                long long topology = 0, geometry = 0;
+                for (std::size_t i = 0; i < a.size(); i += 2) {
+                    topology += a[i] != b[i];
+                    geometry += a[i + 1] != b[i + 1];
+                }
+                c.expect(topology == 0, name + ": faces of " + Exec::name() + " and Serial agree (" +
+                                            std::to_string(topology) + " of 21 steps differ)");
+                c.expect(geometry == 0, name + ": bits of volumes and centroids agree (" + std::to_string(geometry) +
+                                            " of 21 steps differ)");
+            },
+            on_cuda(27));
 #endif
         add("repro.dump." + name, [=](Check& c) {
             // Hashes to compare builds and thread counts: MESH_REPRO_DUMP=<file> appends "<case> <step> <topology> <geometry>".

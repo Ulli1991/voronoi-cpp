@@ -9,7 +9,8 @@ namespace mesh_cases {
 // Zero to a few particles, and a mesh that goes back to none.
 void few_cases() {
     for (const char* kind : {"uniform", "jittered", "lattice"})
-        for (const int n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 24, 27, 32, 40, 48, 64, 100, 125, 216, 512}) {
+        for (const int n :
+             {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 24, 27, 32, 40, 48, 64, 100, 125, 216, 512}) {
             add("few." + std::string(kind) + "." + std::to_string(n), [=](Check& c) {
                 const Points p = make_points(kind, n);
                 Mesh m(Exec{}, 1.0);
@@ -25,12 +26,10 @@ void few_cases() {
                 }
             });
         }
-    add(
-        "few.empty",
-        [](Check& c) {
-            Mesh m(Exec{}, 1.0);
-            build(c, "no particles", m, {}, Expect::refused);
-        });
+    add("few.empty", [](Check& c) {
+        Mesh m(Exec{}, 1.0);
+        build(c, "no particles", m, {}, Expect::refused);
+    });
     add("few.empty_after_a_mesh", [](Check& c) {
         // Nothing to mesh changes nothing: the mesh stays and steps on.
         Points p = make_points("jittered", 1000);

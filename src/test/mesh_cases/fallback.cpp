@@ -113,16 +113,16 @@ void fallback_cases() {
                 try {
                     r = m.update(to_device(p));
                 } catch (const std::exception& e) {
-                    c.expect(true, "n=" + std::to_string(count) + " kicks of " + sci(d) + " spacings: " + sci(timer.seconds()) +
-                                       " s to a refusal: " + e.what());
+                    c.expect(true, "n=" + std::to_string(count) + " kicks of " + sci(d) +
+                                       " spacings: " + sci(timer.seconds()) + " s to a refusal: " + e.what());
                     return;
                 }
                 const double seconds = timer.seconds();
                 const mc::Result o = mc::check(m, 4);
                 std::ostringstream what;
-                what << "n=" << count << " kicks of " << d << " spacings: " << seconds << " s, stuck " << r.stuck << ", host "
-                     << r.host_flips << "/" << r.host_rebuilds << ", rebuilt " << r.rebuilt << ", " << r.stuck / seconds
-                     << " stuck entries/s";
+                what << "n=" << count << " kicks of " << d << " spacings: " << seconds << " s, stuck " << r.stuck
+                     << ", host " << r.host_flips << "/" << r.host_rebuilds << ", rebuilt " << r.rebuilt << ", "
+                     << r.stuck / seconds << " stuck entries/s";
                 c.expect(o.ok(), what.str());
             });
     add("fallback.grow_by_steps", [](Check& c) {
@@ -140,7 +140,8 @@ void fallback_cases() {
         bool refused = false;
         for (int s = 1; s <= 20 && !refused; ++s) {
             for (int i = 0; i < n; ++i)
-                for (int a = 0; a < 3; ++a) p[i][a] = wrap(from[i][a] + s / 20.0 * nearest_image(to[i][a] - from[i][a]));
+                for (int a = 0; a < 3; ++a)
+                    p[i][a] = wrap(from[i][a] + s / 20.0 * nearest_image(to[i][a] - from[i][a]));
             to_grid(p);
             step_or_refused(c, "towards skew segments, step " + std::to_string(s), m, p, refused, 4);
         }

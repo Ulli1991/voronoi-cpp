@@ -64,8 +64,8 @@ void coincident_cases() {
     });
 
     // During steps. Every particle stays; a few move as written.
-    auto walk = [](Check& c, const std::string& name, Points p, const std::vector<std::pair<int, Point>>& targets, int steps,
-                   int stay) {
+    auto walk = [](Check& c, const std::string& name, Points p, const std::vector<std::pair<int, Point>>& targets,
+                   int steps, int stay) {
         Mesh m(Exec{}, 1.0);
         if (!build(c, name + ", start", m, p, Expect::exact)) return;
         std::vector<Point> from;
@@ -102,7 +102,8 @@ void coincident_cases() {
         Mesh m(Exec{}, 1.0);
         build(c, "start", m, p, Expect::exact);
         const Point centre = p[1000];
-        std::vector<double> gap{1e-3, 1e-5, 1e-7, 8 * grid_step, grid_step, 0.3 * grid_step, 1e-3 * grid_step, grid_step};
+        std::vector<double> gap{1e-3,     1e-5, 1e-7, 8 * grid_step, grid_step, 0.3 * grid_step, 1e-3 * grid_step,
+                                grid_step};
         bool refused = false;
         for (std::size_t s = 0; s < gap.size() && !refused; ++s) {
             p[7] = centre;
@@ -158,7 +159,8 @@ void coincident_cases() {
             build(c, "start", m, p, Expect::exact, 4);
             p[50] = p[51];
             bool refused = false;
-            step_or_refused(c, "a pair lands on one position, default fallback, n=" + std::to_string(n), m, p, refused, 4);
+            step_or_refused(c, "a pair lands on one position, default fallback, n=" + std::to_string(n), m, p, refused,
+                            4);
             c.expect(refused, "refused");
         });
     // The refusal says what is wrong: the pair, by id.
@@ -169,7 +171,8 @@ void coincident_cases() {
             c.expect(false, name + ": refused");
         } catch (const std::exception& e) {
             const std::string what = e.what();
-            c.expect(what.find("particles " + pa + " and " + pb + " ") != std::string::npos, name + ": names the pair: " + what);
+            c.expect(what.find("particles " + pa + " and " + pb + " ") != std::string::npos,
+                     name + ": names the pair: " + what);
         }
     };
     add("coincident.message.start", [=](Check& c) {

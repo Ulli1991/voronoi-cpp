@@ -16,8 +16,8 @@ void box_cases() {
                 const int side = 8 * across;
                 const Points p = make_points(kind, side * side * across, box);
                 Mesh m(Exec{}, box);
-                build(c, std::string(kind) + " in a 1:1:1/8 slab, about " + std::to_string(across) + " cells across", m, p,
-                      Expect::exact_or_refused, 32);
+                build(c, std::string(kind) + " in a 1:1:1/8 slab, about " + std::to_string(across) + " cells across", m,
+                      p, Expect::exact_or_refused, 32);
             });
     for (const double thin : {1.0 / 32, 1.0 / 256, 1.0 / 1024})
         add("box.thin." + sci(thin), [=](Check& c) {
@@ -59,8 +59,9 @@ void box_cases() {
         // Particles on every wrap: x = 0, side, just below 0, a period off.
         Points p = make_points("jittered", 4096);
         const double below = std::nextafter(1.0, 0.0);
-        const std::vector<Point> special{{0, 0, 0},         {1, 1, 0.5},         {below, 0.5, 0.5}, {-grid_step, 0.5, 0.25},
-                                         {1.0, 0.25, 0.75}, {-0.25, 0.25, 0.25}, {1.75, 1.75, 0.1}, {0.1, -3.5, 2.5}};
+        const std::vector<Point> special{
+            {0, 0, 0},         {1, 1, 0.5},         {below, 0.5, 0.5}, {-grid_step, 0.5, 0.25},
+            {1.0, 0.25, 0.75}, {-0.25, 0.25, 0.25}, {1.75, 1.75, 0.1}, {0.1, -3.5, 2.5}};
         for (std::size_t i = 0; i < special.size(); ++i) p[i * 500 + 3] = special[i];
         Mesh m(Exec{}, 1.0);
         build(c, "particles on and across the boundaries", m, p, Expect::exact);
@@ -100,42 +101,49 @@ void box_cases() {
                 for (double& v : a) v = (v + 0.5 * grid_step) * scale;
             other.update(to_device(q));
             const long long differ = oracle::different_tetrahedra(mc::tets_of(unit), mc::tets_of(other));
-            c.expect(differ == 0, "box " + sci(scale) + ": the tetrahedra of the unit box (" + std::to_string(differ) + " differ)");
+            c.expect(differ == 0,
+                     "box " + sci(scale) + ": the tetrahedra of the unit box (" + std::to_string(differ) + " differ)");
             const auto a = to_host(unit.volume()), b = to_host(other.volume());
             double worst = 0;
-            for (std::size_t i = 0; i < p.size(); ++i) worst = std::max(worst, std::abs(b(i) / (scale * scale * scale) / a(i) - 1));
+            for (std::size_t i = 0; i < p.size(); ++i)
+                worst = std::max(worst, std::abs(b(i) / (scale * scale * scale) / a(i) - 1));
             c.expect(worst < 1e-12, "volumes scale with the box (" + sci(worst) + ")");
             const mc::Result r = mc::check(other);
             c.expect(r.ok(), r.text());
         });
     for (const double side : {1.0, 3.0, 0.7, 0.1, 1e-3, 1.0 / 3, 3.086e24})
-        add("box.snap_twice." + sci(side), [=](Check& c) {
-            // Snapping a snapped position must keep it: the mesh's positions
-            // are k * step and tet_start snaps them again.
-            const Box box(side);
-            const Points p = scaled(make_points("clustered", 4096), box);
-            long long moved = 0;
-            for (const auto& q : p)
-                for (int a = 0; a < 3; ++a) {
-                    const int k = exact_predicates::snap(q[a], box, a);
-                    moved += exact_predicates::snap(k * box.step, box, a) != k;
-                }
-            c.expect(moved == 0, "side " + sci(side) + ": " + std::to_string(moved) + " of " + std::to_string(3 * p.size()) +
-                                     " coordinates move when snapped twice");
-            // On a lattice a step decides ties: the mesh of the positions the caller gave, by the oracle (no tie-break,
-            // every image).
-            Points lattice = scaled(exact_lattice(16, {{0.5, 0.5, 0.5}}), box);
-            for (auto& q : lattice)
-                for (int a = 0; a < 3; ++a) q[a] = (exact_predicates::snap(q[a], box, a) + 0.5) * box.step;
-            Mesh m(Exec{}, box);
-            m.update(to_device(lattice));
-            const auto r = oracle::check(mc::grid_of(m), mc::tets_of(m));
-            c.expect(r.ok(), "the lattice in that box: " + r.text());
-        }, side > 1e20 ? on_cuda(26) : 0);
+        add(
+            "box.snap_twice." + sci(side),
+            [=](Check& c) {
+                // Snapping a snapped position must keep it: the mesh's positions
+                // are k * step and tet_start snaps them again.
+                const Box box(side);
+                const Points p = scaled(make_points("clustered", 4096), box);
+                long long moved = 0;
+                for (const auto& q : p)
+                    for (int a = 0; a < 3; ++a) {
+                        const int k = exact_predicates::snap(q[a], box, a);
+                        moved += exact_predicates::snap(k * box.step, box, a) != k;
+                    }
+                c.expect(moved == 0, "side " + sci(side) + ": " + std::to_string(moved) + " of " +
+                                         std::to_string(3 * p.size()) + " coordinates move when snapped twice");
+                // On a lattice a step decides ties: the mesh of the positions the caller gave, by the oracle (no tie-break,
+                // every image).
+                Points lattice = scaled(exact_lattice(16, {{0.5, 0.5, 0.5}}), box);
+                for (auto& q : lattice)
+                    for (int a = 0; a < 3; ++a) q[a] = (exact_predicates::snap(q[a], box, a) + 0.5) * box.step;
+                Mesh m(Exec{}, box);
+                m.update(to_device(lattice));
+                const auto r = oracle::check(mc::grid_of(m), mc::tets_of(m));
+                c.expect(r.ok(), "the lattice in that box: " + r.text());
+            },
+            side > 1e20 ? on_cuda(26) : 0);
     for (const std::string what : {"nan", "inf", "huge"})
         add("box.nonfinite." + what, [=](Check& c) {
             const Points p = make_points("jittered", 4096);
-            const double bad = what == "nan" ? std::nan("") : what == "inf" ? std::numeric_limits<double>::infinity() : 1e300;
+            const double bad = what == "nan"   ? std::nan("")
+                               : what == "inf" ? std::numeric_limits<double>::infinity()
+                                               : 1e300;
             Points q = p;
             q[100] = {bad, 0.5, 0.5};
             Mesh m(Exec{}, 1.0);

@@ -53,8 +53,8 @@ inline bool build(Check& check, const std::string& name, Mesh& mesh, const Point
         mesh.update_cells();
         const mc::Result c = mc::check(mesh, cells);
         check.expect(expect != Expect::refused && c.ok(), name + ": built (patched " + std::to_string(r.start.patched) +
-                                                              ", rounds " + std::to_string(r.start.rounds) + ", faces " +
-                                                              std::to_string(r.faces) + "): " + c.text());
+                                                              ", rounds " + std::to_string(r.start.rounds) +
+                                                              ", faces " + std::to_string(r.faces) + "): " + c.text());
         return true;
     } catch (const std::exception& e) {
         check.expect(expect != Expect::exact, name + ": refused: " + e.what());

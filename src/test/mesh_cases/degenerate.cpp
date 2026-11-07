@@ -73,19 +73,20 @@ void degenerate_cases() {
             }
         });
         for (const int noise : {1, 16, 1024})
-            add("degenerate.noise." + name + "." + std::to_string(noise), [=](Check& c) {  // every step all near-degenerate
-                // The lattice with +-noise grid steps of fresh noise every step.
-                Points p = start;
-                Mesh m(Exec{}, 1.0);
-                build(c, name + " start", m, p, Expect::exact);
-                std::mt19937_64 rng(noise);
-                std::uniform_int_distribution<int> u(-noise, noise);
-                for (int s = 1; s <= 2; ++s) {
-                    for (std::size_t i = 0; i < p.size(); ++i)
-                        for (int a = 0; a < 3; ++a) p[i][a] = wrap(start[i][a] + u(rng) * grid_step);
-                    step(c, name + " noise step " + std::to_string(s), m, p);
-                }
-            });
+            add("degenerate.noise." + name + "." + std::to_string(noise),
+                [=](Check& c) {  // every step all near-degenerate
+                    // The lattice with +-noise grid steps of fresh noise every step.
+                    Points p = start;
+                    Mesh m(Exec{}, 1.0);
+                    build(c, name + " start", m, p, Expect::exact);
+                    std::mt19937_64 rng(noise);
+                    std::uniform_int_distribution<int> u(-noise, noise);
+                    for (int s = 1; s <= 2; ++s) {
+                        for (std::size_t i = 0; i < p.size(); ++i)
+                            for (int a = 0; a < 3; ++a) p[i][a] = wrap(start[i][a] + u(rng) * grid_step);
+                        step(c, name + " noise step " + std::to_string(s), m, p);
+                    }
+                });
     }
     for (const Layout& l : {Layout{"sc", exact_lattice(16, sc_basis)}, Layout{"bcc", exact_lattice(8, bcc_basis)},
                             Layout{"fcc", exact_lattice(8, fcc_basis)}}) {
@@ -111,7 +112,8 @@ void degenerate_cases() {
                     zero += a2 == 0;
                 }
                 c.expect(bad == 0, name + ": " + std::to_string(zero) + " of " + std::to_string(m.faces()) +
-                                       " faces have zero area, " + std::to_string(bad) + " non-finite centroid components");
+                                       " faces have zero area, " + std::to_string(bad) +
+                                       " non-finite centroid components");
                 if (s == 0) step(c, "rigid step", m, p);
             }
         });
@@ -156,8 +158,8 @@ void degenerate_cases() {
         const double h = 1.0 / side, big = h / 4, small = h / 64;
         auto at = [&](int s) {
             Points p;
-            const double r[3] = {big + small * (s % 8 - 4), big + small * ((s + 3) % 8 - 4) * (s % 8 ? 1 : 0) +
-                                                                (s % 8 ? 0 : small * (s % 8 - 4)),
+            const double r[3] = {big + small * (s % 8 - 4),
+                                 big + small * ((s + 3) % 8 - 4) * (s % 8 ? 1 : 0) + (s % 8 ? 0 : small * (s % 8 - 4)),
                                  big + small * (s % 8 - 4)};
             for (int i = 0; i < side; ++i)
                 for (int j = 0; j < side; ++j)

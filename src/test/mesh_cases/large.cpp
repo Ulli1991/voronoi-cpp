@@ -70,16 +70,17 @@ void large_cases() {
                             ++wrong;
                             if (first.empty()) {
                                 std::ostringstream o;
-                                o << " first: seed " << seed << " step " << s << " stuck " << r.stuck << " rounds " << r.rounds
-                                  << " rebuilt " << r.rebuilt << " total volume " << total << " " << check.text();
+                                o << " first: seed " << seed << " step " << s << " stuck " << r.stuck << " rounds "
+                                  << r.rounds << " rebuilt " << r.rebuilt << " total volume " << total << " "
+                                  << check.text();
                                 first = o.str();
                             }
                         }
                     }
                 }
                 std::ostringstream what;
-                what << "n=" << n << " kicks of " << kick << " boxes, 4 seeds, 4 steps: wrong " << wrong << ", refused " << refused_count
-                     << ", rebuilt " << rebuilt << ", repaired exact " << clean << first;
+                what << "n=" << n << " kicks of " << kick << " boxes, 4 seeds, 4 steps: wrong " << wrong << ", refused "
+                     << refused_count << ", rebuilt " << rebuilt << ", repaired exact " << clean << first;
                 c.expect(wrong == 0, what.str());
             });
     add("large.shuffle", [](Check& c) {
@@ -171,7 +172,8 @@ void large_cases() {
         c.expect(refused, "refused");
         build(c, "and it builds again", m, make_points("jittered", 1000), Expect::exact);
     });
-    for (const auto& [mode, label] : {std::pair{voronoi::Fallback::cheapest, "cheapest"}, std::pair{voronoi::Fallback::host, "host"}})
+    for (const auto& [mode, label] :
+         {std::pair{voronoi::Fallback::cheapest, "cheapest"}, std::pair{voronoi::Fallback::host, "host"}})
         add(std::string("large.after_refusal.step.") + label, [fallback = mode](Check& c) {
             // Refused at the end of a step that went through the repair and the host.
             Points p = make_points("jittered", 12167);
@@ -231,17 +233,19 @@ void large_cases() {
                 const mc::Result r = mc::check(m, 4);
                 const auto& state = m.repair_state();
                 c.expect(r.ok(), "step " + std::to_string(s) + ": " + r.text());
-                std::cout << "    step " << s << " faces " << double(m.faces()) / n << " slots " << double(state.count) / n
-                          << " free " << state.free_count << " capacity " << double(state.alive.extent(0)) / n
-                          << " B/cell " << double(DeviceBytes::current) / n << "\n"
+                std::cout << "    step " << s << " faces " << double(m.faces()) / n << " slots "
+                          << double(state.count) / n << " free " << state.free_count << " capacity "
+                          << double(state.alive.extent(0)) / n << " B/cell " << double(DeviceBytes::current) / n << "\n"
                           << std::flush;
             }
         }
         const double faces = double(m.faces()) / n, slots = double(m.repair_state().count) / n;
-        c.expect(std::abs(faces / faces_first - 1) < 0.05, "faces per cell drift below 5 %: " + sci(faces_first) + " -> " + sci(faces));
+        c.expect(std::abs(faces / faces_first - 1) < 0.05,
+                 "faces per cell drift below 5 %: " + sci(faces_first) + " -> " + sci(faces));
         c.expect(slots < 1.1 * slots_first, "tetrahedra slots do not creep: " + sci(slots_first) + " -> " + sci(slots));
-        c.expect(double(DeviceBytes::current) < 1.05 * double(bytes_at_100), "memory does not creep: " +
-                 sci(double(bytes_at_100) / n) + " -> " + sci(double(DeviceBytes::current) / n) + " B/cell");
+        c.expect(double(DeviceBytes::current) < 1.05 * double(bytes_at_100),
+                 "memory does not creep: " + sci(double(bytes_at_100) / n) + " -> " +
+                     sci(double(DeviceBytes::current) / n) + " B/cell");
     });
     add("large.cycle", [](Check& c) {
         // There and back: the same positions give the same mesh, at any cycle.
