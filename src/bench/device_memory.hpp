@@ -8,6 +8,7 @@
 #include <map>
 
 // Peak of the device allocations, through the Kokkos Tools callbacks.
+// Used by: mesh2d_bench (start() before the run, peak read at the end); Memory is the execution space's memory space.
 template <class Memory>
 struct DeviceMemory {
     static inline std::map<const void*, std::uint64_t> live;

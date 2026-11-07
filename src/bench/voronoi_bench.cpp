@@ -1,4 +1,5 @@
-// Timing and debugging of the mesh pipeline, not a test: `rebuild` and `step`; flags in docs/design.md.
+// Bench for the mesh pipeline (the voronoi::Mesh stage of the hydro step), not a test: `rebuild` and `step`;
+// flags in docs/design.md. step mirrors a moving hydro run: advect points -> Mesh::update -> update_cells.
 
 #include "support.hpp"
 
@@ -17,7 +18,8 @@ namespace {
 
 using namespace support;
 
-// Device memory accounting through the Kokkos Tools allocation callbacks: current and peak bytes per phase, and the live allocations at the peak.
+// Device memory accounting through the Kokkos Tools allocation callbacks: current and peak bytes per phase, and the
+// live allocations at the peak. Used by: rebuild, step (phase() after each stage), main (start() with --memory).
 struct DeviceMemory {
     static inline bool on = false;
     static inline std::unordered_map<const void*, std::pair<std::string, std::uint64_t>> live;
@@ -68,7 +70,7 @@ struct DeviceMemory {
     }
 };
 
-// Time per kernel label through the Kokkos Tools callbacks.
+// Time per kernel label through the Kokkos Tools callbacks. Used by: main (start() with --kernels), step (report).
 struct KernelTimes {
     static inline bool on = false;
     static inline std::map<std::string, double> total;  // ms over the sampled steps
@@ -98,6 +100,7 @@ struct KernelTimes {
         E::set_begin_deep_copy_callback(begin_copy);
         E::set_end_deep_copy_callback(end_copy);
     }
+    // Prints the slowest kernels per step over `steps` sampled steps, for n cells. Used by: step.
     static void report(int steps, int n) {
         if (!on) return;
         std::vector<std::pair<double, std::string>> rows;
@@ -108,12 +111,14 @@ struct KernelTimes {
     }
 };
 
+// Whether the bare flag is present. Used by: main.
 bool has_flag(int argc, char** argv, const std::string& flag) {
     for (int i = 1; i < argc; ++i)
         if (argv[i] == flag) return true;
     return false;
 }
 
+// Value of `--flag=value`, or fallback. Used by: main.
 double flag_value(int argc, char** argv, const std::string& flag, double fallback) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -122,7 +127,7 @@ double flag_value(int argc, char** argv, const std::string& flag, double fallbac
     return fallback;
 }
 
-// --box=Lx,Ly,Lz (or one side, a cube); the unit cube by default.
+// --box=Lx,Ly,Lz (or one side, a cube); the unit cube by default. Used by: main.
 exact_predicates::Box box_flag(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -139,7 +144,7 @@ exact_predicates::Box box_flag(int argc, char** argv) {
     return {};
 }
 
-// Positional arguments, flags removed.
+// Positional arguments, flags removed. Used by: main.
 std::vector<std::string> positional(int argc, char** argv) {
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i)
@@ -147,6 +152,9 @@ std::vector<std::string> positional(int argc, char** argv) {
     return args;
 }
 
+// The `rebuild` mode: times the cell list and each construction variant (thread, exact, warp) on one point set
+// and cross-checks their volumes. args: rebuild <n> <distribution> [variants] [repeats]. Returns the failure count.
+// Used by: main.
 int rebuild(const std::vector<std::string>& args, const Box& box, double width_factor, bool check) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
@@ -192,7 +200,7 @@ int rebuild(const std::vector<std::string>& args, const Box& box, double width_f
 }
 
 // Adjacency faults of a host mesh: neighbours that are dead, that do not
-// share the face, or that do not point back.
+// share the face, or that do not point back. Used by: step (--debug).
 void report_adjacency(const tet_flips::Mesh& m, const char* when) {
     long long dead = 0, wrong_face = 0, no_back = 0;
     for (int t = 0; t < m.count; ++t) {
@@ -217,7 +225,7 @@ void report_adjacency(const tet_flips::Mesh& m, const char* when) {
               << "\n";
 }
 
-// The stuck entries the last device repair left, by reason.
+// The stuck entries the last device repair left, by reason. Used by: step (--debug).
 void report_stuck(const tet_repair::State<Memory>& state) {
     const int stuck = Kokkos::min(state.host_counters(tet_repair::counter::stuck), static_cast<int>(state.stuck.extent(0)));
     const auto list = to_host(state.stuck);
@@ -233,7 +241,7 @@ void report_stuck(const tet_repair::State<Memory>& state) {
 }
 
 // A checksum of the per-cell face lists and the bits of the cell volumes
-// and centroids (FNV-1a), to compare builds of the same mesh.
+// and centroids (FNV-1a), to compare builds of the same mesh. Used by: step (build report).
 std::uint64_t cells_checksum(const Mesh& mesh) {
     const auto start = to_host(mesh.cell_face_start());
     const auto face = to_host(mesh.cell_face());
@@ -259,7 +267,7 @@ std::uint64_t cells_checksum(const Mesh& mesh) {
 }
 
 // Cells at a corner of a live tetrahedron created since the last move, and
-// cells whose set of other particles differs from `before` (updated).
+// cells whose set of other particles differs from `before` (updated). Used by: step (--touched).
 void report_touched(const Mesh& mesh, std::vector<std::vector<int>>& before) {
     const int n = mesh.particles();
     const auto start = to_host(mesh.cell_face_start());
@@ -296,7 +304,7 @@ void report_touched(const Mesh& mesh, std::vector<std::vector<int>>& before) {
     before = std::move(now);
 }
 
-// A checksum of the bits of the cell volumes and centroids.
+// A checksum of the bits of the cell volumes and centroids. Used by: step (--checksum).
 std::uint64_t geometry_checksum(const Mesh& mesh) {
     const auto volume = to_host(mesh.volume());
     const auto centroid = to_host(mesh.centroid());
@@ -313,6 +321,9 @@ std::uint64_t geometry_checksum(const Mesh& mesh) {
     return h;
 }
 
+// The `step` mode: build the mesh, then `steps` times advect the points, Mesh::update and update_cells, timing the
+// phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
+// Used by: main.
 int step(const std::vector<std::string>& args, const Box& box, bool verify, bool debug, bool touched, bool checksum,
          voronoi::Fallback fallback) {
     const Exec exec;
@@ -334,7 +345,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
               << "\n";
 
     {
-        // The start kernels: clipping with rings, from_rings and the exact start (tet_start::build, which rewrites rings, so timed with a fresh clipping).
+        // The start kernels: clipping with rings, from_rings and the exact start; tet_start::build rewrites
+        // rings, so it is timed with a fresh clipping.
         const auto list = cell_list(x, box);
         const auto grid = shell_voronoi::make_grid(list);
         auto cells = cells_with_rings(list);

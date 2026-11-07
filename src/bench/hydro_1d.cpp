@@ -1,4 +1,5 @@
-// LUNA's 1D tests (sod, shu-osher, woodward-colella) on the 1D Voronoi mesh, timed.
+// Bench for LUNA's 1D tests (sod, shu-osher, woodward-colella) on the 1D Voronoi mesh, timed.
+// Flow: problem() -> Mesh<1> -> FiniteVolume<1> (time_step, step) -> hash / .npy output; main parses flags.
 
 #include "finite_volume_1d.hpp"
 #include "problems_1d.hpp"
@@ -26,7 +27,7 @@ using hydro::problems_1d::gamma_gas;
 using hydro::problems_1d::Problem;
 using hydro::problems_1d::problem;
 
-// Peak of the device allocations, through the Kokkos Tools callbacks.
+// Peak of the device allocations, through the Kokkos Tools callbacks (start() with --memory; peak read by main).
 struct DeviceMemory {
     static inline std::map<const void*, std::uint64_t> live;
     static inline std::uint64_t current = 0, peak = 0;
@@ -51,18 +52,21 @@ struct DeviceMemory {
     }
 };
 
+// Value of `--name=value` among the flags after the two positionals, or fallback. Used by: main.
 std::string flag(int argc, char** argv, const char* name, const char* fallback) {
     const std::size_t length = std::strlen(name);
     for (int a = 3; a < argc; ++a)
         if (std::strncmp(argv[a], name, length) == 0 && argv[a][length] == '=') return argv[a] + length + 1;
     return fallback;
 }
+// Whether the bare flag `--name` is present. Used by: main.
 bool has(int argc, char** argv, const char* name) {
     for (int a = 3; a < argc; ++a)
         if (std::strcmp(argv[a], name) == 0) return true;
     return false;
 }
 
+// The command-line choices of one run. Filled by: main; read by: simulate.
 struct Options {
     int n = 0, order = 1;
     double jitter = 0, courant = 0.8, fixed_dt = 0;
@@ -73,6 +77,7 @@ struct Options {
     long long max_steps = 0;
 };
 
+// Outcome of one simulate(): steps, wall time, final time, state hash, phase timings. Used by: main.
 struct Result {
     long long steps = 0, sorts = 0;
     double wall_s = 0, t = 0;
@@ -80,7 +85,8 @@ struct Result {
     hydro::Timings timings;
 };
 
-// FNV-1a over the bits of the state (and the positions of a moving run).
+// FNV-1a over the bits of the state (and the positions of a moving run): equal hashes mean bit-identical runs.
+// columns: values per row. Used by: simulate.
 template <class V>
 void hash_into(std::uint64_t& h, const V& host, int columns) {
     for (std::size_t i = 0; i < host.extent(0); ++i)
@@ -92,6 +98,7 @@ void hash_into(std::uint64_t& h, const V& host, int columns) {
         }
 }
 
+// Writes rows of (x, centroid, volume, rho, v, P) as a NumPy .npy file. Used by: simulate (--out).
 void write_npy(const std::string& path, const std::vector<std::array<double, 6>>& rows) {
     char header[128];
     int length = std::snprintf(header, sizeof header, "{'descr': '<f8', 'fortran_order': False, 'shape': (%zu, 6), }", rows.size());
@@ -105,6 +112,8 @@ void write_npy(const std::string& path, const std::vector<std::array<double, 6>>
     file.write(reinterpret_cast<const char*>(rows.data()), static_cast<std::streamsize>(rows.size() * sizeof rows[0]));
 }
 
+// One timed run of problem pb: build the mesh, set the initial cell averages, loop time_step/step to t_end,
+// then hash the state and optionally write `out`. Riemann: hydro::HLL or HLLC. Used by: main (once per repeat).
 template <class Riemann>
 Result simulate(const Problem& pb, const Options& o, const std::string& out) {
     const Exec exec;

@@ -1,5 +1,5 @@
-// The Sedov-Taylor blast of LUNA on the Voronoi mesh (hydro::FiniteVolume), static or moving, with phase timings.
-
+// Bench for the Sedov-Taylor blast of LUNA on the Voronoi mesh (hydro::FiniteVolume), static or moving, with phase timings.
+// Flow: main parses flags -> run_precision -> run: build Mesh, set the blast, loop time_step/step, write snapshots.
 
 #include "finite_volume.hpp"
 #include "snapshot.hpp"
@@ -23,6 +23,7 @@ using namespace support;
 
 // Device memory through the Kokkos Tools allocation callbacks: now and at
 // the peak of the current phase, with the live allocations at that peak.
+// Used by: run (phase() after each stage), main (start() with --memory).
 struct DeviceMemory {
     static inline bool on = false;
     static inline std::unordered_map<const void*, std::pair<std::string, std::uint64_t>> live;
@@ -70,6 +71,7 @@ struct DeviceMemory {
     }
 };
 
+// Value of `--name=value` (or "1" for a bare `--name`) among the arguments, else fallback. Used by: main.
 std::string flag(int argc, char** argv, const std::string& name, const std::string& fallback) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -80,7 +82,7 @@ std::string flag(int argc, char** argv, const std::string& name, const std::stri
 }
 
 // The points in Morton order (21 bits per coordinate): particle ids follow
-// space, so neighbouring cells sit close in memory.
+// space, so neighbouring cells sit close in memory. Used by: run (unless --input-order).
 Points morton_order(Points points, const Box& box) {
     auto spread = [](std::uint64_t v) {  // the 21 bits of v to every third bit
         v &= 0x1fffff;
@@ -103,6 +105,7 @@ Points morton_order(Points points, const Box& box) {
     return sorted;
 }
 
+// Median of the per-step phase times. Used by: run (summary).
 double median(std::vector<double> v) {
     if (v.empty()) return 0;
     std::sort(v.begin(), v.end());
@@ -110,7 +113,7 @@ double median(std::vector<double> v) {
 }
 
 // The Sedov set-up of LUNA (constants: scripts/validation/runs/sedov3d_run.py:19-26,
-// src/luna/ic_generation/sedov3d.py:9-14).
+// src/luna/ic_generation/sedov3d.py:9-14). Used by: run, main.
 struct Sedov {
     static constexpr double year_s = 3.15576e7, kpc_cm = 3.08568e21, msun_g = 1.98892e33;
     static constexpr double proton_g = 1.6726219e-24, boltzmann = 1.380649e-16;
@@ -127,10 +130,12 @@ struct Sedov {
     double energy() const { return 1.0e51 / energy_cgs(); }
 };
 
+// Sums of the conserved state over all cells (conservation check). Used by: run, via totals().
 struct Totals {
     double mass = 0, px = 0, py = 0, pz = 0, energy = 0;
 };
 
+// Sums FiniteVolume::state() on the device. Used by: run (before and after the loop).
 template <class FV>
 Totals totals(const FV& fv) {
     const auto q = fv.state();
@@ -148,7 +153,7 @@ Totals totals(const FV& fv) {
     return t;
 }
 
-// FNV-1a over the bits of every value of a host view (2D, rows x columns).
+// FNV-1a over the bits of every value of a host view (2D, rows x columns). Used by: run (final checksum).
 template <class View>
 std::uint64_t bits_hash(const View& v, std::uint64_t h = 1469598103934665603ULL) {
     for (std::size_t i = 0; i < v.extent(0); ++i)
@@ -164,6 +169,7 @@ std::uint64_t bits_hash(const View& v, std::uint64_t h = 1469598103934665603ULL)
     return h;
 }
 
+// The command-line choices of one run. Filled by: main; read by: run, run_precision.
 struct Options {
     int side = 0, order = 1, snapshots = 10;
     std::string kind, loop, limit, riemann, out, precision;
@@ -176,7 +182,8 @@ struct Options {
 };
 
 // The whole run with the hydro's precision policy P (the mesh carries float
-// face rows if P asks for them) and Riemann solver R.
+// face rows if P asks for them) and Riemann solver R: mesh -> initial state -> loop of
+// time_step/step with snapshots -> conservation and timing report. Used by: run_precision.
 template <class P, class R>
 void run(const Options& o, Points points) {
     using FV = hydro::FiniteVolume<3, Exec, R, P>;
@@ -255,8 +262,8 @@ void run(const Options& o, Points points) {
     snap.order = o.order;
     snap.gas = gas;
     snap.units = sedov.units;
-    // The radius of the disturbed region (density or pressure off the background by 1e-6); for a uniform stream, the
-    // largest relative deviation of rho, P and v.
+    // Snapshot: copy Q and the mesh to the host, write the file, report the disturbed radius (density or pressure
+    // off the background by 1e-6); for a uniform stream, the largest relative deviation of rho, P and v.
     auto write = [&](int index, double t) {
         const auto Q = to_host(fv.state());
         const auto x = to_host(mesh.positions());
@@ -367,7 +374,7 @@ void run(const Options& o, Points points) {
 
 // The precision policies of --precision (hydro/precision.hpp): <name>
 // geometry / gradient weights / gradients / face fluxes / Riemann; default:
-// double, the fit solved in the sweep (weights void).
+// double, the fit solved in the sweep (weights void). Used by: main.
 template <class R>
 void run_precision(const Options& o, const Points& points) {
     using hydro::Half;

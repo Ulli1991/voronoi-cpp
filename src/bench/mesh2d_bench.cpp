@@ -1,4 +1,5 @@
-// The 2D mesh timed: a build from nothing and moving steps, on one device, in M cells/s.
+// Bench: the 2D mesh timed (a build from nothing and moving steps, on one device, in M cells/s); no hydro.
+// Flow: make_points -> Mesh<2>::rebuild + update_cells (build) -> drift + update + update_cells (steps).
 
 #include "device_memory.hpp"
 #include "voronoi_mesh.hpp"
@@ -21,6 +22,7 @@ using Mesh = voronoi::Mesh<2, Exec>;
 using Box = exact_predicates::BoxN<2>;
 using X = Kokkos::View<double* [2], Memory>;
 
+// Value of `--name=value` among the flags after the two positionals, or fallback. Used by: main.
 std::string flag(int argc, char** argv, const char* name, const char* fallback) {
     const std::size_t length = std::strlen(name);
     for (int a = 3; a < argc; ++a)
@@ -28,6 +30,7 @@ std::string flag(int argc, char** argv, const char* name, const char* fallback) 
     return fallback;
 }
 
+// Interleaves the zero bits of the low 32 bits of v (a Morton coordinate). Used by: make_points (sorted).
 std::uint64_t spread(std::uint64_t v) {
     v = (v | v << 16) & 0x0000ffff0000ffffull;
     v = (v | v << 8) & 0x00ff00ff00ff00ffull;
@@ -36,6 +39,8 @@ std::uint64_t spread(std::uint64_t v) {
     return (v | v << 1) & 0x5555555555555555ull;
 }
 
+// n points of the given kind (jittered, random, clustered, lattice) in the box, on the device; n is rounded to a
+// lattice. sorted: in Morton order so neighbouring cells sit close in memory. Used by: main.
 X make_points(const std::string& kind, int n, const Box& box, bool sorted) {
     X x("x", n);
     auto h = Kokkos::create_mirror_view(x);
