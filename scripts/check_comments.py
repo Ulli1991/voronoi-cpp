@@ -8,14 +8,14 @@ from pathlib import Path
 LIMIT = 3
 HEADER_LINES = 30
 LIBRARY = ("neighbour_search", "voronoi_construct", "hydro")
-CONTROL = ("return", "if", "for", "while", "else", "switch", "case", "}", "//", "throw", "do", "using", "#")
+CONTROL = re.compile(r"(return|if|for|while|else|switch|case|throw|do|using)\b|[}#]|//")
 KEYWORD = re.compile(r"(template|struct|class|enum|inline|static|KOKKOS|constexpr|\[\[|namespace)\b")
 SIGNATURE = re.compile(r"^[\w:<>,\*&\s]+[\s\*&]\**&?[\w:~]+\(")
 
 
 def is_declaration(line):
     s = line.strip()
-    if not s or s.startswith(CONTROL):
+    if not s or CONTROL.match(s):
         return False
     return bool(KEYWORD.match(s)) or bool(SIGNATURE.match(s) and "=" not in s.split("(")[0])
 
