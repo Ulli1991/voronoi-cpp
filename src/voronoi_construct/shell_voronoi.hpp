@@ -819,6 +819,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             // The walk (see Stencil), ring_buffer grid cells at a time.
             int level = grid.level(t), home[3], finer = -1;
             home_cell(p, grid, level, home);
+            // NOLINTNEXTLINE(bugprone-infinite-loop): `status` is set inside the loop body (by the lambdas above and below).
             while (status == ok) {
                 const double width = grid.narrowest / (1 << level);
                 const int reach = level_reach(level, grid.fewest), entries = stencil.ends(reach);

@@ -3,6 +3,7 @@
 #include "exact_predicates.hpp"
 #include "neighbor_search.hpp"
 #include "shell_voronoi_warp.hpp"
+#include "tet_cells.hpp"
 #include "tet_flips.hpp"
 #include "tet_mesh.hpp"
 #include "tet_repair.hpp"

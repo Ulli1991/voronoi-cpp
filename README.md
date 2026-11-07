@@ -80,18 +80,23 @@ What a caller can rely on:
 
 What `update()` does with new positions. Normally the mesh is repaired by exact flips on the GPU, which is the green path. If a repair can't finish, or the first time, the mesh is rebuilt from scratch by clipping, the blue path. Input that can't give an exact mesh is refused with an error.
 
-| Header | Job |
-|---|---|
-| `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
-| `exact_predicates.hpp` | the periodic `Box`, snapping, exact orientation and in-sphere signs (filtered double, then 128/256-bit integers), symbolic perturbation by particle id |
-| `shell_voronoi.hpp` | clipping with a thread per cell: the walk, rounded and exact cells |
-| `shell_voronoi_warp.hpp` | clipping with a warp per cell on CUDA, writing faces or face rings |
-| `tet_mesh.hpp` | persistent tetrahedra: `from_rings`, circumcentres, face rings, faces, per-cell face lists |
-| `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of cells around errors |
-| `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
-| `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
-| `voronoi_mesh.hpp` | `voronoi::Mesh`: the pipeline behind one interface |
-| `sorted_mesh.hpp` | `voronoi::Mesh<1>`: generators sorted on a 2⁵² grid, ties by id, periodic or with walls; `insert()` and `remove()` change the line between updates and report what changed |
+Source map, in the order `Mesh<3>::update` calls it (stage numbers as in the file headers; each file's header also says who calls it and what it feeds):
+
+| Stage | Header | Job |
+|---|---|---|
+| all | `exact_predicates.hpp` | the periodic `Box`, snapping, exact orientation and in-sphere signs (filtered double, then 128/256-bit integers), symbolic perturbation by particle id |
+| 0 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the entry point, `update`, `rebuild`, `update_cells`, `clip`; the pipeline behind one interface |
+| 1 | snapping | `Mesh::snap` in `voronoi_mesh.hpp`: positions to the 2³⁰ grid |
+| 2 | `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
+| 3 | `shell_voronoi.hpp` | clipping with a thread per cell: the walk, rounded and exact cells |
+| 3 | `shell_voronoi_warp.hpp` | clipping with a warp per cell on CUDA, writing faces or face rings |
+| 3 | `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of cells around errors |
+| 4a | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
+| 4b | `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
+| 5 | `tet_mesh.hpp` | persistent tetrahedra: `from_rings`, circumcentres, face rings, faces |
+| 5b | `tet_cells.hpp` | per-cell face lists, volumes, centroids and gradient weights (`update_cells`) |
+
+The other dimensions follow the same order. 2D: `voronoi_mesh_2d.hpp` with `polygon_clip.hpp` (clipping), `tri_mesh.hpp` (start and faces), `tri_repair.hpp` (device repair), `tri_finish.hpp` (host fallback) and `exact_predicates_2d.hpp`. 1D: `sorted_mesh.hpp`, `voronoi::Mesh<1>`: generators sorted on a 2⁵² grid, ties by id, periodic or with walls; `insert()` and `remove()` change the line between updates and report what changed.
 
 Clipping builds each cell by walking the grid cells around its generator, nearest first, and clipping with every particle within twice the cell's radius; the walk ends when no further particle can cut, which certifies the cell. The exact start turns the resulting face rings into tetrahedra and checks that together they are the Delaunay tetrahedralization, rebuilding any cell that fails. Each step then snaps the positions and repairs the tetrahedra whose local Delaunay test may fail by flips on the device, every flip decided by exact predicates. Triangles that stay stuck are rebuilt on the host, or the whole mesh is rebuilt.
 
@@ -228,9 +233,9 @@ Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, th
 ## Repository layout
 
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
-- `src/test/`: the tests and their support code. `src/bench/`: `voronoi_bench`, `mesh2d_bench`.
+- `src/test/`: the tests and their support code; `mesh_cases_test` has its groups in `src/test/mesh_cases/` (one file per group, shared helpers in `common.hpp`). `src/bench/`: `voronoi_bench`, `mesh2d_bench`.
 - `src/hydro/`, `hydro_sedov`, `hydro_1d`: the copy that goes ([#16](https://github.com/Ulli1991/voronoi-cpp/issues/16)).
 - `scripts/`: lint and A100 benchmark and test scripts.
 - `research_notes/`, `reports/`: status notes and surveys.
 
-CI (`.github/workflows/checks.yml`) runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
+CI (`.github/workflows/checks.yml`) checks the comment rules and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
