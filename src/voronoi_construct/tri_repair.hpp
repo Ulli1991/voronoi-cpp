@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+// 2D repair stage, device: called by Mesh<2>::update after snap, then tri_finish on stuck triangles; feeds tri_mesh::faces.
 // Keeps the triangulation Delaunay as particles move: screen() lists failing edges, repair() flips them in rounds (Lawson 2-2).
 // Conflicting flips are settled by votes in per-triangle locks whose keys grow with the round, so winners do not depend on list order.
 // Inversions no flip removes stay stuck, for tri_finish::finish() or a rebuild in voronoi::Mesh.
@@ -15,11 +16,14 @@ namespace tri_repair {
 namespace ep = exact_predicates;
 using tri_mesh::Triangles;
 
+// Used by: repair, Mesh<2>::update.
 struct Stats {
     long long flips = 0;
     int rounds = 0, stuck = 0;
 };
 
+// The repair's work lists and counters (device), kept across updates.
+// Used by: screen, repair, tri_finish::finish, Mesh<2>.
 template <class MemorySpace>
 struct State {
     Kokkos::View<unsigned long long*, MemorySpace> lock;  // of a triangle
@@ -44,6 +48,7 @@ struct State {
 };
 
 namespace detail {
+// Used by: screen, repair, tri_finish::finish.
 template <class V>
 void reserve(V& v, std::size_t size, bool keep) {
     if (v.extent(0) >= size) return;
@@ -62,6 +67,7 @@ KOKKOS_INLINE_FUNCTION unsigned hash(unsigned x) {
 }  // namespace detail
 
 // See the top of this file.
+// Used by: screen.
 template <class Memory>
 struct Screen {
     using Points = ep::Points<Memory, 2>;
@@ -112,6 +118,7 @@ struct Screen {
 };
 
 // Fills the list; every circumcentre is written.
+// Used by: Mesh<2>::update and rebuild (first step of the repair).
 template <class ExecSpace>
 void screen(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point, const ep::BoxN<2>& box,
             const Triangles<typename ExecSpace::memory_space>& mesh, State<typename ExecSpace::memory_space>& state) {
@@ -137,6 +144,7 @@ void screen(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_s
 
 // Whether the edge between (c, a, b) and (d, b, a) flips; `bad` set if one of
 // them is not positive.
+// Used by: Plan.
 template <class P>
 KOKKOS_INLINE_FUNCTION bool wants_flip(const P& point, int c, int a, int b, int d, bool& bad) {
     const ep::Offset2 A = ep::offset(point, c, a), B = ep::offset(point, c, b), D = ep::offset(point, c, d);
@@ -153,10 +161,12 @@ KOKKOS_INLINE_FUNCTION bool wants_flip(const P& point, int c, int a, int b, int 
 }
 
 // One triangle's rows, to rewrite it with the lowest corner first.
+// Used by: Apply.
 struct Row {
     int v[3], apex[3], adjacent[3], face[3];
 };
 
+// Used by: repair (first pass of a round).
 template <class Memory>
 struct Plan {
     Kokkos::View<const int* [6], Kokkos::LayoutRight, Memory> corners, links;
@@ -194,6 +204,7 @@ struct Plan {
     }
 };
 
+// Used by: repair (second pass of a round).
 template <class Memory>
 struct Apply {
     Kokkos::View<int* [6], Kokkos::LayoutRight, Memory> corners, links;
@@ -275,6 +286,7 @@ struct Apply {
 };
 
 // Inverted or flat triangles left.
+// Used by: repair.
 template <class ExecSpace>
 int count_inverted(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point,
                    const Triangles<typename ExecSpace::memory_space>& mesh) {
@@ -292,6 +304,7 @@ int count_inverted(const ExecSpace& exec, const ep::Points<typename ExecSpace::m
 
 // Twice the sum of the signed areas, in grid steps^2: a step of order the box can leave a covering of the torus several times.
 // Flips of positive triangles keep it, so this runs only after an inversion.
+// Used by: Mesh<2>::fills_box.
 template <class ExecSpace>
 double total_area(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point, const ep::BoxN<2>& box,
                   const Triangles<typename ExecSpace::memory_space>& mesh) {
@@ -311,6 +324,7 @@ double total_area(const ExecSpace& exec, const ep::Points<typename ExecSpace::me
 }
 
 // Works through the list. stuck: inverted or flat triangles left.
+// Used by: Mesh<2>::update and rebuild.
 template <class ExecSpace>
 Stats repair(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point,
              const Triangles<typename ExecSpace::memory_space>& mesh, State<typename ExecSpace::memory_space>& state) {
@@ -350,6 +364,7 @@ Stats repair(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
 }
 
 // The circumcentres of the triangles that flipped.
+// Used by: Mesh<2>::geometry.
 template <class ExecSpace>
 void centres(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point, const ep::BoxN<2>& box,
              const Triangles<typename ExecSpace::memory_space>& mesh, const State<typename ExecSpace::memory_space>& state) {

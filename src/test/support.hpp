@@ -1,6 +1,7 @@
 #pragma once
 
-// Inputs, reference results and comparisons shared by the tests and the benchmark.
+// Point generators, reference builds and mesh comparisons shared by the tests and benchmarks.
+// Exercises clipping (shell_voronoi), tet_start, tet_repair and voronoi::Mesh through their references.
 
 #include "neighbor_search.hpp"
 #include "shell_voronoi_warp.hpp"
@@ -35,6 +36,7 @@ inline Shape shape(const Box& box) {
     return {box.side[0] / longest, box.side[1] / longest, box.side[2] / longest};
 }
 // Lattice cells per axis for about `cells` cells of equal spacing in a box of shape s, at least `fewest` per axis.
+// Used by: make_points_off_grid and make_degenerate (non-cubic lattices).
 inline std::array<int, 3> lattice_sides(double cells, const Shape& s, int fewest) {
     const double per_unit = std::cbrt(cells / (s[0] * s[1] * s[2]));
     return {std::max(fewest, static_cast<int>(std::lround(per_unit * s[0]))),
@@ -44,8 +46,9 @@ inline std::array<int, 3> lattice_sides(double cells, const Shape& s, int fewest
 
 inline double wrap(double x) { return x - std::floor(x); }
 
-// Snaps points to the grid of the exact predicates (2³⁰ steps across the box).
+// Snaps points to the unit-box grid of the exact predicates (2³⁰ steps), rounding down.
 // Inputs must be on the grid: topology uses snapped positions, geometry the raw ones.
+// Used by: make_points, Flow::advect, mesh_cases_test.
 inline void to_grid(Points& points) {
     for (auto& p : points)
         for (double& x : p) x = std::floor(x * exact_predicates::scale) / exact_predicates::scale;
@@ -53,11 +56,13 @@ inline void to_grid(Points& points) {
 inline double nearest_image(double d, double side = 1.0) { return d - side * std::nearbyint(d / side); }
 
 // The same on the grid of `box` (exact_predicates::snap), as voronoi::Mesh does.
+// Used by: make_points(kind, n, box), Flow::advect(box).
 inline void to_grid(Points& points, const Box& box) {
     for (auto& p : points)
         for (int a = 0; a < 3; ++a) p[a] = exact_predicates::snap(p[a], box, a) * box.step;
 }
 
+// Host copy of a device view. Used by: every test that reads results back.
 template <class View>
 auto to_host(const View& v) {
     return Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, v);
@@ -65,6 +70,7 @@ auto to_host(const View& v) {
 
 // Degenerate layouts "<layout>@<perturbation>" (perturbation in spacings, uniform in each coordinate):
 // sc, bcc, fcc lattices; shells of 12 points (12 cells meet at the centre); planes; pairs with a twin.
+// Used by: make_points_off_grid, for the "sc@..." / "shells@..." kinds of start_test, repair_test, voronoi_mesh_test.
 inline Points make_degenerate(const std::string& layout, double perturbation, int n, const Shape& shape = {1, 1, 1}) {
     std::mt19937_64 rng(20261029);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
@@ -119,6 +125,7 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
 }
 
 // Points in the unit box of the given `kind`: uniform, jittered, lattice, wave, clustered, halo or a degenerate layout.
+// Used by: make_points, scaled; directly by hydro_test and voronoi_mesh_test (off-grid, snapped by the mesh).
 // Lattices round n to a cube, or with `shape` to equal spacings once scaled to that box.
 inline Points make_points_off_grid(const std::string& kind, int n, const Shape& shape = {1, 1, 1}) {
     if (const auto at = kind.find('@'); at != std::string::npos)
@@ -187,6 +194,7 @@ inline Points make_points_off_grid(const std::string& kind, int n, const Shape& 
 }
 
 // The same on the grid of the exact predicates (to_grid).
+// Used by: clipping_test, mesh_test, start_test, repair_test, mesh2d_test, mesh_cases_test, benchmarks.
 inline Points make_points(const std::string& kind, int n) {
     Points points = make_points_off_grid(kind, n);
     to_grid(points);
@@ -194,6 +202,7 @@ inline Points make_points(const std::string& kind, int n) {
 }
 
 // The points scaled from the unit box to `box` (side[a] along axis a).
+// Used by: make_points(kind, n, box), and by tests that build their own positions in a box.
 inline Points scaled(Points points, const Box& box) {
     for (auto& p : points)
         for (int a = 0; a < 3; ++a) p[a] *= box.side[a];
@@ -202,6 +211,7 @@ inline Points scaled(Points points, const Box& box) {
 
 // Points in `box`, on its grid: lattices of about equal spacings along
 // every axis, the other distributions stretched with the box.
+// Used by: start_test, repair_test, voronoi_mesh_test, mesh_cases_test (non-cubic boxes).
 inline Points make_points(const std::string& kind, int n, const Box& box) {
     if (box.cubic() && box.side[0] == 1.0) return make_points(kind, n);
     Points points = scaled(make_points_off_grid(kind, n, shape(box)), box);
@@ -209,6 +219,7 @@ inline Points make_points(const std::string& kind, int n, const Box& box) {
     return points;
 }
 
+// Uploads points to a device View. Used by: every test that feeds the library.
 inline Positions to_device(const Points& points) {
     Positions x("positions", points.size());
     auto h = Kokkos::create_mirror_view(x);
@@ -220,6 +231,7 @@ inline Positions to_device(const Points& points) {
 
 // A cell list over `box` whose base grid has about one particle per cell
 // (times width_factor^-3).
+// Used by: clipping_test (coarser lists via width_factor), mesh_test, voronoi_mesh_test, mesh_cases_test.
 template <class X>
 neighbor_search::CellList<Exec> cell_list(const X& x, const Box& box = {}, double width_factor = 1.0) {
     neighbor_search::CellList<Exec> list;
@@ -232,6 +244,7 @@ neighbor_search::CellList<Exec> cell_list(const X& x, const Box& box = {}, doubl
 
 // The points renumbered in slot order, so that a cell list built on them has
 // the identity order and slots name particles from then on.
+// Used by: mesh_test, start_test, distortion.hpp.
 inline Points in_slot_order(const Points& points, const Box& box = {}) {
     const auto order = to_host(cell_list(to_device(points), box).order);
     Points sorted(points.size());
@@ -240,6 +253,8 @@ inline Points in_slot_order(const Points& points, const Box& box = {}) {
 }
 
 // A smooth periodic velocity field of unit-order speed: six random modes.
+// advect() moves points by it to make the steps that repair_test, voronoi_mesh_test and mesh_cases_test feed
+// to voronoi::Mesh::update.
 class Flow {
 public:
     Flow() {
@@ -283,6 +298,7 @@ private:
     std::array<std::array<double, 7>, 6> modes_;  // wave vector (3), direction (3), phase
 };
 
+// Median wall time in ms of f over `repeats` runs after one warm-up. Used by: voronoi_bench only.
 template <class F>
 double median_ms(int repeats, const F& f) {
     f();  // warm-up
@@ -300,6 +316,7 @@ double median_ms(int repeats, const F& f) {
 // Checks a clipping build on its own: cells certified, volumes positive and summing to the box,
 // area vectors closing, faces seen from both sides, owned face centroids equidistant from their
 // two generators with none closer (brute force on a sample). Prints a summary; returns the failed checks.
+// Exercises shell_voronoi clipping output. Used by: clipping_test, mesh2d_test, voronoi_bench.
 inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Positions& positions, std::ostream& out,
                        const Box& box = {}) {
     constexpr double volume_tolerance = 1e-12, closure_tolerance = 1e-12, distance_tolerance = 1e-9;
@@ -370,8 +387,8 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     return failures;
 }
 
-// Clipping build of the particles of `list` that records
-// face rings, for tet_mesh::from_rings and tet_start::build.
+// Clipping build of the particles of `list` that records face rings, the input of
+// tet_mesh::from_rings and tet_start::build. Used by: mesh_test, mesh_cases_test, start_mesh, voronoi_bench.
 inline shell_voronoi::Cells<Memory> cells_with_rings(const neighbor_search::CellList<Exec>& list,
                                                      long long entries = 0) {
     auto cells = shell_voronoi::Cells<Memory>::with_rings(list.n, entries > 0 ? entries : 64LL * list.n);
@@ -383,8 +400,8 @@ inline shell_voronoi::Cells<Memory> cells_with_rings(const Positions& x, const B
     return cells_with_rings(cell_list(x, box));
 }
 
-// The exact starting tetrahedralization of x: clipping with
-// rings, then tet_start::build.
+// The exact starting tetrahedralization of x: clipping with rings, then tet_start::build (once more with a
+// bigger face pool if the patches did not fit). Returns tet_start's stats. Used by: start_test, mesh_cases_test.
 inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& mesh, const Box& box = {}) {
     const auto list = cell_list(x, box);
     auto cells = cells_with_rings(list);
@@ -399,6 +416,7 @@ inline tet_start::Stats start_mesh(const Positions& x, tet_mesh::Mesh<Memory>& m
 
 // The Voronoi cells of x by clipping, by particle: every particle's natural
 // neighbours (from the owned faces), volume and build status.
+// Used by: clipping_test (by_particle, compare), compare_with_rebuild (clipped), mesh_check.hpp.
 struct Reference {
     NeighbourSets neighbours;
     std::vector<double> volume;
@@ -434,7 +452,7 @@ inline Reference clipped(const Positions& x, const Box& box = {}) {
 }
 
 // Cells of two builds that differ: particles with other neighbour sets, and
-// the largest relative volume difference.
+// the largest relative volume difference. Used by: clipping_test (kernel and list comparisons).
 struct Difference {
     int neighbours = 0;
     double volume = 0;
@@ -449,7 +467,7 @@ inline Difference compare(const Reference& a, const Reference& b) {
 }
 
 // Every particle's Delaunay neighbours in a host mesh, including faces of
-// zero area.
+// zero area. Used by: compare_with_rebuild.
 inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
     NeighbourSets sets(n);
     for (int t = 0; t < m.count; ++t)
@@ -466,7 +484,7 @@ inline NeighbourSets delaunay_neighbours(const tet_flips::Mesh& m, int n) {
 
 using Mesh = voronoi::Mesh<3, Exec>;
 
-// A host copy of the mesh's tetrahedra.
+// A host copy of the mesh's tetrahedra. Used by: compare_with_rebuild, mesh_check.hpp, voronoi_bench.
 template <class M>  // any voronoi::Mesh<3, Exec, ...>
 tet_flips::Mesh host_tetrahedra(const M& mesh) {
     auto copy = [](const auto& v) {
@@ -482,7 +500,7 @@ tet_flips::Mesh host_tetrahedra(const M& mesh) {
 
 // Inverted tetrahedra plus shared triangles that fail the local Delaunay
 // test (each failing triangle counted from both sides); brute force over
-// every tetrahedron, exact.
+// every tetrahedron, exact. Used by: compare_with_rebuild (so repair_test, voronoi_mesh_test, hydro_test).
 inline long long failing(const tet_flips::Mesh& m) {
     long long bad = 0;
     for (int t = 0; t < m.count; ++t) {
@@ -502,6 +520,7 @@ inline long long failing(const tet_flips::Mesh& m) {
 
 // The mesh's face area vectors on the host, rows [0, faces()) (packed on
 // the device first: the face arrays hold more rows).
+// Used by: hydro_test, voronoi_mesh_test, mesh_cases_test.
 template <class M>
 Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(const M& mesh) {
     Kokkos::View<double* [3], Kokkos::LayoutRight, Memory> packed("face_areas", mesh.faces());
@@ -518,6 +537,7 @@ Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> face_areas(con
 // mesh lacks), extra (mesh faces clipping lacks, extra_area their largest area in spacings²;
 // clipping drops faces below rounding level), volume (largest relative difference), total (box
 // volumes), wrong_lists (per-cell list entries out of order or one-sided, after update_cells()).
+// Filled by compare_with_rebuild. Used by: repair_test, voronoi_mesh_test, hydro_test, voronoi_bench.
 struct Comparison {
     long long failing = 0, mismatched = 0, missing = 0, extra = 0, faces = 0, clipped_faces = 0, wrong_lists = 0;
     double extra_area = 0, volume = 0, total = 0;
@@ -527,6 +547,7 @@ struct Comparison {
     bool pass() const { return failing == 0 && missing == 0 && extra_area < 1e-9 && volume < 1e-10 && wrong_lists == 0; }
 };
 
+// Rebuilds x exactly by clipping and compares the mesh's connectivity, faces and volumes with it.
 template <class M>
 Comparison compare_with_rebuild(const M& mesh, const Positions& x) {
     const int n = mesh.particles();

@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+// 2D repair stage, host fallback: called by Mesh<2>::update when tri_repair::repair leaves stuck triangles.
 // Host fallback of the 2D repair: patches around triangles stuck inverted are replaced by the Delaunay triangles of the
 // patch's own corners (Bowyer-Watson, exact and perturbed by particle id); accepted if the boundary matches, else the patch grows.
 namespace tri_finish {
@@ -21,6 +22,7 @@ using Edge = std::pair<int, int>;
 
 // The Delaunay triangles of p[3..] and the three far points p[0..2] (a
 // counter-clockwise triangle around them), as indices, counter-clockwise.
+// Used by: finish.
 inline std::vector<Triple> delaunay(const std::vector<ep::Offset2>& p, const std::vector<int>& id) {
     std::vector<Triple> triangles = {{0, 1, 2}}, kept;
     std::vector<Edge> rim;
@@ -49,6 +51,7 @@ inline std::vector<Triple> delaunay(const std::vector<ep::Offset2>& p, const std
     return triangles;
 }
 
+// Used by: finish, Mesh<2>::update.
 struct Stats {
     long long patches = 0, triangles = 0;
     bool done = true;  // false: a patch could not be replaced
@@ -57,6 +60,7 @@ struct Stats {
 // Replaces patches around the inverted or flat triangles. Afterwards
 // state.list holds the patches' edges and state.touched their slots
 // (appended); run tri_repair::repair next.
+// Used by: Mesh<2>::update.
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point,
              const tri_repair::Triangles<typename ExecSpace::memory_space>& mesh,

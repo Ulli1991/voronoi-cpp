@@ -1,5 +1,5 @@
 // The contract of voronoi::Mesh on positions off the snapping grid: after each update the faces are those of an exact
-// rebuild (also with Fallback::host and ::rebuild), stored once and closing every cell.
+// rebuild (also with Fallback::host and ::rebuild), stored once and closing every cell. Exercises voronoi::Mesh.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -13,7 +13,8 @@ using namespace support;
 
 using Face = std::pair<int, int>;
 
-// The faces of a mesh by particle pair: area vector from the lower id.
+// The faces of a mesh by particle pair: area vector from the lower id. `rename` maps the mesh's particle
+// numbers to those of another run (permutation test). Used by: the face, permutation and local-rebuild sections.
 std::map<Face, Point> faces_of(const Mesh& mesh, const std::vector<int>& rename = {}) {
     const auto owner = to_host(mesh.owner());
     const auto neighbour = to_host(mesh.neighbour());
@@ -35,6 +36,7 @@ std::map<Face, Point> faces_of(const Mesh& mesh, const std::vector<int>& rename 
     return faces;
 }
 
+// Largest component difference of two vectors. Used by: the permutation and local-rebuild sections.
 double difference(const Point& a, const Point& b) {
     return std::max({std::abs(a[0] - b[0]), std::abs(a[1] - b[1]), std::abs(a[2] - b[2])});
 }

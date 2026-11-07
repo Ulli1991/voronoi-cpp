@@ -19,6 +19,7 @@ using Mesh = voronoi::Mesh<1, Exec>;
 using X = Kokkos::View<double* [1], Memory>;
 namespace ep = exact_predicates;
 
+// Host copy of a device view. Used by: read and every section that inspects results.
 template <class V>
 auto host(const V& v) {
     auto h = Kokkos::create_mirror_view(v);
@@ -26,6 +27,7 @@ auto host(const V& v) {
     return h;
 }
 
+// Uploads 1D positions. Used by: every section that updates the mesh.
 X device(const std::vector<double>& x) {
     X v("x", x.size());
     auto h = Kokkos::create_mirror_view(v);
@@ -37,12 +39,15 @@ X device(const std::vector<double>& x) {
 // A face as a comparable tuple: owner, neighbour, area, centroid.
 using Face = std::tuple<int, int, double, double>;
 
+// Everything a mesh exposes (volumes, centroids, positions, face lists, sorted faces), for bit-exact comparison.
+// Used by: the moving-mesh section (mesh against a fresh build).
 struct Snapshot {
     std::vector<double> volume, centroid, position;
     std::vector<int> others;  // the other particle of each list entry, 2 per cell
     std::vector<Face> faces;  // sorted
 };
 
+// Reads the mesh into a Snapshot. Used by: the moving-mesh section.
 Snapshot read(const Mesh& mesh) {
     const int n = mesh.particles(), faces = mesh.faces();
     const auto owner = host(mesh.owner()), neighbour = host(mesh.neighbour()), list = host(mesh.cell_face());
@@ -64,13 +69,14 @@ Snapshot read(const Mesh& mesh) {
     return s;
 }
 
+// Bit-for-bit equality of two snapshots. Used by: the moving-mesh section.
 bool same(const Snapshot& a, const Snapshot& b) {
     return a.volume == b.volume && a.centroid == b.centroid && a.position == b.position && a.others == b.others &&
            a.faces == b.faces;
 }
 
-// The oracle: sort (key, id) on the host, and every cell and face from it in
-// integers (quarter grid steps).
+// The oracle: sort (key, id) on the host, and every cell and face from it in integers (quarter grid steps).
+// Returns an empty string when the mesh agrees, else the first disagreement. Used by: the static and moving sections.
 std::string oracle(const Mesh& mesh, const std::vector<double>& x, const sorted_mesh::Grid& grid, bool periodic) {
     const int n = static_cast<int>(x.size());
     const long long P = sorted_mesh::Grid::period;
@@ -123,18 +129,19 @@ std::string oracle(const Mesh& mesh, const std::vector<double>& x, const sorted_
     return "";
 }
 
-// The cells of the snapped points as intervals in half grid steps: a periodic
-// cell may run past the end of the line. O(n^2) in overlaps, a test's oracle.
+// A cell as an interval in half grid steps; a periodic cell may run past the end of the line.
 struct Interval {
     long long lo, hi;
 };
 
+// Snapped grid keys of the points. Used by: changes_on.
 std::vector<long long> keys_of(const std::vector<double>& x, const sorted_mesh::Grid& grid, bool periodic) {
     std::vector<long long> key;
     for (const double v : x) key.push_back(static_cast<long long>(sorted_mesh::snap(v, grid, periodic)));
     return key;
 }
 
+// The cells of the snapped points (ties by id) as intervals. Used by: changes_on.
 std::vector<Interval> cells_of(const std::vector<long long>& key, bool periodic) {
     const long long P = sorted_mesh::Grid::period;
     const int n = static_cast<int>(key.size());
@@ -151,6 +158,7 @@ std::vector<Interval> cells_of(const std::vector<long long>& key, bool periodic)
     return cell;
 }
 
+// Length of the overlap of two cells, summed over periodic images. Used by: check_report.
 long long common(const Interval& a, const Interval& b, bool periodic) {
     long long sum = 0;
     const long long P2 = 2 * sorted_mesh::Grid::period;
@@ -162,6 +170,7 @@ long long common(const Interval& a, const Interval& b, bool periodic) {
 // The report of one change against the cells before and after it. Insert:
 // the new cells' overlaps; remove: what the neighbours gain from the gone
 // cell, the same integers with the old and the new cells' roles swapped.
+// Returns "" when the report is right. Used by: changes_on.
 std::string check_report(const Mesh::Changes& c, const std::vector<Interval>& parents, const std::vector<Interval>& children,
                          const std::vector<int>& child_of_request, const std::vector<Interval>& before, double step, bool periodic) {
     const auto id = host(c.id);
@@ -187,7 +196,8 @@ std::string check_report(const Mesh::Changes& c, const std::vector<Interval>& pa
     return "";
 }
 
-// Random batches of insertions and removals on a line.
+// Random batches of insertions and removals on a line: oracle, fresh build and report overlaps agree.
+// Used by: main (periodic and walls).
 void changes_on(Check& check, bool periodic, const Exec& exec, std::mt19937_64& rng) {
     const double L = 3.0;
     const sorted_mesh::Grid grid(L);
@@ -304,7 +314,7 @@ void changes_on(Check& check, bool periodic, const Exec& exec, std::mt19937_64& 
 }
 
 // Insertion at the two ends of a line with walls: a transfer by the report
-// conserves to rounding, and no sort runs.
+// conserves to rounding, and no sort runs. Used by: main.
 void transfer_at_a_wall(Check& check, const Exec& exec) {
     std::vector<double> x;
     const double L = 2.0;

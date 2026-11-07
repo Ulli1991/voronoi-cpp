@@ -2,6 +2,7 @@
 
 #include "exact_predicates.hpp"
 
+// 2D counterpart of exact_predicates.hpp: used by polygon_clip (clipping) and tri_repair/tri_finish (repair).
 // The exact predicates in 2D on offsets of snapped points (|offset| <= 2³⁰): orientation in 64 bits, in-circle in
 // 128 bits (terms below 2¹²²), behind a double filter, with the same symbolic perturbation as 3D.
 namespace exact_predicates {
@@ -15,6 +16,7 @@ KOKKOS_INLINE_FUNCTION int sign_of(i64 v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 
 // Sign of det [a la; b lb; e le] of offsets from one point: -orientation(a, b) if e is inside the circle through
 // the origin, a, b; +orientation(a, b) if outside; 0 on it.
+// Used by: in_circle.
 KOKKOS_INLINE_FUNCTION int circle_sign(const Offset2& a, const Offset2& b, const Offset2& e) {
     const double ax = double(a[0]), ay = double(a[1]), bx = double(b[0]), by = double(b[1]);
     const double ex = double(e[0]), ey = double(e[1]);
@@ -33,6 +35,7 @@ KOKKOS_INLINE_FUNCTION int circle_sign(const Offset2& a, const Offset2& b, const
 
 // Whether p[3] lies inside the circle through p[0..2] (any orientation, not flat, one frame); id are particle ids.
 // Perturbed, so never a tie: the term of p[3] is the triangle's own orientation.
+// Used by: polygon_clip::beyond, tri_repair, tri_finish.
 KOKKOS_INLINE_FUNCTION bool in_circle(const Offset2* p, const int* id) {
     const Offset2 a = minus(p[1], p[0]), b = minus(p[2], p[0]), e = minus(p[3], p[0]);
     const int o = sign_of(cross(a, b));

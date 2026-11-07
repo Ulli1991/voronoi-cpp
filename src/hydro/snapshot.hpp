@@ -12,15 +12,18 @@
 
 // HDF5 snapshots in LUNA's layout: <dir>/snapdir_NNN/snapshot_NNN.0.hdf5, group `cells`
 // (density, velocity, pressure, U, plus x, y, z and volume of the mesh) and group `units`.
+// Last stage of a step loop: the bench fills a SnapshotData from FiniteVolume::state() and calls write_snapshot.
 namespace hydro {
 
+// Unit system of the run in cgs; written to group `units` only if not all 1. Used by: write_snapshot.
 struct Units {
     double length_cm = 1, mass_g = 1, velocity_cm_s = 1;
     bool enabled() const { return !(length_cm == 1 && mass_g == 1 && velocity_cm_s == 1); }
 };
 
 // What a snapshot holds, on the host: per cell the generator x[3], the
-// volume and the conserved state U[5].
+// volume and the conserved state U[5] (per cell U = Q / volume, density-like).
+// Used by: hydro_sedov (filled from the mesh and FiniteVolume::state()), write_snapshot.
 struct SnapshotData {
     int index = 0;
     double time = 0;
@@ -33,6 +36,7 @@ struct SnapshotData {
 };
 
 namespace detail {
+// Scalar HDF5 attributes (double, long long, string) and 1D/2D double datasets. Used by: write_snapshot.
 inline void attribute(hid_t group, const char* name, hid_t type, const void* value) {
     const hid_t space = H5Screate(H5S_SCALAR);
     const hid_t attr = H5Acreate2(group, name, type, space, H5P_DEFAULT, H5P_DEFAULT);
@@ -58,7 +62,8 @@ inline void dataset(hid_t group, const char* name, const std::vector<double>& va
 }
 }  // namespace detail
 
-// Writes the snapshot; returns the file name.
+// Writes the snapshot (derived primitives are computed here from U); returns the file name.
+// Used by: hydro_sedov, at the requested output times.
 inline std::string write_snapshot(const std::string& dir, const SnapshotData& s) {
     char number[16];
     std::snprintf(number, sizeof number, "%03d", s.index);

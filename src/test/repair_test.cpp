@@ -1,5 +1,5 @@
 // Repair of the persistent mesh as particles move under a smooth flow: after each step it is Delaunay and matches an exact
-// clipped rebuild in neighbours and face volumes.
+// clipped rebuild in neighbours and face volumes. Exercises voronoi::Mesh::update (flip repair) and update_cells.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -11,6 +11,7 @@ int main(int argc, char** argv) {
     using namespace support;
     Check check;
     const Flow flow;
+    // One flow run: point kind, spacings moved per step, step count, box, particle count, label for the box.
     struct Case {
         const char* kind;
         double displacement;
@@ -45,7 +46,8 @@ int main(int argc, char** argv) {
             x = to_device(cube ? scaled(points, c.box) : points);
             const voronoi::Report report = mesh.update(x);
             mesh.update_cells();
-            const Comparison d = compare_with_rebuild(mesh, x);
+            // The mesh against an exact clipping rebuild of the same positions (support::compare_with_rebuild).
+        const Comparison d = compare_with_rebuild(mesh, x);
             std::ostringstream what;
             what << "step " << step << ": flips " << report.flips << " stuck " << report.stuck << " host flips "
                  << report.host_flips << " rebuilt " << report.host_rebuilds << "; " << d;

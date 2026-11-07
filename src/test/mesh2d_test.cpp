@@ -1,5 +1,6 @@
 // The 2D mesh (voronoi::Mesh<2>) against oracles that share no code with it: predicates, brute-force triangulation and
-// cells, moving meshes equal to fresh builds bit for bit, and refusals.
+// cells, moving meshes equal to fresh builds bit for bit, and refusals. Exercises voronoi::Mesh<2> (update,
+// update_cells, clip); self-contained (no support.hpp), with its own oracles.
 
 #include "check.hpp"
 #include "voronoi_mesh.hpp"
@@ -33,6 +34,7 @@ namespace ep = exact_predicates;
 using i128 = ep::i128;
 using Long = long double;
 
+// Host copy of a device view. Used by: every checker that reads the mesh.
 template <class V>
 auto host(const V& v) {
     auto h = Kokkos::create_mirror_view(v);
@@ -59,6 +61,8 @@ Points on_grid(Points p, const Box& box) {
     return p;
 }
 
+// Points of the given kind (random, jittered, clustered, lattice, hexagonal, wave) in the box, on its grid.
+// Used by: test_static, test_large, test_refusals, test_clip, test_moving (not support::make_points).
 Points make_points(const std::string& kind, int n, const Box& box) {
     std::mt19937_64 rng(20261105);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
@@ -101,12 +105,13 @@ Points make_points(const std::string& kind, int n, const Box& box) {
     return on_grid(p, box);
 }
 
+// 3x3 determinant in 128 bits. Used by: textbook_in_circle.
 i128 det3(i128 a, i128 b, i128 c, i128 d, i128 e, i128 f, i128 g, i128 h, i128 i) {
     return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
 }
 
 // In-circle of a, b, c (counter-clockwise), d: > 0 inside, by the textbook
-// determinant over differences from d. Small coordinates only.
+// determinant over differences from d. Small coordinates only. Used by: test_predicates, check_triangles.
 i128 textbook_in_circle(const ep::Offset2* p) {
     i128 m[3][3];
     for (int r = 0; r < 3; ++r) {
@@ -118,6 +123,7 @@ i128 textbook_in_circle(const ep::Offset2* p) {
     return det3(m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
 }
 
+// ep::in_circle (and cross) against the textbook determinant, every point ordering, and cocircular ties.
 void test_predicates(Check& check) {
     std::mt19937_64 rng(7);
     long long wrong = 0, ties = 0, inconsistent = 0, cases = 0;
@@ -165,13 +171,14 @@ void test_predicates(Check& check) {
     check.expect(ep::in_circle(abc_d, id1) != ep::in_circle(abd_c, id3), "cocircular quad: one diagonal wins");
 }
 
+// One brute-force cell: volume, centroid and faces keyed by the other particle. Used by: brute_cell, check_cells.
 struct Cell {
     Long volume = 0, cx = 0, cy = 0;
     std::map<int, std::array<Long, 3>> faces;  // other particle: length, centroid relative to the generator
 };
 
 // Cell i of the particles by clipping a big square in long double with
-// every bisector of every image of every particle.
+// every bisector of every image of every particle. Used by: check_cells.
 Cell brute_cell(int i, const Points& p, const Box& box) {
     struct Edge {
         Long x, y;
@@ -338,15 +345,17 @@ void check_cells(Check& check, const Mesh& mesh, const Points& p, const Box& box
     check.expect(closure < 1e-10, name + ": cells closed, worst " + sci(closure));
 }
 
-// Everything a run reads, bit for bit: faces by (owner, neighbour).
+// Everything a run reads, bit for bit: faces by (owner, neighbour). Used by: test_moving (fresh build comparison).
 struct Bits {
     std::vector<std::uint64_t> values;
 };
+// Appends the bit pattern of v. Used by: bits_of.
 void add(std::vector<std::uint64_t>& out, double v) {
     std::uint64_t u;
     std::memcpy(&u, &v, 8);
     out.push_back(u);
 }
+// Reads the mesh into Bits. Used by: test_moving.
 Bits bits_of(const Mesh& mesh) {
     Bits b;
     const auto volume = host(mesh.volume());
@@ -529,6 +538,7 @@ void test_clip(Check& check) {
     check.expect(different == 0, "clip: the rings of listed cells are their Delaunay neighbours");
 }
 
+// Static builds in four box shapes and six point kinds: no repair needed, triangulation and cells right.
 void test_static(Check& check) {
     const std::pair<const char*, Box> boxes[] = {{"1x1", Box(1.0)}, {"2x1", Box(2.0, 1.0)}, {"3x1", Box(3.0, 1.0)}, {"1x1/16", Box(1.0, 1.0 / 16)}};
     for (const char* kind : {"random", "jittered", "clustered", "lattice", "hexagonal", "wave"})
@@ -545,6 +555,7 @@ void test_static(Check& check) {
         }
 }
 
+// Moving points in a 2 x 1 box with the given fallback: oracle checks and bit-identity with fresh builds.
 void test_moving(Check& check, voronoi::Fallback fallback) {
     const Box box(2.0, 1.0);
     std::mt19937_64 rng(11);

@@ -8,14 +8,17 @@
 #include <cuda_fp16.h>
 #endif
 
-// The hydro's compile-time precision policy; Precision<> is double throughout. Settings: Geometry (face rows),
-// Weight (stored least-squares weights, or void), Gradient (gradients and face-state change),
-// Flux (stored face fluxes), Riemann (the Riemann solve).
+// Compile-time precision policy of FiniteVolume (all double by default); fed to it as a template argument.
+// Settings: Geometry (face rows), Weight (stored least-squares weights, or void), Gradient (gradients and
+// face-state change), Flux (stored face fluxes), Riemann (the Riemann solve).
 namespace hydro {
 
 // FP16 storage of float gradients (a Gradient setting).
+// Used by: Precision, FiniteVolume's gradient store and face kernel; hydro_sedov picks it.
 struct Half {};
 
+// The precision choices of one run; each alias below is read by FiniteVolume (geometry rows from Mesh,
+// gradients in the sweep, fluxes and Riemann solve in the update).
 template <class Geometry = double, class Weight = void, class Gradient = double, class Flux = double,
           class Riemann = double>
 struct Precision {
@@ -38,6 +41,7 @@ struct Precision {
 namespace half {
 
 // float -> IEEE binary16 bits, round to nearest even; and back.
+// Used by: FiniteVolume's gradient store (from_float) and face kernel (to_float).
 KOKKOS_INLINE_FUNCTION std::uint16_t from_float(float f) {
 #if defined(__CUDA_ARCH__)
     return __half_as_ushort(__float2half_rn(f));
@@ -85,19 +89,20 @@ KOKKOS_INLINE_FUNCTION float to_float(std::uint16_t h) {
 #endif
 }
 
-// 2^k for k in [-126, 127].
+// 2^k for k in [-126, 127]; used by: FiniteVolume's FP16 gradient scaling.
 KOKKOS_INLINE_FUNCTION float power_of_two(int k) { return Kokkos::bit_cast<float>(static_cast<std::uint32_t>(k + 127) << 23); }
 
 // The exponent k of a group whose largest magnitude is m: m 2^k in
 // [2^14, 2^15) (k = 0 for m = 0), within [-114, 126]: no overflow, 11 bits
-// relative to the group's largest component.
+// relative to the group's largest component. Used by: FiniteVolume's gradient store.
 KOKKOS_INLINE_FUNCTION int group_exponent(float m) {
     if (!(m > 0)) return 0;
     const int e = static_cast<int>((Kokkos::bit_cast<std::uint32_t>(m) >> 23) & 0xff) - 127;
     return Kokkos::clamp(14 - e, -114, 126);
 }
 
-// The group of gradient component c = D v + a: rho (v = 0), velocity, pressure.
+// The group of gradient component c = D v + a: rho (v = 0), velocity, pressure; each group shares one exponent.
+// Used by: FiniteVolume's gradient store and face kernel.
 template <int D>
 KOKKOS_INLINE_FUNCTION int group(int c) {
     return c < D ? 0 : c < D + D * D ? 1 : 2;
@@ -106,6 +111,7 @@ KOKKOS_INLINE_FUNCTION int group(int c) {
 }  // namespace half
 
 // Entries of a row of `count` values of type T, padded to whole 32-byte sectors.
+// Used by: FiniteVolume::gradient_width.
 template <class T>
 constexpr int row_width(int count) {
     constexpr int per_sector = 32 / static_cast<int>(sizeof(T));

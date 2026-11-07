@@ -14,29 +14,37 @@
 
 // Finite volumes on a voronoi::Mesh<D> (D = 2, 3), static or moving: MUSCL-Hancock (order 1) or Godunov (order 0),
 // HLLC or HLL on every face, one global time step; the state is the extensive Q = (mass, momentum, energy) per cell.
-// time_step() computes primitives, gradients and dt; step(dt) updates Q (and the mesh if moving).
+// Step order: time_step() (primitives, gradients, dt) -> step(dt) (face fluxes via euler.hpp, update Q, then mesh
+// update if moving). Driven by bench/hydro_sedov.cpp and the hydro tests; Q is read out through snapshot.hpp.
 namespace hydro {
 
+// How the fluxes reach Q: one fused loop per cell (each face computed twice), or fluxes stored per face then summed.
+// Used by: FiniteVolume::advance.
 enum class Update { per_cell, per_face };
 
 // The gradient limiter: at the face centroids, at the neighbours' centroids, or none.
+// Used by: Sweep::operator().
 enum class Limiter { face_centroid, cell_centroid, none };
 
 // A static mesh, or one whose points move with the flow.
+// Used by: FiniteVolume::step (moving: drift points, then Mesh::update).
 enum class Motion { static_mesh, moving };
 
 // Times of the phases of a step, in ms, summed over steps (fenced).
-// primitives and sweep (point velocities, time step and gradients): in
-// time_step(); fluxes: with the per-cell loop the fluxes and the update.
+// primitives and sweep (point velocities, time step and gradients): in time_step(); fluxes: with the per-cell loop
+// also the update. Used by: FiniteVolume::phase_end; printed by hydro_sedov.
 struct Timings {
     double primitives = 0, sweep = 0, fluxes = 0, update = 0, drift = 0, mesh = 0, cells = 0;
 };
 
 // What the mesh updates of a moving run did, summed over steps.
+// Used by: FiniteVolume::move; printed by hydro_sedov.
 struct MeshStats {
     long long updates = 0, rebuilds = 0, stuck = 0, host_flips = 0, device_flips = 0;
 };
 
+// The solver on a mesh in D dimensions. Riemann: HLL or HLLC (euler.hpp); Precision: see precision.hpp.
+// Used by: hydro_sedov (run), the hydro tests.
 template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class Riemann = HLLC,
           class Precision = hydro::Precision<>>
 class FiniteVolume {
@@ -61,13 +69,12 @@ public:
     using Exponents = Kokkos::View<std::uint32_t*, Memory, Unmanaged>;  // FP16 gradients: one byte per group
     using FaceFluxes = Kokkos::View<FluxStore* [V], Kokkos::LayoutRight, Memory, Unmanaged>;
 
-    // AREPO next generation's mesh regularisation as its Sedov examples
-    // configure it (examples/sedov_3d/sedov_globaltstp_3d/Config.sh:11-13:
-    // REGULARIZE_MESH_CM_DRIFT, _USE_SOUNDSPEED, _FACE_ANGLE; param.txt:93-94).
+    // AREPO next generation's mesh regularisation as its Sedov examples configure it
+    // (examples/sedov_3d/sedov_globaltstp_3d/Config.sh:11-13, param.txt:93-94). Used by: Sweep (moving).
     static constexpr double cell_shaping_speed = 0.5, cell_max_angle_factor = 2.25;
 
-    // mesh: built, with update_cells() done.
-    // Static: its geometry must not change while this object is used.
+    // Allocates Q and (moving) the point arrays. mesh: built, with update_cells() done; for a static run its
+    // geometry must not change while this object is used. Used by: hydro_sedov before the first time_step().
     FiniteVolume(const ExecSpace& exec, Mesh& mesh, const Gas& gas, int order, Update update,
                  Limiter limiter = Limiter::face_centroid, Motion motion = Motion::static_mesh)
         : exec_(exec), mesh_(&mesh), gas_(gas), order_(order), update_(update), limiter_(limiter), motion_(motion),
@@ -84,8 +91,8 @@ public:
         refresh();
     }
 
-    // The extensive conserved state of each cell, Q(i, v) = (mass, momentum,
-    // energy); set it before stepping.
+    // The extensive conserved state of each cell, Q(i, v) = (mass, momentum, energy); the caller sets the
+    // initial condition here before stepping and reads it for snapshots.
     Cells state() const { return q_; }
     // Moving: the positions of the mesh-generating points and their velocities.
     Points positions() const { return x_; }
@@ -98,6 +105,7 @@ public:
 
     // The global time step: the smallest of AREPO-ng's cell time steps, without the power-of-two bins; the sweep before
     // it sets the point velocities (moving) and the gradients that step() uses.
+    // Used by: the bench main loop, before each step().
     double time_step(double courant, Timings* timings = nullptr) {
         timer_.reset();
         refresh();
@@ -110,9 +118,8 @@ public:
         return dt;
     }
 
-    // One step of length dt with the gradients and point velocities of the
-    // last time_step() (swept again if there was none since the last step;
-    // the state must not change in between).
+    // One step of length dt with the gradients and point velocities of the last time_step() (swept again if there
+    // was none since the last step; the state must not change in between). Used by: the bench main loop.
     void step(double dt, Timings* timings = nullptr) {
         timer_.reset();
         refresh();
@@ -131,19 +138,18 @@ public:
         if (motion_ == Motion::moving) move(dt, timings);
     }
 
-    // Face sides of the last step whose extrapolated state was not
-    // physical and which took the cell's state instead.
+    // Face sides of the last step whose extrapolated state was not physical and which took the cell's state instead.
     long long fallbacks() const { return fallbacks_; }
 
-    // The radius of a sphere (D = 3) or circle (D = 2) of volume v
-    // (AREPO's get_cell_radius, voronoi.c:1053-1071).
+    // The radius of a sphere (D = 3) or circle (D = 2) of volume v (AREPO's get_cell_radius, voronoi.c:1053-1071).
+    // Used by: primitives() (stored per cell for the time step).
     KOKKOS_INLINE_FUNCTION static double radius(double v) {
         if constexpr (D == 3)
             return Kokkos::cbrt(v * (3.0 / (4.0 * M_PI)));
         else
             return Kokkos::sqrt(v * (1.0 / M_PI));
     }
-    // The size of a face of area (2D: length) |A| in AREPO's face angle.
+    // The size of a face of area (2D: length) |A| in AREPO's face angle. Used by: Sweep (moving regularisation).
     KOKKOS_INLINE_FUNCTION static double face_angle(double area) {
         if constexpr (D == 3)
             return Kokkos::sqrt(area / M_PI);
@@ -152,6 +158,7 @@ public:
     }
 
     // Mesh arrays and the per-face and per-cell operations on them (float face rows are read back as double).
+    // Copied by value into the kernels. Used by: Sweep, FaceStep, FaceFlux, advance.
     struct Geometry {
         static constexpr bool float_rows = Mesh::float_rows;
         Kokkos::View<const int*, Memory> owner, neighbour, start, face;
@@ -171,7 +178,7 @@ public:
             const double inv = 1.0 / volume(i);
             return make_state<D>([&](int v) { return q(i, v) * inv; });
         }
-        // Nearest image of generator j seen from generator i.
+        // Nearest image of generator j seen from generator i (periodic box).
         KOKKOS_INLINE_FUNCTION Vec separation(int i, int j) const {
             return make_vec<D>(
                 [&](int a) { return tet_mesh::wrap(positions(j, a) - positions(i, a), box.side[a], box.inverse[a]); });
@@ -200,7 +207,7 @@ public:
             else
                 return row(face_centroid, f);
         }
-        // Both loads issued at once (no dependent second load).
+        // The cell on the other side of face f from cell i; both loads issued at once (no dependent second load).
         KOKKOS_INLINE_FUNCTION int other(int f, int i) const {
             const int o = owner_of(f), n = neighbour_of(f);
             return o == i ? n : o;
@@ -215,7 +222,7 @@ public:
 
     // The phases, public only because CUDA device lambdas may not be defined in private member functions.
 
-    // Ends a timed phase (fenced) when timings are wanted.
+    // Ends a timed phase (fenced) when timings are wanted. Used by: time_step, step, move, advance.
     void phase_end(Timings* timings, double Timings::*part) {
         if (!timings) return;
         exec_.fence();
@@ -223,7 +230,7 @@ public:
         timer_.reset();
     }
 
-    // The positions start from the mesh's snapped ones.
+    // The positions start from the mesh's snapped ones. Used by: the constructor (moving).
     void copy_positions() {
         const auto from = mesh_->positions();
         const auto x = x_;
@@ -233,7 +240,7 @@ public:
             });
     }
 
-    // The mesh's current arrays (an update may reallocate them).
+    // The mesh's current arrays (an update may reallocate them). Used by: the constructor, time_step, step, move.
     void refresh() {
         const Mesh& mesh = *mesh_;
         faces_ = mesh.faces();
@@ -242,9 +249,8 @@ public:
                      mesh.gradient_weights(), mesh.volume(), mesh.positions(),   mesh.sides()};
     }
 
-    // Primitive rows, gradient rows (and FP16 exponents), then face flux rows
-    // (per-face loop), in the mesh's scratch memory, each part starting on a
-    // 32-byte boundary.
+    // Primitive rows, gradient rows (and FP16 exponents), then face flux rows (per-face loop), in the mesh's scratch
+    // memory, each part starting on a 32-byte boundary. Used by: time_step, step (before primitives()).
     void borrow_scratch() {
         auto sectors = [](std::size_t bytes) { return (bytes + 31) / 32 * 32; };
         const std::size_t cells = static_cast<std::size_t>(n_);
@@ -263,6 +269,7 @@ public:
     }
 
     // W = primitive(Q / V), the sound speed and the radius of every cell, once per step.
+    // Used by: time_step, step (first phase).
     void primitives() {
         const auto q = q_;
         const auto prim = prims_;
@@ -276,14 +283,14 @@ public:
                 prim(i, V + 1) = radius(geo.volume(i));
             });
     }
-    // Row i of the primitives.
+    // Row i of the primitives (W only). Used by: Sweep, neighbour_range, FaceFlux::side.
     KOKKOS_INLINE_FUNCTION static State primitive_row(const Prims& prim, int i) {
         return make_state<D>([&](int v) { return prim(i, v); });
     }
 
     // The sweep of time_step() over cell i's face list: (Moving) the point velocity, AREPO-ng's
     // regularisation; (Grad) the limited least-squares gradients of the primitives, from the weights if the
-    // precision has them. The point velocities have the arithmetic of main 3fd11aa's kernel.
+    // precision has them. Used by: sweep(order, motion) (the reconstruction stage).
     template <bool Moving, bool Grad>
     struct Sweep {
         Prims prim;
@@ -299,15 +306,14 @@ public:
             const State Wi = primitive_row(prim, i);
             double surface = 0, smallest_face = Kokkos::Experimental::infinity_v<double>, max_angle = 0;
             Gradient<D, G> grad;
-            // The neighbours' range: values W_j (double), or differences W_j - W_i (reduced precision: rounded once).
+            // Neighbour range for the limiter: values W_j (double), or differences W_j - W_i (reduced precision).
             G lo[V], hi[V];
             for (int v = 0; v < V; ++v) {
                 grad[v] = hydro::Vec<D, G>{};
                 lo[v] = Kokkos::Experimental::finite_max_v<G>;
                 hi[v] = -Kokkos::Experimental::finite_max_v<G>;
             }
-            // Without weights: the fit's normal equations M x = b, summed here
-            // (main's arithmetic), solved after the loop.
+            // Without stored weights: the fit's normal equations M x = b, summed here, solved after the loop.
             constexpr int U = D + 1;
             G M[U][U] = {};
             G b[V][U] = {};
@@ -399,7 +405,7 @@ public:
             }
         }
 
-        // The neighbours' range without the faces below tiny.
+        // The neighbours' range without the faces below tiny. Used by: operator() when a face is tiny.
         KOKKOS_FUNCTION void neighbour_range(int i, const State& Wi, double tiny, G (&lo)[V], G (&hi)[V]) const {
             constexpr bool exact = std::is_same_v<G, double>;
             for (int v = 0; v < V; ++v) {
@@ -419,8 +425,8 @@ public:
             }
         }
 
-        // The gradient part of the fit's solution, M x_v = b_v for every
-        // variable: M is symmetric positive definite, Cholesky M = L L^T once.
+        // The gradient part of the fit's solution, M x_v = b_v for every variable: M is symmetric positive
+        // definite, Cholesky M = L L^T once. Used by: operator() (no stored weights).
         template <int U>
         KOKKOS_INLINE_FUNCTION static void solve(const G (&M)[U][U], const G (&b)[V][U], Gradient<D, G>& grad) {
             G L[U][U] = {};
@@ -447,9 +453,8 @@ public:
             }
         }
 
-        // The row of cell i; FP16: each variable group (rho, v, P) scaled by
-        // 2^k so that its largest component lies in [2^14, 2^15), k in
-        // exponents(i) (one byte per group).
+        // Writes the gradient row of cell i; FP16: each variable group (rho, v, P) scaled by 2^k so that its
+        // largest component lies in [2^14, 2^15), k in exponents(i) (one byte per group). Used by: operator().
         KOKKOS_INLINE_FUNCTION void store(int i, const Gradient<D, G>& grad) const {
             if constexpr (P::half) {
                 float largest[3] = {0, 0, 0};
@@ -476,7 +481,7 @@ public:
         }
     };
 
-    // The cell terms of the time step (see time_step()).
+    // The cell terms of the time step (see time_step()): reduces to the smallest. Used by: sweep(courant).
     template <bool Moving>
     struct CellStep {
         Prims prim;
@@ -490,8 +495,8 @@ public:
             smallest = Kokkos::fmin(smallest, courant * step);
         }
     };
-    // The pair terms: vsig_ij and d_ij are the same from both sides, so each
-    // face gives both cells' terms at once; only their minimum is wanted.
+    // The pair terms: vsig_ij and d_ij are the same from both sides, so each face gives both cells' terms at once;
+    // only their minimum is wanted. Used by: sweep(courant).
     struct FaceStep {
         Prims prim;
         Geometry geo;
@@ -510,7 +515,7 @@ public:
         }
     };
 
-    // Runs the sweep; returns the global time step.
+    // Runs the sweep (gradients, point velocities) and returns the global time step. Used by: time_step, step.
     double sweep(double courant) {
         const bool moving = motion_ == Motion::moving;
         if (order_ == 1)
@@ -530,7 +535,8 @@ public:
         return Kokkos::min(by_cell, by_face);
     }
 
-    // The points drift by dt * w and stay in the box; the mesh is updated.
+    // The points drift by dt * w and stay in the box; the mesh is updated (Mesh::update, then update_cells).
+    // Used by: step (moving), after advance().
     void move(double dt, Timings* timings) {
         const auto x = x_;
         const auto w = w_;
@@ -556,8 +562,8 @@ public:
         refresh();
     }
 
-    // The flux through face f (times its area, from owner to neighbour);
-    // `fallbacks` counts the sides that took the cell's state.
+    // The flux through face f (times its area, from owner to neighbour): reconstruct both sides, Riemann solve.
+    // Order: 0 or 1; Moving: faces have velocity. Used by: advance (per-cell or per-face loop).
     template <int Order, bool Moving>
     struct FaceFlux {
         Cells q;
@@ -569,6 +575,7 @@ public:
         Gas gas;
         double dt;
 
+        // The stored gradient of cell i (FP16: decoded with the cell's group exponents).
         KOKKOS_INLINE_FUNCTION Gradient<D, G> gradient(int i) const {
             Gradient<D, G> grad;
             if constexpr (P::half) {
@@ -585,6 +592,7 @@ public:
         }
         // As AREPO's prepare_state: time and space extrapolation to the face centroid at the half step,
         // only if rho and P stay positive, else the cell's state. Order 0: W computed here from Q.
+        // r: offset of the face centroid from cell i's centroid. Used by: operator().
         KOKKOS_INLINE_FUNCTION State side(int i, Vec r, int& fallbacks) const {
             if constexpr (Order == 0) {
                 (void)r;
@@ -610,7 +618,7 @@ public:
             }
         }
         // The face velocity of AREPO-ng's prepare_face_velocity: the mean of the two point velocities
-        // plus a term along the generator direction for the face centroid's offset.
+        // plus a term along the generator direction for the face centroid's offset. Used by: operator() (moving).
         KOKKOS_INLINE_FUNCTION Vec face_velocity(int f, int o, int j) const {
             const Vec wL = geo.row(w, o), wR = geo.row(w, j);
             const Vec d = geo.separation(o, j);
@@ -621,9 +629,8 @@ public:
             if (cc > 0.9 * dist) facv *= 0.9 * dist / cc;
             return (wL + wR) * 0.5 + d * (facv / dist);
         }
-        // The Riemann solve along the unit normal n; float: in the face's
-        // frame (velocities relative to wf in double, then rounded), the flux
-        // back to the lab frame in double.
+        // The Riemann solve along the unit normal n; float: in the face's frame (velocities relative to wf in
+        // double, then rounded), the flux back to the lab frame in double. Used by: operator().
         KOKKOS_INLINE_FUNCTION static State solve(const State& L, const State& R, Vec n, Vec wf, const Gas& gas) {
             if constexpr (std::is_same_v<typename P::riemann, double>) {
                 return Riemann::flux(L, R, n, wf, gas);
@@ -638,7 +645,7 @@ public:
                 return detail::to_lab(make_state<D>([&](int v) { return static_cast<double>(F[v]); }), wf);
             }
         }
-        // fallbacks_o, fallbacks_j: the sides of owner and neighbour that took the cell's state.
+        // fallbacks_o, fallbacks_j: counts of the owner's and neighbour's sides that took the cell's state.
         KOKKOS_INLINE_FUNCTION State operator()(int f, int& fallbacks_o, int& fallbacks_j) const {
             const int o = geo.owner_of(f), j = geo.neighbour_of(f);
             const Vec a = geo.area_of(f);
@@ -661,6 +668,7 @@ public:
         }
     };
 
+    // Dispatches the update on the runtime motion. Used by: step.
     template <int Order>
     void advance(double dt, Timings* timings) {
         if (motion_ == Motion::moving)
@@ -669,6 +677,8 @@ public:
             advance<Order, false>(dt, timings);
     }
 
+    // Fluxes on every face, then Q -= dt * sum of signed fluxes (per_cell: one loop; per_face: two).
+    // Used by: step, after the sweep.
     template <int Order, bool Moving>
     void advance(double dt, Timings* timings) {
         const FaceFlux<Order, Moving> flux{q_, prims_, gradients_, exponents_, w_, geometry_, gas_, dt};
@@ -676,7 +686,7 @@ public:
         const auto q = q_;
         if (update_ == Update::per_cell) {
             // In place at order 1: the fluxes read only the primitive and gradient rows; order 0 reads Q
-            // (FaceFlux::side), so into next_. Each cell counts the fallbacks of its own sides.
+            // (FaceFlux::side), so into next_.
             const auto next = Order == 0 ? next_ : q_;
             Kokkos::parallel_reduce(
                 "hydro::fluxes_and_update", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),

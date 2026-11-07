@@ -17,6 +17,8 @@
 #include <cub/device/device_radix_sort.cuh>
 #endif
 
+// The 1D path of voronoi::Mesh<1> (included by voronoi_mesh.hpp): snap -> sort -> geometry, no clipping or repair.
+// Called by the hydro code (finite_volume_1d.hpp); feeds it faces, volumes and centroids.
 // The 1D Voronoi mesh: generators sorted by snapped position (ties by particle id), faces at the midpoints,
 // exact because distances are whole grid steps; periodic, or with walls via mirrored end generators.
 namespace sorted_mesh {
@@ -27,6 +29,7 @@ using i64 = ep::i64;
 using Key = std::uint64_t;
 
 // The grid of a line of length `side`.
+// Used by: Mesh<1>, snap, hydro/finite_volume_1d.hpp.
 struct Grid {
 #ifndef VORONOI_1D_BITS
 #define VORONOI_1D_BITS 52
@@ -41,6 +44,7 @@ struct Grid {
 
 // The sorted line as kernels read it: slot s holds particle order(s) at
 // grid step key(s).
+// Used by: Sorter::sort (fills it), Mesh<1>::geometry, insert/remove.
 template <class MemorySpace>
 struct Line {
     Kokkos::View<int*, MemorySpace> order;
@@ -77,12 +81,14 @@ struct Line {
 };
 
 // (key, id) of a < (key, id) of b: the order of the line.
+// Used by: Sorter::sort, Mesh<1>::still_sorted.
 KOKKOS_INLINE_FUNCTION bool before(Key ka, int a, Key kb, int b) {
     return ka < kb || (ka == kb && a < b);
 }
 
 // The grid step of x on a line of `period` steps: wrapped (periodic) or
 // clamped to [0, period) (walls).
+// Step 1, snap. Used by: Mesh<1>::snap_all, still_sorted, finite_volume_1d.
 KOKKOS_INLINE_FUNCTION Key snap(double x, const Grid& grid, bool periodic) {
     const double y = periodic ? x - grid.side * Kokkos::floor(x / grid.side) : x;
     const i64 k = static_cast<i64>(Kokkos::floor(y / grid.step));
@@ -92,6 +98,7 @@ KOKKOS_INLINE_FUNCTION Key snap(double x, const Grid& grid, bool periodic) {
 // Sorts the particles by (key, id): keys(i) of particle i in `keys`, the
 // result in line.order and line.key. On CUDA a stable radix sort over the
 // key bits (ids in increasing order keep ties by id); elsewhere std::sort.
+// Used by: Mesh<1>::order.
 template <class ExecSpace>
 class Sorter {
 public:
@@ -148,6 +155,7 @@ enum class Ends { periodic, walls };
 // What Mesh<1>::insert() or remove() did, per request r: id (-1: deferred), the two neighbours (-1, -2: walls), the
 // lengths they give to or take from the cell, and their old volumes. Ids of before the change; the views are the mesh's
 // and hold until the next change. Using it to move conserved quantities: docs/design.md.
+// Used by: Mesh<1>::insert, remove.
 template <class Memory>
 struct Changes {
     int requested = 0, done = 0, first = 0, moves = 0;
@@ -160,6 +168,7 @@ struct Changes {
 // id, area +-1 owner to neighbour, centroids relative to the owner). Wall faces have neighbour -1 (at 0) and -2 (at
 // L). Face s lies between slots s and s + 1; cell i's faces are 2i, 2i + 1 in increasing id of the other particle.
 // update(x) snaps, rechecks the order and sorts again only if particles crossed; order(x) does only that.
+// Used by: voronoi::Mesh<1> users (FiniteVolume 1D).
 template <class ExecSpace>
 class Mesh<1, ExecSpace, double, void> {
 public:
@@ -177,6 +186,7 @@ public:
 
     // New positions x(i, 0) in [0, L) (walls: outside ones go to the nearest end step). Builds on the first call or when
     // the particle count changed. `active` and `timings` as Mesh<3> (unused).
+    // Used by: callers, every step (snap -> order -> geometry).
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -186,6 +196,7 @@ public:
         report.faces = faces();
         return report;
     }
+    // Used by: callers, to force a fresh sort.
     template <class X>
     Report rebuild(const X& x, Timings* timings = nullptr) {
         (void)timings;
@@ -193,6 +204,8 @@ public:
         return update(x);
     }
     // The order alone (face and cell arrays stale until update_cells()).
+    // Steps snap + sort: only sorts again if particles crossed.
+    // Used by: update, callers that compute keys themselves.
     template <class X>
     Report order(const X& x) {
         Report report;
@@ -212,6 +225,7 @@ public:
         current_ = false;
         return report;
     }
+    // Used by: callers after order(), insert(), remove().
     void update_cells(Timings* timings = nullptr) {
         (void)timings;
         geometry();
@@ -228,6 +242,7 @@ public:
     // Adds generators at points(r, 0), in the mesh's memory, to the line of the last update()/order(), without a sort. Views
     // may then be longer than particles(), but x given to update() or order() must have exactly particles() rows. A request
     // in a gap already taken or on a generator is deferred. Face and cell arrays stale until update_cells().
+    // Used by: callers; geometry() via update_cells().
     template <class Points>
     const Changes& insert(const Points& points) {
         const int requested = static_cast<int>(points.extent(0));
@@ -359,6 +374,7 @@ public:
 
     // Takes particles ids(r) off the line. A request is deferred if it would leave fewer than 3 particles, if a neighbour
     // on the line is going as well, or if the id is not on the line. Stale arrays, as insert().
+    // Used by: callers; geometry() via update_cells().
     template <class Ids>
     const Changes& remove(const Ids& ids) {
         const int requested = static_cast<int>(ids.extent(0));
@@ -559,6 +575,7 @@ public:
             "mesh1::cell_face_start", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n + 1), KOKKOS_LAMBDA(int i) { start(i) = 2 * i; });
     }
 
+    // Used by: order.
     template <class X>
     void snap_all(const X& x) {
         const auto keys = keys_;
@@ -572,6 +589,7 @@ public:
     // Snaps x into the line's slots and counts the slots out of order: a
     // periodic line is still sorted (as a cycle) with exactly one descent,
     // one with walls with none.
+    // Used by: order.
     template <class X>
     bool still_sorted(const X& x) {
         const Line line = line_;
@@ -641,6 +659,7 @@ public:
 
     // Faces, volumes, centroids and per-cell face lists from the line, one
     // thread per slot.
+    // Used by: update, update_cells.
     void geometry() {
         if (current_) return;
         const Line line = line_;

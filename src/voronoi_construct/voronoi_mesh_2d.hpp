@@ -3,7 +3,8 @@
 #include "tri_finish.hpp"
 #include "tri_repair.hpp"
 
-// The 2D Voronoi mesh: Mesh<3>'s contract on tri_mesh.hpp and tri_repair.hpp, with the same refusals and rebuild rules.
+// Top level for D = 2 (included by voronoi_mesh.hpp): Mesh<3>'s contract and call order on tri_mesh/tri_repair.
+// update: snap -> screen -> repair -> tri_finish (host) -> geometry; else rebuild: snap -> index -> clip -> repair.
 // Faces are numbered at the start (always 3n); volume() is current after update_cells() only.
 namespace voronoi {
 
@@ -31,6 +32,7 @@ public:
 
     // As Mesh<3>::update: new positions x(i, a) in [0, side[a]), repaired, or built on the first call or when n changed;
     // exact on return, or a std::runtime_error (then there is no mesh and the next update() builds).
+    // Used by: callers every step; calls rebuild when stuck or overlapping.
     template <class X>
     Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
         (void)active;
@@ -84,6 +86,7 @@ public:
 
     // The exact mesh of positions x from scratch: clipping, then the triangles of the rings
     // (screened and repaired, a no-op when the clipping is right; both are counted in the report).
+    // Used by: update (first call, changed count, failed repair).
     template <class X>
     Report rebuild(const X& x, Timings* timings = nullptr) {
         if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh<2>: no particles");
@@ -136,8 +139,8 @@ public:
         return report;
     }
 
-    // The clipped rings of the particles `cells` at positions x, independent
-    // of the persistent mesh; ring-status uncertified for the others.
+    // The clipped rings of the particles `cells` at positions x, independent of the persistent mesh; ring-status
+    // uncertified for the others. Used by: callers; not part of update().
     template <class X>
     polygon_clip::Rings<Memory> clip(const X& x, const View<const int*>& cells) {
         if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh::clip: no particles");
@@ -158,8 +161,8 @@ public:
         return Scratch(scratch_.data(), bytes);
     }
 
-    // The per-cell face lists, and volumes and centroids summed over them in
-    // fixed order (bit-reproducible); does nothing if they are current.
+    // The per-cell face lists, and volumes and centroids summed over them in fixed order (bit-reproducible); does
+    // nothing if they are current. Used by: callers after update(); calls incremental_lists or tet_mesh::cells.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
         if (!built()) throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
@@ -217,7 +220,9 @@ public:
     const tri_mesh::Triangles<Memory>& triangles() const { return mesh_; }
     const ep::Points<Memory, 2>& points() const { return point_; }
 
+    // Stage 1: positions_ (doubles) and point_ (grid integers for exact tests) = x snapped to the grid.
     // Public only because CUDA device lambdas may not be defined in private member functions.
+    // Used by: update, rebuild, clip.
     template <class X>
     void snap(const X& x) {
         if (static_cast<int>(positions_.extent(0)) != n_) {
@@ -236,6 +241,8 @@ public:
                 }
             });
     }
+    // Update the cell lists from the faces flipped since the last update_cells (renumber_ maps faces, dirty = flipped).
+    // Used by: update_cells.
     void incremental_lists() {
         using Range = Kokkos::RangePolicy<ExecSpace>;
         if (renumber_.extent(0) == 0) {
@@ -268,6 +275,8 @@ public:
                 table(f) = f;
             });
     }
+    // Map particle ids `cells` to their slots in the cell list's sorted order (what the clipping takes).
+    // Used by: clip.
     View<const int*> slots_of(const View<const int*>& cells) {
         const int count = static_cast<int>(cells.extent(0));
         View<int*> slots("clip_slots", count), slot_of("clip_slot_of", n_);
@@ -282,7 +291,7 @@ public:
 private:
     bool built() const { return mesh_.corners.extent(0) > 0; }
 
-    // No mesh any more: the next update() builds from scratch.
+    // No mesh any more: the next update() builds from scratch. Used by: rebuild, refuse.
     void forget() {
         exec_.fence();
         mesh_ = tri_mesh::Triangles<Memory>{};
@@ -297,30 +306,34 @@ private:
         patched_ = false;
         updates_since_lists_ = 0;
     }
-    // The positions were refused: coincident particles by name, else `why`.
+    // The positions were refused: coincident particles by name, else `why`. Used by: rebuild.
     [[noreturn]] void refuse(const std::string& why) {
         const std::string pair = detail::coincident(positions_);
         forget();
         throw std::runtime_error(pair.empty() ? why : pair);
     }
     // Whether the signed areas add up to the box once (tri_repair::total_area).
+    // Used by: update, rebuild (a mesh covering the torus many times passes every local test).
     bool fills_box() const {
         const double whole = 2.0 * static_cast<double>(box_.period[0]) * static_cast<double>(box_.period[1]);
         const double area = state_.area_stale || patched_ ? tri_repair::total_area(exec_, point_, box_, mesh_) : state_.area;
         return Kokkos::abs(area / whole - 1) < 1e-6;
     }
 
+    // Add the time since `timer` to phase `field` (fenced) if timings are wanted. Used by: update, rebuild, update_cells, geometry.
     void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
         if (!timings) return;
         exec_.fence();
         timings->*field += timer.seconds() * 1e3;
         timer.reset();
     }
+    // Stage 2: the cell list of positions_. Used by: rebuild, clip.
     void index() {
         if (list_.n != n_) neighbor_search::configure(list_, n_, box_, std::sqrt(box_.volume() / n_));
         neighbor_search::build(exec_, list_, positions_);
     }
-    // The centres of flipped triangles, then the faces.
+    // Stage 5: circumcentres of flipped triangles, then the faces (tet_mesh::faces). Returns faces().
+    // Used by: update, rebuild.
     int geometry(Timings* timings) {
         Kokkos::Timer timer;
         tri_repair::centres(exec_, point_, box_, mesh_, state_);

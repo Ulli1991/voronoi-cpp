@@ -15,6 +15,8 @@
 #include <cub/device/device_radix_sort.cuh>
 #endif
 
+// Stage 2, index (3D and 2D): called by Mesh::index after snap (configure when n changes, then build); the sorted cell
+// list feeds the clipping start (shell_voronoi make_grid, polygon_clip make_grid). 1D needs none.
 // Particles of a periodic box sorted along a Morton curve: an implicit octree whose nodes each own
 // a contiguous range of slots. Buffers persist across builds; a build allocates nothing.
 namespace neighbor_search {
@@ -26,6 +28,7 @@ constexpr int max_levels = 10;  // base levels: Morton cell numbers fit in an in
 // about its shortest side, one for a cube), each an octree root. Slot q holds particle order(q) at positions(q).
 // Base cell c owns slots [cell_offsets(c), cell_offsets(c + 1)); within it slots are sorted by the fine Morton key.
 // level(q) is the grid level (2^level cells per tile side) whose cells hold about one particle near q.
+// Used by: configure, build, Mesh::index; read through shell_voronoi::make_grid and polygon_clip::make_grid.
 template <class ExecSpace, int D = 3>
 struct CellList {
     static_assert(D == 2 || D == 3, "neighbor_search::CellList: 2 or 3 dimensions");
@@ -66,6 +69,7 @@ KOKKOS_INLINE_FUNCTION std::uint64_t spread3(std::uint64_t v) {
     v = (v | v << 2) & 0x1249249249249249ull;
     return v;
 }
+// Used by: build (the keys), shell_voronoi::Grid cell lookups.
 KOKKOS_INLINE_FUNCTION std::uint64_t morton(std::uint64_t x, std::uint64_t y, std::uint64_t z) {
     return spread3(x) << 2 | spread3(y) << 1 | spread3(z);
 }
@@ -91,14 +95,17 @@ KOKKOS_INLINE_FUNCTION std::uint64_t spread2(std::uint64_t v) {
     v = (v | v << 1) & 0x5555555555555555ull;
     return v;
 }
+// Used by: build in 2D.
 KOKKOS_INLINE_FUNCTION std::uint64_t morton(std::uint64_t x, std::uint64_t y) { return spread2(x) << 1 | spread2(y); }
 
 // Integer coordinate of x on a grid of `side` cells over [0, box) (one axis); every user computes it this way.
+// Used by: build, shell_voronoi and polygon_clip home-cell lookups.
 KOKKOS_INLINE_FUNCTION int grid_coordinate(double x, double box, int side) {
     return Kokkos::clamp(static_cast<int>(x / box * side), 0, side - 1);
 }
 
 // First slot in [begin, end) whose fine key is not below `key`.
+// Used by: build (per-slot level), shell_voronoi::Grid and polygon_clip::Grid cell ranges.
 template <class Fine>
 KOKKOS_INLINE_FUNCTION int lower_bound(const Fine& fine, int begin, int end, std::uint32_t key) {
     while (begin < end) {
@@ -113,6 +120,7 @@ KOKKOS_INLINE_FUNCTION int lower_bound(const Fine& fine, int begin, int end, std
 
 namespace detail {
 
+// Used by: configure.
 template <class View, class... Extents>
 void ensure(View& v, const char* label, Extents... extents) {
     const std::size_t want[] = {static_cast<std::size_t>(extents)...};
@@ -122,6 +130,7 @@ void ensure(View& v, const char* label, Extents... extents) {
 }
 
 // The sort works in the storage of `positions` (24 bytes per particle): two buffers of 64-bit keys, two of ids.
+// Used by: sort_buffers, build.
 struct SortBuffers {
     std::uint64_t* keys[2];
     int* ids[2];
@@ -142,6 +151,7 @@ inline int bits(long long count) {
 }
 
 // Bits of a particle's key: its tile, then its Morton key inside the tile.
+// Used by: configure, build (sort key width).
 template <class ExecSpace, int D>
 int key_bits(const CellList<ExecSpace, D>& s) {
     return bits(s.tile_count()) + D * (s.levels + fine_levels);
@@ -149,6 +159,7 @@ int key_bits(const CellList<ExecSpace, D>& s) {
 
 // Size the tiles, the base grid (2^levels cells per tile side, the power of two nearest to tile / cell_width)
 // and the buffers; call again when n, the box or the width changes. Levels are capped so keys fit 64 bits.
+// Used by: Mesh::index when the particle count changes.
 template <class ExecSpace, int D>
 void configure(CellList<ExecSpace, D>& s, int n, const exact_predicates::BoxN<D>& box, double cell_width) {
     s.n = n;
@@ -186,6 +197,7 @@ void configure(CellList<ExecSpace, D>& s, int n, const exact_predicates::BoxN<D>
 
 // Sort the particles by Morton key, then fill the slots, the base-cell
 // offsets and the per-slot levels.
+// Used by: Mesh::index, every update.
 template <class ExecSpace, int D, class InPositions>
 void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPositions& in_positions) {
     const int n = s.n, cells = s.cell_count(), base = s.levels, depth = s.levels + fine_levels;

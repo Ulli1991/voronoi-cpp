@@ -13,8 +13,9 @@
 #include <utility>
 #include <vector>
 
-// Fused natural-neighbour Voronoi construction in a periodic box: each cell is walked on a grid,
-// clipped nearest-first, and its volume, centroid and owned faces (or face rings) are stored.
+// Clipping, the thread-per-cell kernel (3D): feeds the start (tet_start::build) on rebuilds and Mesh::clip, and runs on
+// host for overflow cells. Each cell is walked on a grid, clipped nearest-first, and its volume, centroid and owned
+// faces (or face rings) are stored. Callers: voronoi_mesh.hpp via shell_voronoi_warp.hpp, tet_start.hpp.
 namespace shell_voronoi {
 
 enum Status : int {
@@ -35,6 +36,8 @@ constexpr int ring_buffer = 32;
 constexpr int box_planes = 6;
 constexpr int face_block = 256;  // face pool entries a warp claims at a time (shell_voronoi_warp.hpp)
 
+// Double-precision 3D vector of the rounded cell geometry and the face arrays.
+// Used by: RoundedCell, Cells, detail::construct_pass.
 struct Vec3 {
     double x, y, z;
 };
@@ -57,6 +60,7 @@ template <int D>
 using VecN = std::conditional_t<D == 2, Vec2, Vec3>;
 
 // Read-only inputs, all in slot order, from a built neighbor_search::CellList.
+// Used by: every walk below (construct_pass, warp kernel).
 template <class MemorySpace>
 struct Grid {
     Kokkos::View<double* [3], MemorySpace> positions;
@@ -109,6 +113,8 @@ struct Grid {
     }
 };
 
+// Views the cell list's sorted positions and cell offsets as a Grid.
+// Used by: Mesh<3>::update (start), Mesh<3>::clip, tet_start::build.
 template <class ExecSpace>
 Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList<ExecSpace>& list) {
     Grid<typename ExecSpace::memory_space> g{list.positions, list.order, list.cell_offsets, list.fine, list.level,
@@ -135,6 +141,8 @@ struct Stencil {
     Kokkos::View<int*, MemorySpace> ends;
 };
 
+// Builds the sorted stencil table (see above).
+// Used by: construct, construct_huge, construct_warp, tet_start::build.
 template <class ExecSpace>
 Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec) {
     std::vector<std::pair<int, int>> entries;
@@ -170,6 +178,7 @@ Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec) {
 // Cells closer than this many widths are walked at `level`: max_reach, or less where 2 reach + 1 cells
 // along the shortest axis (`fewest` tiles) would visit a cell twice. Certification therefore holds within one
 // periodic image only: 2R must stay below 3/8 of the shortest side, else the cell is uncertified.
+// Used by: the walk in construct_pass and its warp twin.
 KOKKOS_INLINE_FUNCTION int level_reach(int level, int fewest = 1) {
     return Kokkos::min(int{max_reach}, ((fewest << level) - 1) / 2);
 }
@@ -185,6 +194,7 @@ KOKKOS_INLINE_FUNCTION int image(int packed, int axis) { return ((packed >> (2 *
 
 // The home cell of generator p at `level` (2^level cells per tile side).
 // cubic (Grid::cube(), known at compile time): one tile, equal sides.
+// Used by: construct_pass, warp kernel.
 template <bool cubic = false, class MemorySpace>
 KOKKOS_INLINE_FUNCTION void home_cell(const Vec3& p, const Grid<MemorySpace>& grid, int level, int (&home)[3]) {
     const double* side = grid.box.side;
@@ -198,6 +208,7 @@ KOKKOS_INLINE_FUNCTION void home_cell(const Vec3& p, const Grid<MemorySpace>& gr
 // inside the finished walk one level finer, whose home cell is 2 home + bit
 // a of `finer` along axis a (finer < 0: none); else its slots and the
 // periodic image they are seen in.
+// Used by: the walk in construct_pass and the warp kernel.
 template <bool adaptive = true, bool cubic = false, class MemorySpace>
 KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int level, const int (&home)[3], int finer,
                                          int code, const Vec3& p, double reach2, int& begin, int& end,
@@ -243,6 +254,7 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
 // faces are face_start(t) + [0, owned_count(t)), each with neighbour, area vector (out of t) and centroid
 // (relative to t's generator); a ring build records rings in a second pool and no face geometry. A cell whose
 // pool chunk is full is face_overflow, and the construct functions build again with a pool of needed() entries.
+// Used by: construct*, tet_start::build (rings), Mesh::clip (faces).
 template <class MemorySpace>
 struct Cells {
     Kokkos::View<int*, MemorySpace> status;
@@ -333,6 +345,7 @@ private:
 // With `listed` (flags by particle), a listed cell also stores the faces it
 // shares with unlisted particles, so a local rebuild returns each face of
 // the listed cells once.
+// Used by: construct_pass, Mesh::clip.
 template <class MemorySpace>
 struct Selection {
     Kokkos::View<const int*, MemorySpace> slots;
@@ -354,6 +367,7 @@ KOKKOS_INLINE_FUNCTION unsigned pool_chunk(int t, unsigned chunks) {
 
 // Claim `need` entries of a pool of `capacity` for cell t: sets start,
 // returns false if its chunk is full.
+// Used by: claim_rings, claim_faces, the warp kernel, polygon_clip::construct_pass.
 template <class Used, class Index>
 KOKKOS_INLINE_FUNCTION bool claim(const Used& used, long long capacity, int t, int need, Index& start) {
     const unsigned chunks = static_cast<unsigned>(used.extent(0));
@@ -383,6 +397,7 @@ inline double start_half_width(const ep::Box& box) { return 0.25 * box.shortest(
 // A cell under construction, in double relative to the generator: a vertex is cut when it lies beyond the
 // bisector by more than a rounding tolerance. Planes and Vertices are capacities; larger cells are built
 // again with bigger ones. Layout of both cell kinds: docs/design.md.
+// Used by: construct_cells (portable and warp-equivalent path).
 template <int Planes, int Vertices>
 struct RoundedCell {
     static_assert(Planes <= 255, "plane indices are bytes");
@@ -414,6 +429,7 @@ struct RoundedCell {
 // ExactCell: in grid steps relative to the snapped generator. Vertex v is the circumcentre -w / (2 o) of the
 // generator and its three planes' particles; a particle at e is inside iff e.w + |e|^2 o has the opposite sign of o,
 // decided by a filter, else by the exact perturbed in-sphere sign, so neighbouring cells agree (the start's patch is tet_start).
+// Used by: construct_cells from tet_start::build (exact cells around failures) and construct(exact).
 template <int Planes, int Vertices>
 struct ExactCell {
     using Index = std::conditional_t<(Planes <= 255 && Vertices <= 256), std::uint8_t, std::uint16_t>;
@@ -453,6 +469,7 @@ struct ExactCell {
 
 // Vertex v of an exact cell at the meeting point of planes a, b, c (in
 // walking order); false if they do not meet in one point.
+// Used by: start_cube.
 template <class C>
 KOKKOS_INLINE_FUNCTION bool set_vertex(C& cell, int v, int a, int b, int c) {
     ep::i128 n[3];  // the vertex is n / (2 o) = -w / (2 o)
@@ -471,6 +488,7 @@ KOKKOS_INLINE_FUNCTION bool set_vertex(C& cell, int v, int a, int b, int c) {
 
 // The vertex of a rounded cell where planes a, b, c meet; false if they do
 // not meet in one point.
+// Used by: clip (rounded cells).
 template <class C>
 KOKKOS_INLINE_FUNCTION bool intersect(const C& cell, int a, int b, int c, Vec3& x) {
     const Vec3 bc = cross(cell.normal[b], cell.normal[c]);
@@ -485,6 +503,7 @@ KOKKOS_INLINE_FUNCTION bool intersect(const C& cell, int a, int b, int c, Vec3& 
 // Whether particle `id` at e lies inside the circumsphere of vertex v of an
 // exact cell; the filtered value decides unless it is within its rounding
 // bound.
+// Used by: clip (exact cells).
 template <class C>
 KOKKOS_INLINE_FUNCTION bool inside(const C& cell, int v, const ep::Offset& e, int id, int self) {
     const double ex = double(e[0]), ey = double(e[1]), ez = double(e[2]);
@@ -509,6 +528,7 @@ KOKKOS_INLINE_FUNCTION bool live(const C& cell, int v) {
 // The cube of half-width h (box units) around the generator, bounded by six
 // virtual particles at distance 2h (ids n..n+5). Corner order flips at
 // corners of odd parity, so that every face is walked the same way round.
+// Used by: construct_pass, at the start of each cell.
 template <class C>
 KOKKOS_INLINE_FUNCTION void start_cube(C& cell, double h, double unit, int n) {
     using Index = typename C::Index;
@@ -553,6 +573,7 @@ KOKKOS_INLINE_FUNCTION void start_cube(C& cell, double h, double unit, int n) {
 
 // Drop planes no vertex uses any more and renumber the rest (box planes keep
 // their indices). Returns the freed count.
+// Used by: clip when the planes are full, construct_pass.
 template <class C>
 KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
     constexpr int capacity = C::planes_capacity;
@@ -580,6 +601,7 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
 // Clip by the bisector of the generator `self` and particle `id` (at e in grid steps, or d in box units):
 // removes the cut vertices, closes the hole with a new face. Returns ok when the plane does not cut or after the cut;
 // after anything else the cell must not be read again.
+// Used by: the nearest-first loop in construct_pass.
 template <class C>
 KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int id, int self) {
     using Index = typename C::Index;
@@ -686,6 +708,8 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
     return ok;
 }
 
+// A particle that may cut the cell, sorted by distance.
+// Used by: construct_pass.
 struct Candidate {
     double distance2;  // sort key and reach
     int slot;
@@ -694,6 +718,7 @@ struct Candidate {
 
 // Which of the selected cells a pass builds: all, those not ok, or those
 // that overflowed the usual capacities.
+// Used by: construct_cells, construct_huge.
 enum class Pass { all, failed, overflowed };
 
 // A thread's cell: on its stack, the host's huge ones (over a megabyte) on
@@ -720,6 +745,7 @@ struct Held<Cell, true> {
 // The per-thread kernel, with cells of type Cell (RoundedCell or
 // ExactCell): the walk (see Stencil), then the face walk that writes the
 // owned faces or rings and integrates the geometry.
+// Used by: construct_cells, construct_huge.
 template <class Cell, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     const Stencil<typename ExecSpace::memory_space>& stencil,
@@ -955,6 +981,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
 
 // A host copy of view `from`, of type To (the host's layout); an empty view
 // stays empty.
+// Used by: construct_huge.
 template <class To, class From>
 To host_copy(const From& from) {
     if (from.data() == nullptr) return To{};
@@ -965,6 +992,7 @@ To host_copy(const From& from) {
 }
 
 // Device view `to` = host view `from`.
+// Used by: construct_huge.
 template <class From, class To>
 void copy_back(const From& from, const To& to) {
     if (to.data() == nullptr) return;
@@ -976,6 +1004,7 @@ void copy_back(const From& from, const To& to) {
 // The cells that overflowed big exact cells: exact cells of huge capacity, on
 // the host, with the grid and the results copied there and back unless they
 // are there already. A rare path: its cost per cell grows as faces x vertices.
+// Used by: construct_cells.
 template <class ExecSpace>
 void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
                     const Cells<typename ExecSpace::memory_space>& out,
@@ -1038,6 +1067,7 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
 // Build the cells of `pass` with cells of kind Cell (RoundedCell or
 // ExactCell), then those that overflowed the usual capacities once more
 // with big ones, and exact cells that overflowed those with huge ones.
+// Used by: construct, tet_start::build.
 template <template <int, int> class Cell, class ExecSpace>
 void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                      const Stencil<typename ExecSpace::memory_space>& stencil,
@@ -1065,6 +1095,7 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
 
 // Run build() on an empty pool; if the pool turned out too small (cells
 // face_overflow), again on one that fits.
+// Used by: construct, construct_warp.
 template <class ExecSpace, class MemorySpace, class Build>
 void until_pool_fits(const ExecSpace& exec, Cells<MemorySpace>& out, const Build& build) {
     for (int attempt = 0; attempt < 3; ++attempt) {
@@ -1081,6 +1112,7 @@ void until_pool_fits(const ExecSpace& exec, Cells<MemorySpace>& out, const Build
 // Build the selected cells (default: all) with one thread per cell: the
 // portable kernel (rounded cells, as the warp kernel), or exactly
 // (detail::ExactCell) if `exact`.
+// Used by: construct_warp (non-CUDA), tests.
 template <class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                Cells<typename ExecSpace::memory_space>& out,

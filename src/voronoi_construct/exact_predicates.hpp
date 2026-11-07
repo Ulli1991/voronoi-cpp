@@ -8,6 +8,7 @@
 #include <string>
 #include <type_traits>
 
+// Foundation of every stage: snapping (update step 1) and the exact tests of clipping, start, and repair, all 3D/1D/2D.
 // Exact predicates on positions snapped to a 2³⁰-step grid across the longest box side, for host and device.
 // A double filter with an error bound decides first; otherwise exact (128-bit orient, 256-bit in-sphere below 2⁴⁰),
 // with in-sphere ties broken by symbolic perturbation so all callers agree.
@@ -21,6 +22,7 @@ constexpr double scale = 1073741824.0;  // 2^30
 constexpr double epsilon = 1.1102230246251565e-16;  // 2^-53
 
 // An exact offset between snapped points in D dimensions.
+// Used by: every predicate below, and all stages' exact tests.
 template <int D>
 struct OffsetN {
     i64 v[D];
@@ -33,6 +35,7 @@ constexpr i64 period = i64(1) << 30;  // grid steps across the (longest) side
 
 // A periodic box [0, side[0]) x ... x [0, side[D - 1]). One step (longest side / 2³⁰) serves every axis, so the integer
 // in-sphere test is that of the snapped points; each side is rounded to period[a] whole steps and side[] holds those.
+// Used by: snap, Points, Mesh::snap, every stage that needs periodic offsets.
 template <int D>
 struct BoxN {
     static_assert(D >= 1 && D <= 3, "exact_predicates::BoxN: 1, 2 or 3 dimensions");
@@ -82,6 +85,7 @@ using Box = BoxN<3>;
 
 // The grid step of x along `axis` of `box`, in [0, period[axis]): the largest k with k * step <= x, the product
 // rounded as the mesh's positions are, so snapping k * step gives k back.
+// Used by: the Points snap kernel, voronoi::snap_positions, sorted_mesh, tet_mesh.
 template <int D>
 KOKKOS_INLINE_FUNCTION int snap(double x, const BoxN<D>& box, int axis) {
     i64 s = static_cast<i64>(Kokkos::floor(x / box.step));
@@ -97,6 +101,7 @@ KOKKOS_INLINE_FUNCTION int snap(double x, double box) {
 }
 
 // b - a on the periodic grid of `steps` per side, to the nearest image; a, b in [0, steps) so one shift suffices.
+// Used by: offset, tet_mesh, tri_finish.
 KOKKOS_INLINE_FUNCTION i64 delta(i64 a, i64 b, i64 steps = period) {
     i64 d = b - a;
     if (d >= steps / 2) d -= steps;
@@ -109,11 +114,13 @@ KOKKOS_INLINE_FUNCTION Offset minus(const Offset& a, const Offset& b) {
 }
 
 // Signed 256-bit integer as four 64-bit limbs, two's complement.
+// Used by: in_sphere, add_product.
 struct Wide {
     unsigned long long limb[4] = {0, 0, 0, 0};
 };
 
 // w += a * b for signed a, b with |a|, |b| < 2^127.
+// Used by: in_sphere (exact path).
 KOKKOS_INLINE_FUNCTION void add_product(Wide& w, i128 a, i128 b) {
     const bool negative = (a < 0) != (b < 0);
     const u128 ua = a < 0 ? -u128(a) : u128(a), ub = b < 0 ? -u128(b) : u128(b);
@@ -166,6 +173,7 @@ KOKKOS_INLINE_FUNCTION i128 lift(const Offset& a) {
 
 // The circumcentre of the origin and a, b, c is n / (2 det3(a, b, c)), with
 // n = |a|^2 (b x c) + |b|^2 (c x a) + |c|^2 (a x b); returns det3(a, b, c).
+// Used by: shell_voronoi::ExactCell, tet_mesh, tet_repair.
 KOKKOS_INLINE_FUNCTION i128 circumcentre(const Offset& a, const Offset& b, const Offset& c, i128* n) {
     i128 bc[3], ca[3], ab[3];
     cross(b, c, bc);
@@ -178,6 +186,7 @@ KOKKOS_INLINE_FUNCTION i128 circumcentre(const Offset& a, const Offset& b, const
 
 // det3 in double and its permanent (the same sum with absolute values), which
 // bounds the rounding error: |det - exact| <= 8 eps permanent.
+// Used by: orient (filter stage).
 KOKKOS_INLINE_FUNCTION double det3_float(const Offset& a, const Offset& b, const Offset& c, double& permanent) {
     const double ax = double(a[0]), ay = double(a[1]), az = double(a[2]);
     const double bx = double(b[0]), by = double(b[1]), bz = double(b[2]);
@@ -190,6 +199,7 @@ KOKKOS_INLINE_FUNCTION double det3_float(const Offset& a, const Offset& b, const
 }
 
 // Sign of the orientation of (o, a, b, c) given as offsets from o.
+// Used by: orient(Points, v), tet_flips, tet_start.
 KOKKOS_INLINE_FUNCTION int orient(const Offset& a, const Offset& b, const Offset& c) {
     double permanent;
     const double d = det3_float(a, b, c, permanent);
@@ -202,6 +212,7 @@ KOKKOS_INLINE_FUNCTION int orient(const Offset& a, const Offset& b, const Offset
 
 // Whether p[4] lies inside the circumsphere of tetrahedron p[0..3] (any orientation, not flat), in one frame; id are
 // particle ids. Ties go by symbolic perturbation (lift |p|² grows by eps^id, lower ids dominate); never a tie.
+// Used by: in_sphere(Points, ...), shell_voronoi::inside.
 KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
     // D = det [1 p_i |p_i|^2] over the five points; e inside means sign(D) = -orientation.
     const Offset a = minus(p[1], p[0]), b = minus(p[2], p[0]), c = minus(p[3], p[0]), e = minus(p[4], p[0]);
@@ -250,6 +261,7 @@ KOKKOS_INLINE_FUNCTION bool in_sphere(const Offset* p, const int* id) {
 
 // Snapped positions, point(i, a) for a < D, in [0, period[a]) so 32 bits are exact; padded to 16 bytes in 3D for one
 // aligned load. The periods are the box's (a unit cube unless given).
+// Used by: Mesh::snap, tet_start, tet_repair, tet_flips, tri_repair, tri_finish.
 template <class MemorySpace, int D = 3>
 struct Points {
     static constexpr int dimensions = D, columns = D == 3 ? 4 : D;
@@ -271,6 +283,7 @@ private:
 };
 
 // point(i) = the snapped x(i) for positions x in `box` (point's box).
+// Used by: Mesh<2>::snap (update step 1; the 3D path snaps in voronoi::snap_positions).
 template <class ExecSpace, class X, int D>
 void snap(const ExecSpace& exec, const X& x, const typename Points<typename ExecSpace::memory_space, D>::Box& box,
           const Points<typename ExecSpace::memory_space, D>& point) {

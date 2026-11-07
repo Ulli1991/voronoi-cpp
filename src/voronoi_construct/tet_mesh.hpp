@@ -8,8 +8,9 @@
 #include <cstdint>
 #include <type_traits>
 
-// A persistent Delaunay tetrahedralization and the Voronoi geometry it implies.
-// Per step: one circumcentre per new tetrahedron, face geometry, per-cell lists; repair only where the Delaunay condition fails.
+// Stage 5 (geometry) plus the mesh data structure of stages 3-4: built by tet_start, edited by tet_repair/tet_flips.
+// Mesh::update/update_cells call circumcentres -> update_face_rings -> faces -> cells (or cells_incremental) -> gradient_weights.
+// Per step: one circumcentre per new tetrahedron, face geometry, per-cell lists; repair only where Delaunay fails.
 namespace tet_mesh {
 
 using shell_voronoi::Vec2;
@@ -70,7 +71,7 @@ KOKKOS_INLINE_FUNCTION int position(const M& m, int t, int v) {
     return -1;
 }
 
-// The particle of u that t lacks, or -1.
+// The particle of u that t lacks, or -1. Used by: tet_repair::plan/repair, tet_flips::detail::fails.
 template <class M>
 KOKKOS_INLINE_FUNCTION int far_vertex(const M& m, int t, int u) {
     for (int k = 0; k < 4; ++k)
@@ -78,7 +79,7 @@ KOKKOS_INLINE_FUNCTION int far_vertex(const M& m, int t, int u) {
     return -1;
 }
 
-// The face of tetrahedron v opposite corner k, its particles sorted.
+// The face of tetrahedron v opposite corner k, its particles sorted. Used by: tet_repair (closes), tet_flips.
 KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
     for (int a = 0, b = 0; a < 4; ++a)
         if (a != k) f[b++] = v[a];
@@ -89,7 +90,7 @@ KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
 
 KOKKOS_INLINE_FUNCTION bool same_face(const int* a, const int* b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
 
-// The corner of tetrahedron t opposite its face f (sorted particles).
+// The corner of tetrahedron t opposite its face f (sorted particles). Used by: tet_flips::finish.
 template <class M>
 KOKKOS_INLINE_FUNCTION int opposite(const M& m, int t, const int* f) {
     for (int k = 0; k < 3; ++k) {
@@ -228,7 +229,7 @@ KOKKOS_INLINE_FUNCTION int walk_edge_canonical(const M& m, int t, int i, int j, 
     return steps;
 }
 
-// Sorts the four corners v by particle id; returns the permutation parity (+1 even, -1 odd).
+// Sorts the four corners v by particle id; returns the permutation parity (+1 even, -1 odd). Used by: tet_repair::move_screened.
 // Circumcentres from sorted corners are the same bits whatever order the flips built the tetrahedron in.
 KOKKOS_INLINE_FUNCTION int sort_corners(int* v) {
     int parity = 1;
@@ -295,11 +296,12 @@ KOKKOS_INLINE_FUNCTION bool sliver(const Vec3* d, double& volume6, double& shape
 }
 }  // namespace detail
 
-// The tetrahedra and their adjacency from the face rings of a clipping build (Cells::with_rings, cells in slot order,
+// Stage 3: The tetrahedra and their adjacency from the face rings of a clipping build (Cells::with_rings, cells in slot order,
 // every cell ok), without hashing: tetrahedron (i, j, q_m, q_m+1) is emitted only by the face of its two smallest
 // particles, and each triangle's two tetrahedra are adjacent in the ring of its two smallest particles' face.
 // Faces in CSR come back in face_start (cell t owns [face_start(t), face_start(t + 1))). Returns the number of ring
 // slots or adjacencies not resolved (0 for a consistent build); edges without a face are left to represent_dropped.
+// Used by: tet_start::build (every round).
 template <class ExecSpace>
 int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
              Mesh<typename ExecSpace::memory_space>& mesh,
@@ -481,6 +483,7 @@ int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpac
 
 // After assemble on a consistent mesh: an edge without a face (the owner's cell dropped a rounding-level face its
 // neighbour kept) is represented by the lowest-numbered tetrahedron around it, so every edge has one representative.
+// Used by: tet_start::build, once the start passes check.
 template <class ExecSpace>
 void represent_dropped(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_space>& mesh,
                        const Kokkos::View<int*, typename ExecSpace::memory_space>& face_start) {
@@ -519,6 +522,7 @@ int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSp
 // Face rings kept from step to step. Face start(t) + rank is the rank-th edge (bit order) tetrahedron t represents;
 // its ring is pool[ring_start(f), ring_start(f) + ring_length(f)). Two pools: one in use, one spare to compact into;
 // the spare is the mesh's scratch memory between updates and holds the temporaries of update_face_rings/update_cells.
+// Used by: Mesh<3>::rebuild (make_face_rings), Mesh::geometry (update_face_rings), Mesh::scratch.
 template <class MemorySpace>
 struct FaceRings {
     using Ints = Kokkos::View<int*, MemorySpace>;
@@ -555,7 +559,7 @@ FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
 
 // The face of edge i-j (particles of tetrahedron t) in the numbering `start`, and its representative, by walking around
 // the edge. Returns -1 if the walk does not reach it, or first meets a touched tetrahedron numbered below t
-// (touched(u) != 0), which finds the face itself.
+// (touched(u) != 0), which finds the face itself. Used by: number_faces, update_face_rings.
 template <class M, class Start, class Touched>
 KOKKOS_INLINE_FUNCTION int edge_face(const M& m, const Start& start, const Touched& touched, int t, int i, int j,
                                      int& representative) {
@@ -587,7 +591,7 @@ struct OldFaces {
 
 // Number the faces of update_face_rings, with owner and neighbour. A face represented by an untouched tetrahedron takes
 // its old ring, one represented by a touched tetrahedron gets ring_start 0 (marked later); the first call walks every face.
-// Writes at most the face capacity; returns the number of faces.
+// Writes at most the face capacity; returns the number of faces. Used by: update_face_rings.
 template <class ExecSpace>
 int number_faces(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_space>& mesh, int count,
                  const Kokkos::View<char*, typename ExecSpace::memory_space>& touched,
@@ -642,6 +646,7 @@ int number_faces(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_sp
 
 // Renumber the faces after a repair and update their rings in place: a face keeps its ring unless a touched
 // tetrahedron lies on it (`touched_list`; empty handle: all touched). Sets mesh.owner/neighbour/ring_*; returns the face count.
+// Used by: Mesh<3>::geometry, after circumcentres.
 template <class ExecSpace>
 int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_space>& mesh, int count,
                       const Kokkos::View<char*, typename ExecSpace::memory_space>& touched,
@@ -923,6 +928,7 @@ KOKKOS_INLINE_FUNCTION void stored_centre(const X& x, const Box& box, const int*
 }
 
 // 1. Circumcentres, one thread per tetrahedron: of the first `count` (all if negative) or of those listed in `only`.
+// Used by: Mesh<3>::geometry; tet_repair::repair (only for the first `count`, all dirty ones).
 template <class ExecSpace, class X>
 void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
                    const Mesh<typename ExecSpace::memory_space>& mesh, int count = -1,
@@ -940,7 +946,7 @@ void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
 }
 
 // 2. Face area vectors (owner to neighbour), centroids (relative to the owner) and, if out.volume is allocated,
-// cell volumes (summed by atomics), one thread per owned face.
+// cell volumes (summed by atomics), one thread per owned face. Used by: Mesh<3>::geometry, after update_face_rings.
 template <class ExecSpace, class X>
 void faces(const ExecSpace& exec, const X& x, const Box& box,
            const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
@@ -1232,6 +1238,7 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
 // D = 2 or 3, x the positions the geometry came from; `scratch` holds cells_scratch_bytes(faces) bytes. Grows out.face when needed.
 // One pass appends each face to both cells' lists; each cell then sorts its list by the other particle's id and sums its
 // pyramids in that order (detail::sort_and_sum): the same sums as faces(), in fixed order.
+// Used by: Mesh::update_cells (full path).
 template <class ExecSpace, class X, int D>
 void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
            const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
@@ -1377,6 +1384,7 @@ void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicate
 
 // 3'. cells() after a repair, from the last step's lists, bit for bit the same: only cells with a corner of a
 // tetrahedron created by a flip (list `created`) can change faces; the others renumber (`renumber`) and sum again.
+// Used by: Mesh<3>::update_cells (when few entries were touched).
 template <class ExecSpace, class X>
 void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
@@ -1412,7 +1420,7 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
 // entries k (face f, other cell j), X_k = (1, d_k), d_k from the centroid of i to that of j (nearest image), w_k = |A_f|,
 // M = sum_k w_k X_k X_k^T; entry k gets weight(k) = w_k (M^-1 X_k)_{1..D}, so sum_k weight(k) (u_j - u_i) is the gradient
 // of the area-weighted fit u_j - u_i = a + g.d_k. In double (Cholesky of M), stored in the type of `out` (rows of D);
-// one thread per cell, after cells().
+// one thread per cell, after cells(). Used by: Mesh::update_cells (Weight != void).
 template <class ExecSpace, class Xs, int D, class Weights>
 void gradient_weights(const ExecSpace& exec, const Xs& x, const exact_predicates::BoxN<D>& box,
                       const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,

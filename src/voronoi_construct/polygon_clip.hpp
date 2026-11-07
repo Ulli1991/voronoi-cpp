@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+// Clipping, 2D: the start/rebuild stage of voronoi::Mesh<2>::update (voronoi_mesh_2d.hpp), feeding tri_mesh.hpp.
 // Exact Voronoi cells of particles in a periodic 2D box, each built alone by clipping a polygon (shell_voronoi's walk in 2D).
 // Every decision is the exact perturbed in-circle test (exact_predicates_2d.hpp), so q is in the ring of p exactly if p is in the ring of q.
 // Lengths are in grid steps relative to the generator; the output is each cell's ring, its neighbours counter-clockwise (Rings).
@@ -32,6 +33,7 @@ constexpr int usual_edges = 32, big_edges = 256;  // polygon capacities
 constexpr int candidates = 16;                    // clipped nearest-first from a small buffer
 
 // Read-only inputs in slot order, from a built neighbor_search::CellList.
+// Used by: make_grid, construct_pass.
 template <class MemorySpace>
 struct Grid {
     Kokkos::View<double* [2], MemorySpace> positions;
@@ -82,6 +84,7 @@ struct Grid {
     }
 };
 
+// Used by: Mesh<2>::rebuild and Mesh<2>::clip (voronoi_mesh_2d.hpp).
 template <class ExecSpace>
 Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList<ExecSpace, 2>& list) {
     Grid<typename ExecSpace::memory_space> g{list.positions, list.order, list.cell_offsets, list.fine, list.level,
@@ -100,6 +103,7 @@ Grid<typename ExecSpace::memory_space> make_grid(const neighbor_search::CellList
 // Grid-cell offsets (5 bits per axis, biased by 8) sorted by the squared
 // smallest distance, in cell widths, any point of the home cell can have to
 // them (shell_voronoi::Stencil in 2D).
+// Used by: Mesh<2>::rebuild, Mesh<2>::clip.
 template <class ExecSpace>
 sv::Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec) {
     using Memory = typename ExecSpace::memory_space;
@@ -134,6 +138,7 @@ sv::Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec
 // The rings: cell i's neighbours, counter-clockwise, are
 // ring(start(i)) .. ring(start(i) + degree(i) - 1). The degrees sum to 6n on
 // a torus; the pool holds them in chunks claimed by hashed counters.
+// Used by: construct, tri_mesh::from_rings, Mesh<2>::clip.
 template <class MemorySpace>
 struct Rings {
     Kokkos::View<int*, MemorySpace> status, degree, start, ring;
@@ -153,12 +158,14 @@ struct Rings {
 
 // A corner of a polygon: edge m, the bisector with the particle at offset o in  (negative for the starting square),
 // and the vertex between edges m and m + 1 with a bound on its rounding error per axis.
+// Used by: Polygon, set_vertex.
 struct Corner {
     double ox, oy, vx, vy, tol;
     int slot;
 };
 
 // The vertex where the bisectors of a and b meet (b counter-clockwise of a).
+// Used by: Polygon (starting square), clip.
 KOKKOS_INLINE_FUNCTION void set_vertex(Corner& out, double ax, double ay, double bx, double by) {
     const double la = ax * ax + ay * ay, lb = bx * bx + by * by;
     const double det = ax * by - ay * bx, scale = 0.5 / det;
@@ -170,6 +177,8 @@ KOKKOS_INLINE_FUNCTION void set_vertex(Corner& out, double ax, double ay, double
     if (!(spread * 1e-14 < Kokkos::abs(det))) out.tol = Kokkos::Experimental::infinity_v<double>;
 }
 
+// The cell under construction: a ring of Corners, clipped one particle at a time.
+// Used by: construct_pass.
 template <int Capacity>
 struct Polygon {
     Corner corner[Capacity];
@@ -201,6 +210,7 @@ struct Polygon {
 // Whether the bisector with e (offset ex, ey, lift le) cuts vertex m of the
 // polygon: e lies inside the circle of the generator and the vertex's two
 // neighbours. The double comparison decides unless within rounding of a tie.
+// Used by: clip.
 template <class Exact, int Capacity>
 KOKKOS_INLINE_FUNCTION bool beyond(const Polygon<Capacity>& p, int m, double ex, double ey, double le, const Exact& exact) {
     const Corner& c = p.corner[m];
@@ -213,6 +223,7 @@ KOKKOS_INLINE_FUNCTION bool beyond(const Polygon<Capacity>& p, int m, double ex,
 }
 
 // Clips polygon p with the particle at offset (ex, ey): false if it overflows.
+// Used by: the nearest-first loop in construct_pass.
 template <class Exact, int Capacity>
 KOKKOS_INLINE_FUNCTION bool clip(Polygon<Capacity>& p, double ex, double ey, int slot, const Exact& exact) {
     const double le = ex * ex + ey * ey;
@@ -255,6 +266,8 @@ KOKKOS_INLINE_FUNCTION bool clip(Polygon<Capacity>& p, double ex, double ey, int
     return true;
 }
 
+// A particle that may cut the cell, sorted by distance.
+// Used by: construct_pass.
 struct Candidate {
     double distance2, ox, oy;
     int slot;
@@ -263,6 +276,7 @@ struct Candidate {
 // Builds the polygons of the selected slots (all if none) with capacity
 // Capacity; `failed`: only those of cells whose status is overflow. Writes
 // status, degree, and ring blocks claimed from the pool.
+// Used by: construct.
 template <int Capacity, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     const sv::Stencil<typename ExecSpace::memory_space>& stencil,
@@ -401,6 +415,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
 }
 
 // The cells of status `which`.
+// Used by: construct, Mesh<2>::rebuild.
 template <class ExecSpace>
 long long count_status(const ExecSpace& exec, const Rings<typename ExecSpace::memory_space>& rings, int which) {
     const auto status = rings.status;
@@ -414,6 +429,7 @@ long long count_status(const ExecSpace& exec, const Rings<typename ExecSpace::me
 // The rings of all particles (or of the listed slots): the usual polygon,
 // the rare larger cells again with a big one, a larger pool if it was full.
 // Uncertified cells stay in the status (voronoi::Mesh refuses them).
+// Used by: Mesh<2>::rebuild (start), Mesh<2>::clip.
 template <class ExecSpace>
 Rings<typename ExecSpace::memory_space> construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                                                   const sv::Stencil<typename ExecSpace::memory_space>& stencil,

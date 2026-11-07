@@ -1,5 +1,5 @@
 // The starting mesh is the Delaunay tetrahedralization of the snapped positions (perturbed ties) on random, clustered,
-// lattice and degenerate input, checked by a brute-force host oracle.
+// lattice and degenerate input, checked by a brute-force host oracle. Exercises tet_start::build (via start_mesh).
 
 #include "check.hpp"
 #include "support.hpp"
@@ -15,11 +15,14 @@ namespace {
 using namespace support;
 namespace ep = exact_predicates;
 
+// Defect counts of the oracle below; all zero and box_volume true means a valid Delaunay tetrahedralization.
 struct Verdict {
     long long flat = 0, unpaired = 0, folded = 0, wrong_adjacency = 0, unused = 0, not_empty = 0;
     bool box_volume = false;
 };
 
+// Brute-force check that `mesh` triangulates the box with empty circumspheres (exact predicates, all images).
+// Used by: the per-layout checks in main and the corner-moved negative control.
 Verdict oracle(const Positions& x, const Box& box, const tet_mesh::Mesh<Memory>& mesh) {
     const auto vertex = to_host(mesh.vertex);
     const auto adjacent = to_host(mesh.adjacent);
@@ -108,7 +111,7 @@ Verdict oracle(const Positions& x, const Box& box, const tet_mesh::Mesh<Memory>&
     return verdict;
 }
 
-// Edges of the tetrahedra with no representative, and with more than one.
+// Edges of the tetrahedra with no representative, and with more than one. Used by: the layout checks in main.
 std::pair<long long, long long> representatives(const tet_mesh::Mesh<Memory>& mesh) {
     const auto vertex = to_host(mesh.vertex);
     const auto edges = to_host(mesh.edges);

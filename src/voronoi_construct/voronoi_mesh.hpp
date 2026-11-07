@@ -18,15 +18,16 @@
 #include <utility>
 #include <vector>
 
-// The Voronoi mesh of particles in a periodic box, kept exact as they move: the hydro code's interface to the library.
-// Particles are named by index (the id); ties between cospherical particles break by id; positions are snapped to the
-// 2³⁰ grid and topology and geometry both come from the snapped positions. Faces are stored once, by the lower id.
+// Top level (hydro code's interface): Mesh<3>::update drives snap -> index -> start -> repair -> geometry (tet_*.hpp).
+// Particles are named by id (index); cospherical ties break by id; topology and geometry both come from positions
+// snapped to the 2³⁰ grid. Faces are stored once, by the lower id.
 namespace voronoi {
 
 namespace ep = exact_predicates;
 
 namespace detail {
-// positions = x snapped to the grid (whole grid steps).
+// Stage 1, snap: positions = x snapped to the grid (whole grid steps), so all later tests are exact.
+// Used by: Mesh::snap (from update, rebuild, clip).
 template <class ExecSpace, class X>
 void snap_positions(const ExecSpace& exec, const X& x, const ep::Box& box,
                     const tet_mesh::Points4<typename ExecSpace::memory_space>& positions) {
@@ -38,6 +39,7 @@ void snap_positions(const ExecSpace& exec, const X& x, const ep::Box& box,
 }
 
 // The sum of the cell volumes.
+// Used by: Mesh::geometry, for update()'s check that the repaired mesh fills the box exactly once.
 template <class ExecSpace, class Volume>
 double total_volume(const ExecSpace& exec, const Volume& volume) {
     double total = 0;
@@ -49,6 +51,7 @@ double total_volume(const ExecSpace& exec, const Volume& volume) {
 
 // Particles on one position of the 2³⁰ grid, found by sorting on the host (a refusal only): "" if none, else the
 // error naming a pair. Such particles have no bisector, so no cell, and voronoi::Mesh refuses them.
+// Used by: not_exact.
 template <class Positions>
 std::string coincident(const Positions& positions) {
     const auto x = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, positions);
@@ -72,9 +75,9 @@ std::string coincident(const Positions& positions) {
            "): a doubled particle has no Voronoi cell; move or merge them";
 }
 
-// Why a start failed: coincident particles, cells the clipping could not
-// certify (in one periodic image, see shell_voronoi::level_reach), or else
-// not exact.
+// Why a start failed: coincident particles, cells the clipping could not certify (in one periodic image, see
+// shell_voronoi::level_reach), or else not exact. `cells` are the clipping's per-cell results (status).
+// Used by: Mesh::rebuild, when tet_start::build is not exact (the message goes into the thrown runtime_error).
 template <class Cells, class Positions>
 std::string not_exact(const Cells& cells, const Positions& positions) {
     const std::string pair = coincident(positions);
@@ -97,7 +100,7 @@ std::string not_exact(const Cells& cells, const Positions& positions) {
 }
 }  // namespace detail
 
-// What an update did.
+// What an update did: filled by update() and rebuild(), returned to the caller.
 struct Report {
     bool rebuilt = false;          // built from scratch (first update, rebuild(), or the guard)
     tet_start::Stats start;        // of that build
@@ -110,8 +113,8 @@ struct Report {
     int faces = 0;
 };
 
-// Phase times of an update, in ms, for the benchmark: given to update(),
-// the phases are fenced and timed.
+// Phase times of an update, in ms, for the benchmark: given to update(), the phases are fenced and timed.
+// Used by: Mesh::lap, from update, rebuild, geometry, update_cells.
 struct Timings {
     double repair = 0, fallback = 0, geometry = 0, build = 0, cells = 0;
 };
@@ -123,6 +126,17 @@ struct Timings {
 enum class Fallback { cheapest, host, rebuild };
 
 // The mesh in D dimensions: one interface, an engine per D (3D tetrahedra, 2D voronoi_mesh_2d.hpp, 1D sorted_mesh.hpp).
+//
+// Workflow of the 3D mesh (public methods in call order):
+//   update(x)        every step. First call, changed count, or failure -> rebuild(x); else
+//                    snap -> tet_repair::move_screened -> tet_repair::repair (device) -> tet_flips::finish (host
+//                    fallback, if stuck) -> geometry() (tet_mesh); a mesh not filling the box once -> rebuild(x).
+//   rebuild(x)       from scratch: snap -> index -> shell_voronoi clipping -> tet_start::build -> repair::prepare
+//                    -> geometry(). Throws std::runtime_error if the start is not exact.
+//   update_cells()   optional, after update/rebuild: per-cell face lists, volumes, centroids (and gradient weights).
+//   accessors        faces(), owner(), neighbour(), area(), volume(), ... read the last update's result.
+//   clip(x, cells)   independent of the above: snap -> index -> clipping of the listed cells only.
+//
 // FaceReal = float adds one float row per face (face_rows()) for a reduced-precision hydro; Weight = float or double
 // adds the least-squares gradient weights of every per-cell list entry (computed by update_cells()); void: none.
 template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class FaceReal = double, class Weight = void>
@@ -201,8 +215,8 @@ public:
         return rebuilt;
     }
 
-    // The exact mesh of positions x from scratch: clipping with face rings,
-    // the exact start (tet_start), then faces and cells.
+    // The exact mesh of positions x from scratch: clipping with face rings, the exact start (tet_start), then geometry.
+    // Used by: update (first call, changed count, stuck or overlapping repair); also callable directly.
     template <class X>
     Report rebuild(const X& x, Timings* timings = nullptr) {
         if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh: no particles");
@@ -251,6 +265,7 @@ public:
     // Local rebuild by clipping: the cells of the particles `cells` at positions x, independent of the persistent mesh.
     // Each face of a listed cell is returned once: by the lower id if both are listed, else by the listed one (Cells:
     // owned faces of each listed particle, neighbour ids, area vectors, centroids relative to it).
+    // Used by: callers (hydro code); not part of update().
     template <class X>
     const shell_voronoi::Cells<Memory>& clip(const X& x, const View<const int*>& cells) {
         if (x.extent(0) == 0) throw std::invalid_argument("voronoi::Mesh::clip: no particles");
@@ -284,9 +299,9 @@ public:
         return Scratch(reinterpret_cast<char*>(spare.data()), bytes);
     }
 
-    // The per-cell face lists, and volumes and centroids summed over them in
-    // fixed order (bit-reproducible), for the faces of the last update; does
-    // nothing if they are current.
+    // The per-cell face lists, and volumes and centroids summed over them in fixed order (bit-reproducible), for the
+    // faces of the last update; does nothing if they are current. Incremental when few entries were touched.
+    // Used by: callers after update(); runs tet_mesh::cells_incremental, cells, gradient_weights.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
         if (!built()) throw std::logic_error("voronoi::Mesh::update_cells: no mesh (no update yet, or it was refused)");
@@ -360,6 +375,7 @@ private:
     bool built() const { return state_.alive.extent(0) > 0; }
 
     // No mesh any more: the next update() builds from scratch.
+    // Used by: rebuild (start and on refusal).
     void forget() {
         exec_.fence();
         tets_ = tet_mesh::Mesh<Memory>{};
@@ -374,8 +390,8 @@ private:
         lists_of_last_update_ = false;
     }
 
-    // With timings: fence, add the time since `timer` started to the phase
-    // `field`, restart the timer.
+    // With timings: fence, add the time since `timer` started to the phase `field`, restart the timer.
+    // Used by: update, rebuild, update_cells, geometry.
     void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
         if (!timings) return;
         exec_.fence();
@@ -383,7 +399,8 @@ private:
         timer.reset();
     }
 
-    // positions_ = x snapped to the grid.
+    // Stage 1: positions_ = x snapped to the grid (reallocated if the count changed).
+    // Used by: update, rebuild, clip.
     template <class X>
     void snap(const X& x) {
         if (static_cast<int>(positions_.extent(0)) != n_)
@@ -391,7 +408,8 @@ private:
         detail::snap_positions(exec_, x, box_, positions_);
     }
 
-    // The cell list of positions p.
+    // Stage 2: the cell list (spatial grid) of positions p, for the neighbour search of the clipping.
+    // Used by: rebuild, clip.
     template <class P>
     void index(const P& p) {
         if (list_.n != n_) neighbor_search::configure(list_, n_, box_, box_.cubic() ? box_.side[0] * std::cbrt(1.0 / n_)
@@ -399,7 +417,9 @@ private:
         neighbor_search::build(exec_, list_, p);
     }
 
-    // Circumcentres of the created tetrahedra, face rings, faces and cells.
+    // Stage 5: circumcentres of the created tetrahedra, face rings, face areas/centroids and cell volumes (tet_mesh).
+    // Returns the face count. `created` = entries touched by the repair, or empty for all (first build).
+    // Used by: update, rebuild.
     int geometry(Timings* timings) {
         Kokkos::Timer timer;
         lists_of_last_update_ = updates_since_lists_ == 0;

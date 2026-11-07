@@ -1,5 +1,5 @@
 // Persistent tetrahedra from a clipping build: from_rings equals a host construction from the rings, adjacency and edge
-// representatives are consistent, and the Voronoi geometry matches the clipped cells.
+// representatives are consistent, and the Voronoi geometry matches the clipped cells (tet_mesh, 2D cell list).
 
 #include "check.hpp"
 #include "support.hpp"
@@ -14,6 +14,7 @@ using namespace support;
 
 // Host reference: tetrahedron (i, j, ring[m], ring[m + 1]) for every owned
 // face i-j and ring slot m, as sorted particle quadruples.
+// Used by: the from_rings check in main (tet_mesh::from_rings).
 std::set<std::array<int, 4>> tets_from_rings(const shell_voronoi::Cells<Memory>& cells) {
     const auto owned = to_host(cells.owned_count);
     const auto start = to_host(cells.ring_start);
@@ -32,6 +33,8 @@ std::set<std::array<int, 4>> tets_from_rings(const shell_voronoi::Cells<Memory>&
     return tets;
 }
 
+// Largest relative difference between tet_mesh geometry volumes and the clipped cells' volumes.
+// Used by: the stored-ring and walked-ring volume checks in main (tet_mesh::faces).
 double worst_volume_difference(const tet_mesh::Geometry<Memory>& geometry, const shell_voronoi::Cells<Memory>& cells) {
     const auto mesh_volume = to_host(geometry.volume);
     const auto clipped_volume = to_host(cells.volume);
