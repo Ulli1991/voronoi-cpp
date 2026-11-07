@@ -3,6 +3,17 @@ on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
+  style:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Comment rules
+        run: python3 scripts/check_comments.py
+      - name: Formatting of changed lines
+        run: python3 scripts/check_format.py origin/${{ github.base_ref || 'main' }}
   cpp:
     runs-on: ubuntu-24.04
     strategy:

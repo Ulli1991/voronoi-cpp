@@ -1,0 +1,11 @@
+# Checked on changed lines only (scripts/check_format.py), so existing code is not reformatted in bulk.
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 120
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+PointerAlignment: Left
+ReflowComments: false
+SortIncludes: false
