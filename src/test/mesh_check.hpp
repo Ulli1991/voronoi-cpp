@@ -1,7 +1,7 @@
 #pragma once
 
 // A voronoi::Mesh against the independent oracle (oracle.hpp): tetrahedra, faces, volumes, a sample of cells against
-// brute-force clipping, and the same tetrahedra as a fresh build.
+// brute-force clipping, and the same tetrahedra as a fresh build. Used by mesh_cases_test and distortion.hpp.
 
 #include "oracle.hpp"
 #include "support.hpp"
@@ -13,6 +13,7 @@ namespace mesh_check {
 
 using namespace support;
 
+// The mesh's snapped positions as oracle grid integers (steps of the box). Used by: check, mesh_cases_test, distortion.hpp.
 template <class M>
 oracle::Grid grid_of(const M& mesh) {
     const auto x = to_host(mesh.positions());
@@ -26,6 +27,7 @@ oracle::Grid grid_of(const M& mesh) {
     return g;
 }
 
+// A host copy of the mesh's tetrahedra in the oracle's format. Used by: check, mesh_cases_test.
 template <class M>
 oracle::Tets tets_of(const M& mesh) {
     const tet_flips::Mesh m = host_tetrahedra(mesh);
@@ -43,7 +45,7 @@ oracle::Tets tets_of(const M& mesh) {
     return t;
 }
 
-// The snapped positions of a mesh as an ordinary position view.
+// The snapped positions of a mesh as an ordinary position view. Used by: distortion.hpp (compare_with_rebuild input).
 template <class M>
 Positions snapped(const M& mesh) {
     const auto p = mesh.positions();
@@ -55,6 +57,7 @@ Positions snapped(const M& mesh) {
     return x;
 }
 
+// Outcome of check(): oracle verdict plus brute-force and fresh-build comparisons; ok() is the pass criterion.
 struct Result {
     oracle::Verdict tets;
     long long not_finite = 0;     // faces or cells with NaN or infinity
@@ -90,6 +93,7 @@ struct Result {
 
 // `cells`: how many cells to compare with brute clipping (evenly spread;
 // every cell of a small mesh). check_fresh: build the same positions again.
+// Used by: distortion.hpp (oracle_every) and the mesh_cases_test cases that verify a whole mesh.
 template <class M>
 Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
     Result r;
@@ -201,6 +205,7 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
 
 // A mesh and the clipping disagree on faces: who is right? Checks the largest faces the clipping lacks against brute-force
 // clipping of their owner cell; true when brute force sides with the mesh on all (the plain clipping is the one wrong).
+// Used by: distortion.hpp when compare_with_rebuild reports a mismatch.
 template <class M>
 bool arbitrate(const M& mesh, std::ostream& out, int faces = 8) {
     const Positions x = snapped(mesh);

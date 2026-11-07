@@ -1,5 +1,6 @@
 // 3D special cases against the oracle: a case needs the exact mesh or a refusal, never a wrong mesh with no error.
 // `list` prints the names, `<prefix> ...` runs matching cases; known open issues run with --known only.
+// Exercises voronoi::Mesh<3> (start by tet_start, repair by tet_repair, fallbacks, update_cells) via mesh_check.hpp.
 
 #include "check.hpp"
 #include "distortion.hpp"
@@ -17,29 +18,34 @@ namespace {
 using namespace support;
 namespace mc = mesh_check;
 
+// A named test case; groups below register them with add(), main runs the ones selected on the command line.
 struct Case {
     std::string name;
     std::function<void(Check&)> run;
     int issue = 0;  // an open issue: runs with --known only
 };
+// The registry of all cases, in registration order. Used by: add, main.
 std::vector<Case>& cases() {
     static std::vector<Case> all;
     return all;
 }
-// An issue open on the CUDA build only: the case still runs elsewhere.
+// Marks a case as a known open issue on the CUDA build only (pass to add()); elsewhere it still runs.
 #ifdef KOKKOS_ENABLE_CUDA
 constexpr int on_cuda(int issue) { return issue; }
 #else
 constexpr int on_cuda(int) { return 0; }
 #endif
 
+// Registers a case. `issue` > 0 marks it known: it is skipped unless --known is given. Used by: every group.
 void add(const std::string& name, std::function<void(Check&)> run, int issue = 0) {
     cases().push_back({name, std::move(run), issue});
 }
 
+// What build() accepts: an exact mesh, either an exact mesh or a refusal, or a refusal.
 enum class Expect { exact, exact_or_refused, refused };
 
-// A fresh build of `points`, judged. Returns whether there is a mesh.
+// A fresh build of `points`, judged by mesh_check::check on `cells` sampled cells. Returns whether there is a mesh.
+// Used by: nearly every group (the start: tet_start::build plus repair).
 bool build(Check& check, const std::string& name, Mesh& mesh, const Points& points, Expect expect, int cells = 32) {
     try {
         const voronoi::Report r = mesh.update(to_device(points));
@@ -55,7 +61,7 @@ bool build(Check& check, const std::string& name, Mesh& mesh, const Points& poin
     }
 }
 
-// One update to `points`, judged.
+// One update to `points` (a step of the repair), judged by mesh_check::check. Used by: every group that moves points.
 voronoi::Report step(Check& check, const std::string& name, Mesh& mesh, const Points& points, int cells = 16) {
     const voronoi::Report r = mesh.update(to_device(points));
     mesh.update_cells();
@@ -67,7 +73,7 @@ voronoi::Report step(Check& check, const std::string& name, Mesh& mesh, const Po
     return r;
 }
 
-// The same, accepting a refusal.
+// The same, accepting a refusal: `refused` is set and the report is empty. Used by: groups whose steps may refuse.
 voronoi::Report step_or_refused(Check& check, const std::string& name, Mesh& mesh, const Points& points, bool& refused,
                                 int cells = 16) {
     try {
@@ -79,6 +85,7 @@ voronoi::Report step_or_refused(Check& check, const std::string& name, Mesh& mes
     }
 }
 
+// A uniformly random unit vector. Used by: add_ball, add_shell and cases that place points on spheres.
 Point on_sphere(std::mt19937_64& rng) {
     std::normal_distribution<double> g(0, 1);
     const Point p{g(rng), g(rng), g(rng)};
@@ -86,6 +93,7 @@ Point on_sphere(std::mt19937_64& rng) {
     return {p[0] / r, p[1] / r, p[2] / r};
 }
 
+// Appends n points uniform in the ball (wrapped into the box). Used by: contrast_cases.
 void add_ball(Points& p, std::mt19937_64& rng, Point c, double radius, int n) {
     std::uniform_real_distribution<double> u(0, 1);
     for (int i = 0; i < n; ++i) {
@@ -95,6 +103,7 @@ void add_ball(Points& p, std::mt19937_64& rng, Point c, double radius, int n) {
     }
 }
 
+// Appends n points on the sphere of that radius (wrapped). Used by: contrast_cases, valence_cases, fallback_cases.
 void add_shell(Points& p, std::mt19937_64& rng, Point c, double radius, int n) {
     for (int i = 0; i < n; ++i) {
         const Point d = on_sphere(rng);
@@ -102,15 +111,18 @@ void add_shell(Points& p, std::mt19937_64& rng, Point c, double radius, int n) {
     }
 }
 
+// Appends n points uniform in the unit box. Used by: most groups as background.
 void add_uniform(Points& p, std::mt19937_64& rng, int n) {
     std::uniform_real_distribution<double> u(0, 1);
     for (int i = 0; i < n; ++i) p.push_back({u(rng), u(rng), u(rng)});
 }
 
+// One step of the predicates' grid in the unit box.
 const double grid_step = 1.0 / exact_predicates::scale;
 
 // ---------------------------------------------------------------- coincident
 
+// Particles on one grid position (duplicates): refused at the start, handled or refused during steps, messages.
 void coincident_cases() {
     for (const bool lattice : {false, true}) {
         const std::string on = lattice ? ".lattice" : "";
@@ -323,6 +335,7 @@ void coincident_cases() {
 
 // ----------------------------------------------------------------- few points
 
+// Zero to a few particles, and a mesh that goes back to none.
 void few_cases() {
     for (const char* kind : {"uniform", "jittered", "lattice"})
         for (const int n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 24, 27, 32, 40, 48, 64, 100, 125, 216, 512}) {
@@ -372,6 +385,7 @@ void few_cases() {
 
 // ------------------------------------------------------------------- contrast
 
+// Extreme density contrasts: balls, shells, clumps, lines, planes, skew segments; start statuses and refusals.
 void contrast_cases() {
     for (const double ratio : {1e2, 1e4, 1e6, 1e8})
         add("contrast.two_density." + sci(ratio), [=](Check& c) {
@@ -580,6 +594,7 @@ void contrast_cases() {
 
 Points exact_lattice(int side, const Points& basis);
 
+// Boxes: thin slabs, long boxes, voids, positions on the boundary, snapping twice, non-finite input.
 void box_cases() {
     // Slabs: m cells across a side of 1/8.
     for (const int across : {1, 2, 3, 4, 5, 6, 7, 8})
@@ -723,7 +738,7 @@ void box_cases() {
 // ------------------------------------------------- degeneracy during motion
 
 // A cubic lattice of side^3 cells with the basis, side a power of two, so
-// every position is exact on the grid.
+// every position is exact on the grid. Used by: box_cases, degenerate_cases, predicate_cases.
 Points exact_lattice(int side, const Points& basis) {
     Points p;
     for (int i = 0; i < side; ++i)
@@ -735,6 +750,7 @@ Points exact_lattice(int side, const Points& basis) {
 const Points sc_basis{{0.5, 0.5, 0.5}}, bcc_basis{{0.25, 0.25, 0.25}, {0.75, 0.75, 0.75}},
     fcc_basis{{0.25, 0.25, 0.25}, {0.75, 0.75, 0.25}, {0.75, 0.25, 0.75}, {0.25, 0.75, 0.75}};
 
+// Exact lattices and cospherical sets moving: ties at every step (the perturbation decides), zero-area faces.
 void degenerate_cases() {
     struct Layout {
         std::string name;
@@ -938,7 +954,7 @@ void degenerate_cases() {
 // ----------------------------------------------------------- high valence
 
 // `k` particles on a circle of radius r around the z axis through `at`, and
-// two poles at +-h on the axis; particles of a sparse background elsewhere.
+// two poles at +-h on the axis; particles of a sparse background elsewhere. Used by: valence_cases.
 Points ring_points(const Point& at, double r, int k, double h, int background) {
     std::mt19937_64 rng(12);
     Points p;
@@ -958,6 +974,7 @@ Points ring_points(const Point& at, double r, int k, double h, int background) {
     return p;
 }
 
+// High-valence edges and faces (k tetrahedra around one edge): starts, steps, spheres, hubs.
 void valence_cases() {
     // The face between the poles has k corners, and the edge k tetrahedra.
     for (const int k : {16, 32, 48, 60, 64, 65, 66, 80, 128, 129, 256, 300, 1000}) {
@@ -1043,6 +1060,7 @@ void valence_cases() {
 
 // --------------------------------------------------------------- large motion
 
+// Large steps and kicks, permuted or resized input, refused updates, long runs and cycles.
 void large_cases() {
     for (const double d : {0.5, 1.0, 2.0, 5.0, 20.0})
         add("large.flow." + sci(d), [=](Check& c) {
@@ -1313,6 +1331,7 @@ void large_cases() {
 
 // ------------------------------------------------------------------ fallbacks
 
+// Where repair gives up: stuck triangles, host and rebuild fallbacks, pool growth, their cost.
 void fallback_cases() {
     add("fallback.cheapest.small_n", [](Check& c) {
         // The cheapest fallback at small n is a rebuild: the host costs up to 50 ms per stuck entry, a rebuild of 32768
@@ -1482,6 +1501,7 @@ void fallback_cases() {
 
 // -------------------------------------------------- predicates on real sets
 
+// The library predicates on real tetrahedron/apex sets against the oracle's integers.
 void predicate_cases() {
     // Library predicates on the quintuples a mesh really asks about, against the oracle's integers: each tetrahedron
     // with the apex across each face.
@@ -1564,6 +1584,8 @@ void predicate_cases() {
 
 // ------------------------------------------------------------- reproducibility
 
+// Runs `steps` flow steps on execution space E and returns a (topology, geometry) hash pair per step.
+// Used by: reproducibility_cases (E = default space against Serial).
 template <class E>
 std::vector<std::uint64_t> trace(const Points& start, double displacement, int steps) {
     using Memory = typename E::memory_space;
@@ -1607,6 +1629,7 @@ std::vector<std::uint64_t> trace(const Points& start, double displacement, int s
     return hashes;
 }
 
+// The same run twice, against Serial, and a hash dump to compare builds and thread counts.
 void reproducibility_cases() {
     const std::vector<std::pair<std::string, double>> runs{{"jittered", 0.3}, {"clustered", 0.3}, {"lattice", 0.1}, {"wave", 0.3}};
     for (const auto& [kind, displacement] : runs) {

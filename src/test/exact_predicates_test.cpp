@@ -1,5 +1,6 @@
 // Exact predicates: orientation and in-sphere signs equal an independent integer evaluation, near-degenerate and large
 // inputs included; ties are broken consistently; periodic offsets take the nearest image.
+// Exercises exact_predicates (orient, in_sphere, snap, Box) only; shares no helper header.
 
 #include "check.hpp"
 #include "exact_predicates.hpp"
@@ -15,15 +16,17 @@ namespace ep = exact_predicates;
 using ep::i128;
 using ep::Offset;
 
+// Reference 3x3 determinant in 128 bits. Used by: reference_in_sphere and the orientation checks.
 i128 det(const Offset& a, const Offset& b, const Offset& c) {
     return i128(a[0]) * (i128(b[1]) * c[2] - i128(b[2]) * c[1]) + i128(a[1]) * (i128(b[2]) * c[0] - i128(b[0]) * c[2]) +
            i128(a[2]) * (i128(b[0]) * c[1] - i128(b[1]) * c[0]);
 }
 
+// Sign of v as -1, 0, +1; compared with ep::orient / ep::in_sphere results.
 int sign(i128 v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 
 // Reference in-sphere for small coordinates from the circumcentre (p0 at the origin: inside iff |e|² < 2 e.C);
-// returns +1 inside, -1 outside, 0 on the sphere.
+// returns +1 inside, -1 outside, 0 on the sphere. Used by: the in-sphere comparison against ep::in_sphere.
 int reference_in_sphere(const Offset* p) {
     Offset q[4];
     for (int k = 0; k < 4; ++k) q[k] = ep::minus(p[k + 1], p[0]);
@@ -40,6 +43,7 @@ int reference_in_sphere(const Offset* p) {
     return sign(e_dot_n - ep::lift(e) * d) * sign(d);
 }
 
+// Uniform integer offset in [-range, range]³. Used by: the random orientation and in-sphere sections.
 Offset random_offset(std::mt19937_64& rng, long long range) {
     std::uniform_int_distribution<long long> u(-range, range);
     return {u(rng), u(rng), u(rng)};

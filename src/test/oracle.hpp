@@ -1,7 +1,8 @@
 #pragma once
 
 // Brute-force oracle sharing no code with the library: exact 128-bit predicates and long double clipping over all
-// periodic images, on data only.
+// periodic images, on data only. Checks voronoi::Mesh tetrahedra and cells; reached through mesh_check.hpp
+// and, directly, mesh_cases_test.
 
 #include <algorithm>
 #include <array>
@@ -27,6 +28,7 @@ struct Grid {
     int size() const { return static_cast<int>(p.size()); }
 };
 
+// d reduced to the nearest periodic image, in [-period/2, period/2). Used by: difference.
 inline i64 nearest(i64 d, i64 period) {
     d %= period;
     if (2 * d >= period) d -= period;
@@ -34,17 +36,20 @@ inline i64 nearest(i64 d, i64 period) {
     return d;
 }
 
+// Nearest-image offset in grid steps from particle `from` to `to`. Used by: check, voronoi_cell.
 inline Offset difference(const Grid& g, int from, int to) {
     Offset d;
     for (int a = 0; a < 3; ++a) d[a] = nearest(g.p[to][a] - g.p[from][a], g.period[a]);
     return d;
 }
 
+// 3x3 determinant, exact in 128 bits. Used by: check (orientation), in_sphere.
 inline i128 det(const Offset& a, const Offset& b, const Offset& c) {
     return a[0] * (i128(b[1]) * c[2] - i128(b[2]) * c[1]) + a[1] * (i128(b[2]) * c[0] - i128(b[0]) * c[2]) +
            a[2] * (i128(b[0]) * c[1] - i128(b[1]) * c[0]);
 }
 
+// Squared length |a|² (the lifting coordinate). Used by: in_sphere.
 inline i128 lift(const Offset& a) { return i128(a[0]) * a[0] + i128(a[1]) * a[1] + i128(a[2]) * a[2]; }
 
 // Sign of s[0] t[0] + ... + s[3] t[3] for |s| < 2⁶⁶, |t| < 2⁹⁸: each t split at 2⁴⁸ so both sums fit 128 bits.
@@ -71,7 +76,7 @@ inline int sign_of_sum(const i128* s, const i128* t) {
 }
 
 // +1 when e lies strictly inside the circumsphere of (0, a, b, c), -1 outside, 0 on it
-// (a, b, c not coplanar); with circumcentre C = N / (2 det), inside iff |e|² < 2 e.C.
+// (a, b, c not coplanar); with circumcentre C = N / (2 det), inside iff |e|² < 2 e.C. Used by: check.
 inline int in_sphere(const Offset& a, const Offset& b, const Offset& c, const Offset& e) {
     const i128 d = det(a, b, c);
     const i128 lifts[4] = {lift(a), lift(b), lift(c), -lift(e)};
@@ -86,6 +91,7 @@ struct Tets {
     int count() const { return static_cast<int>(vertex.size()); }
 };
 
+// Result of check(): counts of each defect (zero when ok()), box_volume if tetrahedra fill the box exactly.
 struct Verdict {
     long long tets = 0, ambiguous = 0, flat = 0, inverted = 0, unpaired = 0, folded = 0, wrong_adjacency = 0, unused = 0,
               not_empty = 0, oversized = 0;
@@ -110,7 +116,7 @@ struct Verdict {
     }
 };
 
-// Uniform bins of the particles, to find the images near a sphere.
+// Uniform bins of the particles, to find the images near a sphere. Used by: check (empty-sphere test).
 class Bins {
 public:
     explicit Bins(const Grid& g) : grid_(g) {
@@ -163,6 +169,8 @@ private:
     std::vector<int> start_, items_;
 };
 
+// Exact validation of a tetrahedralization: orientation, pairing and adjacency, every particle used, volumes
+// summing to the box, and empty circumspheres over all periodic images. Used by: mesh_check::check, mesh_cases_test.
 inline Verdict check(const Grid& g, const Tets& m) {
     Verdict v;
     struct Side {
@@ -271,6 +279,7 @@ inline Verdict check(const Grid& g, const Tets& m) {
 
 // Two meshes of one point set are the same mesh when their tetrahedra, as
 // sorted quadruples, are equal. Returns how many quadruples are in only one.
+// Used by: mesh_check::check (fresh build), mesh_cases_test.
 inline long long different_tetrahedra(const Tets& a, const Tets& b) {
     auto quads = [](const Tets& m) {
         std::vector<std::array<int, 4>> q;
@@ -290,18 +299,21 @@ inline long long different_tetrahedra(const Tets& a, const Tets& b) {
 
 // One Voronoi cell by half-space clipping, in long double grid steps relative to its generator.
 using Vec = std::array<long double, 3>;
+// Small vector helpers for the clipping below.
 inline Vec minus(const Vec& a, const Vec& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
 inline long double dot(const Vec& a, const Vec& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 inline Vec cross(const Vec& a, const Vec& b) {
     return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
 }
 
+// One face of a cell: a polygon of corners, the neighbour particle and its image.
 struct Polygon {
     std::vector<Vec> corners;
     int neighbour;  // -1: a side of the starting box (the particle's own image)
     int image = 0;  // numbers the periodic image of the neighbour
 };
 
+// Outward area vector of a polygon. Used by: voronoi_cell.
 inline Vec area_vector(const Polygon& f) {
     Vec a{0, 0, 0};
     for (std::size_t k = 1; k + 1 < f.corners.size(); ++k) {
@@ -311,6 +323,7 @@ inline Vec area_vector(const Polygon& f) {
     return a;
 }
 
+// A finished cell: faces, volume, moment, reach and per-neighbour area vectors. Used by: mesh_check::check and arbitrate, mesh_cases_test.
 struct Cell {
     std::vector<Polygon> faces;
     long double volume = 0;  // grid steps^3
@@ -321,7 +334,7 @@ struct Cell {
     std::map<int, int> images;
 };
 
-// Cut the polyhedron by the half space x.q <= |q|^2 / 2.
+// Cut the polyhedron by the half space x.q <= |q|^2 / 2. Used by: voronoi_cell.
 inline void clip(std::vector<Polygon>& faces, const Vec& q, int neighbour, int image) {
     const long double limit = dot(q, q) / 2;
     std::vector<Vec> cut;
@@ -365,6 +378,7 @@ inline void clip(std::vector<Polygon>& faces, const Vec& q, int neighbour, int i
     faces = std::move(kept);
 }
 
+// Largest distance from the generator to a corner; bounds which images can still cut. Used by: voronoi_cell.
 inline long double reach_of(const std::vector<Polygon>& faces) {
     long double r2 = 0;
     for (const Polygon& f : faces)
@@ -374,6 +388,7 @@ inline long double reach_of(const std::vector<Polygon>& faces) {
 
 // The cell of particle i: the box around it cut by every other particle in every image that can reach it.
 // A duplicate of i has no bisector and is skipped, so duplicates each get the whole shared cell.
+// Used by: mesh_check::check and arbitrate, mesh_cases_test.
 inline Cell voronoi_cell(const Grid& g, int i) {
     const Vec half{g.period[0] / 2.0L, g.period[1] / 2.0L, g.period[2] / 2.0L};
     std::vector<Polygon> faces;

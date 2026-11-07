@@ -1,5 +1,5 @@
 // Full rebuild by clipping on jittered, random, lattice, clustered and halo points: certified cells that fill the box with
-// consistent faces; thread, warp and exact kernels agree.
+// consistent faces; thread, warp and exact kernels agree. Exercises shell_voronoi::construct / construct_warp.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
         const auto list = cell_list(x);
         const auto grid = shell_voronoi::make_grid(list);
 
+        // Thread (construct) and warp (construct_warp) kernels, each validated on its own by support::check_cells.
         shell_voronoi::Cells<Memory> thread(n, true), warp(n, true);
         shell_voronoi::construct(exec, grid, thread);
         shell_voronoi::construct_warp(exec, grid, warp);

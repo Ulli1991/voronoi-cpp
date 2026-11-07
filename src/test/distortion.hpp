@@ -1,7 +1,8 @@
 #pragma once
 
 // Prescribed velocity fields that distort the mesh without hydro, and a driver that runs them through voronoi::Mesh
-// measuring robustness, accuracy, speed and memory per step.
+// measuring robustness, accuracy, speed and memory per step. Exercises voronoi::Mesh::update and update_cells;
+// used by distortion_test and the long_run case of mesh_cases_test.
 
 #include "mesh_check.hpp"
 
@@ -15,6 +16,7 @@ namespace distortion {
 
 using namespace support;
 
+// The flows; distortion_test runs all_flows(), mesh_cases_test only turbulence.
 enum class Kind {
     shear,        // sin(2 pi z) along x: periodic shear
     sawtooth,     // uniform shear +-4 in two layers
@@ -33,6 +35,7 @@ enum class Kind {
     streams,      // two halves of the box stream against each other
 };
 
+// Flow name to Kind (throws on an unknown name). Used by: Options::flow in run, initial_positions.
 inline Kind kind_of(const std::string& name) {
     const std::map<std::string, Kind> names{{"shear", Kind::shear},       {"sawtooth", Kind::sawtooth},
                                             {"vortex", Kind::vortex},     {"taylor_green", Kind::taylor_green},
@@ -45,6 +48,7 @@ inline Kind kind_of(const std::string& name) {
     return names.at(name);
 }
 
+// The flows distortion_test runs when none is named on the command line.
 inline const std::vector<std::string>& all_flows() {
     static const std::vector<std::string> names{"shear",  "sawtooth",  "vortex",  "taylor_green", "turbulence",
                                                 "collapse", "noh",     "expansion", "pancake",    "counter",
@@ -52,6 +56,7 @@ inline const std::vector<std::string>& all_flows() {
     return names;
 }
 
+// The velocity field of a Kind (random modes seeded by `seed`); velocity() is called from device code by advance.
 struct Field {
     static constexpr int modes = 32;
     static constexpr double pi = 3.141592653589793, two_pi = 2 * pi;
@@ -165,7 +170,8 @@ void advance(const Field& field, const X& x, const S& side, double t, double dt)
         });
 }
 
-// Device memory through the Kokkos Tools callbacks.
+// Device memory through the Kokkos Tools callbacks; call start() once. Used by: run (bytes per cell), distortion_test,
+// mesh_cases_test long_run (memory must not grow).
 struct DeviceBytes {
     static inline std::int64_t current = 0, peak = 0;
     static inline std::map<const void*, std::uint64_t> live;
@@ -187,7 +193,7 @@ struct DeviceBytes {
     }
 };
 
-// The shape of the mesh's cells.
+// The shape of the mesh's cells, measured by shape_of every Options::shape_every steps.
 struct Shape {
     double aspect = 0;        // largest, over cells, of reach R / half the distance to the nearest neighbour
     double reach = 0;         // largest 2R of any cell / the side of the box (3/8 is the limit of a build)
@@ -196,6 +202,7 @@ struct Shape {
     int max_corners = 0;      // most corners of a face (tet_mesh::max_ring_length caps the walk)
 };
 
+// Cell shape statistics of a mesh whose generators started at `spacing` apart. Used by: run.
 template <class M>
 Shape shape_of(const M& mesh, double spacing) {
     const int n = mesh.particles();
@@ -258,6 +265,7 @@ Shape shape_of(const M& mesh, double spacing) {
     return {aspect, 2 * std::sqrt(largest) / box.shortest(), faces, std::sqrt(smallest) / spacing, corners};
 }
 
+// Settings of run(), filled from distortion_test's command line.
 struct Options {
     std::string flow = "shear";
     int n = 4096;
@@ -276,6 +284,7 @@ struct Options {
     std::ostream* out = &std::cout;
 };
 
+// What run() measured; wrong_step >= 0 is the failure distortion_test reports.
 struct Summary {
     int steps_done = 0;
     bool refused = false;
@@ -294,6 +303,7 @@ struct Summary {
     double strain = 0;  // time in units of the box crossing
 };
 
+// Jittered start points in slot order (the expansion flow adds a dense ball). Used by: run.
 inline void initial_positions(const Options& o, Points& p) {
     const Kind kind = kind_of(o.flow);
     p = in_slot_order(make_points("jittered", o.n));
@@ -312,6 +322,8 @@ inline void initial_positions(const Options& o, Points& p) {
     }
 }
 
+// Moves the points by the flow for Options::steps steps through voronoi::Mesh::update, checking each step against
+// the oracle (oracle_every) or an exact rebuild (rebuild_every). Used by: distortion_test.
 inline Summary run(const Options& o) {
     Summary s;
     const Exec exec;
@@ -466,6 +478,7 @@ inline Summary run(const Options& o) {
     return s;
 }
 
+// One-line report of a run. Used by: distortion_test (the check message).
 inline std::string text(const Options& o, const Summary& s) {
     std::ostringstream t;
     t << o.flow << " n=" << o.n << " d=" << o.displacement << " drift=" << o.drift << ": steps=" << s.steps_done
