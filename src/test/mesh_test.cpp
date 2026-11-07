@@ -3,6 +3,7 @@
 
 #include "check.hpp"
 #include "support.hpp"
+#include "tet_cells.hpp"
 
 #include <map>
 #include <random>
