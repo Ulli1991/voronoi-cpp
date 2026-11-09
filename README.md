@@ -80,28 +80,35 @@ What a caller can rely on:
 
 What `update()` does with new positions. Normally the mesh is repaired by exact flips on the GPU, which is the green path. If a repair can't finish, or the first time, the mesh is rebuilt from scratch by clipping, the blue path. Input that can't give an exact mesh is refused with an error.
 
-Source map, in the order `Mesh<3>::update` calls it (stage numbers as in the file headers; each file's header also says who calls it and what it feeds):
+Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md). In the order a call runs them:
 
-| Stage | Header | Job |
-|---|---|---|
-| all | `exact_predicates.hpp` | the periodic `Box`, snapping, exact orientation and in-sphere signs (filtered double, then 128/256-bit integers), symbolic perturbation by particle id |
-| 0 | `voronoi_mesh.hpp` | `voronoi::Mesh`: the entry point, `update`, `rebuild`, `update_cells`, `clip`; the pipeline behind one interface |
-| 1 | snapping | `Mesh::snap` in `voronoi_mesh.hpp`: positions to the 2³⁰ grid |
-| 2 | `neighbor_search.hpp` | `CellList`: particles sorted along a Morton curve, an implicit octree over a dense base grid, a grid level per particle fitted to the local density |
-| 3 | `shell_limits.hpp` | the cell status codes and the plane and vertex capacities |
-| 3 | `shell_grid.hpp` | the vectors, `Grid`, `Stencil` and the stencil-walk helpers shared by both kernels |
-| 3 | `shell_cell.hpp` | the rounded and exact cell under construction and the clip step |
-| 3 | `shell_voronoi.hpp` | clipping with a thread per cell: the walk and the construct passes |
-| 3 | `shell_voronoi_warp.hpp` | clipping with a warp per cell on CUDA, writing faces or face rings |
-| 3 | `tet_start.hpp` | the exact start: exact check of `from_rings`, exact clipping of cells around errors |
-| 4a | `tet_repair.hpp` | per-step repair by 2-3 / 3-2 flips on the device |
-| 4b | `tet_flips.hpp` | host fallback of the repair (local Bowyer-Watson rebuilds) |
-| 5 | `tet_mesh.hpp` | persistent tetrahedra: `from_rings`, circumcentres, face rings, faces |
-| 5b | `tet_cells.hpp` | per-cell face lists, volumes, centroids and gradient weights (`update_cells`) |
+1. **Snapping and exact predicates** (`exact_predicates.hpp`, `Mesh::snap`). Positions go to a grid of 2³⁰ steps across the box, where every geometric test can be done exactly. Ties are broken by particle id.
+2. **The cell list** (`neighbor_search.hpp`). Particles are sorted along a Morton curve, and each gets a grid level fitted to the local density.
+3. **Clipping** (`shell_grid.hpp`, `shell_cell.hpp`, `shell_voronoi.hpp`, `shell_voronoi_warp.hpp`, `shell_limits.hpp`). Each cell is cut from a large cube by its neighbours' bisectors, nearest first, until no particle within twice its radius is left.
+4. **The exact start** (`tet_start.hpp`). The clipped face rings become tetrahedra, which are checked exactly; the cells around any error are clipped again exactly.
+5. **The persistent tetrahedra** (`tet_mesh.hpp`). Vertices, adjacency, circumcentres and face rings are kept from step to step.
+6. **The repair** (`tet_repair.hpp`). Each step screens for tetrahedra that may fail, then flips them in rounds on the device; votes settle conflicting flips.
+7. **The fallbacks** (`tet_flips.hpp`, `voronoi_mesh.hpp`). Stuck triangles are rebuilt on the host, or the whole mesh is rebuilt, and a mesh whose volumes do not fill the box is rebuilt too.
+8. **Geometry** (`tet_mesh.hpp`). Circumcentres, then face areas and centroids, then cell volumes.
+9. **`update_cells()`** (`tet_cells.hpp`). Per-cell face lists, with volumes and centroids summed in a fixed order.
 
-The other dimensions follow the same order. 2D: `voronoi_mesh_2d.hpp` with `polygon_clip.hpp` (clipping), `tri_mesh.hpp` (start and faces), `tri_repair.hpp` (device repair), `tri_finish.hpp` (host fallback) and `exact_predicates_2d.hpp`. 1D: `sorted_mesh.hpp`, `voronoi::Mesh<1>`: generators sorted on a 2⁵² grid, ties by id, periodic or with walls; `insert()` and `remove()` change the line between updates and report what changed.
+2D (`voronoi_mesh_2d.hpp`, `polygon_clip.hpp`, `tri_mesh.hpp`, `tri_repair.hpp`, `tri_finish.hpp`) runs the same stages on triangles, with exact clipping. 1D (`sorted_mesh.hpp`) sorts the generators on a 2⁵² grid and supports `insert()` and `remove()`.
 
-Clipping builds each cell by walking the grid cells around its generator, nearest first, and clipping with every particle within twice the cell's radius; the walk ends when no further particle can cut, which certifies the cell. The exact start turns the resulting face rings into tetrahedra and checks that together they are the Delaunay tetrahedralization, rebuilding any cell that fails. Each step then snaps the positions and repairs the tetrahedra whose local Delaunay test may fail by flips on the device, every flip decided by exact predicates. Triangles that stay stuck are rebuilt on the host, or the whole mesh is rebuilt.
+![Clipping one cell](docs/figures/construction_clipping.png)
+
+How one cell is clipped. The start square is a quarter of the box wide on each side of the generator; each bisector, nearest first, cuts off a corner. The walk stops once no particle within 2R (red) is left, and most particles are never looked at.
+
+![The cell list](docs/figures/construction_cell_list.png)
+
+Left: each particle's grid level, fine in the clumps and coarse in the background. Right: the slot order along the Morton curve; every node of the tree, such as the blue one, holds one run of slots.
+
+![Repair by flips](docs/figures/construction_flip.png)
+
+A flip in 2D: d moved inside the circle through c, a, b, and one flip replaces edge a-b with c-d. In the Voronoi dual this replaces one face and moves the ends of four; the rest of the mesh is untouched.
+
+![Snapping and exact ties](docs/figures/construction_exact.png)
+
+Four points exactly on one circle: rounded arithmetic gives opposite answers in different argument orders. The exact test sees the tie, and the particle ids decide it the same way for every caller.
 
 ## Measured performance
 

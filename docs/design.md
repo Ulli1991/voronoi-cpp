@@ -1,6 +1,6 @@
 # Design notes
 
-Details moved out of the source comments, by topic. The outline is in the README ("How it works").
+Details moved out of the source comments, by topic. The outline is in the README ("How it works"); each stage is explained in [how_it_works.md](how_it_works.md).
 
 ## Persistent tetrahedral mesh (tet_mesh.hpp)
 
@@ -200,3 +200,7 @@ Fields run on the device; 256³ is fine. The turbulence field is random-phase so
 ## Cells under construction (`shell_cell.hpp`)
 
 Rounded and exact cells are shared by the walk, the cut topology and the face walk of `construct_pass`. Both keep planes, with the particle id beyond each (box planes are virtual particles from n on), and vertices, each listing its three planes in face-walking order and the three vertices across its edges: `adjacent[v][k]` lies across the edge from corner k to k + 1. Removed vertices are marked and their slots reused. `RoundedCell` is the portable kernel and the warp kernel's CUDA fallback.
+
+## Construction figures (scripts/construction_figures.py)
+
+`scripts/construction_figures.py` draws `docs/figures/construction_*.png` with LUNA's `figstyle.py`. Nothing in them is sketched by hand. The geometry comes from Python ports of the library's 2D code in exact integers: the cell list (`neighbor_search::build`, D = 2), the walk and clip of `polygon_clip::construct_pass`, the perturbed `in_circle` of `exact_predicates_2d.hpp`, and the Lawson rounds of `tri_repair` with their six-lock votes. Checks: the clipped cell's area against `scipy.spatial.Voronoi`, the repaired triangulation against `scipy.spatial.Delaunay`, the face of the 3D panel against the bisector plane, and the tie-break against every argument order. On 2026-11-09 the ports gave the same slot order, levels and rings as the C++ headers on a uniform set of 120 points and a clumped set of 800 (a throwaway driver, not kept). The point sets are relaxed random sets (Lloyd sweeps) and a clumped set; the moved mesh is tiled 3 × 3, so its periodic box sees no hull, and its moved positions are kept unwrapped, as the code takes every difference to the nearest image. The figure of four cocircular points scales a lattice circle of radius 5 by an odd factor onto the 2³⁰ grid, chosen so that the rounded in-circle values disagree in sign.
