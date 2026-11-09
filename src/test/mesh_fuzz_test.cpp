@@ -21,7 +21,8 @@
 #include <iostream>
 #include <set>
 
-extern "C" void __gcov_dump() __attribute__((weak));  // in a coverage build
+// NOLINTNEXTLINE(bugprone-reserved-identifier): gcov's own name, defined in a coverage build
+extern "C" void __gcov_dump() __attribute__((weak));
 
 namespace {
 
@@ -389,7 +390,7 @@ void check_clip(M& mesh, const Op& o, const Box& box, Outcome& out, int at, bool
             char text[120];
             std::snprintf(text, sizeof text, "  clip cell %d status %d volume %.17g brute %.17g", i, status(i),
                           volume(i), brute);
-            std::cout << text << std::endl;
+            std::cout << text << '\n' << std::flush;
         }
         // Scaled by the cell's width in steps, with a floor for doubles summed over dozens of faces.
         if (e * std::cbrt(double(cell.volume)) > 1e-6 && e > 1e-13)
@@ -411,7 +412,7 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
     bool timed = false, reach_measured = false;
     Points last;  // the positions the mesh is of
     auto say = [&](const std::string& text) {
-        if (limits.verbose) std::cout << "  " << text << std::endl;
+        if (limits.verbose) std::cout << "  " << text << '\n' << std::flush;
     };
     int at = -1;
     for (const Op& o : s.ops) {
@@ -551,7 +552,7 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
         if (limits.verbose) {  // to find the first call where two builds differ
             char text[64];
             std::snprintf(text, sizeof text, "hash %d %016" PRIx64, at, out.hash);
-            std::cout << "  " << text << std::endl;
+            std::cout << "  " << text << '\n' << std::flush;
         }
         check_snap(mesh, o.x, out, at);
         check_faces(mesh, report, out, at);
@@ -717,7 +718,7 @@ void run_1d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
             if (q >= side) q = 0;
         }
     }
-    if (verbose) std::cout << label << std::endl;
+    if (verbose) std::cout << label << '\n' << std::flush;
 }
 
 // The cell of particle i in integer grid steps by half planes, long double, 25 images.
@@ -837,14 +838,15 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
             std::sort(at.begin(), at.end());
             const long long coincident = at.end() - std::unique(at.begin(), at.end());
             std::cout << label << " box " << box.side[0] << " x " << box.side[1] << " step " << t << " coincident "
-                      << coincident << std::endl;
+                      << coincident << '\n'
+                      << std::flush;
         }
         try {
             report = mesh.update(to_view(x));
         } catch (const std::exception& e) {
             ++out.refusals;
             const std::string what = e.what(), c = category(what);
-            if (verbose) std::cout << "refused: " << what << std::endl;
+            if (verbose) std::cout << "refused: " << what << '\n' << std::flush;
             out.hit(c == "unknown" ? valid : refused, c, what, t);
             if (mesh.faces() != 0) out.hit(wrong, "after_refusal", "a refused update left a mesh", t);
             if (out.refusals >= 3) return;
@@ -883,7 +885,8 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
                             out.hit(bits, "fresh_2d", "cell " + std::to_string(i), t);
                             break;
                         }
-                } catch (const std::exception&) {
+                } catch (const std::exception&) {  // a refused fresh build: nothing to compare
+                    out.hit(valid, "fresh_2d_refused", "", t);
                 }
             }
             if (out.kind >= wrong) return;
@@ -1042,10 +1045,11 @@ std::string run_verbose(const Script& s) {
     limits.verbose = true;
     Outcome o;
     std::cout << "label " << s.label << "\nbox " << s.sides[0] << " " << s.sides[1] << " " << s.sides[2] << " variant "
-              << s.variant << " n " << s.particles() << " calls " << s.ops.size() << std::endl;
+              << s.variant << " n " << s.particles() << " calls " << s.ops.size() << '\n'
+              << std::flush;
     run_script(s, o, limits);
-    std::cout << "outcome " << o.signature << "\ndetail " << o.detail << "\ncalls " << o.calls << " op " << o.op
-              << std::endl;
+    std::cout << "outcome " << o.signature << "\ndetail " << o.detail << "\ncalls " << o.calls << " op " << o.op << '\n'
+              << std::flush;
     return o.signature;
 }
 
@@ -1147,7 +1151,8 @@ Script shrink(const Script& start, const std::string& program, const std::string
     for (int pass = 0; pass < 6; ++pass) {
         const bool a = drop_calls(), b = drop_particles();
         std::cout << "pass " << pass << ": n " << s.particles() << " calls " << s.ops.size() << " after " << runs
-                  << " runs" << std::endl;
+                  << " runs" << '\n'
+                  << std::flush;
         if (!a && !b) break;
     }
     return s;
@@ -1179,7 +1184,7 @@ void smoke(Check& c, const std::string& directory, double seconds, bool with_kno
     for (const std::string& name : names) {
         const std::string path = directory + "/" + name, known = header_of(path);
         if (!known.empty() && !with_known) {
-            std::cout << "skipped, known: " << name << " " << known << std::endl;
+            std::cout << "skipped, known: " << name << " " << known << '\n' << std::flush;
             continue;
         }
         Outcome o;
@@ -1215,7 +1220,7 @@ void smoke(Check& c, const std::string& directory, double seconds, bool with_kno
     }
     std::cout << cases << " seeds, " << skipped << " skipped (#29, #32):";
     for (int k = 0; k < classes; ++k) std::cout << " " << class_name[k] << "=" << count[k];
-    std::cout << std::endl;
+    std::cout << '\n' << std::flush;
 }
 
 std::string option(int argc, char** argv, const std::string& name, const std::string& otherwise) {
@@ -1233,7 +1238,7 @@ int main(int argc, char** argv) {
     if (mode == "run") {
         const std::string results = option(argc, argv, "results", "");
         if (results.empty()) {
-            std::cerr << "run needs --results=FILE" << std::endl;
+            std::cerr << "run needs --results=FILE" << '\n' << std::flush;
             return 2;
         }
         return long_run(std::stoll(option(argc, argv, "first", "1")), std::stoll(option(argc, argv, "count", "1000")),
@@ -1256,14 +1261,15 @@ int main(int argc, char** argv) {
             what.find_first_not_of("0123456789") == std::string::npos ? make_script(std::stoull(what)) : load(what);
         const std::string scratch = out + ".try";
         const std::string signature = signature_in_child(self, s, scratch, timeout);
-        std::cout << "seed or file " << what << ": " << signature << std::endl;
+        std::cout << "seed or file " << what << ": " << signature << '\n' << std::flush;
         if (signature == "exact" || signature.rfind("refused", 0) == 0) return 0;
         s = shrink(s, self, scratch, signature, timeout);
         s.label += " (min of " + what + ", " + signature + ")";
         save(s, out);
         std::remove(scratch.c_str());
         std::cout << "minimal: n " << s.particles() << " calls " << s.ops.size() << " " << signature << " -> " << out
-                  << std::endl;
+                  << '\n'
+                  << std::flush;
         return 0;
     }
     Kokkos::ScopeGuard guard;
@@ -1273,7 +1279,8 @@ int main(int argc, char** argv) {
             Outcome o;
             std::string label;
             run_low(std::stoull(argv[2]), o, label, true);
-            std::cout << "label " << label << "\noutcome " << o.signature << "\ndetail " << o.detail << std::endl;
+            std::cout << "label " << label << "\noutcome " << o.signature << "\ndetail " << o.detail << '\n'
+                      << std::flush;
             return 0;
         }
         const Script s = mode == "one" ? make_script(std::stoull(argv[2])) : load(argv[2]);

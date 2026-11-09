@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
         // The 2D pieces of stage 0: the 2D cell list sorts by tile and Morton key (against a host sort),
         // and tet_mesh::cells in 2D sums a square lattice's faces to cells of area h^2 and centroid 0
         // (pyramid 1/4, centroid 2/3).
-        constexpr int m = 24, n = m * m;
+        constexpr int m = 32, n = m * m;  // a power of two: on the snapping grid, as Mesh gives cells() its positions
         const exact_predicates::BoxN<2> box(2.0, 1.0);
         Kokkos::View<double* [2], Memory> x("x2", n);
         auto hx = Kokkos::create_mirror_view(x);
