@@ -26,6 +26,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 | F | Execution: thread per cell against warp or block per cell (ours: warp), buckets by last step's cell size, spatial reordering, face-centric against cell-centric output | speed | one variable at a time on the same inputs | open |
 | T5 | Autotuning of launch bounds, warps per cell, pool sizes, batch sizes and precision thresholds (Kernel Tuner, Optuna or our own), with correctness as a hard constraint (R5) and held-out inputs | speed | a harness over two or three knobs first | open |
 | D | No clipping: build the start as a Delaunay triangulation directly (a GPU star or walking method, a fresh look at DeWall), then take the Voronoi faces from it; compare all outputs the hydro needs | faster start; the start is our slowest path (11.7 M cells/s at 256³) | the start's phase costs, then a prototype on one input | research |
+| R16 | Reusable topology templates: cache common connectivity patterns of cells and their evaluation order, with generated kernels for the frequent ones | less branching in the clip kernel | topology signatures on jittered and clustered input: how few templates cover how many cells | research |
 
 ## Speed of the moving step (repair)
 
@@ -37,6 +38,11 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 | R1 | Repair driven by a queue of invalidated relationships, against today's rounds over lists | fewer launches, less duplicate work | today's step has 66 launches and 42 fences; measure what a queue saves | open |
 | #34 | Re-sort cells, tetrahedra and faces when memory order has decayed | up to 2x on long smooth runs | sort cost against the measured halving of the step rate by step 500 | next |
 | — | Faces numbered by owner, an owner bit in list entries (from the profile) | about +5 % whole step, +8 % hydro | measured with a copy in the hydro already | next |
+| R13 | Voronoi geometry from the Delaunay dual: vertices are circumcentres, faces are the rings of circumcentres around Delaunay edges | no clipping in steps | done: steps already work this way; the open part is the start (D) | done |
+| S2 | Second and third rings of neighbours, built on demand from the tetrahedra (not stored), as candidates to rebuild stuck or fast-moving cells on the GPU by exact clipping | replaces most host fallbacks (#33) and full rebuilds; local clips for active cells | how often cells get stuck or move about a spacing, and how often a 2- or 3-ring list holds every new neighbour (`Arepo2_WD` needs depth 3) | open |
+| R12 | Predict new neighbours from relative positions and velocities before the step, to prefill candidate lists in hard regions | fewer repair rounds under strong deformation | share of new neighbours predicted, cost, list growth | open |
+| R11 | Hydro-aware prediction: trajectories with the acceleration from the hydro, x + τw + τ²a/2, to rank event checks | better event estimates in shear and compression | linear against accelerated prediction, with real flips as truth | research |
+| R15 | Memory order by Morton or Hilbert, or by the graph, possibly on predicted positions; cost of reordering counted | locality in repair and hydro (see #34) | static, periodic, predicted and graph orderings on a long run | next, with #34 |
 
 ## Memory
 
@@ -46,6 +52,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 | R3 | Store only what the hydro reads; compute face geometry on the fly where it is cheaper than storing it | memory, maybe speed | the reader list from R3 above | open |
 | R6 | Precision by condition: float where geometry is well conditioned, double or exact near uncertain decisions; topology is never approximate | memory and speed | error of float face moments against double across inputs, and the hydro error it causes | open |
 | — | 64-bit offsets past 325³ (ring pool) and 508³ (cell faces) | correctness at large sizes | needed before 384³ | open |
+| R14 | Fuse face geometry with the hydro's flux: compute a face's geometry and use it at once, instead of storing faces and reading them back | memory (face arrays are 197 B/cell each for area and centroid) and memory traffic | geometry write and read traffic in the profile, then a small fused face and flux kernel; MUSCL-Hancock needs cell gradients first, so full fusion may not be possible | research |
 
 ## Accuracy of geometry
 
@@ -70,6 +77,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 | T7b | Alive2 on chosen LLVM transformations of the predicates | confidence in compiled code | only if a miscompile is suspected | research |
 | O6 | Deterministic sums | reproducible bits | `update_cells()` sums in a fixed order | done |
 | R2 | Each shared face computed once, both cells reading it | consistency and speed | the owner rule | done |
+| R18 | Adversarial inputs by active learning: a model of which point sets make clipping slow, repair stall or geometry wrong, steering the fuzz generator | rare failures and a hard benchmark set | against the fuzz generators at the same budget | open |
 
 ## Between the libraries
 
@@ -79,6 +87,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 | J1, O3 | Mesh motion that avoids needless flips while keeping accuracy | fewer repairs | see luna-cpp's ideas | research |
 | J2, J3 | Regularisation aware of hydro error and of mesh cost | accuracy per GPU second | see luna-cpp's ideas | research |
 | J4, O2 | Differentiable moving mesh; space-time cells | adjoints, exact time-centring | see luna-cpp's ideas | research |
+| R19 | Recompute only what changed: track which geometry, reconstructions and fluxes a step invalidates | less work per step | the share of quantities unchanged between steps, as an upper bound | research |
 
 ## Benchmark discipline
 
