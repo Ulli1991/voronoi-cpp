@@ -1,36 +1,89 @@
-# Ideas: what we will try, and why
+# Ideas for a faster, leaner and more accurate mesh
 
-A review of research ideas for the mesh library, 2026-11-09, checked against how the code works today and what Raven has installed. Hydro ideas are in luna-cpp's `docs/ideas.md`.
+Every idea from the research review of 2026-11-08, checked on 2026-11-09 against the code and against what Raven has installed. Nothing is dismissed: each idea has what it could buy (speed, memory, accuracy, robustness), a first test that decides whether to go on, and a status. Hydro ideas are in luna-cpp's `docs/ideas.md`, with links where an idea spans both.
 
-## Already done
+Where we stand, for scale: one A100, double precision, 2.1M cells. Full rebuild 19.7 M cells/s on uniform random points and 39.4 on jittered ones; exact start 17.7; moving step with cell lists 154 M cells/s at 0.03 spacings. Memory 2319 B/cell with the hydro, so about 256³ fits on a 40 GB A100, against a target of 384³ (about 720 B/cell). We think both speed and memory are still well short of what the hardware allows.
 
-| Idea | Where it is |
-|---|---|
-| Filtered predicates with an exact fallback | `exact_predicates.hpp`: a double filter with an error bound decides first, then 128-bit orientation or 256-bit in-sphere on the 2³⁰ grid |
-| Shared faces computed once | the owner rule: each face is stored once, by the lower id, and both cells read it |
-| Differential testing against an exact reference | `oracle.hpp`, the special-case tests, and the fuzz driver's rational arbiter |
-| Deterministic sums | `update_cells()` sums in a fixed order, so runs give the same bits |
-| Repair instead of rebuild for moving points | the persistent tetrahedra and GPU flips, about 10 times the rebuild rate |
-| Geometry refreshed only where topology changed | only faces whose ring changed are walked again |
+Status: **done** (in the code), **next** (first in line), **open** (a real candidate, not started), **research** (bigger, uncertain).
 
-## Planned, in order
+## Measure first
 
-1. **GPU memory and race checking.** Run the CUDA tests under `compute-sanitizer` (memcheck, racecheck, synccheck; in the CUDA 13.0 module on Raven). Cheap, and the read at index -1 (#35) shows it is needed.
-2. **Metamorphic tests.** On the 2³⁰ grid these can be exact: translation by whole grid steps, axis swaps and 90° rotations, doubling the box, and permuting particle ids must give the same mesh, transformed. Cheap, and needs no reference.
-3. **Where clipping time goes.** A histogram of planes, vertices and time per cell, for jittered, uniform, clustered and halo input. This decides the next two items.
-4. **Does clipping order matter?** Clip the same candidates in random orders and measure the spread in work. If it is small, drop learned ordering. If it is large, try cheap scores first.
-5. **Bounds that skip a clip.** A directional test that proves a bisector cannot cut the current cell, as in Taveira et al. (2026). Aimed at clustered input, where we are slowest.
-6. **Split kernels by cell size.** A lean kernel for ordinary cells and a separate path for the large tail, if item 3 shows a tail that dominates.
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| A | Cost attribution per cell: candidates tested, planes kept, clips, vertices, topology edits, repair rounds, scratch size, register spills, bytes written; tails, not only means; Nsight Compute stalls and divergence | decides every speed item below | histograms on jittered, uniform, clustered, halo and anisotropic input | next |
+| R3 | The gap between what we store and what the hydro needs: neighbours, area vectors, face centroids, volumes, centroids, face motion | memory | list every array by B/cell and its reader (the memory profile has most of it, #28) | next |
+| R9 | Time to solution at fixed error as the final score, not cells/s | right decisions | already used in luna-cpp; apply to every mesh change that affects the hydro | done, keep |
 
-## Worth trying later
+## Speed of construction (rebuild and start)
 
-- **Autotuning** of launch bounds, warps per cell and pool sizes, scored on speed and on the exact checks together.
-- **Proving the filter's error bound** with Gappa. Today it is a hand bound, which the exact fallback backs up, so a proof adds confidence, not speed.
-- **SMT search (Z3) for counterexamples** to the reach rule (#31). Z3 installs with pip.
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| B | Candidate order: nearest first (ours), best-first with geometric bounds, directional support bounds, predicted cut strength; previous neighbours first so the cell shrinks early | fewer clips, mostly on clustered input | V3's spread test below | open |
+| V3 | Learned or tuned clipping order: offline orders, derivative-free tuning first, then differentiable ranking (NeuralSort, Blondel et al.), Enzyme on the scoring surrogate only | fewer clips | shuffle the same candidates, measure the spread in work; drop it if the spread is small | open |
+| R8 | Bounds that prove a bisector cannot cut the current cell: support function or directional box, cascaded before the exact clip, as in Taveira et al. 2026 | fewer clips, clustered input | microbenchmark: rejection rate, false positives, cost per test against a clip | next |
+| C | Cell representation: explicit vertices and edges (ours), plane-index triplets, compact fixed capacity, a hybrid for small and large cells; same plane sequence for all | speed, registers | replay recorded plane sequences through each representation | open |
+| O7, R7 | Kernel portfolio: a lean kernel for ordinary cells and a separate queue for the large tail; classifier cost included | speed on clustered input | needs A's tail histogram; then end-to-end time with dispatch | open |
+| F | Execution: thread per cell against warp or block per cell (ours: warp), buckets by last step's cell size, spatial reordering, face-centric against cell-centric output | speed | one variable at a time on the same inputs | open |
+| T5 | Autotuning of launch bounds, warps per cell, pool sizes, batch sizes and precision thresholds (Kernel Tuner, Optuna or our own), with correctness as a hard constraint (R5) and held-out inputs | speed | a harness over two or three knobs first | open |
+| D | No clipping: build the start as a Delaunay triangulation directly (a GPU star or walking method, a fresh look at DeWall), then take the Voronoi faces from it; compare all outputs the hydro needs | faster start; the start is our slowest path (11.7 M cells/s at 256³) | the start's phase costs, then a prototype on one input | research |
 
-## Not now, and why
+## Speed of the moving step (repair)
 
-- **Predicting flips with derivatives (Enzyme) or kinetic certificates.** The step's screening pass is not where the time goes; the repair, faces and cell lists are. For straight-line motion the in-sphere test is a polynomial in time, so exact event times need no AD. Revisit if screening becomes a cost.
-- **Replacing clipping by local Delaunay construction** ("local DeWall"). Steps already use a local Delaunay repair, and only the start clips. A 2026 paper by that name was not found.
-- **Herbie, Alive2, stochastic arithmetic.** The decisions are exact integer predicates, so float rewrites cannot change topology. Herbie also needs Racket, which Raven lacks.
-- **Space-time cells.** A research project of its own, for after the hydro needs it.
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| E | Three paths: geometry-only refresh where topology is unchanged, local repair, full rebuild; validation and launch costs counted | speed | how much of a step goes to tetrahedra that did not change; we already re-walk only faces whose ring changed | open |
+| V1 | Predict topology events: forward-mode derivative of the in-sphere test along the motion (Enzyme or by hand), time to the zero crossing; never a certificate, the exact test stays | could skip screening and refresh work on quiet tetrahedra | log predictions against real flips over many steps: recall, false positives, cost | open |
+| O1 | Certified kinetic events: for straight-line motion each in-sphere test is a polynomial in time; isolate its roots exactly on the grid and schedule work by event | the same as V1, with a certificate | cost of keeping all certificates against today's screening pass | research |
+| R1 | Repair driven by a queue of invalidated relationships, against today's rounds over lists | fewer launches, less duplicate work | today's step has 66 launches and 42 fences; measure what a queue saves | open |
+| #34 | Re-sort cells, tetrahedra and faces when memory order has decayed | up to 2x on long smooth runs | sort cost against the measured halving of the step rate by step 500 | next |
+| — | Faces numbered by owner, an owner bit in list entries (from the profile) | about +5 % whole step, +8 % hydro | measured with a copy in the hydro already | next |
+
+## Memory
+
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| #28 | Ranked savings from the memory profile: float faces (197 B/cell), `tet_centre` float or not stored (125 to 250), repair lists (112), tetrahedron spare 1/32 (56), one position array (56), ring pool (42), idle cell list (41), 16-bit ring lengths (25); lower start peak | 384³ on one A100 | apply in that order, measuring B/cell and speed at each | next |
+| R3 | Store only what the hydro reads; compute face geometry on the fly where it is cheaper than storing it | memory, maybe speed | the reader list from R3 above | open |
+| R6 | Precision by condition: float where geometry is well conditioned, double or exact near uncertain decisions; topology is never approximate | memory and speed | error of float face moments against double across inputs, and the hydro error it causes | open |
+| — | 64-bit offsets past 325³ (ring pool) and 508³ (cell faces) | correctness at large sizes | needed before 384³ | open |
+
+## Accuracy of geometry
+
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| #29, #30 | Fix the silent volume errors: geometry from exact integer differences times the step, and the `clip()` loss | correct volumes | in progress on branch mesh-fixes | next |
+| T3 | Herbie on circumcentres, plane intersections, face areas and moments | accuracy of geometry in double, relevant to #29 | Herbie needs Racket, which installs in user space; one expression against an mpmath reference | open |
+| O5 | Stochastic arithmetic (Verificarlo, CADNA) to find where geometry is sensitive to rounding | finds the next #29 | a run of the fuzz cases under random rounding | open |
+| V2, V8 | Derivatives of vertices, face moments and volumes with respect to positions on a fixed topology; checked against hand derivatives and finite differences | sensitivity and checks, and the hydro's GCL test | Enzyme on the host build (see luna-cpp's ideas) | open |
+| V7 | Margins of the predicates near zero, to see how often the filter falls to the exact path | speed of predicates | count filter failures per input | open |
+
+## Correctness tools
+
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| T7 | `compute-sanitizer` memcheck, racecheck, initcheck and synccheck on the CUDA tests (in the CUDA 13.0 module) | finds GPU races and bad reads such as #35 | run it on the existing ctests | next |
+| T1 | Metamorphic tests, exact on the 2³⁰ grid: shift by whole grid steps, axis swaps and 90° rotations, doubling the box, permuted ids | robustness without a reference | add to the special-case tests | next |
+| T6 | Differential testing against an independent exact reference | robustness | `oracle.hpp`, special-case tests, the fuzz driver's rational arbiter | done, extend |
+| T2 | Filtered predicates with an exact fallback | robust and fast | a double filter, then 128-bit or 256-bit integers | done |
+| T2b | Prove the filter's error bound with Gappa | confidence in the fast path | one predicate's bound | open |
+| T4 | SMT search (Z3) for counterexamples on small geometric models: the reach rule (#31), ordering and neighbour sufficiency | finds edge cases, as regression fixtures | Z3 installs with pip; the reach rule first | open |
+| T7b | Alive2 on chosen LLVM transformations of the predicates | confidence in compiled code | only if a miscompile is suspected | research |
+| O6 | Deterministic sums | reproducible bits | `update_cells()` sums in a fixed order | done |
+| R2 | Each shared face computed once, both cells reading it | consistency and speed | the owner rule | done |
+
+## Between the libraries
+
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| O8 | A predictive interface: geometry, fixed-topology derivatives, event estimates and validity flags for the hydro | better time-centring and mesh motion | design only, after V1 and V2 show value | research |
+| J1, O3 | Mesh motion that avoids needless flips while keeping accuracy | fewer repairs | see luna-cpp's ideas | research |
+| J2, J3 | Regularisation aware of hydro error and of mesh cost | accuracy per GPU second | see luna-cpp's ideas | research |
+| J4, O2 | Differentiable moving mesh; space-time cells | adjoints, exact time-centring | see luna-cpp's ideas | research |
+
+## Benchmark discipline
+
+For every speed claim: GPU and clock, compiler, precision, dimension, boundaries, inputs, number of points, mean and tail neighbour counts, which outputs are produced, correctness checks passed, and what is timed. End-to-end hydro time to a target error decides.
+
+## Sources to check
+
+voro++; Taveira et al. 2026 (arXiv 2605.06408); gDel3D; Ray et al. 2018; ParVoro++; kinetic Delaunay and certificate frameworks; differentiable Voronoi (arXiv 2312.16192); NeuralSort and Blondel et al.; Enzyme (no Kokkos support yet, CUDA experimental); Herbie and FPBench; Gappa; Z3; Alive2; NVIDIA Compute Sanitizer. "Local DeWall (2026)" was not found in a first search.
