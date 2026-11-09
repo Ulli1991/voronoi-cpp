@@ -28,7 +28,7 @@ voronoi_program(mesh2d_bench src/bench/mesh2d_bench.cpp)
 
 include(CTest)
 if(BUILD_TESTING)
-    foreach(test exact_predicates clipping mesh start repair voronoi_mesh mesh1d mesh2d distortion)
+    foreach(test exact_predicates clipping mesh start repair voronoi_mesh mesh1d mesh2d distortion metamorphic)
         voronoi_program(${test}_test src/test/${test}_test.cpp)
         add_test(NAME ${test} COMMAND ${test}_test)
         set_tests_properties(${test} PROPERTIES TIMEOUT 600)
