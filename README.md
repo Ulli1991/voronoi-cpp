@@ -64,7 +64,7 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 
 What a caller can rely on:
 
-- Particles are the caller's indices. Ties between cospherical particles are broken by index (symbolic perturbation), at the start and in every repair. A permuted input gives the permuted mesh.
+- Particles are the caller's indices. Ties between cospherical particles are broken by index (symbolic perturbation), at the start and in every repair. A permuted input gives the permuted mesh, except that on exact ties faces of zero area can differ.
 - Positions are snapped to the grid of the exact predicates, 2³⁰ steps across the longest side, the same step on every axis; topology and geometry both come from the snapped positions. A side that is not a whole number of steps is rounded to one (relative change below 2⁻³¹ longest / side; none for sides in power-of-two ratios such as 2 x 2 x 1/16). `sides()` gives the box used; `box()` is a cube's side.
 - Every cell must be certified within one periodic image: its radius must stay below about 3/16 of the shortest side (in practice about 8 or more particles across it; a slab of 16 cells is fine). Otherwise `update()` throws, saying so. It can throw below 3/16 too ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `update()` repairs the mesh; the first call, or a change of n, builds it. If the device repair leaves stuck triangles, it finishes on the host or rebuilds on the device, whichever is cheaper (`voronoi::Fallback`).
@@ -167,7 +167,7 @@ Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak
 
 ## Tests
 
-Eleven CTest programs, 20 tests, specify the library. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
+Twelve CTest programs, 21 tests, specify the library. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
 |---|---|
@@ -182,6 +182,7 @@ Eleven CTest programs, 20 tests, specify the library. Oracles, run times and wha
 | `mesh2d` | the 2D mesh against independent oracles; a repaired mesh equals a fresh build bit for bit; steps of order the box |
 | `mesh1d` | the 1D line: sorting, walls, insert and remove |
 | `mesh_fuzz` | random point sets, boxes and motions against the oracle, plus every saved failing case in `src/test/fuzz_cases/`; ctest runs a smoke set, `scripts/mesh_fuzz_cpu.sh` and `scripts/mesh_fuzz_gpudev.sh` run campaigns |
+| `metamorphic` | exact transformations of the input give the transformed mesh: shifts by whole grid steps, axis swaps and rotations, permuted ids, a doubled box; 3D, 2D, 1D. Geometry agrees to rounding (about 6e-14 of a spacing); a doubled box is exact |
 
 ```sh
 ctest --test-dir build-cuda --output-on-failure         # A100: ~5 minutes
@@ -245,7 +246,7 @@ Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, th
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
 - `src/test/`: the tests and their support code; `mesh_cases_test` has its groups in `src/test/mesh_cases/` (one file per group, shared helpers in `common.hpp`). `src/bench/`: `voronoi_bench`, `mesh2d_bench`.
 - Used by luna-cpp, keep: `voronoi_library`, `src/test/check.hpp`, `src/test/support.hpp` (and what it includes), `src/bench/device_memory.hpp`.
-- `scripts/`: lint and A100 benchmark and test scripts.
+- `scripts/`: lint and A100 benchmark, test and `compute-sanitizer` (`sanitize_a100.sh <build> <memcheck|racecheck|initcheck|synccheck>`) scripts.
 - `research_notes/`, `reports/`: status notes and surveys.
 
 CI (`.github/workflows/checks.yml`) checks the comment rules (a header per file, a docstring on every multi-line library definition, comment runs of 3 lines at most) and the formatting of changed lines (`.clang-format`, `scripts/check_format.py`), runs clang-tidy and the CPU tests in ordinary and sanitizer builds against a pinned Serial Kokkos 5.0.2. It does not run GPU jobs.
