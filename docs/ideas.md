@@ -96,3 +96,15 @@ For every speed claim: GPU and clock, compiler, precision, dimension, boundaries
 ## Sources to check
 
 voro++; Taveira et al. 2026 (arXiv 2605.06408); gDel3D; Ray et al. 2018; ParVoro++; kinetic Delaunay and certificate frameworks; differentiable Voronoi (arXiv 2312.16192); NeuralSort and Blondel et al.; Enzyme (no Kokkos support yet, CUDA experimental); Herbie and FPBench; Gappa; Z3; Alive2; NVIDIA Compute Sanitizer. "Local DeWall (2026)" was not found in a first search.
+
+## From Doug Rennehan's plume (read at eb19338, 2026-11-06)
+
+Ideas from plume's local Voronoi cells, to test on our A100. plume was tuned only on a Quadro RTX 6000 (Turing, weak FP64), so none of these is a known gain here.
+
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| P1 | Per-vertex balls as the stop test: a particle can cut only if it lies in the ball of some current vertex; open a grid cell or tree node only if it meets one of those balls (plume `daa62a9`) | fewer candidates and clips than our single 2R sphere measured from the home grid cell, mostly on clustered input | count candidates and clips per cell with both tests on the same inputs; then rebuild rate | next, with R8 |
+| P2 | Complete a cell its candidates cannot certify with a second kernel at larger capacities, walking outward, instead of refusing or going to the host (plume `4c259fb`, `daa62a9`) | robustness: replaces most reach refusals (#31) and host fallbacks (#33), with S2 | how many cells are refused or sent to the host today, and the cost of completing them on the device | open |
+| P3 | Faces taken from one shared pool, exactly a cell's count per cell, by one atomic add; grow 1.25 times and repeat when short (plume `79dbcd9`, 1.66 to 1.0 kB a row there) | memory, with #28 | our pools against exact-count claiming: B/cell and speed | open |
+| P4 | Reflecting walls by mirror ghosts: a cell beside a wall closes on the bisector with its own mirror image (plume `77d0d05`) | walls in 2D and 3D, which we do not have | a lattice beside a wall: every cell's volume equals the interior's | open |
+| P5 | Merge face pairs found beyond a cell's list into both cells' lists, sorted and unique (plume `6f2c8d4`) | symmetric neighbour lists in the local mode (`clip()`) | only if the local mode needs lists | research |
