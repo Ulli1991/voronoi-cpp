@@ -2,7 +2,7 @@
 
 A C++ library that builds exact Voronoi meshes of moving particles on GPUs. You hand it particle positions in a periodic box and get back the faces, cell volumes and centroids a finite-volume code needs. When the particles move, it repairs the mesh instead of rebuilding it, and the result stays exact. It is written in Kokkos: CUDA (validated on an A100 40 GB), plus OpenMP and Serial builds that run the same code for checks. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
 
-The topology is exact. The cell geometry is not yet right in every case: two open bugs give wrong volumes with no error, see [Limitations](#limitations-and-open-items).
+The topology is exact, and so is the geometry up to rounding in every box tested. A few fuzz cases in boxes whose grid step is not a power of two are still wrong ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); see [Limitations](#limitations-and-open-items).
 
 The finite-volume hydro is a separate code, [luna-cpp](https://github.com/Ulli1991/luna-cpp), which takes only the mesh from here (as a submodule, through `voronoi_library` and `voronoi::Mesh`); this repository contains no solver.
 
@@ -69,7 +69,7 @@ What a caller can rely on:
 - Every cell must be certified within one periodic image: its radius must stay below about 3/16 of the shortest side (in practice about 8 or more particles across it; a slab of 16 cells is fine). Otherwise `update()` throws, saying so. It can throw below 3/16 too ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `update()` repairs the mesh; the first call, or a change of n, builds it. If the device repair leaves stuck triangles, it finishes on the host or rebuilds on the device, whichever is cheaper (`voronoi::Fallback`).
 - Faces are stored once, by the lower id, so a flux applied with opposite signs conserves exactly. Cell volumes after `update()` are summed with atomics. `update_cells()` sums volumes and centroids over each cell's faces in a fixed order, giving the same bits every run, and builds the per-cell face lists for gathers.
-- `clip(x, cells)` rebuilds the listed cells by clipping, independent of the persistent mesh, and returns each face once (a local mode for substeps of active cells). It can return a wrong volume ([#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)).
+- `clip(x, cells)` rebuilds the listed cells by clipping, independent of the persistent mesh, and returns each face once (a local mode for substeps of active cells). It builds exact cells.
 - `rebuild(x)` builds the exact mesh from scratch. `scratch(bytes)` lends device memory between updates.
 - The dimension is a template parameter, `voronoi::Mesh<D, Exec>` with `exact_predicates::BoxN<D>`; `Box` is `BoxN<3>` (research_notes/dimension_design_2026-11-02.md).
 - `voronoi::Mesh<2>` has the contract of `Mesh<3>` on triangles (`voronoi_mesh_2d.hpp`), with two differences. `volume()` is current after `update_cells()` only. There are always exactly 3n faces, numbered for good: a flip gives its face new particles, and a face can have zero length on a lattice. A repaired mesh equals a fresh build bit for bit.
@@ -200,13 +200,10 @@ voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--de
 
 Open bugs, found by fuzzing the mesh against an oracle that shares no code with it:
 
-- **Wrong cell volumes with no error, up to 9.4 %,** on valid input in boxes whose grid step is not a power of two ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)). The topology is right and the volumes still sum to the box, so the check in `update()` does not catch it. How common it is on realistic input is not known.
-- **`clip()` returns a volume 5 % low with status ok,** in a unit cube ([#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)). The cause is not known. The persistent mesh was exact in those runs.
+- **24 of about 116,000 fuzz cases are still wrong,** all in boxes whose grid step is not a power of two, after the fix of [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29) removed 398 of 423 ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)). The cause is not known.
 - **Non-finite or negative geometry with no error** at extreme box sizes ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)). The fuzz drew sides from 1e-140 to 1e141; the usable range is not measured or stated yet.
 - Valid input can be refused below the stated 3/16 limit, with largest radii from 0.112 of the shortest side ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `Fallback::host` has no bound on its work: minutes on hundreds of particles ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
-- `Mesh<2>::update` can hang: the 2D repair flips the same entries forever and never returns ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)).
-- `tet_flips::rebuild` reads particle positions at index -1; the effect on meshes is not known ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)).
 - A periodic `Mesh<1>` with all particles on one grid step gives volumes summing to 0, silently ([#37](https://github.com/Ulli1991/voronoi-cpp/issues/37)).
 
 Other limits:
@@ -220,7 +217,7 @@ Other limits:
 - A cell may hold up to 16000 planes and 32000 vertices during its exact clipping; past 128 planes or 256 vertices it is built on the host. Past those limits `update()` refuses, naming them. Particles around a void cost O(k²) at the start: about 1 s at k = 2000, 2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
 - A step of order the box (random kicks of 0.6 box) can end the device repair with nothing stuck on a mesh that covers the torus many times. `update()` sees it in the total volume of the cells, off the box by more than 1e-6, and rebuilds (`Report::overlapped`). That check is on the volume alone: a wrong mesh whose volumes still add up to the box within 1e-6 would pass it.
 - `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries (10 at 2.1M cells, none below 200000); the rest is a rebuild, which needs the memory of a start.
-- Geometry rounds with the positions: with a power-of-two step, the relative volume of a cell h grid steps wide is good to about 4e-8 / h (other steps: [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)). It is exact down to clumps of 512 steps (error 8e-10), and particles one grid step apart are still exact.
+- Geometry rounds with the positions: the relative volume of a cell h grid steps wide is good to about 4e-8 / h. Position differences are taken in whole grid steps, so a box whose step is not a power of two is as good as any other (fixed in [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)); the 1 to 3.5 % it costs moving steps buys that. It is exact down to clumps of 512 steps (error 8e-10), and particles one grid step apart are still exact.
 - The device repair breaks down near one spacing of motion per step (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU), repair limited to active regions, and refinement and derefinement are not implemented yet; `update()` takes an `active` list for later.
 - Periodic boxes only (any three sides; see the certification limit above for thin slabs). Only 1D has walls.
@@ -229,9 +226,9 @@ Other limits:
 
 ## Roadmap
 
-Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the refusals above.
+Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the refusals above, a mesh fuzz driver, and the fixes of the silent volume errors ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), the 2D hang ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)) and a bad read in the host fallback ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)).
 
-1. Fix the wrong volumes ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)) and the 2D hang ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)), then state the box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)), the reach limit ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)) and a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
+1. Find the cause of the remaining fuzz failures ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)), then state the box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)), the reach limit ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)) and a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
 2. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
 3. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
 4. Mesh speed: a re-sort when the order has decayed ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)), faces numbered by owner, then repair rounds and the fixed cost per step.
