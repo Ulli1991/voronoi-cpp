@@ -118,7 +118,8 @@ Stats finish(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
                     if (local.emplace(a, static_cast<int>(p.size())).second) {
                         p.push_back(offset(origin, a));
                         id.push_back(a);
-                        fits = fits && std::abs(p.back()[0]) < std::min(far / 2, px / 4) && std::abs(p.back()[1]) < std::min(far / 2, py / 4);
+                        fits = fits && std::abs(p.back()[0]) < std::min(far / 2, px / 4) &&
+                               std::abs(p.back()[1]) < std::min(far / 2, py / 4);
                     }
                     if (!in_patch[u])
                         fits = rim.insert({{a, b}, {u, links(t, 3 + k)}}).second && fits;

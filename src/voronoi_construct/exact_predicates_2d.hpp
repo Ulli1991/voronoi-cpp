@@ -18,7 +18,8 @@ KOKKOS_INLINE_FUNCTION int sign_of(i64 v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 // Wider ones have no meaning here, as no images are stored: their area depends on the corner they are read from.
 KOKKOS_INLINE_FUNCTION bool one_image(const Offset2& a, const Offset2& b, const i64* period) {
     for (int k = 0; k < 2; ++k) {
-        if (2 * Kokkos::abs(a[k]) >= period[k] || 2 * Kokkos::abs(b[k]) >= period[k] || 2 * Kokkos::abs(b[k] - a[k]) >= period[k])
+        if (2 * Kokkos::abs(a[k]) >= period[k] || 2 * Kokkos::abs(b[k]) >= period[k] ||
+            2 * Kokkos::abs(b[k] - a[k]) >= period[k])
             return false;
     }
     return true;

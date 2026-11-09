@@ -93,7 +93,8 @@ struct Op {
 };
 
 inline const char* op_name(int kind) {
-    static const char* const names[Op::kinds] = {"update", "rebuild", "cells", "clip", "fallback", "rounds", "scribble", "timed"};
+    static const char* const names[Op::kinds] = {"update",   "rebuild", "cells",    "clip",
+                                                 "fallback", "rounds",  "scribble", "timed"};
     return names[kind];
 }
 
@@ -194,11 +195,10 @@ struct Profile {
 };
 inline Profile profile_of(std::uint64_t seed) {
     static const Profile profiles[] = {
-        {"small", 8, 600, 2000, 6},      // the long CPU runs
-        {"api", 16, 600, 1000, 16},      // long call sequences
-        {"medium", 32, 2000, 32768, 4},  // long CPU runs and the A100
-        {"large", 1000000, 32768, 262144, 3},
-        {"huge", 1000000, 1000000, 4000000, 2},  // the A100
+        {"small", 8, 600, 2000, 6},                                                    // the long CPU runs
+        {"api", 16, 600, 1000, 16},                                                    // long call sequences
+        {"medium", 32, 2000, 32768, 4},                                                // long CPU runs and the A100
+        {"large", 1000000, 32768, 262144, 3}, {"huge", 1000000, 1000000, 4000000, 2},  // the A100
     };
     return profiles[std::min<std::uint64_t>(seed / 1000000000000ULL, 4)];
 }
@@ -211,12 +211,18 @@ inline double frac(double x) { return x - std::floor(x); }
 inline const std::vector<Point>& lattice_basis(int kind) {
     static const double q = 0.25;
     static const std::vector<Point> bases[] = {
-        {{0, 0, 0}},                                                                 // sc
-        {{0, 0, 0}, {0.5, 0.5, 0.5}},                                                // bcc
-        {{0, 0, 0}, {0.5, 0.5, 0}, {0.5, 0, 0.5}, {0, 0.5, 0.5}},                    // fcc
-        {{0, 0, 0}, {0.5, 0.5, 0}, {0.5, 1.0 / 6, 0.5}, {0, 2.0 / 3, 0.5}},          // hcp, orthorhombic cell
-        {{0, 0, 0}, {0.5, 0.5, 0}, {0.5, 0, 0.5}, {0, 0.5, 0.5},                     // diamond
-         {q, q, q}, {3 * q, 3 * q, q}, {3 * q, q, 3 * q}, {q, 3 * q, 3 * q}},
+        {{0, 0, 0}},                                                         // sc
+        {{0, 0, 0}, {0.5, 0.5, 0.5}},                                        // bcc
+        {{0, 0, 0}, {0.5, 0.5, 0}, {0.5, 0, 0.5}, {0, 0.5, 0.5}},            // fcc
+        {{0, 0, 0}, {0.5, 0.5, 0}, {0.5, 1.0 / 6, 0.5}, {0, 2.0 / 3, 0.5}},  // hcp, orthorhombic cell
+        {{0, 0, 0},
+         {0.5, 0.5, 0},
+         {0.5, 0, 0.5},
+         {0, 0.5, 0.5},  // diamond
+         {q, q, q},
+         {3 * q, 3 * q, q},
+         {3 * q, q, 3 * q},
+         {q, 3 * q, 3 * q}},
     };
     return bases[kind];
 }
@@ -253,7 +259,8 @@ inline Points quasi(Rng& rng, int n) {
     const double a[3] = {1 / g, 1 / (g * g), 1 / (g * g * g)};
     const double offset = rng.unit();
     Points p;
-    for (int i = 0; i < n; ++i) p.push_back({frac(offset + a[0] * i), frac(offset + a[1] * i), frac(offset + a[2] * i)});
+    for (int i = 0; i < n; ++i)
+        p.push_back({frac(offset + a[0] * i), frac(offset + a[1] * i), frac(offset + a[2] * i)});
     return p;
 }
 
@@ -264,7 +271,9 @@ inline Points poisson_disc(Rng& rng, int n) {
     const int side = std::max(1, static_cast<int>(1 / r));
     std::vector<std::vector<int>> bucket(side * side * side);
     Points p;
-    auto at = [&](int i, int j, int k) -> std::vector<int>& { return bucket[(((i + side) % side) * side + (j + side) % side) * side + (k + side) % side]; };
+    auto at = [&](int i, int j, int k) -> std::vector<int>& {
+        return bucket[(((i + side) % side) * side + (j + side) % side) * side + (k + side) % side];
+    };
     for (int tries = 30 * n; tries > 0 && static_cast<int>(p.size()) < n; --tries) {
         const Point c{rng.unit(), rng.unit(), rng.unit()};
         const int b[3] = {static_cast<int>(c[0] * side), static_cast<int>(c[1] * side), static_cast<int>(c[2] * side)};
@@ -323,10 +332,16 @@ inline Points polyhedron(int kind) {
                 for (const int w : {-1, 1}) p.push_back({u * a, v * b, w * c});
     };
     switch (kind) {
-        case 0: p = {{1, 1, 1}, {1, -1, -1}, {-1, 1, -1}, {-1, -1, 1}}; break;      // tetrahedron
-        case 1: signs(1, 1, 1); break;                                              // cube
-        case 2: p = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}; break;  // octahedron
-        case 3:                                                                     // icosahedron
+        case 0:
+            p = {{1, 1, 1}, {1, -1, -1}, {-1, 1, -1}, {-1, -1, 1}};
+            break;  // tetrahedron
+        case 1:
+            signs(1, 1, 1);
+            break;  // cube
+        case 2:
+            p = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            break;  // octahedron
+        case 3:     // icosahedron
             for (const int u : {-1, 1})
                 for (const int v : {-1, 1}) {
                     p.push_back({0, double(u), v * g});
@@ -334,7 +349,7 @@ inline Points polyhedron(int kind) {
                     p.push_back({u * g, 0, double(v)});
                 }
             break;
-        case 4:                                                                     // dodecahedron
+        case 4:  // dodecahedron
             signs(1, 1, 1);
             for (const int u : {-1, 1})
                 for (const int v : {-1, 1}) {
@@ -343,7 +358,7 @@ inline Points polyhedron(int kind) {
                     p.push_back({u * g, 0, v / g});
                 }
             break;
-        default:                                                                    // cuboctahedron
+        default:  // cuboctahedron
             for (const int u : {-1, 1})
                 for (const int v : {-1, 1}) {
                     p.push_back({double(u), double(v), 0});
@@ -363,7 +378,8 @@ inline Points polyhedron(int kind) {
 inline std::vector<std::array<long long, 3>> sphere_points(Rng& rng, int want) {
     std::vector<std::array<long long, 3>> best;
     long long r2 = std::max<long long>(3, static_cast<long long>(want) * want / 8 + rng.below(50));
-    for (int tries = 0; tries < 200 && static_cast<int>(best.size()) < want; ++tries, r2 += 1 + r2 / 20 + rng.below(5)) {
+    for (int tries = 0; tries < 200 && static_cast<int>(best.size()) < want;
+         ++tries, r2 += 1 + r2 / 20 + rng.below(5)) {
         // 7 mod 8 and multiples of 4 have few or no points.
         if ((r2 & 3) == 0 || r2 % 8 == 7) continue;
         std::vector<std::array<long long, 3>> here;
@@ -441,7 +457,8 @@ inline Points cloud(Rng& rng, const char* kind, int n, double size) {
 inline void separate(Points& x, const Box& box, Rng& rng) {
     std::vector<std::pair<std::array<int, 3>, int>> order(x.size());
     auto at = [&](const Point& q) {
-        return std::array<int, 3>{exact_predicates::snap(q[0], box, 0), exact_predicates::snap(q[1], box, 1), exact_predicates::snap(q[2], box, 2)};
+        return std::array<int, 3>{exact_predicates::snap(q[0], box, 0), exact_predicates::snap(q[1], box, 1),
+                                  exact_predicates::snap(q[2], box, 2)};
     };
     for (std::size_t i = 0; i < x.size(); ++i) order[i] = {at(x[i]), static_cast<int>(i)};
     std::sort(order.begin(), order.end());
@@ -504,7 +521,8 @@ inline Points make_points(Rng& rng, const Box& box, const Profile& profile, std:
     }
     // Jitter from one grid step to one spacing, or none.
     if (rng.chance(0.6) && !p.empty()) {
-        const double amount = rng.chance(0.2) ? rng.range(1, 4) * box.step / longest : rng.log_between(1e-9, 1.0) * spacing;
+        const double amount =
+            rng.chance(0.2) ? rng.range(1, 4) * box.step / longest : rng.log_between(1e-9, 1.0) * spacing;
         for (Point& q : p)
             for (int a = 0; a < 3; ++a) q[a] = frac(q[a] + rng.between(-amount, amount) / aspect[a]);
         label += "+jit";
@@ -530,7 +548,8 @@ inline Points make_points(Rng& rng, const Box& box, const Profile& profile, std:
                 const double size = rng.chance(0.5) ? 0.5 : rng.log_between(1e-4, 0.5);
                 const Point c{rng.unit(), rng.unit(), rng.unit()};
                 for (int i = 0; i < k; ++i)
-                    p.push_back({frac(c[0] + size * rng.unit()), frac(c[1] + size * rng.unit()), frac(c[2] + size * rng.unit())});
+                    p.push_back({frac(c[0] + size * rng.unit()), frac(c[1] + size * rng.unit()),
+                                 frac(c[2] + size * rng.unit())});
                 label += "+step";
                 break;
             }
@@ -589,7 +608,8 @@ inline Points make_points(Rng& rng, const Box& box, const Profile& profile, std:
     for (std::size_t i = 0; i < p.size(); ++i)
         for (int a = 0; a < 3; ++a) {
             const double v = p[i][a] * box.side[a];
-            x[i][a] = on_grid ? static_cast<double>(exact_predicates::snap(v, box, a)) * box.step : std::min(v, std::nextafter(box.side[a], 0.0));
+            x[i][a] = on_grid ? static_cast<double>(exact_predicates::snap(v, box, a)) * box.step
+                              : std::min(v, std::nextafter(box.side[a], 0.0));
         }
 
     // Parts in whole grid steps: cospherical and coplanar exactly, near-duplicates, duplicates.
@@ -610,11 +630,12 @@ inline Points make_points(Rng& rng, const Box& box, const Profile& profile, std:
         const auto o = steps_of(c);
         switch (rng.below(5)) {
             case 0: {  // exact cospherical, 5 to 2000 points
-        const int want = rng.chance(0.95) ? rng.range(5, 200) : rng.range(200, 2000);
-        const auto s = sphere_points(rng, want);
+                const int want = rng.chance(0.95) ? rng.range(5, 200) : rng.range(200, 2000);
+                const auto s = sphere_points(rng, want);
                 long long r = 1;
                 for (const auto& q : s) r = std::max({r, std::llabs(q[0]), std::llabs(q[1]), std::llabs(q[2])});
-                const double limit = 0.45 * static_cast<double>(std::min({box.period[0], box.period[1], box.period[2]})) / r;
+                const double limit =
+                    0.45 * static_cast<double>(std::min({box.period[0], box.period[1], box.period[2]})) / r;
                 const long long scale = std::max(1LL, static_cast<long long>(rng.log_between(1, std::max(1.5, limit))));
                 for (const auto& q : s) add_steps(o[0] + scale * q[0], o[1] + scale * q[1], o[2] + scale * q[2]);
                 label += "+cosphere";
@@ -623,7 +644,8 @@ inline Points make_points(Rng& rng, const Box& box, const Profile& profile, std:
             }
             case 1: {  // exact coplanar, 5 to 2000 points in a plane through o
                 const int want = rng.chance(0.8) ? rng.range(5, 200) : rng.range(200, 2000);
-                long long u[3] = {rng.range(-3, 3), rng.range(-3, 3), rng.range(-3, 3)}, v[3] = {rng.range(-3, 3), rng.range(-3, 3), rng.range(-3, 3)};
+                long long u[3] = {rng.range(-3, 3), rng.range(-3, 3), rng.range(-3, 3)},
+                          v[3] = {rng.range(-3, 3), rng.range(-3, 3), rng.range(-3, 3)};
                 if (u[0] == 0 && u[1] == 0 && u[2] == 0) u[0] = 1;
                 if (v[1] * u[2] == v[2] * u[1] && v[2] * u[0] == v[0] * u[2] && v[0] * u[1] == v[1] * u[0]) {
                     v[(u[0] != 0) ? 1 : 0] += 1;
@@ -684,7 +706,9 @@ inline std::array<double, 3> make_box(Rng& rng, std::string& label) {
         case 2:
         case 3:
         case 4:
-        case 5: label += "cube "; return {1, 1, 1};
+        case 5:
+            label += "cube ";
+            return {1, 1, 1};
         case 6: {
             const double s = std::ldexp(1.0, rng.range(-30, 30));
             label += "pow2 ";
@@ -710,8 +734,12 @@ inline std::array<double, 3> make_box(Rng& rng, std::string& label) {
             const double t = std::ldexp(1.0, rng.range(1, 6));
             return {t, 1, 1};
         }
-        case 11: label += "123 "; return {1, 2, 3};
-        case 12: label += "hcp "; return {hcp[0], hcp[1], hcp[2]};
+        case 11:
+            label += "123 ";
+            return {1, 2, 3};
+        case 12:
+            label += "hcp ";
+            return {hcp[0], hcp[1], hcp[2]};
         case 13: {
             label += "ratio ";
             return {rng.between(0.2, 1), rng.between(0.2, 1), rng.between(0.2, 1)};
@@ -740,10 +768,16 @@ struct Field {
         Point v{};
         const double x = tau * q[0], y = tau * q[1];
         switch (kind) {
-            case 0: v = {std::sin(y), 0, 0}; break;                               // shear
-            case 1: v = {-std::sin(y) * std::cos(x), std::sin(x) * std::cos(y), 0}; break;  // vortex
-            case 2: v = {std::sin(x), -std::sin(y), 0}; break;                    // strain
-            case 3:                                                               // turbulence
+            case 0:
+                v = {std::sin(y), 0, 0};
+                break;  // shear
+            case 1:
+                v = {-std::sin(y) * std::cos(x), std::sin(x) * std::cos(y), 0};
+                break;  // vortex
+            case 2:
+                v = {std::sin(x), -std::sin(y), 0};
+                break;  // strain
+            case 3:     // turbulence
                 for (int m = 0; m < 8; ++m) {
                     const double s = std::sin(tau * (k[m][0] * q[0] + k[m][1] * q[1] + k[m][2] * q[2]) + phase[m]);
                     for (int c = 0; c < 3; ++c) v[c] += a[m][c] * s;
@@ -752,7 +786,8 @@ struct Field {
             case 4:  // collapse onto the centre, 5: expansion from it, periodic in each axis
             case 5: {
                 const double sign = kind == 4 ? -1 : 1;
-                for (int c = 0; c < 3; ++c) v[c] = sign * std::sin(tau * (q[c] - centre[c]) / 2) * (q[c] < centre[c] ? -1 : 1);
+                for (int c = 0; c < 3; ++c)
+                    v[c] = sign * std::sin(tau * (q[c] - centre[c]) / 2) * (q[c] < centre[c] ? -1 : 1);
                 break;
             }
             default:  // collapse onto a plane
@@ -785,13 +820,14 @@ inline void wrap_into(Point& q, const Box& box) {
 
 // The next positions, from the current and the one before. `spacing`: mean,
 // in length.
-inline Points next_positions(Rng& rng, const Box& box, const Points& now, const Points& before, double spacing, Field& field,
-                             bool on_grid, std::string& label) {
+inline Points next_positions(Rng& rng, const Box& box, const Points& now, const Points& before, double spacing,
+                             Field& field, bool on_grid, std::string& label) {
     Points x = now;
     const int n = static_cast<int>(x.size());
     if (n == 0) return x;
     // A step from one grid step to 3 spacings, sometimes of order the box.
-    const double scale = rng.chance(0.07) ? rng.between(0.2, 1.1) * box.shortest() : rng.log_between(box.step, 3 * spacing);
+    const double scale =
+        rng.chance(0.07) ? rng.between(0.2, 1.1) * box.shortest() : rng.log_between(box.step, 3 * spacing);
     auto subset = [&](double fraction) {
         std::vector<int> s(n);
         std::iota(s.begin(), s.end(), 0);
@@ -837,8 +873,9 @@ inline Points next_positions(Rng& rng, const Box& box, const Points& now, const 
                 for (int a = 0; a < 3; ++a) q[a] += scale * d[a];
             break;
         }
-        case 8: break;  // stopped
-        case 9: {       // reversal
+        case 8:
+            break;  // stopped
+        case 9: {   // reversal
             if (before.size() == x.size()) x = before;
             break;
         }
@@ -942,7 +979,9 @@ inline Script make_script(std::uint64_t seed) {
             o.kind = Op::clip;
             o.x = now;
             if (rng.chance(0.3)) o.x = next_positions(rng, box, now, before, spacing, field, on_grid, s.label);
-            const int count = rng.chance(0.05) ? 0 : rng.chance(0.2) ? static_cast<int>(now.size()) : rng.range(1, std::min<int>(32, now.size()));
+            const int count = rng.chance(0.05)  ? 0
+                              : rng.chance(0.2) ? static_cast<int>(now.size())
+                                                : rng.range(1, std::min<int>(32, now.size()));
             o.list.resize(count);
             std::iota(o.list.begin(), o.list.end(), 0);
             if (count > 0 && count < static_cast<int>(now.size())) {
@@ -959,10 +998,18 @@ inline Script make_script(std::uint64_t seed) {
             Points bad = now;
             const int i = rng.below(static_cast<int>(bad.size()));
             switch (rng.below(4)) {
-                case 0: bad[i][rng.below(3)] = std::numeric_limits<double>::quiet_NaN(); break;
-                case 1: bad[i][rng.below(3)] = std::numeric_limits<double>::infinity(); break;
-                case 2: bad[i][rng.below(3)] = 1e300; break;
-                default: bad[i] = bad[rng.below(static_cast<int>(bad.size()))]; break;
+                case 0:
+                    bad[i][rng.below(3)] = std::numeric_limits<double>::quiet_NaN();
+                    break;
+                case 1:
+                    bad[i][rng.below(3)] = std::numeric_limits<double>::infinity();
+                    break;
+                case 2:
+                    bad[i][rng.below(3)] = 1e300;
+                    break;
+                default:
+                    bad[i] = bad[rng.below(static_cast<int>(bad.size()))];
+                    break;
             }
             add_x(Op::update, bad);
             add_x(Op::update, now);
@@ -973,7 +1020,8 @@ inline Script make_script(std::uint64_t seed) {
             if (rng.chance(0.5) && other.size() > 4)
                 other.resize(other.size() - 1 - rng.below(static_cast<int>(other.size()) / 4));
             else
-                for (int i = rng.range(1, 16); i > 0; --i) other.push_back({rng.unit() * box.side[0], rng.unit() * box.side[1], rng.unit() * box.side[2]});
+                for (int i = rng.range(1, 16); i > 0; --i)
+                    other.push_back({rng.unit() * box.side[0], rng.unit() * box.side[1], rng.unit() * box.side[2]});
             add_x(Op::update, other);
             now = other;
             before = other;

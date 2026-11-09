@@ -38,8 +38,11 @@ void test_local_rebuild_near_a_corner(Check& check) {
     const ep::Box box(1.0);
     long long rebuilt = 0;
     for (int seed = 0; seed < count; ++seed) {
-        tet_flips::Mesh m{tet_mesh::Quads<Host>("vertex", capacity), tet_mesh::Quads<Host>("adjacent", capacity),
-                          Kokkos::View<char*, Host>("alive", capacity), {ep::Points<Host>::View(rows, n), box.period}, count};
+        tet_flips::Mesh m{tet_mesh::Quads<Host>("vertex", capacity),
+                          tet_mesh::Quads<Host>("adjacent", capacity),
+                          Kokkos::View<char*, Host>("alive", capacity),
+                          {ep::Points<Host>::View(rows, n), box.period},
+                          count};
         std::map<std::array<int, 3>, std::pair<int, int>> open;
         for (int t = 0; t < count; ++t) {
             m.alive(t) = 1;
@@ -60,8 +63,8 @@ void test_local_rebuild_near_a_corner(Check& check) {
         }
         rebuilt += !tet_flips::detail::rebuild(m, seed, -1).empty();
     }
-    check.expect(count > 0, "local rebuilds near a bounding corner read no particle -1 (" + std::to_string(count) + " seeds, " +
-                                std::to_string(rebuilt) + " replaced)");
+    check.expect(count > 0, "local rebuilds near a bounding corner read no particle -1 (" + std::to_string(count) +
+                                " seeds, " + std::to_string(rebuilt) + " replaced)");
     munmap(pages, 2 * page);
 }
 

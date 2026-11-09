@@ -270,7 +270,9 @@ KOKKOS_INLINE_FUNCTION Vec2 wrap(Vec2 d, const exact_predicates::BoxN<2>& box) {
 // difference has the rounding of two products k * step, a large error on neighbours a few steps apart (#29).
 template <int D>
 KOKKOS_INLINE_FUNCTION double snapped_difference(double delta, const exact_predicates::BoxN<D>& box, int a) {
-    return (Kokkos::nearbyint(delta * box.per_step) - static_cast<double>(box.period[a]) * Kokkos::nearbyint(delta * box.inverse[a])) * box.step;
+    return (Kokkos::nearbyint(delta * box.per_step) -
+            static_cast<double>(box.period[a]) * Kokkos::nearbyint(delta * box.inverse[a])) *
+           box.step;
 }
 // The same per axis.
 template <int D>
@@ -896,8 +898,9 @@ KOKKOS_INLINE_FUNCTION void rounded_offsets(const X& x, const Box& box, const in
     for (int k = 0; k < 3; ++k)
         for (int a = 0; a < 3; ++a) {
             const double delta = R::sub(x(v[k + 1], a), x(v[0], a));
-            const double whole = R::sub(Kokkos::nearbyint(R::mul(delta, box.per_step)),
-                                        R::mul(static_cast<double>(box.period[a]), Kokkos::nearbyint(R::mul(delta, box.inverse[a]))));
+            const double whole =
+                R::sub(Kokkos::nearbyint(R::mul(delta, box.per_step)),
+                       R::mul(static_cast<double>(box.period[a]), Kokkos::nearbyint(R::mul(delta, box.inverse[a]))));
             e[k][a] = R::mul(whole, box.step);
         }
     for (int k = 0; k < 3; ++k) d[k] = {e[k][0], e[k][1], e[k][2]};

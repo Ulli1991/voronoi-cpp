@@ -97,7 +97,8 @@ struct Screen {
         area += det;
         tet_mesh::store(centre, t, circle.centre(x0, y0, step));
         const double spread = Kokkos::abs(ax * by) + Kokkos::abs(ay * bx);
-        const bool near = Kokkos::abs(ax) < quarter_x && Kokkos::abs(bx) < quarter_x && Kokkos::abs(ay) < quarter_y && Kokkos::abs(by) < quarter_y;
+        const bool near = Kokkos::abs(ax) < quarter_x && Kokkos::abs(bx) < quarter_x && Kokkos::abs(ay) < quarter_y &&
+                          Kokkos::abs(by) < quarter_y;
         if (!near && !ep::one_image(ep::offset(point, v0, v1), ep::offset(point, v0, v2), point.period)) {
             ++bad;
             failing += 3;
@@ -137,9 +138,16 @@ void screen(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_s
     using Memory = typename ExecSpace::memory_space;
     for (;;) {
         Kokkos::deep_copy(exec, state.used, 0);
-        const Screen<Memory> kernel{mesh.corners, mesh.centre, point, state.list, state.used, box.step,
-                                    static_cast<int>(box.period[0]), static_cast<int>(box.period[1]),
-                                    static_cast<int>(state.list.extent(0)), 0.25 * static_cast<double>(box.period[0]),
+        const Screen<Memory> kernel{mesh.corners,
+                                    mesh.centre,
+                                    point,
+                                    state.list,
+                                    state.used,
+                                    box.step,
+                                    static_cast<int>(box.period[0]),
+                                    static_cast<int>(box.period[1]),
+                                    static_cast<int>(state.list.extent(0)),
+                                    0.25 * static_cast<double>(box.period[0]),
                                     0.25 * static_cast<double>(box.period[1])};
         long long failing = 0, bad = 0;
         double area = 0;
@@ -200,7 +208,8 @@ struct Plan {
         const int u = links(t, k);
         const int k1 = (k + 1) % 3, k2 = (k + 2) % 3;
         bool inverted = false, too_wide = false;
-        const bool flip = wants_flip(point, corners(t, k), corners(t, k1), corners(t, k2), corners(t, 3 + k), inverted, too_wide);
+        const bool flip =
+            wants_flip(point, corners(t, k), corners(t, k1), corners(t, k2), corners(t, 3 + k), inverted, too_wide);
         bad += inverted;
         wide += too_wide;
         if (!flip) {
@@ -348,7 +357,8 @@ double total_area(const ExecSpace& exec, const ep::Points<typename ExecSpace::me
 // Used by: Mesh<2>::update and rebuild.
 template <class ExecSpace>
 Stats repair(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point,
-             const Triangles<typename ExecSpace::memory_space>& mesh, State<typename ExecSpace::memory_space>& state, int rounds = 1000) {
+             const Triangles<typename ExecSpace::memory_space>& mesh, State<typename ExecSpace::memory_space>& state,
+             int rounds = 1000) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     Stats stats;
@@ -362,7 +372,8 @@ Stats repair(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
         const unsigned long long token = state.round << 32;
         long long wanted = 0, bad = 0, wide = 0;
         Kokkos::parallel_reduce("tri_repair::plan", Range(exec, 0, state.entries),
-                                Plan<Memory>{mesh.corners, mesh.links, point, state.lock, state.list, token}, wanted, bad, wide);
+                                Plan<Memory>{mesh.corners, mesh.links, point, state.lock, state.list, token}, wanted,
+                                bad, wide);
         state.inverted = state.inverted || bad > 0;
         ++stats.rounds;
         if (wide > 0) {

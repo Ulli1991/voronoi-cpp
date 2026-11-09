@@ -103,7 +103,8 @@ void check_faces(const M& mesh, const voronoi::Report& report, Outcome& out, int
     const auto centroid = support::to_host(mesh.face_centroid());
     const auto g = mesh_check::grid_of(mesh);
     const int faces = mesh.faces(), n = mesh.particles();
-    if (report.faces != faces) out.hit(wrong, "report_faces", std::to_string(report.faces) + " of " + std::to_string(faces), at);
+    if (report.faces != faces)
+        out.hit(wrong, "report_faces", std::to_string(report.faces) + " of " + std::to_string(faces), at);
     if (static_cast<int>(owner.extent(0)) != faces) out.hit(wrong, "owner_extent", "", at);
     std::vector<std::pair<int, int>> pairs;
     pairs.reserve(faces);
@@ -144,14 +145,17 @@ void check_faces(const M& mesh, const voronoi::Report& report, Outcome& out, int
     if (order > 0) out.hit(wrong, "face_order", std::to_string(order) + " faces with owner >= neighbour", at);
     if (repeated > 0) out.hit(wrong, "face_repeated", std::to_string(repeated) + " pairs with two faces", at);
     if (direction > 0) out.hit(wrong, "face_direction", std::to_string(direction) + " faces pointing back", at);
-    if (bisector > 0) out.hit(worst > 1e3 ? wrong : rough, "face_bisector", std::to_string(bisector) + " faces, worst " + std::to_string(worst) + " grid steps", at);
+    if (bisector > 0)
+        out.hit(worst > 1e3 ? wrong : rough, "face_bisector",
+                std::to_string(bisector) + " faces, worst " + std::to_string(worst) + " grid steps", at);
     if constexpr (M::float_rows) {
         auto rows = mesh.face_rows();
         const auto r = support::to_host(rows);
         long long differ = 0;
         for (int f = 0; f < faces; ++f)
             for (int k = 0; k < 3; ++k)
-                differ += r(f, k) != static_cast<float>(area(f, k)) || r(f, 3 + k) != static_cast<float>(centroid(f, k));
+                differ +=
+                    r(f, k) != static_cast<float>(area(f, k)) || r(f, 3 + k) != static_cast<float>(centroid(f, k));
         if (differ > 0) out.hit(wrong, "float_rows", std::to_string(differ) + " values", at);
     }
 }
@@ -208,8 +212,10 @@ void check_cell_geometry(const M& mesh, const oracle::Grid& g, int sample, Outco
             }
         }
     }
-    if (worst_cell > centroid_floor) out.hit(worst_cell > 1e-3 ? wrong : rough, "cell_centroid", std::to_string(worst_cell) + " cell sizes", at);
-    if (worst_face > centroid_floor) out.hit(worst_face > 1e-3 ? wrong : rough, "face_centroid", std::to_string(worst_face) + " cell sizes", at);
+    if (worst_cell > centroid_floor)
+        out.hit(worst_cell > 1e-3 ? wrong : rough, "cell_centroid", std::to_string(worst_cell) + " cell sizes", at);
+    if (worst_face > centroid_floor)
+        out.hit(worst_face > 1e-3 ? wrong : rough, "face_centroid", std::to_string(worst_face) + " cell sizes", at);
 }
 
 // The per-cell lists: bounds, each face in both its cells, order by the other id.
@@ -252,7 +258,8 @@ void check_lists(const M& mesh, Outcome& out, int at) {
     }
     for (int f = 0; f < faces; ++f)
         if (seen[f] != 2) {
-            out.hit(wrong, "list_twice", "face " + std::to_string(f) + " listed " + std::to_string(seen[f]) + " times", at);
+            out.hit(wrong, "list_twice", "face " + std::to_string(f) + " listed " + std::to_string(seen[f]) + " times",
+                    at);
             return;
         }
 }
@@ -280,7 +287,8 @@ void check_weights(const M& mesh, const oracle::Grid& g, Outcome& out, int at) {
                 const int f = list(k), j = owner(f) == i ? neighbour(f) : owner(f);
                 const oracle::Offset d = oracle::difference(g, i, j);
                 double du = 0;
-                for (int a = 0; a < 3; ++a) du += gradient[a] * (double(d[a]) * g.step + centroid(j, a) - centroid(i, a));
+                for (int a = 0; a < 3; ++a)
+                    du += gradient[a] * (double(d[a]) * g.step + centroid(j, a) - centroid(i, a));
                 for (int a = 0; a < 3; ++a) {
                     not_finite += !std::isfinite(weights(k, a));
                     sum[a] += static_cast<double>(weights(k, a)) * du;
@@ -330,7 +338,8 @@ void check_cell_bits(const M& mesh, Outcome& out, int at) {
         most = std::max(most, std::abs(fv(i) / volume(i) - 1));
         for (int a = 0; a < 3; ++a) differ += fc(i, a) != centroid(i, a);
     }
-    if (differ > 0) out.hit(bits, "fresh_cells", std::to_string(differ) + " values, volume off by " + std::to_string(most), at);
+    if (differ > 0)
+        out.hit(bits, "fresh_cells", std::to_string(differ) + " values, volume off by " + std::to_string(most), at);
 }
 
 // Tetrahedra as a sorted set and faces by pair, volumes and centroids: what a backend must agree on.
@@ -378,11 +387,13 @@ void check_clip(M& mesh, const Op& o, const Box& box, Outcome& out, int at, bool
         const double e = std::abs(volume(i) - brute) / brute;
         if (verbose) {
             char text[120];
-            std::snprintf(text, sizeof text, "  clip cell %d status %d volume %.17g brute %.17g", i, status(i), volume(i), brute);
+            std::snprintf(text, sizeof text, "  clip cell %d status %d volume %.17g brute %.17g", i, status(i),
+                          volume(i), brute);
             std::cout << text << std::endl;
         }
         // Scaled by the cell's width in steps, with a floor for doubles summed over dozens of faces.
-        if (e * std::cbrt(double(cell.volume)) > 1e-6 && e > 1e-13) out.hit(e > 1e-6 ? wrong : rough, "clip_volume", "cell " + std::to_string(i) + " off by " + sci(e), at);
+        if (e * std::cbrt(double(cell.volume)) > 1e-6 && e > 1e-13)
+            out.hit(e > 1e-6 ? wrong : rough, "clip_volume", "cell " + std::to_string(i) + " off by " + sci(e), at);
     }
 }
 
@@ -406,7 +417,8 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
     for (const Op& o : s.ops) {
         ++at;
         ++out.calls;
-        say(std::to_string(at) + ": " + op_name(o.kind) + " " + std::to_string(o.arg) + " x=" + std::to_string(o.x.size()));
+        say(std::to_string(at) + ": " + op_name(o.kind) + " " + std::to_string(o.arg) +
+            " x=" + std::to_string(o.x.size()));
         voronoi::Report report;
         bool had_mesh = mesh.faces() > 0;
         switch (o.kind) {
@@ -458,13 +470,15 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
                 if (out.kind >= wrong) return;
                 continue;
             }
-            default: break;
+            default:
+                break;
         }
         // update or rebuild.
         voronoi::Timings timings;
         try {
             const Positions x = device(o.x);
-            report = o.kind == Op::rebuild ? mesh.rebuild(x, timed ? &timings : nullptr) : mesh.update(x, {}, timed ? &timings : nullptr);
+            report = o.kind == Op::rebuild ? mesh.rebuild(x, timed ? &timings : nullptr)
+                                           : mesh.update(x, {}, timed ? &timings : nullptr);
             timed = false;
         } catch (const std::exception& e) {
             timed = false;
@@ -475,10 +489,14 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
             if (c == "coincident") {
                 std::vector<std::array<int, 3>> grid;
                 grid.reserve(o.x.size());
-                for (const Point& q : o.x) grid.push_back({exact_predicates::snap(q[0], box, 0), exact_predicates::snap(q[1], box, 1), exact_predicates::snap(q[2], box, 2)});
+                for (const Point& q : o.x)
+                    grid.push_back({exact_predicates::snap(q[0], box, 0), exact_predicates::snap(q[1], box, 1),
+                                    exact_predicates::snap(q[2], box, 2)});
                 std::sort(grid.begin(), grid.end());
-                if (std::adjacent_find(grid.begin(), grid.end()) == grid.end()) out.hit(valid, "coincident_false", what, at);
-                else out.hit(refused, c, what, at);
+                if (std::adjacent_find(grid.begin(), grid.end()) == grid.end())
+                    out.hit(valid, "coincident_false", what, at);
+                else
+                    out.hit(refused, c, what, at);
             } else if (c == "reach") {
                 // The cause claimed: a cell of radius 3/16 of the shortest side or more.
                 // Brute force over all cells, once a case, on a mesh small enough.
@@ -495,13 +513,15 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
                     auto sorted = g.p;
                     std::sort(sorted.begin(), sorted.end());
                     if (std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end()) {
-                        for (int i = 0; i < count; ++i) largest = std::max(largest, double(oracle::voronoi_cell(g, i).reach * g.step));
+                        for (int i = 0; i < count; ++i)
+                            largest = std::max(largest, double(oracle::voronoi_cell(g, i).reach * g.step));
                         largest /= box.shortest();
                         say("largest cell radius / shortest side: " + std::to_string(largest));
                     }
                 }
                 if (largest >= 0 && largest < 3.0 / 16 * 0.9)
-                    out.hit(valid, "reach_false", "largest radius " + sci(largest) + " of the shortest side; " + what, at);
+                    out.hit(valid, "reach_false", "largest radius " + sci(largest) + " of the shortest side; " + what,
+                            at);
                 else
                     out.hit(refused, c, what, at);
             } else if (c == "elongated" || c == "no_particles" || c == "memory") {
@@ -509,7 +529,8 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
             } else {
                 out.hit(valid, c, what, at);
             }
-            if (mesh.faces() != 0 || mesh.particles() != 0) out.hit(wrong, "after_refusal", "a refused update left a mesh", at);
+            if (mesh.faces() != 0 || mesh.particles() != 0)
+                out.hit(wrong, "after_refusal", "a refused update left a mesh", at);
             bool thrown = false;
             try {
                 mesh.update_cells();
@@ -539,8 +560,8 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
             const auto r = mesh_check::check(mesh, limits.sample, !report.rebuilt);
             say(std::string(op_name(o.kind)) + " n=" + std::to_string(n) + " faces=" + std::to_string(mesh.faces()) +
                 " flips=" + std::to_string(report.flips) + " stuck=" + std::to_string(report.stuck) +
-                " host=" + std::to_string(report.host_flips + report.host_rebuilds) + " rebuilt=" + std::to_string(report.rebuilt) +
-                (r.ok() ? " exact" : " NOT EXACT " + r.text()));
+                " host=" + std::to_string(report.host_flips + report.host_rebuilds) +
+                " rebuilt=" + std::to_string(report.rebuilt) + (r.ok() ? " exact" : " NOT EXACT " + r.text()));
             if (!r.ok()) {
                 if (limits.verbose) {  // for arbitration by exact arithmetic outside this program
                     const auto volume = support::to_host(mesh.volume());
@@ -548,21 +569,38 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
                     const int stride = std::max(1, n / limits.sample);
                     for (int i = 0; i < n; i += stride) {
                         char text[96];
-                        std::snprintf(text, sizeof text, "cell %d volume %.17g brute %.17g", i, volume(i), double(oracle::voronoi_cell(g, i).volume * g.step * g.step * g.step));
+                        std::snprintf(text, sizeof text, "cell %d volume %.17g brute %.17g", i, volume(i),
+                                      double(oracle::voronoi_cell(g, i).volume * g.step * g.step * g.step));
                         say(text);
                     }
                 }
                 // What failed, in the order a reader would look.
                 const auto& t = r.tets;
-                const char* what = t.ambiguous ? "ambiguous" : t.flat ? "flat" : t.inverted ? "inverted" : t.unpaired ? "unpaired"
-                                 : t.folded ? "folded" : t.wrong_adjacency ? "adjacency" : t.unused ? "unused" : t.not_empty ? "not_empty"
-                                 : t.oversized ? "oversized" : !t.box_volume ? "box_volume" : r.not_finite ? "not_finite"
-                                 : r.fresh_differs > 0 ? "fresh_differs" : r.brute_missing ? "brute_missing" : r.brute_extra ? "brute_extra"
-                                 : r.negative ? "negative" : r.duplicates ? "duplicates" : r.closure >= 1e-11 ? "closure"
-                                 : std::abs(r.total - 1) >= 1e-11 ? "total" : r.fresh_volume >= 1e-10 ? "fresh_volume" : "brute_volume";
+                const char* what = t.ambiguous                      ? "ambiguous"
+                                   : t.flat                         ? "flat"
+                                   : t.inverted                     ? "inverted"
+                                   : t.unpaired                     ? "unpaired"
+                                   : t.folded                       ? "folded"
+                                   : t.wrong_adjacency              ? "adjacency"
+                                   : t.unused                       ? "unused"
+                                   : t.not_empty                    ? "not_empty"
+                                   : t.oversized                    ? "oversized"
+                                   : !t.box_volume                  ? "box_volume"
+                                   : r.not_finite                   ? "not_finite"
+                                   : r.fresh_differs > 0            ? "fresh_differs"
+                                   : r.brute_missing                ? "brute_missing"
+                                   : r.brute_extra                  ? "brute_extra"
+                                   : r.negative                     ? "negative"
+                                   : r.duplicates                   ? "duplicates"
+                                   : r.closure >= 1e-11             ? "closure"
+                                   : std::abs(r.total - 1) >= 1e-11 ? "total"
+                                   : r.fresh_volume >= 1e-10        ? "fresh_volume"
+                                                                    : "brute_volume";
                 // Rounding-level geometry on the exact tetrahedra: not a wrong mesh.
-                const bool small = t.ok() && r.not_finite == 0 && r.brute_missing == 0 && r.brute_extra == 0 && r.negative == 0 && r.fresh_differs <= 0 &&
-                                   r.duplicates == 0 && r.brute_volume < 1e-6 && r.brute_area < 1e-6 && r.closure < 1e-7 && std::abs(r.total - 1) < 1e-7 && r.fresh_volume < 1e-6;
+                const bool small = t.ok() && r.not_finite == 0 && r.brute_missing == 0 && r.brute_extra == 0 &&
+                                   r.negative == 0 && r.fresh_differs <= 0 && r.duplicates == 0 &&
+                                   r.brute_volume < 1e-6 && r.brute_area < 1e-6 && r.closure < 1e-7 &&
+                                   std::abs(r.total - 1) < 1e-7 && r.fresh_volume < 1e-6;
                 out.hit(small ? rough : wrong, what, r.text(), at);
             }
             if (r.fresh_differs < 0) out.hit(valid, "fresh_refused", r.fresh_error, at);
@@ -574,10 +612,18 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
 
 void run_script(const Script& s, Outcome& out, const Limits& limits) {
     switch (s.variant) {
-        case float_rows: run<voronoi::Mesh<3, Exec, float, void>>(s, out, limits); break;
-        case float_weights: run<voronoi::Mesh<3, Exec, double, float>>(s, out, limits); break;
-        case double_weights: run<voronoi::Mesh<3, Exec, double, double>>(s, out, limits); break;
-        default: run<voronoi::Mesh<3, Exec>>(s, out, limits); break;
+        case float_rows:
+            run<voronoi::Mesh<3, Exec, float, void>>(s, out, limits);
+            break;
+        case float_weights:
+            run<voronoi::Mesh<3, Exec, double, float>>(s, out, limits);
+            break;
+        case double_weights:
+            run<voronoi::Mesh<3, Exec, double, double>>(s, out, limits);
+            break;
+        default:
+            run<voronoi::Mesh<3, Exec>>(s, out, limits);
+            break;
     }
 }
 
@@ -647,7 +693,10 @@ void run_1d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
         if (differ > 0) {
             double total = 0;
             for (int i = 0; i < n; ++i) total += volume(i);
-            out.hit(wrong, "volume_1d", std::to_string(differ) + " cells, step " + std::to_string(t) + ", volumes sum to " + sci(total / side) + " of the line", t);
+            out.hit(wrong, "volume_1d",
+                    std::to_string(differ) + " cells, step " + std::to_string(t) + ", volumes sum to " +
+                        sci(total / side) + " of the line",
+                    t);
             return;
         }
         Mesh1 fresh(Exec{}, side, ends);
@@ -761,7 +810,8 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
                     v = x[i - 1][1] / box.side[1];
                 }
                 break;
-            default: break;
+            default:
+                break;
         }
         x[i] = {frac(u) * box.side[0], frac(v) * box.side[1]};
         for (int a = 0; a < 2; ++a) x[i][a] = std::min(x[i][a], std::nextafter(box.side[a], 0.0));
@@ -782,10 +832,12 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
         voronoi::Report report;
         if (verbose) {  // before the call: it may not return
             std::vector<std::array<int, 2>> at;
-            for (const P2& p : x) at.push_back({exact_predicates::snap(p[0], box, 0), exact_predicates::snap(p[1], box, 1)});
+            for (const P2& p : x)
+                at.push_back({exact_predicates::snap(p[0], box, 0), exact_predicates::snap(p[1], box, 1)});
             std::sort(at.begin(), at.end());
             const long long coincident = at.end() - std::unique(at.begin(), at.end());
-            std::cout << label << " box " << box.side[0] << " x " << box.side[1] << " step " << t << " coincident " << coincident << std::endl;
+            std::cout << label << " box " << box.side[0] << " x " << box.side[1] << " step " << t << " coincident "
+                      << coincident << std::endl;
         }
         try {
             report = mesh.update(to_view(x));
@@ -807,7 +859,8 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
             double total = 0, worst = 0;
             for (int i = 0; i < n; ++i) {
                 total += volume(i);
-                if (!std::isfinite(volume(i)) || !(volume(i) > 0)) out.hit(wrong, "volume_2d", "cell " + std::to_string(i), t);
+                if (!std::isfinite(volume(i)) || !(volume(i) > 0))
+                    out.hit(wrong, "volume_2d", "cell " + std::to_string(i), t);
             }
             if (std::abs(total / (box.side[0] * box.side[1]) - 1) > 1e-10) out.hit(wrong, "total_2d", sci(total), t);
             const int stride = std::max(1, n / 16);
@@ -815,8 +868,10 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
                 const double brute = double(area_2d(g, i, period) * box.step * box.step);
                 worst = std::max(worst, std::abs(volume(i) / brute - 1));
             }
-            if (worst > 1e-6) out.hit(wrong, "brute_2d", "cell off by " + sci(worst), t);
-            else if (worst > 1e-9) out.hit(rough, "brute_2d", "cell off by " + sci(worst), t);
+            if (worst > 1e-6)
+                out.hit(wrong, "brute_2d", "cell off by " + sci(worst), t);
+            else if (worst > 1e-9)
+                out.hit(rough, "brute_2d", "cell off by " + sci(worst), t);
             if (!report.rebuilt) {
                 Mesh2 fresh(Exec{}, box);
                 try {
@@ -836,7 +891,8 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
             out.flips += report.flips;
         }
         const double spacing = std::sqrt(box.side[0] * box.side[1] / n);
-        const double d = rng.chance(0.07) ? rng.between(0.2, 1.1) * box.shortest() : rng.log_between(box.step, 3 * spacing);
+        const double d =
+            rng.chance(0.07) ? rng.between(0.2, 1.1) * box.shortest() : rng.log_between(box.step, 3 * spacing);
         const int motion = rng.below(4);
         for (auto& p : x) {
             if (motion == 0 || (motion == 1 && rng.chance(0.1))) {
@@ -855,8 +911,10 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
 
 void run_low(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) {
     try {
-        if (dimension_of(seed) == 1) run_1d(seed, out, label, verbose);
-        else run_2d(seed, out, label, verbose);
+        if (dimension_of(seed) == 1)
+            run_1d(seed, out, label, verbose);
+        else
+            run_2d(seed, out, label, verbose);
     } catch (const std::exception& e) {
         out.hit(valid, category(e.what()), e.what(), 0);
     }
@@ -875,9 +933,13 @@ double now_seconds() {
 }
 
 void line(FILE* f, long long seed, const char* kind, const Script* s, const Outcome* o, double seconds) {
-    std::fprintf(f, "%lld %s %s n=%d calls=%lld refusals=%lld flips=%lld stuck=%lld host=%lld rebuilt=%lld hash=%016" PRIx64 " t=%.3f op=%d | %s | %s\n", seed, kind,
-                 o ? o->signature.c_str() : "-", s ? s->particles() : 0, o ? o->calls : 0, o ? o->refusals : 0, o ? o->flips : 0, o ? o->stuck : 0, o ? o->host : 0,
-                 o ? o->rebuilt : 0, o ? o->hash : 0, seconds, o ? o->op : -1, s ? s->label.c_str() : "", o ? o->detail.substr(0, 300).c_str() : "");
+    std::fprintf(
+        f,
+        "%lld %s %s n=%d calls=%lld refusals=%lld flips=%lld stuck=%lld host=%lld rebuilt=%lld hash=%016" PRIx64
+        " t=%.3f op=%d | %s | %s\n",
+        seed, kind, o ? o->signature.c_str() : "-", s ? s->particles() : 0, o ? o->calls : 0, o ? o->refusals : 0,
+        o ? o->flips : 0, o ? o->stuck : 0, o ? o->host : 0, o ? o->rebuilt : 0, o ? o->hash : 0, seconds,
+        o ? o->op : -1, s ? s->label.c_str() : "", o ? o->detail.substr(0, 300).c_str() : "");
     std::fflush(f);
 }
 
@@ -919,12 +981,15 @@ long long resume_seed(const std::string& results, long long first, long long str
     return seed + stride;
 }
 
-int long_run(long long first, long long count, long long stride, const std::string& results, double seconds, double timeout) {
+int long_run(long long first, long long count, long long stride, const std::string& results, double seconds,
+             double timeout) {
     const long long last = first + (count - 1) * stride;
-    auto* shared = static_cast<Shared*>(mmap(nullptr, sizeof(Shared), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+    auto* shared =
+        static_cast<Shared*>(mmap(nullptr, sizeof(Shared), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
     shared->seed = resume_seed(results, first, stride);
     const double deadline = now_seconds() + seconds;
-    std::printf("mesh_fuzz run: seeds %lld to %lld by %lld, resuming at %lld, results %s\n", first, last, stride, static_cast<long long>(shared->seed), results.c_str());
+    std::printf("mesh_fuzz run: seeds %lld to %lld by %lld, resuming at %lld, results %s\n", first, last, stride,
+                static_cast<long long>(shared->seed), results.c_str());
     std::fflush(stdout);
     while (shared->seed <= last && now_seconds() < deadline) {
         shared->beat = now_seconds();
@@ -959,7 +1024,8 @@ int long_run(long long first, long long count, long long stride, const std::stri
         const long long seed = shared->seed;
         Outcome o;
         o.kind = std::strcmp(kind, "CRASH") == 0 ? crash : hang;
-        o.signature = std::string(kind) + ":" + (WIFSIGNALED(status) ? "signal" + std::to_string(WTERMSIG(status)) : "exit");
+        o.signature =
+            std::string(kind) + ":" + (WIFSIGNALED(status) ? "signal" + std::to_string(WTERMSIG(status)) : "exit");
         const Script s;  // the driver's memory stays small: the seed says it all
         FILE* f = std::fopen(results.c_str(), "a");
         line(f, seed, kind, &s, &o, now_seconds() - shared->beat);
@@ -975,17 +1041,19 @@ std::string run_verbose(const Script& s) {
     Limits limits;
     limits.verbose = true;
     Outcome o;
-    std::cout << "label " << s.label << "\nbox " << s.sides[0] << " " << s.sides[1] << " " << s.sides[2] << " variant " << s.variant
-              << " n " << s.particles() << " calls " << s.ops.size() << std::endl;
+    std::cout << "label " << s.label << "\nbox " << s.sides[0] << " " << s.sides[1] << " " << s.sides[2] << " variant "
+              << s.variant << " n " << s.particles() << " calls " << s.ops.size() << std::endl;
     run_script(s, o, limits);
-    std::cout << "outcome " << o.signature << "\ndetail " << o.detail << "\ncalls " << o.calls << " op " << o.op << std::endl;
+    std::cout << "outcome " << o.signature << "\ndetail " << o.detail << "\ncalls " << o.calls << " op " << o.op
+              << std::endl;
     return o.signature;
 }
 
 // ------------------------------------------------------------------- shrinking
 
 // The signature of a script, in a process of its own: a candidate may crash or hang.
-std::string signature_in_child(const std::string& program, const Script& s, const std::string& scratch, double timeout) {
+std::string signature_in_child(const std::string& program, const Script& s, const std::string& scratch,
+                               double timeout) {
     save(s, scratch);
     int pipe_ends[2];
     if (pipe(pipe_ends) != 0) return "error";
@@ -1010,12 +1078,14 @@ std::string signature_in_child(const std::string& program, const Script& s, cons
     while (!done) {
         ssize_t got;
         while ((got = read(pipe_ends[0], chunk, sizeof chunk)) > 0) output.append(chunk, got);
-        if (waitpid(child, &status, WNOHANG) == child) done = true;
+        if (waitpid(child, &status, WNOHANG) == child)
+            done = true;
         else if (now_seconds() - start > timeout) {
             kill(child, SIGKILL);
             waitpid(child, &status, 0);
             killed = done = true;
-        } else usleep(2000);
+        } else
+            usleep(2000);
     }
     ssize_t got;
     while ((got = read(pipe_ends[0], chunk, sizeof chunk)) > 0) output.append(chunk, got);
@@ -1028,7 +1098,8 @@ std::string signature_in_child(const std::string& program, const Script& s, cons
 }
 
 // Delta debugging: calls, then particles, as long as the signature stays.
-Script shrink(const Script& start, const std::string& program, const std::string& scratch, const std::string& signature, double timeout) {
+Script shrink(const Script& start, const std::string& program, const std::string& scratch, const std::string& signature,
+              double timeout) {
     Script s = start;
     int runs = 0;
     auto same = [&](const Script& candidate) {
@@ -1075,7 +1146,8 @@ Script shrink(const Script& start, const std::string& program, const std::string
     };
     for (int pass = 0; pass < 6; ++pass) {
         const bool a = drop_calls(), b = drop_particles();
-        std::cout << "pass " << pass << ": n " << s.particles() << " calls " << s.ops.size() << " after " << runs << " runs" << std::endl;
+        std::cout << "pass " << pass << ": n " << s.particles() << " calls " << s.ops.size() << " after " << runs
+                  << " runs" << std::endl;
         if (!a && !b) break;
     }
     return s;
@@ -1165,7 +1237,8 @@ int main(int argc, char** argv) {
             return 2;
         }
         return long_run(std::stoll(option(argc, argv, "first", "1")), std::stoll(option(argc, argv, "count", "1000")),
-                        std::stoll(option(argc, argv, "stride", "1")), results, std::stod(option(argc, argv, "seconds", "1e9")), timeout);
+                        std::stoll(option(argc, argv, "stride", "1")), results,
+                        std::stod(option(argc, argv, "seconds", "1e9")), timeout);
     }
     if (mode == "dump") {  // a seed's Script, so that two builds replay the same doubles
         if (argc < 4) return 2;
@@ -1179,7 +1252,8 @@ int main(int argc, char** argv) {
         const ssize_t length = readlink("/proc/self/exe", self, sizeof self - 1);
         if (length <= 0) return 2;
         self[length] = 0;
-        Script s = what.find_first_not_of("0123456789") == std::string::npos ? make_script(std::stoull(what)) : load(what);
+        Script s =
+            what.find_first_not_of("0123456789") == std::string::npos ? make_script(std::stoull(what)) : load(what);
         const std::string scratch = out + ".try";
         const std::string signature = signature_in_child(self, s, scratch, timeout);
         std::cout << "seed or file " << what << ": " << signature << std::endl;
@@ -1188,7 +1262,8 @@ int main(int argc, char** argv) {
         s.label += " (min of " + what + ", " + signature + ")";
         save(s, out);
         std::remove(scratch.c_str());
-        std::cout << "minimal: n " << s.particles() << " calls " << s.ops.size() << " " << signature << " -> " << out << std::endl;
+        std::cout << "minimal: n " << s.particles() << " calls " << s.ops.size() << " " << signature << " -> " << out
+                  << std::endl;
         return 0;
     }
     Kokkos::ScopeGuard guard;
@@ -1208,7 +1283,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     Check c;
-    smoke(c, option(argc, argv, "cases", "fuzz_cases"), std::stod(option(argc, argv, "seconds", "60")), option(argc, argv, "known", "") == "1");
+    smoke(c, option(argc, argv, "cases", "fuzz_cases"), std::stod(option(argc, argv, "seconds", "60")),
+          option(argc, argv, "known", "") == "1");
     std::cout << (c.failed() ? "FAILED\n" : "passed\n");
     return c.failed() != 0;
 }
