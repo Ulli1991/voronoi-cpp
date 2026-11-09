@@ -6,6 +6,8 @@ The topology is exact, and so is the geometry up to rounding in every box tested
 
 The finite-volume hydro is a separate code, [luna-cpp](https://github.com/Ulli1991/luna-cpp), which takes only the mesh from here (as a submodule, through `voronoi_library` and `voronoi::Mesh`); this repository contains no solver.
 
+The library will be renamed **kikkou** (亀甲, kikkō, the tortoise-shell pattern), with the namespace `kikkou::`, once the open work has landed.
+
 BSD 3-Clause, see [LICENSE](LICENSE).
 
 ## Install and build
