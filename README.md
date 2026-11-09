@@ -112,21 +112,21 @@ Four points exactly on one circle: rounded arithmetic gives opposite answers in 
 
 ## Measured performance
 
-One A100 40 GB, double precision, periodic unit box. Rates are million cells per second of GPU time. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 256³ column is from older code, which is faster there now.
+One A100 40 GB, double precision, periodic unit box. Rates are million cells per second of GPU time. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild and step rows are current (with the fixes of #29, #30, #35 and #36, 1305 MHz). The 256³ column is the code just before those fixes, at 1095 MHz; the fixes cost moving steps 1 to 3.5 % and rebuilds nothing.
 
 | Million cells per second | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
-| Full rebuild (warp clipping), jittered | 39.4 | 34.8 |
-| Full rebuild, uniform random | 19.7 | |
-| Full rebuild, clustered (Gaussian blobs, ~1:500) | 15.4 | |
+| Full rebuild (warp clipping), jittered | 39.4 | 33.7 |
+| Full rebuild, uniform random | 19.7 | 17.0 |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | 15.4 | 14.1 |
 | Full rebuild, halo (1:10⁴ core to edge) | 14.1 | |
 | Full rebuild, lattice / wave | 49.2 / 37.9 | |
 | Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
-| Moving-mesh update, 0.03 spacings per step | 208 | 291 |
-| Moving-mesh update, 0.1 spacings per step | 119 | 188 |
-| Moving-mesh update, 0.3 spacings per step | 57 | 98 |
-| `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 574 / 448 / 436 | 666 / 543 / 458 |
-| Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | 154 / 94 / 51 | 202 / 140 / 81 |
+| Moving-mesh update, 0.03 spacings per step | 199 | 182 (with `update_cells()`) |
+| Moving-mesh update, 0.1 spacings per step | 115 | 129 (with `update_cells()`) |
+| Moving-mesh update, 0.3 spacings per step | 56.5 | |
+| `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings (older code) | 574 / 448 / 436 | |
+| Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (older code, bit-reproducible) | 154 / 94 / 51 | |
 
 Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) are described in the measurements file.
 
@@ -140,7 +140,7 @@ The rates above are early steps. On a smooth flow where every cell moves, the me
 
 ### GPU against a full CPU node, same code
 
-The same code built with the OpenMP backend on one Raven CPU node (2x Xeon Platinum 8360Y, 72 cores), against one A100, at 2,097,152 cells in double. Million cells (or cell updates) per second:
+Older code (see the measurements file) built with the OpenMP backend on one Raven CPU node (2x Xeon Platinum 8360Y, 72 cores), against one A100, at 2,097,152 cells in double. Million cells (or cell updates) per second:
 
 | | 72-core CPU node | A100 | A100 / CPU |
 |---|---|---|---|
@@ -167,7 +167,7 @@ Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak
 
 ## Tests
 
-Ten CTest programs specify the library. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
+Eleven CTest programs, 20 tests, specify the library. Oracles, run times and what PASS means are in [TESTING.md](TESTING.md).
 
 | Test | Specifies |
 |---|---|
@@ -179,7 +179,9 @@ Ten CTest programs specify the library. Oracles, run times and what PASS means a
 | `voronoi_mesh` | the contract of `voronoi::Mesh` that luna-cpp relies on |
 | `mesh_cases.*` | 3D special cases against an oracle that shares no code with the library: coincident points, extreme contrast, thin boxes, high valence, large motion, fallbacks, bits across backends |
 | `distortion` | flows that wind the mesh up, with no solver: shear, vortex, Taylor-Green, turbulence, collapse, expansion |
-| `mesh2d` | the 2D mesh against independent oracles; a repaired mesh equals a fresh build bit for bit |
+| `mesh2d` | the 2D mesh against independent oracles; a repaired mesh equals a fresh build bit for bit; steps of order the box |
+| `mesh1d` | the 1D line: sorting, walls, insert and remove |
+| `mesh_fuzz` | random point sets, boxes and motions against the oracle, plus every saved failing case in `src/test/fuzz_cases/`; ctest runs a smoke set, `scripts/mesh_fuzz_cpu.sh` and `scripts/mesh_fuzz_gpudev.sh` run campaigns |
 
 ```sh
 ctest --test-dir build-cuda --output-on-failure         # A100: ~5 minutes
@@ -205,6 +207,8 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 - Valid input can be refused below the stated 3/16 limit, with largest radii from 0.112 of the shortest side ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `Fallback::host` has no bound on its work: minutes on hundreds of particles ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
 - A periodic `Mesh<1>` with all particles on one grid step gives volumes summing to 0, silently ([#37](https://github.com/Ulli1991/voronoi-cpp/issues/37)).
+- OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
+- The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, but only 316 on the A100, none of them with millions of points.
 
 Other limits:
 
@@ -221,7 +225,7 @@ Other limits:
 - The device repair breaks down near one spacing of motion per step (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU), repair limited to active regions, and refinement and derefinement are not implemented yet; `update()` takes an `active` list for later.
 - Periodic boxes only (any three sides; see the certification limit above for thin slabs). Only 1D has walls.
-- `voronoi::Mesh<2>` refuses as `Mesh<3>` does: particles on one grid position by name, cells out of certified reach, no particles. A refused update leaves no mesh and the next builds. Its repair is checked by the sum of the signed areas (`Report::overlapped`).
+- `voronoi::Mesh<2>` refuses as `Mesh<3>` does: particles on one grid position by name, cells out of certified reach, no particles. A refused update leaves no mesh and the next builds. Its repair is checked by the sum of the signed areas (`Report::overlapped`), and a step that leaves triangles wider than half a period, or takes more than 1000 rounds, ends in a rebuild.
 - Memory limits 3D on one A100 to about 256³ today: 2319 B/cell with the hydro, of which the start peak alone is 1728. The target is 384³, about 720 B/cell ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)).
 
 ## Roadmap
