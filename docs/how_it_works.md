@@ -197,6 +197,6 @@ The same stages on triangles, with a few differences.
 
 **Insert and remove.** `insert()` and `remove()` change the line between updates without a sort: a binary search per request and one pass over the line. For each request, `Changes` reports the two neighbours and the lengths the new cell takes from them, or that they take from the removed one. A caller can move conserved quantities by those fractions and conserve them exactly. An insertion is deferred if it lands on a generator or in a gap another request already takes. A removal is deferred if it would leave fewer than three particles, if a neighbour on the line is removed in the same call, or if the id is not on the line.
 
-**What can go wrong.** A periodic line with all particles on one grid step gives volumes summing to 0, with no error (#37).
+**What can go wrong.** A periodic line with all particles on one grid step is refused (see above, #37). Fewer than 3 particles are a `std::invalid_argument`.
 
 **Read.** `sorted_mesh.hpp`.
