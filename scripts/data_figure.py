@@ -36,6 +36,8 @@ GROUPS = [
         ("face_rings_owner, _neighbour", 66, "number_faces", f"faces, update_cells, {HYDRO}", ["step"]),
         ("face_rings_ring_start,\n_ring_length", 66, "number_faces, append_rings,\ncompact_rings", "faces", ["step"]),
         ("face_area, face_centroid\ndouble[3] rows", 394, "faces", f"cell_sums, {HYDRO}", ["step"]),
+        ("owner_faces (Layout only, not in the\n1950): by number, slot tables", 168, "number_by_owner",
+         f"faces, update_cells, {HYDRO}", ["step"]),
         ("face_rings_pool, two:\nin use and spare", 501, "append_rings, compact_rings;\nspare: the temporaries",
          f"faces (ring entries); spare:\n{HYDRO} via Mesh::scratch", ["kept", "scratch"]),
     ]),

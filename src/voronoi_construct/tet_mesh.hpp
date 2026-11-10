@@ -827,6 +827,91 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     return faces;
 }
 
+// Faces numbered by owner, then slot (voronoi::Layout::owner_faces), over the numbers of FaceRings (slots):
+// slot[current](f) is face f's slot, id(s) the inverse, owner and neighbour by face, owned_start(i) cell i's first face.
+// Used by: Mesh<3>::geometry (number_by_owner, faces), Mesh::owned_start.
+template <class MemorySpace>
+struct OwnerFaces {
+    using Ints = Kokkos::View<int*, MemorySpace>;
+    Ints slot[2], id, owner, neighbour, owned_start;
+    int current = 0;
+    int faces = -1;  // numbered by the last update, -1: none
+};
+
+// Numbers the `faces` faces of `rings` (slots) by owner, then slot; cursor: room for n ints. When the rings carry a
+// renumbering table (rings.renumber_valid: last slot -> new slot, and ~slot for new faces in rings.dirty), it is rewritten
+// in face numbers, as update_cells' incremental path reads it. Used by: Mesh<3>::geometry.
+template <class ExecSpace>
+void number_by_owner(const ExecSpace& exec, FaceRings<typename ExecSpace::memory_space>& rings, int faces, int n,
+                     OwnerFaces<typename ExecSpace::memory_space>& out,
+                     const Kokkos::View<int*, typename ExecSpace::memory_space>& cursor) {
+    using Range = Kokkos::RangePolicy<ExecSpace>;
+    const int now = 1 - out.current, last = out.current;
+    for (auto* v : {&out.slot[now], &out.id, &out.owner, &out.neighbour})
+        if (static_cast<int>(v->extent(0)) < faces)
+            *v = typename OwnerFaces<typename ExecSpace::memory_space>::Ints(
+                Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("owner_faces")), faces + faces / 32);
+    if (static_cast<int>(out.owned_start.extent(0)) != n + 1)
+        out.owned_start = typename OwnerFaces<typename ExecSpace::memory_space>::Ints("owned_start", n + 1);
+    const auto slot_owner = rings.owner, slot_neighbour = rings.neighbour;
+    const auto start = out.owned_start, slot = out.slot[now], id = out.id, owner = out.owner, neighbour = out.neighbour;
+    Kokkos::deep_copy(exec, start, 0);
+    Kokkos::parallel_for(
+        "tet_mesh::owned_counts", Range(exec, 0, faces),
+        KOKKOS_LAMBDA(int s) { Kokkos::atomic_inc(&start(slot_owner(s))); });
+    Kokkos::parallel_scan(
+        "tet_mesh::owned_start", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int i, int& sum, bool final) {
+            const int count = i < n ? start(i) : 0;
+            if (final) {
+                start(i) = sum;
+                if (i < n) cursor(i) = sum;
+            }
+            sum += count;
+        });
+    Kokkos::parallel_for(
+        "tet_mesh::owned_fill", Range(exec, 0, faces),
+        KOKKOS_LAMBDA(int s) { slot(Kokkos::atomic_fetch_inc(&cursor(slot_owner(s)))) = s; });
+    // Each owner's faces in slot order (insertion sort on the slots themselves: about 7 per cell, no gathers), then the
+    // numbers both ways.
+    Kokkos::parallel_for(
+        "tet_mesh::owned_sort", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
+            for (int a = start(i) + 1; a < start(i + 1); ++a) {
+                const int s = slot(a);
+                int b = a;
+                for (; b > start(i) && slot(b - 1) > s; --b) slot(b) = slot(b - 1);
+                slot(b) = s;
+            }
+        });
+    Kokkos::parallel_for(
+        "tet_mesh::owned_numbers", Range(exec, 0, faces), KOKKOS_LAMBDA(int f) {
+            const int s = slot(f);
+            id(s) = f;
+            owner(f) = slot_owner(s);
+            neighbour(f) = slot_neighbour(s);
+        });
+    if (rings.renumber_valid && out.faces == rings.renumbered) {
+        // The table, last face -> new face, built in place of the last slots, then over the slot table.
+        using Borrowed = typename FaceRings<typename ExecSpace::memory_space>::Borrowed;
+        const Borrowed table(rings.pool[1 - rings.in_use].data(), rings.renumbered);
+        const auto before = out.slot[last];
+        Kokkos::parallel_for(
+            "tet_mesh::owned_renumber", Range(exec, 0, rings.renumbered), KOKKOS_LAMBDA(int g) {
+                const int t = table(before(g));
+                before(g) = t < 0 ? -1 : id(t);
+            });
+        Kokkos::deep_copy(exec, table, Kokkos::subview(before, std::make_pair(0, rings.renumbered)));
+        const auto dirty = rings.dirty;
+        Kokkos::parallel_for(
+            "tet_mesh::owned_dirty", Range(exec, 0, rings.dirty_count), KOKKOS_LAMBDA(int d) {
+                if (dirty(d) < 0) dirty(d) = ~id(~dirty(d));
+            });
+    } else {
+        rings.renumber_valid = false;
+    }
+    out.current = now;
+    out.faces = faces;
+}
+
 // The circumcentre of particles v[0..3] relative to x(v[0]), given the
 // offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images).
 template <class X>
@@ -1007,17 +1092,21 @@ void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
 }
 
 // 2. Face area vectors (owner to neighbour), centroids (relative to the owner) and, if out.volume is allocated,
-// cell volumes (summed by atomics), one thread per owned face. Used by: Mesh<3>::geometry, after update_face_rings.
+// cell volumes (summed by atomics), one thread per owned face; face f is slot `slot(f)` of the mesh's faces if given.
+// Used by: Mesh<3>::geometry, after update_face_rings (and number_by_owner).
 template <class ExecSpace, class X>
-void faces(const ExecSpace& exec, const X& x, const Box& box,
-           const Mesh<typename ExecSpace::memory_space>& mesh, const Geometry<typename ExecSpace::memory_space>& out) {
+void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
+           const Geometry<typename ExecSpace::memory_space>& out,
+           const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot = {}) {
     const bool with_volume = out.volume.extent(0) > 0;
     const bool with_rows = out.rows.extent(0) > 0;
+    const bool mapped = slot.data() != nullptr;
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
     Kokkos::parallel_for(
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f) {
-            const int i = mesh.owner(f), j = mesh.neighbour(f);
-            const int begin = mesh.ring_start(f), end = begin + mesh.ring_length(f);
+            const int s = mapped ? slot(f) : f;
+            const int i = mesh.owner(s), j = mesh.neighbour(s);
+            const int begin = mesh.ring_start(s), end = begin + mesh.ring_length(s);
             const Vec3 p = row(x, i);
             const GridPoint q(x, i, box);
             auto vertex = [&](int m) { return from_point(mesh.centre, mesh.ring(m), q, box.step); };

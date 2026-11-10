@@ -216,16 +216,32 @@ The same stages on triangles, with a few differences.
 
 ## 12. Memory order and numbering
 
-Which index each array uses, and in which order its rows lie. This section is the one place for it; `scripts/mesh_order.py` holds the labels the figures use. A change of order (the re-sort, [#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)) updates both and renders the figures again.
+Which index each array uses, and in which order its rows lie. This section is the one place for it; `scripts/mesh_order.py` holds the labels the figures use. A change of order updates both and renders the figures again. Three of the orders depend on `voronoi::Layout` (all off by default, below).
 
 | Index | Order | Arrays, and where it is set |
 |---|---|---|
-| particle i | the caller's index | `positions`, `cell_volume`, `cell_centroid`, `cell_face_start`, `tet_repair_point`. The mesh never re-sorts particles; `voronoi_bench` numbers them along a Morton curve (`--unsorted`: as generated). |
+| particle i | the caller's index; with a re-sort, a curve's order (Hilbert by default) | `positions`, `cell_volume`, `cell_centroid`, `cell_face_start`, `tet_repair_point`. Without `Layout::every` or `far` the mesh never re-sorts particles; with them it renumbers them at every build and when due, and `permutation()(i)` is the caller's index of cell i (`mesh_order.hpp`: `cell_order`, `rcm`; `voronoi_mesh.hpp`: `resort`). `voronoi_bench` numbers them along a Morton curve (`--unsorted`: as generated). |
 | slot q | Morton order of the cell list, ties by id | `slot_positions`, `slot_fine_keys`, `slot_levels`; `particle_order(q)` is the particle in slot q. Rebuild and `clip()` only (`neighbor_search.hpp`: `build`). |
-| tetrahedron t | slot of `tet_vertex` | at a start, `assemble`'s order, grouped by the face of each tetrahedron's two smallest particles (`tet_mesh.hpp`: `assemble`); a flip reuses its old slots, then pops freed ones, then appends (`tet_repair.hpp`: `repair`). |
-| face f | the scan over edge bits | f = `face_rings_start(t)` + the rank of the edge among t's set bits, redone every update (`tet_mesh.hpp`: `number_faces`); `owner(f) < neighbour(f)`. |
-| list entry k | per cell, by the other particle | `cell_face(k)` for k in [`cell_face_start(i)`, `cell_face_start(i + 1)`) (`tet_cells.hpp`: `sort_list`, `CellSortWarp`). |
+| tetrahedron t | slot of `tet_vertex` | at a start, `assemble`'s order, grouped by the face of each tetrahedron's two smallest particles (`tet_mesh.hpp`: `assemble`); a flip reuses its old slots, then pops freed ones, then appends (`tet_repair.hpp`: `repair`); a re-sort orders the live ones by their lowest particle, ties by slot, and drops the dead (`mesh_order.hpp`: `order_tetrahedra`). |
+| face slot s | the scan over edge bits | s = `face_rings_start(t)` + the rank of the edge among t's set bits, redone every update (`tet_mesh.hpp`: `number_faces`); the rings and `face_rings_owner`, `_neighbour` use it. |
+| face f | the face slot, or by owner | without `Layout::owner_faces` f = s. With it, by owner, an owner's faces in slot order, redone every update (`tet_mesh.hpp`: `number_by_owner`); `owned_start()(i)` is cell i's first. `owner(f) < neighbour(f)` either way; `area`, `face_centroid`, `face_rows` follow f. |
+| list entry k | per cell, by the other particle | `cell_face(k)` for k in [`cell_face_start(i)`, `cell_face_start(i + 1)`) (`tet_cells.hpp`: `sort_list`, `CellSortWarp`); with `Layout::owner_bit`, bit 31 is set where the cell does not own the face (`Mesh::list_face`, `list_owned`). |
 | ring entry | per face, canonical | `pool[ring_start(f), ring_start(f) + ring_length(f))`, from the tetrahedron whose other two ids are least (`tet_mesh.hpp`: `walk_edge_canonical`). |
+
+
+**The layouts.** Three optional layouts of `Mesh<3>`, set by `set_layout(voronoi::Layout)`, all off by default. A re-sort renumbers the cells along a space-filling curve and stores the tetrahedra and faces after them. Faces by owner number the faces by their owner. The owner bit marks, in each cell's list, the faces the cell does not own.
+
+**Why.** The cells keep their ids while they move, and a flip puts its new tetrahedra into whatever slots are free, so on a flow where every cell moves the memory order decays: on the bench's smooth flow at 128³, 0.1 spacings per step, the faces of a cell spread over the whole face array and the step runs at half its early rate by step 500 ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34), [measure_resort_2026-11-10.md](measure_resort_2026-11-10.md)). Faces are otherwise numbered after the tetrahedra that represent them, which are not in owner order even after a build; a solver that gathers over owners reads them scattered.
+
+**The re-sort** (`mesh_order.hpp`, `Mesh::resort`). Each cell gets a key from its snapped position, the top 21 bits per axis: Morton (the cell list's curve), Hilbert (Skilling's transform), Moore (eight Hilbert curves in a closed loop, turned by a small search so that each ends next to where the next begins), Morton read as a Gray code, or row-major. Keys are sorted stably (CUB's radix sort on CUDA), so ties keep the old order. Reverse Cuthill-McKee runs on the Voronoi graph instead: a breadth-first search from a cell of the last level of a search from cell 0, level by level on the device, each level sorted by the place of its first-placed neighbour, then by degree, then by id, and the order reversed. The tetrahedra are then sorted by their lowest new cell (ties by slot), dead slots dropped, adjacency renumbered; faces follow the tetrahedra, and every face ring is walked again. It runs after the repair and before the geometry, every `every` updates or when more than `far` of the faces join cells over 64 ids apart (checked every 16 updates), and at every build.
+
+**The contract.** A re-sort changes the cell ids. `update()` returns `Report::resorted`; then cell i is the particle the caller passed as `permutation()(i)`, and the caller renumbers every per-particle array it keeps, its positions too, before the next update: `permute(v)` does it for a view. The mesh as a set does not change: each particle keeps its neighbours, and volumes, centroids and areas agree to rounding (relative 1e-14), not to the bit, because the orders that fix rounding (the corners of a circumcentre, the start of a face's fan, the order of a cell's sums) follow ids. Exact ties break by id, so on cospherical input a re-sort can also change which zero-area faces exist.
+
+**Faces by owner** (`tet_mesh::number_by_owner`). After the faces are numbered from the tetrahedra (slots), a counting sort by owner, each owner's few faces kept in slot order, gives each face its number; `faces` computes the geometry in that order, and `owned_start()` gives each cell's range. The renumbering table of the incremental `update_cells()` is rewritten in the new numbers, so the same lists and the same bits come out.
+
+**The owner bit.** With `owner_bit`, the entry of a face in the list of the cell that does not own it has bit 31 set; `Mesh::list_face(e)` gives the face, `Mesh::list_owned(e)` the side. A solver then reads no `owner()` to know the sign of a flux.
+
+**Read.** `mesh_order.hpp` (`key`, `MooreTable`, `cell_order`, `rcm`, `order_tetrahedra`), `voronoi_mesh.hpp` (`Layout`, `resort`, `permute`), `tet_mesh.hpp` (`number_by_owner`), `tet_cells.hpp` (`list_face`).
 
 ## 13. Where the data lives, and how the GPU touches it
 

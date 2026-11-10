@@ -677,8 +677,8 @@ Comparison compare_with_rebuild(const M& mesh, const Positions& x) {
     c.wrong_lists = mesh.cells_current() ? std::abs(start(n) - 2 * mesh.faces()) : 0;
     for (int i = 0; i < n; ++i)
         for (int a = start(i), last = -1; mesh.cells_current() && a < start(i + 1) && c.wrong_lists == 0; ++a) {
-            const int f = list(a), other = owner(f) == i ? neighbour(f) : owner(f);
-            c.wrong_lists += (owner(f) != i && neighbour(f) != i) || other <= last;
+            const int f = tet_mesh::list_face(list(a)), other = owner(f) == i ? neighbour(f) : owner(f);
+            c.wrong_lists += (owner(f) != i && neighbour(f) != i) || other <= last || (list(a) < 0 && owner(f) == i);
             last = other;
         }
     const auto volume = to_host(mesh.volume());

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "exact_predicates.hpp"
+#include "mesh_order.hpp"
 #include "neighbor_search.hpp"
 #include "shell_voronoi_warp.hpp"
 #include "tet_cells.hpp"
@@ -136,12 +137,13 @@ struct Report {
     long long host_flips = 0;      // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
     int faces = 0;
+    bool resorted = false;  // cell ids changed: cell i is the particle the caller passed as Mesh::permutation()(i)
 };
 
 // Phase times of an update, in ms, for the benchmark: given to update(), the phases are fenced and timed.
 // Used by: Mesh::lap, from update, rebuild, geometry, update_cells.
 struct Timings {
-    double repair = 0, fallback = 0, geometry = 0, build = 0, cells = 0;
+    double repair = 0, fallback = 0, geometry = 0, build = 0, cells = 0, resort = 0;
 };
 
 // What update() does when the device repair leaves triangles it cannot repair: repair around them on the host
@@ -151,6 +153,19 @@ struct Timings {
 // core; the host repairs the fuzz finished took up to 1.7e6) and the mesh is rebuilt instead (#33).
 enum class Fallback { cheapest, host, rebuild };
 constexpr long long host_budget = 1LL << 20;
+using Curve = mesh_order::Curve;
+
+// The memory layout of Mesh<3> (#34). A re-sort renumbers the cells along `curve` (a build sorts too), then the
+// tetrahedra after their lowest cell and the faces after them; it is due every `every` updates, or when more than
+// `far` of the faces join cells over 64 ids apart (checked every 16 updates). Off with both 0, as by default.
+struct Layout {
+    Curve curve = Curve::hilbert;
+    int every = 0;
+    double far = 0;
+    bool owner_faces = false;  // faces numbered by owner (Mesh::owned_start), then by their slot
+    bool owner_bit = false;    // cell_face entries of faces the cell does not own have bit 31 set (Mesh::list_face)
+    bool resorts() const { return every > 0 || far > 0; }
+};
 
 // The mesh in D dimensions: one interface, an engine per D (3D tetrahedra, 2D voronoi_mesh_2d.hpp, 1D sorted_mesh.hpp).
 //
@@ -197,6 +212,8 @@ public:
     Report update(const X& x, Timings* timings = nullptr) {
         if (!built() || static_cast<int>(x.extent(0)) != n_) return rebuild(x, timings);
         Report report;
+        resorted_ = false;
+        ++since_sort_;
         Kokkos::Timer timer;
         snap(x);
         tet_repair::move_screened(exec_, positions_, box_, tets_, state_);
@@ -220,13 +237,16 @@ public:
             lap(timer, timings, &Timings::fallback);
         }
         if (!stuck) {
+            if ((layout_.every > 0 && since_sort_ >= layout_.every) || (layout_.far > 0 && far_share_ > layout_.far))
+                resort(timings);
+            report.resorted = resorted_;
             report.faces = geometry(timings);
             // A step of order the box leaves tetrahedra whose corners see each other through different images: every
             // local test passes and the mesh covers the torus many times.
             report.overlapped = !(Kokkos::abs(total_volume_ / box_.volume() - 1) < 1e-6);
             if (!report.overlapped) return report;
         }
-        // A rebuild, also for what the host left.
+        // A rebuild, also for what the host left: from x as given, so a re-sort of this update is undone.
         Report rebuilt = rebuild(x, timings);
         rebuilt.flips = report.flips;
         rebuilt.rounds = report.rounds;
@@ -247,6 +267,7 @@ public:
         report.rebuilt = true;
         const int particles = static_cast<int>(x.extent(0));
         forget();
+        resorted_ = false;
         n_ = particles;
         snap(x);
         {
@@ -280,8 +301,35 @@ public:
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, Areas("cell_centroid", n_)};
         lap(timer, timings, &Timings::build);
+        if (layout_.resorts()) resort(timings);
+        report.resorted = resorted_;
         report.faces = geometry(timings);
         return report;
+    }
+
+    // The memory layout (see Layout); the next update_cells() builds every list. Off by default.
+    void set_layout(const Layout& layout) {
+        layout_ = layout;
+        updates_since_lists_ = 1;
+        cells_current_ = false;
+    }
+    const Layout& layout() const { return layout_; }
+
+    // After an update that re-sorted (Report::resorted): cell i is the particle the caller passed as permutation()(i).
+    // The caller renumbers its per-particle arrays, positions too, before the next update (permute does it).
+    View<const int*> permutation() const { return permutation_; }
+    // Row i of the managed view v (rank 1 or 2, one row per particle) becomes row permutation()(i); v is reallocated.
+    template <class V>
+    void permute(V& v) const {
+        V out(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label()), v.layout());
+        permute(v, out);
+        v = out;
+    }
+    // The same into another view: out(i) = in(permutation()(i)), rows of rank 1 or 2.
+    template <class In, class Out>
+    void permute(const In& in, const Out& out) const {
+        mesh_order::gather(exec_, permutation_, in, out);
+        exec_.fence();
     }
 
     // Local rebuild by clipping: the cells of the particles `cells` at positions x, independent of the persistent mesh.
@@ -337,10 +385,11 @@ public:
             table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <= spare.extent(0) * sizeof(int)) {
             tet_mesh::cells_incremental(exec_, positions_, box_, owner(), neighbour(), tets_, state_.alive,
                                         Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries)),
-                                        rings_, geometry_, cells_, reinterpret_cast<char*>(spare.data()));
+                                        rings_, geometry_, cells_, reinterpret_cast<char*>(spare.data()),
+                                        layout_.owner_bit);
         } else {
             tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
-                            scratch(tet_mesh::cells_scratch_bytes(faces())).data());
+                            scratch(tet_mesh::cells_scratch_bytes(faces())).data(), layout_.owner_bit);
         }
         updates_since_lists_ = 0;
         cells_current_ = true;
@@ -363,8 +412,10 @@ public:
     // area() and face_centroid() may hold more (spare capacity): loop to
     // faces(), never to their extent.
     int faces() const { return static_cast<int>(tets_.owner.extent(0)); }
-    View<const int*> owner() const { return tets_.owner; }
-    View<const int*> neighbour() const { return tets_.neighbour; }
+    View<const int*> owner() const { return face_owner_; }
+    View<const int*> neighbour() const { return face_neighbour_; }
+    // Layout::owner_faces: cell i owns faces owned_start(i) .. owned_start(i + 1) - 1; empty otherwise.
+    View<const int*> owned_start() const { return layout_.owner_faces ? owner_faces_.owned_start : View<const int*>(); }
     Rows area() const { return geometry_.area; }
     Rows face_centroid() const { return geometry_.centroid; }
     // FaceReal = float: the float rows of the faces (tet_mesh::FaceRows); empty otherwise.
@@ -376,6 +427,9 @@ public:
     Rows centroid() const { return cells_.centroid; }
     View<const int*> cell_face_start() const { return cells_.start; }
     View<const int*> cell_face() const { return cells_.face; }
+    // The face of list entry e, and whether the cell owns it (Layout::owner_bit; without it, compare owner()).
+    static KOKKOS_INLINE_FUNCTION int list_face(int e) { return tet_mesh::list_face(e); }
+    static KOKKOS_INLINE_FUNCTION bool list_owned(int e) { return e >= 0; }
     // The snapped positions the geometry is computed from (padded to 32 bytes).
     tet_mesh::Points4<Memory> positions() const { return positions_; }
 
@@ -398,6 +452,10 @@ private:
         rings_ = tet_mesh::FaceRings<Memory>{};
         geometry_ = tet_mesh::Geometry<Memory>{};
         cells_ = tet_mesh::CellFaces<Memory>{};
+        owner_faces_ = tet_mesh::OwnerFaces<Memory>{};
+        face_owner_ = face_neighbour_ = {};
+        since_sort_ = 0;
+        far_share_ = 0;
         n_ = 0;
         cells_current_ = false;
         updates_since_lists_ = 1;
@@ -451,12 +509,58 @@ private:
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 32);
             if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 32);
         }
-        tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        face_owner_ = tets_.owner;
+        face_neighbour_ = tets_.neighbour;
+        if (layout_.owner_faces) {
+            tet_mesh::number_by_owner(exec_, rings_, faces, n_, owner_faces_, cells_.cursor);
+            const auto used = std::make_pair(0, faces);
+            face_owner_ = Kokkos::subview(owner_faces_.owner, used);
+            face_neighbour_ = Kokkos::subview(owner_faces_.neighbour, used);
+            tet_mesh::faces(exec_, positions_, box_, tets_, geometry_,
+                            View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current], used)));
+        } else {
+            owner_faces_ = tet_mesh::OwnerFaces<Memory>{};
+            tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        }
+        if (layout_.far > 0 && since_sort_ % 16 == 0)
+            far_share_ = mesh_order::far_share(exec_, face_owner_, face_neighbour_);
         total_volume_ = detail::total_volume(exec_, geometry_.volume);
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
         return faces;
+    }
+
+    // Renumbers the cells along layout_.curve and sorts the tetrahedra after them (mesh_order); positions follow, and
+    // permutation_ maps the new ids to the caller's. The next geometry walks every face; update_cells builds every list.
+    // Used by: update (when due), rebuild.
+    void resort(Timings* timings) {
+        Kokkos::Timer timer;
+        View<int*> order(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_order")), n_);
+        if (layout_.curve == Curve::rcm)
+            mesh_order::rcm(exec_, tets_, state_.alive, state_.count, n_, order);
+        else
+            mesh_order::cell_order(exec_, state_.point, n_, layout_.curve, order);
+        View<int*> rank(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_rank")), n_);
+        mesh_order::invert(exec_, View<const int*>(order), rank);
+        Positions moved(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("positions")), n_);
+        decltype(state_.point.view) points(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_repair_point")), n_);
+        mesh_order::gather(exec_, order, positions_, moved);
+        mesh_order::gather(exec_, order, state_.point.view, points);
+        positions_ = moved;
+        state_.point.view = points;
+        mesh_order::order_tetrahedra(exec_, View<const int*>(rank), tets_, state_);
+        rings_.faces = -1;
+        rings_.used = rings_.tets = rings_.dirty_count = 0;
+        rings_.renumber_valid = false;
+        owner_faces_.faces = -1;
+        permutation_ = order;  // one re-sort per update: a rebuild after it starts again from the caller's order
+        exec_.fence();
+        resorted_ = true;
+        since_sort_ = 0;
+        far_share_ = 0;
+        lap(timer, timings, &Timings::resort);
     }
 
     ExecSpace exec_;
@@ -476,6 +580,13 @@ private:
     tet_mesh::FaceRings<Memory> rings_;
     tet_mesh::Geometry<Memory> geometry_;
     tet_mesh::CellFaces<Memory> cells_;
+    tet_mesh::OwnerFaces<Memory> owner_faces_;
+    View<const int*> face_owner_, face_neighbour_;  // by face number: tets_'s, or owner_faces_'s
+    Layout layout_;
+    View<int*> permutation_;  // of the last re-sort
+    bool resorted_ = false;   // by the update running
+    int since_sort_ = 0;      // updates since the last build or re-sort
+    double far_share_ = 0;    // far_faces() at the last check
     shell_voronoi::Cells<Memory> local_;
 };
 

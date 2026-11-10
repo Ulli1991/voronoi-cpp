@@ -12,6 +12,9 @@ STEP_MS = {
     "compact": 0.79, "faces": 2.63, "lists": 1.75, "sort": 1.24, "sums": 1.79,
 }
 STEP_TOTAL = 22.98
+# Optional layout (voronoi::Layout, off by default), docs/measure_resort_2026-11-10.md, 128³ at 0.1 spacings: a Hilbert
+# re-sort, when due, and the numbering by owner, every step.
+RESORT_MS, OWNER_MS = 11.0, 2.3
 GAP = 0.5  # between boxes, room for a wait line
 
 
@@ -44,7 +47,7 @@ class Column:
 
 
 def step_figure():
-    W, H = 12.7, 30
+    W, H = 12.7, 33
     fig, ax = canvas(W, H)
     x0, w, tx, sx, sw = 0.2, 7.5, 7.95, 10.15, 2.5
     ax.text(x0, H - 0.2, "One step: update(x) on a built mesh with the same n", fontsize=14, fontweight="bold",
@@ -89,7 +92,7 @@ def step_figure():
     rb_y = dy - hf_h + 0.3 - 0.55
     rb_h = card_height("flow_rebuild.png", "a\nb\nc\nd", 9.5)
     card(ax, sx, rb_y - rb_h, sw, rb_h, "Rebuild", "flow_rebuild.png",
-         "more entries, host failed,\nout of rounds (1000), or the\nvolume check (8) fails.\n250 to 590 ms at 128³",
+         "more entries, host failed,\nout of rounds (1000), or the\nvolume check (10) fails.\n250 to 590 ms at 128³",
          REBUILD, "GPU", size=9.5)
     bend = sx - 0.35
     arrow(ax, [(dx + 1.2, dy), (bend, dy), (bend, dy - 0.2), (sx, dy - 0.2)], label="few", at=(bend - 0.6, dy))
@@ -110,22 +113,28 @@ def step_figure():
         c.top = y - GAP
         return y, h
 
-    y, h = box_after_decision("4  Centres of created tetrahedra", "tet_mesh.hpp: circumcentres (only = touched_list)",
-                              "one thread per created tetrahedron (3.3 % of them here); reads vertex, positions;\n"
-                              "writes centre", REPAIR)
-    time_bar(ax, tx, y + h / 2 - 0.25, STEP_MS["centres"])
+    y, h = box_after_decision("4  Re-sort, when due (Layout::every or far; off by default)",
+                              "voronoi_mesh.hpp: Mesh::resort → mesh_order.hpp",
+                              "keys of a curve from tet_repair_point, radix sort; positions and points gathered;\n"
+                              "tetrahedra sorted by their lowest new particle, adjacency renumbered; every face\n"
+                              "is then numbered and walked anew; Report::resorted, permutation() for the caller", SETUP)
+    ax.text(tx, y + h / 2, f"{RESORT_MS:.1f} ms a re-sort\n(Hilbert), when due", va="center", fontsize=10, color=INK)
     done_y = y + h - 0.3
+    y, h = c.box("5  Centres of created tetrahedra", "tet_mesh.hpp: circumcentres (only = touched_list)",
+                 "one thread per created tetrahedron (3.3 % of them here); reads vertex, positions;\n"
+                 "writes centre (of every tetrahedron after a re-sort)", REPAIR)
+    time_bar(ax, tx, y + h / 2 - 0.25, STEP_MS["centres"])
     arrow(ax, [(sx + 0.3, dy - hf_h + 0.3), (sx + 0.3, done_y), (x0 + w, done_y)], label="done",
           at=(x0 + w + 0.7, done_y), size=9.5)
 
-    y, h = c.box("5  Number the faces", "tet_mesh.hpp: update_face_rings → detail::number_faces",
-                 "a scan over all tetrahedron slots: face f = start(t) + rank of the edge among t's bits;\n"
+    y, h = c.box("6  Number the faces", "tet_mesh.hpp: update_face_rings → detail::number_faces",
+                 "a scan over all tetrahedron slots: face slot s = start(t) + rank of the edge among t's bits;\n"
                  "writes owner, neighbour, ring_start, ring_length; a kept face takes its old ring\n"
                  "through the renumber table (in the spare pool)", REPAIR)
     time_bar(ax, tx, y + h / 2, STEP_MS["numbers"])
     c.wait(y, "host reads the face count; over capacity: realloc with 1/32 more, scan again")
 
-    y, h = c.box("6  Walk the dirty rings", "tet_mesh.hpp: update_face_rings  (dirty_faces, append_rings)",
+    y, h = c.box("7  Walk the dirty rings", "tet_mesh.hpp: update_face_rings  (dirty_faces, append_rings)",
                  "a thread per created tetrahedron: its 6 edges; atomic_exchange claims each face once\n"
                  "a thread per dirty face (10.4 % here): walk around the edge, claim room at the pool's\n"
                  "end (atomic_fetch_add), walk again in canonical order; old rings stay as gaps", REPAIR)
@@ -133,20 +142,26 @@ def step_figure():
     time_bar(ax, tx, y + h / 2 - 0.25, STEP_MS["compact"], "compact")
     c.wait(y, "host reads both totals; pool full: copy every ring to the spare pool, swap")
 
-    y, h = c.box("7  Face geometry", "tet_mesh.hpp: faces",
+    y, h = c.box("8  Number by owner (Layout::owner_faces; off by default)", "tet_mesh.hpp: number_by_owner",
+                 "count per owner, scan, atomic fill, each owner's faces in slot order: face f by owner,\n"
+                 "owned_start; the renumber table rewritten in face numbers", SETUP)
+    ax.text(tx, y + h / 2, f"{OWNER_MS:.1f} ms when on", va="center", fontsize=10, color=INK)
+
+    y, h = c.box("9  Face geometry", "tet_mesh.hpp: faces",
                  "one thread per face, run once for the pair: gathers the ring's centres, writes area,\n"
                  "face_centroid (and float face_rows); atomic_add of the pyramid to both cells' volume", REPAIR)
     time_bar(ax, tx, y + h / 2, STEP_MS["faces"])
 
-    y, h = c.box("8  Volume check", "voronoi_mesh.hpp: detail::total_volume, Mesh::update",
+    y, h = c.box("10  Volume check", "voronoi_mesh.hpp: detail::total_volume, Mesh::update",
                  "a reduction over volume: |sum / box − 1| < 1e-6, else rebuild (Report::overlapped)", TEST)
     c.wait(y, "host reads the sum; update() returns")
 
-    y, h = c.box("9  update_cells(), when the caller asks", "tet_cells.hpp: cells_incremental or cells",
+    y, h = c.box("11  update_cells(), when the caller asks", "tet_cells.hpp: cells_incremental or cells",
                  "incremental if created ≤ n/5 and the scratch fits (not here: 490,000 created > n/5)\n"
                  "lists: atomic count per cell, scan, atomic fill (cell_face_counts, _start, _fill)\n"
                  "sort: CellSortWarp, a warp per cell, bitonic by the other particle's id\n"
-                 "sums: CellSumsWarp, 4 lanes per cell, volume and centroid in list order", SETUP, link=False)
+                 "sums: CellSumsWarp, 4 lanes per cell, volume and centroid in list order\n"
+                 "(Layout::owner_bit: bit 31 in the entries of faces the cell does not own)", SETUP, link=False)
     arrow(ax, [(x0 + w - 0.35, c.boxes[-2]), (x0 + w - 0.35, y + h)], label="later", at=(x0 + w - 0.85, y + h + 0.25),
           size=9.5)
     for k, name in enumerate(("lists", "sort", "sums")):
@@ -156,9 +171,10 @@ def step_figure():
     ax.text(x0, b, f"Times: Kokkos Tools kernel times, median of steps 2 to 6, 128³ jittered at 0.1 spacings per step; "
             f"the rows sum to {STEP_TOTAL} ms.\nNsight Systems on the same input: 61 launches and 33 host "
             "synchronisations per step, 21.75 ms on the GPU in 22.2 ms of wall time.\nThe fractions (2.0, 3.3, 10.4 %), "
-            "rounds, stuck counts and fallback times are from the same note, docs/measure_2026-11-10.md.",
+            "rounds, stuck counts and fallback times are from the same note, docs/measure_2026-11-10.md;\nthe re-sort and the "
+            "numbering by owner from docs/measure_resort_2026-11-10.md.",
             fontsize=9.5, color=FAINT, va="top", linespacing=1.35)
-    b -= 1.0
+    b -= 1.2
     legend_chips(ax, x0, b, [(REPAIR, "step"), (TEST, "check"), (SETUP, "optional"), (HOSTC, "host"),
                              (REBUILD, "rebuild")], step=1.45)
     ax.text(x0 + 7.4, b, "▌▌", color=WAIT, fontsize=10, va="center")
