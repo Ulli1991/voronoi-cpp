@@ -88,8 +88,8 @@ std::string not_exact(const Cells& cells, const Positions& positions) {
     for (std::size_t i = 0; i < status.extent(0); ++i) ++count[status(i)];
     if (count[shell_voronoi::uncertified] > 0)
         return "voronoi::Mesh: " + std::to_string(count[shell_voronoi::uncertified]) +
-               " cells reach too far to be certified in one periodic image (a cell's radius must stay below about 3/16 "
-               "of the shortest box side): too few particles across the box";
+               " cells reach too far to be certified in one periodic image: " + shell_voronoi::reach_rule(3) +
+               "; too few particles across the box";
     const long long overflow = count[shell_voronoi::plane_overflow] + count[shell_voronoi::vertex_overflow];
     if (overflow > 0)
         return "voronoi::Mesh: " + std::to_string(overflow) + " cells need more than the clipping's " +

@@ -113,8 +113,8 @@ public:
             const long long uncertified = polygon_clip::count_status(exec_, rings, polygon_clip::uncertified);
             if (uncertified > 0)
                 refuse("voronoi::Mesh<2>: " + std::to_string(uncertified) +
-                       " cells reach too far to be certified in one periodic image (a cell's radius must "
-                       "stay below about 3/16 of the shortest box side): too few particles across the box");
+                       " cells reach too far to be certified in one periodic image: " + shell_voronoi::reach_rule(2) +
+                       "; too few particles across the box");
             try {
                 mesh_ = tri_mesh::from_rings(exec_, rings);
             } catch (const std::runtime_error& e) {

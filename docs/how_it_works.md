@@ -62,7 +62,7 @@ The control flow of one `update()`:
 
 **What can go wrong**, by status:
 
-- `uncertified`: the walk reached the coarsest grid the box allows and was not done. 2R must stay below 3/8 of the shortest side, or the cell could meet its own periodic image. A thin slab with too few particles across it is refused, with that reason.
+- `uncertified`: the walk reached the coarsest grid the box allows and was not done. The walk ends at level 2 (4 grid cells per tile side, reach 1) and certifies most at level 3 (reach 3 of 8 cells), so R must stay below 3/16 of the shortest tile side, and below 1/8 of it for a particle that starts at level 2 (fewer than about 2^(2.5 D) particles in its tile); farther, the cell could meet its own periodic image. A thin slab with too few particles across it is refused, with that reason.
 - `plane_overflow`, `vertex_overflow`: more than 48 planes or 64 vertices. The cell is built again with 128 and 256, and then on the host as an exact cell with 16000 and 32000. Past that, `update()` refuses.
 - `face_overflow`: the pool chunk is full, so the build runs again with more room.
 - `degenerate`: a cut that rounding could not resolve (planes that do not meet in one point, too few vertices left) or a volume that is not positive. The exact start rebuilds the cell.

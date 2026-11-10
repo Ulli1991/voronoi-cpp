@@ -124,6 +124,35 @@ void contrast_cases() {
             }
             diagnose(c, "half of " + std::to_string(n) + " in a ball", p);
         });
+    add("contrast.reach_rule", [](Check& c) {
+        // The refusal for reach states the rule that applies (#31): lattices of 5^3 and 6^3 points, cells of radius
+        // sqrt(3) / 10 and sqrt(3) / 12 of the side by the oracle, both below 3/16; 125 in one tile is below 180.
+        for (const int side : {5, 6}) {
+            const Points p = exact_lattice(side, sc_basis);
+            oracle::Grid g;
+            const Box box(1.0);
+            g.step = box.step;
+            for (int a = 0; a < 3; ++a) g.period[a] = box.period[a];
+            for (const auto& q : p)
+                g.p.push_back({exact_predicates::snap(q[0], box, 0), exact_predicates::snap(q[1], box, 1),
+                               exact_predicates::snap(q[2], box, 2)});
+            const double radius = static_cast<double>(oracle::voronoi_cell(g, 0).reach) * box.step;
+            Mesh m(Exec{}, 1.0);
+            std::string why;
+            try {
+                m.update(to_device(p));
+            } catch (const std::runtime_error& e) {
+                why = e.what();
+            }
+            const bool sparse = side == 5;
+            c.expect(
+                radius > 1.0 / 8 && radius < 3.0 / 16 &&
+                    (sparse ? why.find("below 1/8 of it where a tile holds fewer than about 180") != std::string::npos
+                            : why.empty()),
+                std::to_string(side) + "^3 lattice, radius " + sci(radius) +
+                    " of the side: " + (sparse ? "refused by the 1/8 rule (" + why + ")" : "built (" + why + ")"));
+        }
+    });
     add("contrast.refusal_messages", [](Check& c) {
         // What each status of the clipping is reported as.
         // Made by hand: a cell of more planes than the exact clipping holds costs minutes to reach.
@@ -139,7 +168,7 @@ void contrast_cases() {
             const std::string what = voronoi::detail::not_exact(cells, snapped);
             c.expect(what.find(word) != std::string::npos, "status " + std::to_string(status) + ": " + what);
         };
-        says(shell_voronoi::uncertified, "too few particles");
+        says(shell_voronoi::uncertified, "3/16 of the shortest tile side");
         says(shell_voronoi::plane_overflow, "16000 planes");
         says(shell_voronoi::vertex_overflow, "32000 vertices");
         says(shell_voronoi::face_overflow, "1 out of pool room");

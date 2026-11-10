@@ -499,7 +499,8 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
                 else
                     out.hit(refused, c, what, at);
             } else if (c == "reach") {
-                // The cause claimed: a cell of radius 3/16 of the shortest side or more.
+                // The cause claimed: a cell of radius 1/8 of the shortest tile side or more (3/16 where the tile
+                // is dense; shell_voronoi::reach_rule).
                 // Brute force over all cells, once a case, on a mesh small enough.
                 const int count = static_cast<int>(o.x.size());
                 double largest = -1;
@@ -516,12 +517,16 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
                     if (std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end()) {
                         for (int i = 0; i < count; ++i)
                             largest = std::max(largest, double(oracle::voronoi_cell(g, i).reach * g.step));
-                        largest /= box.shortest();
-                        say("largest cell radius / shortest side: " + std::to_string(largest));
+                        double tile = box.side[0];
+                        for (int a = 0; a < 3; ++a)
+                            tile =
+                                std::min(tile, box.side[a] / std::max(1.0, std::round(box.side[a] / box.shortest())));
+                        largest /= tile;
+                        say("largest cell radius / shortest tile side: " + std::to_string(largest));
                     }
                 }
-                if (largest >= 0 && largest < 3.0 / 16 * 0.9)
-                    out.hit(valid, "reach_false", "largest radius " + sci(largest) + " of the shortest side; " + what,
+                if (largest >= 0 && largest < 1.0 / 8 * 0.9)
+                    out.hit(valid, "reach_false", "largest radius " + sci(largest) + " of the shortest tile; " + what,
                             at);
                 else
                     out.hit(refused, c, what, at);

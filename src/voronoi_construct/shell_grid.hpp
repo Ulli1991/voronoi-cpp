@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -161,10 +162,22 @@ Stencil<typename ExecSpace::memory_space> make_stencil(const ExecSpace& exec) {
 
 // Cells closer than this many widths are walked at `level`: max_reach, or less where 2 reach + 1 cells
 // along the shortest axis (`fewest` tiles) would visit a cell twice. Certification therefore holds within one
-// periodic image only: 2R must stay below 3/8 of the shortest side, else the cell is uncertified.
-// Used by: the walk in construct_pass and its warp twin.
+// periodic image only; see reach_rule for the radius that follows.
+// Used by: the walk in construct_pass and its warp twin, reach_rule.
 KOKKOS_INLINE_FUNCTION int level_reach(int level, int fewest = 1) {
     return Kokkos::min(int{max_reach}, ((fewest << level) - 1) / 2);
+}
+
+// The largest certified radius, in words, for D = 2 or 3 (#31). A walk ends at level 2 (4 cells per tile side, reach
+// 1: R < 1/8 of a tile) and certifies most at level 3 (reach 3 of 8: R < 3/16); a particle starts at level 2 where its
+// tile holds fewer than 2^(2.5 D) particles (CellList::level), and the walk only goes coarser.
+// Used by: the refusals of Mesh<3> and Mesh<2>.
+inline std::string reach_rule(int dimensions) {
+    return std::string(
+               "a cell's radius must stay below 3/16 of the shortest tile side, and below 1/8 of it where a "
+               "tile holds fewer than about ") +
+           (dimensions == 2 ? "32" : "180") +
+           " particles (a tile is side / round(side / shortest side) along each axis; a cube is one tile)";
 }
 
 // Squared gap, in child widths, between a finer home cell and a child at offset d (0 if they touch or coincide).
