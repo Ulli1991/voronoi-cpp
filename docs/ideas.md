@@ -58,7 +58,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 
 | ID | Idea | Buys | First test | Status |
 |---|---|---|---|---|
-| #29, #30 | Fix the silent volume errors: geometry from exact integer differences times the step, and the `clip()` loss | correct volumes | in progress on branch mesh-fixes | next |
+| #29, #30 | Fix the silent volume errors: geometry from exact integer differences times the step, and the `clip()` loss | correct volumes | in progress on branch mesh-fixes | done (also #35, #36, #26, #32, #31, #33, #37, #46, #47) |
 | T3 | Herbie on circumcentres, plane intersections, face areas and moments | accuracy of geometry in double, relevant to #29 | Herbie needs Racket, which installs in user space; one expression against an mpmath reference | open |
 | O5 | Stochastic arithmetic (Verificarlo, CADNA) to find where geometry is sensitive to rounding | finds the next #29 | a run of the fuzz cases under random rounding | open |
 | V2, V8 | Derivatives of vertices, face moments and volumes with respect to positions on a fixed topology; checked against hand derivatives and finite differences | sensitivity and checks, and the hydro's GCL test | Enzyme on the host build (see luna-cpp's ideas) | open |
@@ -68,8 +68,8 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 
 | ID | Idea | Buys | First test | Status |
 |---|---|---|---|---|
-| T7 | `compute-sanitizer` memcheck, racecheck, initcheck and synccheck on the CUDA tests (in the CUDA 13.0 module) | finds GPU races and bad reads such as #35 | run it on the existing ctests | next |
-| T1 | Metamorphic tests, exact on the 2³⁰ grid: shift by whole grid steps, axis swaps and 90° rotations, doubling the box, permuted ids | robustness without a reference | add to the special-case tests | next |
+| T7 | `compute-sanitizer` memcheck, racecheck, initcheck and synccheck on the CUDA tests (in the CUDA 13.0 module) | finds GPU races and bad reads such as #35 | run it on the existing ctests | done (`scripts/sanitize_a100.sh`) |
+| T1 | Metamorphic tests, exact on the 2³⁰ grid: shift by whole grid steps, axis swaps and 90° rotations, doubling the box, permuted ids | robustness without a reference | add to the special-case tests | done (`metamorphic` test) |
 | T6 | Differential testing against an independent exact reference | robustness | `oracle.hpp`, special-case tests, the fuzz driver's rational arbiter | done, extend |
 | T2 | Filtered predicates with an exact fallback | robust and fast | a double filter, then 128-bit or 256-bit integers | done |
 | T2b | Prove the filter's error bound with Gappa | confidence in the fast path | one predicate's bound | open |
