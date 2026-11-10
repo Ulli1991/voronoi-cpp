@@ -155,8 +155,9 @@ void check_faces(const M& mesh, const voronoi::Report& report, Outcome& out, int
         long long differ = 0;
         for (int f = 0; f < faces; ++f)
             for (int k = 0; k < 3; ++k)
-                differ +=
-                    r(f, k) != static_cast<float>(area(f, k)) || r(f, 3 + k) != static_cast<float>(centroid(f, k));
+                differ += r(f, k) != static_cast<float>(area(f, k)) ||
+                          r(f, 3 + k) != static_cast<float>(centroid(f, k)) || !std::isfinite(r(f, k)) ||
+                          !std::isfinite(r(f, 3 + k));  // overflow (#32)
         if (differ > 0) out.hit(wrong, "float_rows", std::to_string(differ) + " values", at);
     }
 }
@@ -405,9 +406,23 @@ struct Limits {
     bool verbose = false;
 };
 
+// A box outside the measured range of sides is refused at construction (#32): a refusal with that cause.
+// Used by: run.
+template <int D>
+bool usable_box(const exact_predicates::BoxN<D>& box, bool float_rows, bool float_weights, Outcome& out) {
+    try {
+        voronoi::detail::usable(box, float_rows, float_weights);
+        return true;
+    } catch (const std::invalid_argument& e) {
+        out.hit(refused, "box_range", e.what(), 0);
+        return false;
+    }
+}
+
 template <class M>
 void run(const Script& s, Outcome& out, const Limits& limits) {
     const Box box(s.sides[0], s.sides[1], s.sides[2]);
+    if (!usable_box(box, M::float_rows, M::with_weights && std::is_same_v<typename M::WeightReal, float>, out)) return;
     M mesh(Exec{}, box);
     bool timed = false, reach_measured = false;
     Points last;  // the positions the mesh is of

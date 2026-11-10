@@ -29,7 +29,11 @@ public:
     using FaceRows = Kokkos::View<const float* [8], Kokkos::LayoutRight, Memory>;
     using Weights = Kokkos::View<const WeightReal* [2], Kokkos::LayoutRight, Memory>;
 
-    Mesh(const ExecSpace& exec, const Box& box) : exec_(exec), box_(box), point_("point2", 0, box) {}
+    // Sides outside detail::usable (measured in 3D) are a std::invalid_argument.
+    Mesh(const ExecSpace& exec, const Box& box)
+        : exec_(exec),
+          box_(detail::usable(box, float_rows, with_weights && std::is_same_v<WeightReal, float>)),
+          point_("point2", 0, box) {}
     Mesh(const ExecSpace& exec, double side) : Mesh(exec, Box(side)) {}
 
     // As Mesh<3>::update: new positions x(i, a) in [0, side[a]), repaired, or built on the first call or when n changed;

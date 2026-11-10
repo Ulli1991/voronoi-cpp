@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <numeric>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -99,6 +100,33 @@ std::string not_exact(const Cells& cells, const Positions& positions) {
            std::to_string(count[shell_voronoi::face_overflow]) + " out of pool room, " +
            std::to_string(count[shell_voronoi::degenerate]) + " degenerate)";
 }
+
+// The box sides measured to give finite, correct geometry (#32). The double geometry multiplies up to four lengths:
+// exact from 1e-76 to 3e77 with 907 points, from 1e-75 with 262144 (smaller cells), wrong past 1e78. Float face rows
+// hold areas (exact 3e-17 to 1e20), float gradient weights inverse lengths (3e-38 to 1e43). Returns `box`, or throws
+// std::invalid_argument naming the range.
+// Used by: the Mesh<3> and Mesh<2> constructors.
+template <int D>
+const exact_predicates::BoxN<D>& usable(const exact_predicates::BoxN<D>& box, bool float_rows, bool float_weights) {
+    double low = 1e-75, high = 3e77;
+    const char* why = "the double geometry";
+    if (float_rows) {
+        low = 1e-16, high = 1e20;
+        why = "float face rows";
+    }
+    if (float_weights) {
+        low = std::max(low, 1e-37), high = std::min(high, 1e43);
+        why = float_rows ? "float face rows and gradient weights" : "float gradient weights";
+    }
+    for (int a = 0; a < D; ++a)
+        if (!(box.side[a] >= low && box.side[a] <= high)) {
+            std::ostringstream text;
+            text << "voronoi::Mesh: a box side of " << box.side[a] << " is outside [" << low << ", " << high
+                 << "], where " << why << " would over- or underflow; rescale the units";
+            throw std::invalid_argument(text.str());
+        }
+    return box;
+}
 }  // namespace detail
 
 // What an update did: filled by update() and rebuild(), returned to the caller.
@@ -168,8 +196,10 @@ public:
 
     // A periodic box of sides box.side[a] (see exact_predicates::Box: sides are rounded to whole grid steps, side[]
     // holds them), or a cube.
-    Mesh(const ExecSpace& exec, const ep::Box& box) : exec_(exec), box_(box) {}
-    Mesh(const ExecSpace& exec, double box) : exec_(exec), box_(box) {}
+    // Sides outside detail::usable are a std::invalid_argument.
+    Mesh(const ExecSpace& exec, const ep::Box& box)
+        : exec_(exec), box_(detail::usable(box, float_rows, with_weights && std::is_same_v<WeightReal, float>)) {}
+    Mesh(const ExecSpace& exec, double box) : Mesh(exec, ep::Box(box)) {}
 
     // New positions of all particles, x(i, a) in [0, side[a]) (any device view). Repairs the mesh, or builds it on the
     // first call or when the particle count changed; exact on return, or a std::runtime_error saying what is wrong.

@@ -99,7 +99,7 @@ mesh_fuzz_test min SEED|FILE --out=FILE                      # delta debugging, 
 
 `src/test/fuzz_cases/*.case` are minimised failures; a line `known <issue>` skips one
 until the issue is fixed (`--known=1` runs it). ctest skips seeds in boxes of
-non-dyadic step and of extreme side (#29, #32), and counts `rough` without failing,
+non-dyadic step and of extreme side (#29; extreme sides are refused since #32), and counts `rough` without failing,
 so most of the checking is in the long runs: `scripts/mesh_fuzz_cpu.sh` (`small`),
 `scripts/mesh_fuzz_gpudev.sh` (15-minute chunks; resubmit the same command to go on).
 The seeds of a run are tied to the generator: a changed generator needs a new base.

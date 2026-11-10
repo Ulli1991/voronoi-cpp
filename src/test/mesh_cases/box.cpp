@@ -111,6 +111,27 @@ void box_cases() {
             const mc::Result r = mc::check(other);
             c.expect(r.ok(), r.text());
         });
+    add("box.range", [](Check& c) {
+        // The measured range of sides (#32): its ends and a box in cgs units build exactly (the oracle); a side past
+        // it, or past the narrower ranges of float face rows and float gradient weights, is refused at construction.
+        for (const double side : {1e-75, 3.086e24, 3e77}) {
+            Mesh m(Exec{}, side);
+            build(c, "side " + sci(side), m, scaled(make_points("jittered", 4096), Box(side)), Expect::exact);
+        }
+        auto refused = [&](const std::string& what, auto&& make) {
+            std::string why;
+            try {
+                make();
+            } catch (const std::invalid_argument& e) {
+                why = e.what();
+            }
+            c.expect(why.find("rescale the units") != std::string::npos, what + ": refused (" + why + ")");
+        };
+        for (const double side : {1e-76, 1e78}) refused("side " + sci(side), [&] { Mesh(Exec{}, side); });
+        refused("side 1e21, float face rows", [&] { voronoi::Mesh<3, Exec, float>(Exec{}, 1e21); });
+        refused("side 1e44, float weights", [&] { voronoi::Mesh<3, Exec, double, float>(Exec{}, 1e44); });
+        refused("side 1e78 in 2D", [&] { voronoi::Mesh<2, Exec>(Exec{}, exact_predicates::BoxN<2>(1e78)); });
+    });
     for (const double side : {1.0, 3.0, 0.7, 0.1, 1e-3, 1.0 / 3, 3.086e24})
         add("box.snap_twice." + sci(side),
             [=](Check& c) {
