@@ -114,9 +114,9 @@ Four points exactly on one circle: rounded arithmetic gives opposite answers in 
 
 ## Measured performance
 
-One A100 40 GB, double precision, periodic unit box. Rates are million cells per second of GPU time. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild and step rows are current (with the fixes of #29, #30, #35 and #36, 1305 MHz). The 256³ column is the code just before those fixes, at 1095 MHz; the fixes cost moving steps 1 to 3.5 % and rebuilds nothing.
+One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild and step rows are current (with the fixes of #29, #30, #35 and #36, 1305 MHz). The 256³ column is the code just before those fixes, at 1095 MHz; the fixes cost moving steps 1 to 3.5 % and rebuilds nothing.
 
-| Million cells per second | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
+| M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
 | Full rebuild (warp clipping), jittered | 39.4 | 33.7 |
 | Full rebuild, uniform random | 19.7 | 17.0 |
@@ -132,7 +132,7 @@ One A100 40 GB, double precision, periodic unit box. Rates are million cells per
 
 Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) are described in the measurements file.
 
-Device memory: a plain warp rebuild takes 701 B/cell (656 at 256³); the peak during start and steps, with face lists, is 2028 B/cell (2007 at 256³, 34.8 GB in use).
+GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); start and steps with face lists take 2028 B/cell (2007 at 256³, where the GPU reports 34.8 GB in use in all).
 
 A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilds at the cube's rate, 39.9 M cells/s for jittered input.
 
@@ -163,9 +163,9 @@ Every phase gains more than the A100's 3.9 times the node's memory bandwidth. Th
 | Build, 2²⁴ cells | 134 | 58 | 52 | 168 |
 | Step, 2²⁴ | 1056 | 1059 | 1061 | 1023 |
 
-Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak device memory is 537 to 574 B/cell.
+Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak GPU memory is 537 to 574 B/cell.
 
-`voronoi::Mesh<1>`, mesh phases of a moving Sod run: 18,905 M cells/s at 2²⁰ and 39,351 at 2²⁴ (1095 MHz, older than this branch).
+`voronoi::Mesh<1>`, mesh phases of a moving Sod run: 18,905 M cells/s at 2²⁰ and 39,351 at 2²⁴ (1095 MHz, older code).
 
 ## Tests
 
@@ -227,7 +227,7 @@ Other limits:
 - Periodic boxes only (any three sides; see the certification limit above for thin slabs). Only 1D has walls.
 - A periodic `Mesh<1>` with every particle on one grid step has no cells: `update()`, `order()` and `remove()` refuse it with a `std::runtime_error` naming a pair ([#37](https://github.com/Ulli1991/voronoi-cpp/issues/37)); after the refusal there is no mesh and the next `update()` builds. Doubled particles are otherwise allowed in 1D, ties by id.
 - `voronoi::Mesh<2>` refuses as `Mesh<3>` does: particles on one grid position by name, cells out of certified reach, no particles. A refused update leaves no mesh and the next builds. Its repair is checked by the sum of the signed areas (`Report::overlapped`), and a step that leaves triangles wider than half a period, or takes more than 1000 rounds, ends in a rebuild.
-- Memory limits 3D on one A100 to about 256³ today: 2319 B/cell with the hydro, of which the start peak alone is 1728. The target is 384³, about 720 B/cell ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)).
+- Memory limits 3D on one A100 to about 256³ today: with luna-cpp's hydro a moving run peaks at 2255 B/cell (2319 in double precision), of which the mesh's start peak alone is 1728. The target is 384³, about 720 B/cell ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)).
 
 ## Roadmap
 
