@@ -31,10 +31,7 @@ using Key = std::uint64_t;
 // The grid of a line of length `side`.
 // Used by: Mesh<1>, snap.
 struct Grid {
-#ifndef VORONOI_1D_BITS
-#define VORONOI_1D_BITS 52
-#endif
-    static constexpr int bits = VORONOI_1D_BITS;
+    static constexpr int bits = 52;
     static constexpr i64 period = i64(1) << bits;
     double side = 1, step = 1.0 / static_cast<double>(period);
 
