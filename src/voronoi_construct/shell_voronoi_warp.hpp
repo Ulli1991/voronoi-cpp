@@ -297,6 +297,33 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
         }
     }
 }
+
+#if defined(VORONOI_MEASURE)
+// Measurement only: whether a particle at offset d lies in the ball of some live vertex (it would cut that vertex).
+__device__ inline bool in_a_ball(const Polyhedron& c, std::uint64_t live, double dx, double dy, double dz) {
+    const double half = 0.5 * (dx * dx + dy * dy + dz * dz);
+    for (std::uint64_t m = live; m != 0; m &= m - 1) {
+        const int w = __ffsll(static_cast<long long>(m)) - 1;
+        if (dx * c.x[w] + dy * c.y[w] + dz * c.z[w] > half) return true;
+    }
+    return false;
+}
+// Measurement only: whether the box [lo, hi] (relative to the generator) meets the ball of some live vertex.
+__device__ inline bool box_meets_a_ball(const Polyhedron& c, std::uint64_t live, const double (&lo)[3],
+                                        const double (&hi)[3]) {
+    for (std::uint64_t m = live; m != 0; m &= m - 1) {
+        const int w = __ffsll(static_cast<long long>(m)) - 1;
+        const double v[3] = {c.x[w], c.y[w], c.z[w]};
+        double gap2 = 0;
+        for (int a = 0; a < 3; ++a) {
+            const double g = Kokkos::max(0.0, Kokkos::max(lo[a] - v[a], v[a] - hi[a]));
+            gap2 += g * g;
+        }
+        if (gap2 < v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) return true;
+    }
+    return false;
+}
+#endif
 #endif  // __CUDA_ARCH__
 
 #if defined(KOKKOS_ENABLE_CUDA)
@@ -351,6 +378,13 @@ struct Kernel {
         start_cube(c, half_width, planes, live);
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
+#if defined(VORONOI_MEASURE)
+        const long long started = clock64();
+        const bool measuring = out.measure.extent(0) > 0, balls = measuring && out.balls;
+        const int sampled = measuring && out.sample_every > 0 && t % out.sample_every == 0 ? t / out.sample_every : -1;
+        long long m[measure::count] = {};
+        int recorded = 0;
+#endif
 
         // Sort the buffered candidates, then clip nearest-first while they can still cut the cell.
         auto flush = [&]() {
@@ -365,6 +399,17 @@ struct Kernel {
                 mine = {positions(slot, 0) + image(packed, 0) * side[0] - p.x,
                         positions(slot, 1) + image(packed, 1) * side[1] - p.y,
                         positions(slot, 2) + image(packed, 2) * side[2] - p.z};
+#if defined(VORONOI_MEASURE)
+            if (sampled >= 0) {
+                const long long at = static_cast<long long>(sampled) * out.sample_cap + recorded + l;
+                if (l < buffered && recorded + l < out.sample_cap) {
+                    out.sample(at, 0) = mine.x;
+                    out.sample(at, 1) = mine.y;
+                    out.sample(at, 2) = mine.z;
+                }
+                recorded += buffered;
+            }
+#endif
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f) break;
@@ -375,6 +420,9 @@ struct Kernel {
                 status = clip(c, planes, live, radius2, d, q, unit);
                 ++clipped;
                 cuts += planes > before;
+#if defined(VORONOI_MEASURE)
+                m[measure::vertices_peak] = Kokkos::max(m[measure::vertices_peak], static_cast<long long>(__popcll(live)));
+#endif
             }
             buffered = 0;
         };
@@ -398,19 +446,53 @@ struct Kernel {
                 if (e < entries)
                     stencil_cell<adaptive, cubic>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end,
                                                   packed);
+#if defined(VORONOI_MEASURE)
+                if (measuring) {
+                    bool cell_outside = false;
+                    if (balls && begin < end) {
+                        const int code = stencil.offsets(e);
+                        double lo[3], hi[3];
+                        const double q[3] = {p.x, p.y, p.z};
+                        for (int a = 0; a < 3; ++a) {
+                            const double w = (cubic ? grid.width[0] : grid.width[a]) / (1 << level);
+                            lo[a] = (home[a] + ((code >> (4 * a)) & 15) - 8) * w - q[a];
+                            hi[a] = lo[a] + w;
+                        }
+                        cell_outside = !box_meets_a_ball(c, live, lo, hi);
+                    }
+                    m[measure::walk_cells] += __popc(__ballot_sync(all_lanes, e < entries));
+                    m[measure::walk_open] += __popc(__ballot_sync(all_lanes, begin < end));
+                    m[measure::open_outside] += __popc(__ballot_sync(all_lanes, cell_outside));
+                    m[measure::in_open_outside] += warp_sum(cell_outside ? end - begin : 0);
+                }
+#endif
                 const int most = warp_max(end - begin);
                 for (int k = 0; k < most && status == ok; ++k) {
                     const int q = begin + k;
                     double d2 = 0;
                     bool take = false;
+#if defined(VORONOI_MEASURE)
+                    bool outside = false;
+#endif
                     if (q < end && q != t) {
                         const double ddx = positions(q, 0) + image(packed, 0) * side[0] - p.x;
                         const double ddy = positions(q, 1) + image(packed, 1) * side[1] - p.y;
                         const double ddz = positions(q, 2) + image(packed, 2) * side[2] - p.z;
                         d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                         take = d2 < 4.0 * radius2;
+#if defined(VORONOI_MEASURE)
+                        outside = balls && !in_a_ball(c, live, ddx, ddy, ddz);
+#endif
                     }
                     const unsigned taking = __ballot_sync(all_lanes, take);
+#if defined(VORONOI_MEASURE)
+                    if (measuring) {
+                        m[measure::tested] += __popc(__ballot_sync(all_lanes, q < end && q != t));
+                        m[measure::taken] += __popc(taking);
+                        m[measure::tested_outside] += __popc(__ballot_sync(all_lanes, outside));
+                        m[measure::taken_outside] += __popc(__ballot_sync(all_lanes, outside && take));
+                    }
+#endif
                     if (taking == 0) continue;
                     if (buffered + __popc(taking) > lanes) flush();
                     if (take) {
@@ -614,6 +696,18 @@ struct Kernel {
                 out.work(id, 1) = clipped;
                 out.work(id, 2) = cuts;
             }
+#if defined(VORONOI_MEASURE)
+            if (measuring) {
+                m[measure::clipped] = clipped;
+                m[measure::cuts] = cuts;
+                m[measure::batches] = rings;
+                m[measure::vertices_end] = __popcll(live);
+                m[measure::warp_status] = status;
+                m[measure::cycles] = clock64() - started;
+                for (int k = 0; k < measure::count; ++k) out.measure(id, k) = m[k];
+            }
+            if (sampled >= 0) out.sample_count(sampled) = recorded;
+#endif
         }
     }
 #endif

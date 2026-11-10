@@ -406,6 +406,9 @@ public:
     // Internals, for tests and the benchmark.
     const tet_mesh::Mesh<Memory>& tetrahedra() const { return tets_; }
     const tet_repair::State<Memory>& repair_state() const { return state_; }
+#if defined(VORONOI_MEASURE)
+    const tet_mesh::FaceRings<Memory>& face_rings() const { return rings_; }  // measurement build only
+#endif
 
 private:
     bool built() const { return state_.alive.extent(0) > 0; }

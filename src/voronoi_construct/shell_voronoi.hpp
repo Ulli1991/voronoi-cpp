@@ -46,6 +46,15 @@ struct Cells {
     // cells walked, candidates clipped, cuts).
     Kokkos::View<double*, MemorySpace> closure;
     Kokkos::View<int* [3], MemorySpace> work;
+#if defined(VORONOI_MEASURE)
+    // Measurement build only: per-cell counters of the warp kernel (measure::*), and the candidates of every
+    // sample_every-th slot in clipping order, at most sample_cap each (docs/measure_2026-11-10.md).
+    Kokkos::View<long long**, MemorySpace> measure;
+    Kokkos::View<double* [3], MemorySpace> sample;
+    Kokkos::View<int*, MemorySpace> sample_count;
+    int sample_every = 0, sample_cap = 0;
+    bool balls = false;  // also count particles and grid cells outside every vertex ball (plume P1)
+#endif
 
     Cells() = default;
 

@@ -13,6 +13,9 @@
 #ifdef KOKKOS_ENABLE_CUDA
 #include <cuda_runtime_api.h>
 #endif
+#if defined(VORONOI_MEASURE)
+#include "measure.hpp"
+#endif
 
 namespace {
 
@@ -144,6 +147,13 @@ exact_predicates::Box box_flag(int argc, char** argv) {
     return {};
 }
 
+// Value of --dump=path, or "". Used by: main (rebuild --measure).
+std::string dump_flag(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i)
+        if (std::string(argv[i]).rfind("--dump=", 0) == 0) return argv[i] + 7;
+    return "";
+}
+
 // Positional arguments, flags removed. Used by: main.
 std::vector<std::string> positional(int argc, char** argv) {
     std::vector<std::string> args;
@@ -155,7 +165,8 @@ std::vector<std::string> positional(int argc, char** argv) {
 // The `rebuild` mode: times the cell list and each construction variant (thread, exact, warp) on one point set
 // and cross-checks their volumes. args: rebuild <n> <distribution> [variants] [repeats]. Returns the failure count.
 // Used by: main.
-int rebuild(const std::vector<std::string>& args, const Box& box, double width_factor, bool check) {
+int rebuild(const std::vector<std::string>& args, const Box& box, double width_factor, bool check, int measure_every,
+            const std::string& dump) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -196,6 +207,11 @@ int rebuild(const std::vector<std::string>& args, const Box& box, double width_f
         }
         DeviceMemory::phase(variant, n);
     }
+#if defined(VORONOI_MEASURE)
+    if (measure_every > 0) measure_bench::clipping(exec, grid, box, measure_every, dump);
+#else
+    (void)measure_every, (void)dump;
+#endif
     return failures;
 }
 
@@ -325,7 +341,7 @@ std::uint64_t geometry_checksum(const Mesh& mesh) {
 // phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
 // Used by: main.
 int step(const std::vector<std::string>& args, const Box& box, bool verify, bool debug, bool touched, bool checksum,
-         voronoi::Fallback fallback) {
+         voronoi::Fallback fallback, bool measure) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -382,6 +398,12 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     int failures = 0;
     std::vector<std::vector<int>> faces_before;
     if (touched) report_touched(mesh, faces_before);
+#if defined(VORONOI_MEASURE)
+    std::vector<std::vector<int>> sets_before;
+    if (measure) measure_bench::step(mesh, sets_before, 0);
+#else
+    (void)measure;
+#endif
     for (int s = 1; s <= steps; ++s) {
         flow.advect(points, displacement * spacing, box);
         x = to_device(points);
@@ -398,6 +420,9 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
                   << " cells_ms=" << t.cells << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3 << "\n";
         if (touched) report_touched(mesh, faces_before);
+#if defined(VORONOI_MEASURE)
+        if (measure) measure_bench::step(mesh, sets_before, s);
+#endif
         if (checksum) std::cout << "geometry_checksum: step=" << s << " " << geometry_checksum(mesh) << "\n";
         if (debug) {
             report_stuck(mesh.repair_state());
@@ -422,16 +447,19 @@ int main(int argc, char** argv) {
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
         return rebuild(args, box_flag(argc, argv), flag_value(argc, argv, "--width", 1.0),
-                       !has_flag(argc, argv, "--no-check")) != 0;
+                       !has_flag(argc, argv, "--no-check"), static_cast<int>(flag_value(argc, argv, "--measure", 0)),
+                       dump_flag(argc, argv)) != 0;
     if (args.size() >= 4 && args[0] == "step")
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug"),
                     has_flag(argc, argv, "--touched"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--fallback=rebuild") ? voronoi::Fallback::rebuild
                     : has_flag(argc, argv, "--fallback=host")  ? voronoi::Fallback::host
-                                                               : voronoi::Fallback::cheapest) != 0;
+                                                               : voronoi::Fallback::cheapest,
+                    has_flag(argc, argv, "--measure")) != 0;
     std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
+                 "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
-                 "                          [--fallback=host|rebuild] [--memory] [--kernels] [--touched]\n"
+                 "                          [--fallback=host|rebuild] [--memory] [--kernels] [--touched] [--measure]\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }

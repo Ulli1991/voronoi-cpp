@@ -53,6 +53,10 @@ struct State {
     int free_count = 0;
     int touched_entries = 0;
     unsigned long long round = 0;
+#if defined(VORONOI_MEASURE)
+    int screened = 0;      // measurement build only: tetrahedra the screen listed, last repair
+    long long checked = 0;  // failing triangles the rounds handled, last repair
+#endif
 };
 
 // What repair() did. Used by: Mesh::update, tet_flips::finish.
@@ -458,6 +462,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
     clear(counter::stuck);
     read();
     int dirty_count = host(counter::listed);
+#if defined(VORONOI_MEASURE)
+    s.screened = dirty_count;
+#endif
     long long flips_at_last_retry = -1;
     bool finished = false;
 
@@ -691,6 +698,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         if (count + host(counter::growth) > capacity) reserve(m, s, capacity + Kokkos::max(capacity / 8, count + host(counter::growth) - capacity));
     }
     stats.unfinished = !finished;
+#if defined(VORONOI_MEASURE)
+    s.checked = stats.checked;
+#endif
     stats.stuck = Kokkos::min(host(counter::stuck), static_cast<int>(s.stuck.extent(0)));
     s.touched_entries = host(counter::created) <= static_cast<int>(s.touched_list.extent(0)) ? host(counter::created) : -1;
     // The created tetrahedra did not fit their list (this step updates all faces): room for 1/4 more next time.

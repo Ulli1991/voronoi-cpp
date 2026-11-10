@@ -24,4 +24,28 @@ constexpr int ring_buffer = 32;
 constexpr int box_planes = 6;
 constexpr int face_block = 256;  // face pool entries a warp claims at a time (shell_voronoi_warp.hpp)
 
+#if defined(VORONOI_MEASURE)
+namespace measure {
+// Measurement build only: the columns of Cells::measure, per cell of the warp kernel.
+enum : int {
+    tested,           // particles whose distance the walk computed
+    taken,            // of those, within 2R: buffered
+    clipped,          // clip calls
+    cuts,             // clips that cut: planes kept
+    vertices_end,     // live vertices of the finished cell
+    vertices_peak,    // most live vertices after any clip
+    walk_cells,       // stencil grid cells the walk checked
+    walk_open,        // of those, within 2R and not empty
+    tested_outside,   // tested particles outside every vertex ball when tested
+    taken_outside,    // taken particles outside every vertex ball
+    open_outside,     // opened grid cells meeting no vertex ball
+    in_open_outside,  // particles in those cells
+    warp_status,      // status before the thread kernel took overflow cells
+    cycles,           // clock64 cycles of the warp, lane 0
+    batches,          // batches of 32 stencil entries
+    count
+};
+}  // namespace measure
+#endif
+
 }  // namespace shell_voronoi
