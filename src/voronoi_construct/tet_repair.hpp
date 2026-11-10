@@ -54,7 +54,7 @@ struct State {
     int touched_entries = 0;
     unsigned long long round = 0;
 #if defined(VORONOI_MEASURE)
-    int screened = 0;      // measurement build only: tetrahedra the screen listed, last repair
+    int screened = 0;       // measurement build only: tetrahedra the screen listed, last repair
     long long checked = 0;  // failing triangles the rounds handled, last repair
 #endif
 };

@@ -421,7 +421,8 @@ struct Kernel {
                 ++clipped;
                 cuts += planes > before;
 #if defined(VORONOI_MEASURE)
-                m[measure::vertices_peak] = Kokkos::max(m[measure::vertices_peak], static_cast<long long>(__popcll(live)));
+                m[measure::vertices_peak] =
+                    Kokkos::max(m[measure::vertices_peak], static_cast<long long>(__popcll(live)));
 #endif
             }
             buffered = 0;

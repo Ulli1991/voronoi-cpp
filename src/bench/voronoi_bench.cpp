@@ -456,10 +456,11 @@ int main(int argc, char** argv) {
                     : has_flag(argc, argv, "--fallback=host")  ? voronoi::Fallback::host
                                                                : voronoi::Fallback::cheapest,
                     has_flag(argc, argv, "--measure")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
-                 "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
-                 "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
-                 "                          [--fallback=host|rebuild] [--memory] [--kernels] [--touched] [--measure]\n"
-                 "       both: [--box=Lx,Ly,Lz]\n";
+    std::cerr
+        << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
+           "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
+           "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
+           "                          [--fallback=host|rebuild] [--memory] [--kernels] [--touched] [--measure]\n"
+           "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }

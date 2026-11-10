@@ -20,10 +20,9 @@ namespace sm = shell_voronoi::measure;
 
 // Name of each column of Cells::measure, in shell_voronoi::measure order.
 inline const char* column_name(int k) {
-    static const char* names[] = {"tested",         "taken",          "clipped",         "cuts",
-                                  "vertices_end",   "vertices_peak",  "walk_cells",      "walk_open",
-                                  "tested_outside", "taken_outside",  "open_outside",    "in_open_outside",
-                                  "warp_status",    "cycles",         "batches"};
+    static const char* names[] = {"tested",        "taken",           "clipped",     "cuts",           "vertices_end",
+                                  "vertices_peak", "walk_cells",      "walk_open",   "tested_outside", "taken_outside",
+                                  "open_outside",  "in_open_outside", "warp_status", "cycles",         "batches"};
     return names[k];
 }
 
@@ -133,11 +132,14 @@ inline void shuffle(const shell_voronoi::Cells<Memory>& cells, const Box& box, i
     for (int q = 0; q < 4; ++q) {
         auto& v = *spreads[q];
         std::sort(v.begin(), v.end());
-        const auto at = [&](double f) { return v.empty() ? 0.0 : v[std::min(v.size() - 1, std::size_t(f * v.size()))]; };
-        std::printf("shuffle: %-13s per_cell kernel=%.2f sorted=%.2f random_mean=%.2f best=%.2f worst=%.2f "
-                    "spread_p50=%.3f spread_p90=%.3f\n",
-                    names[q], kernel[q] / used, sorted[q] / used, mean[q] / used, best[q] / used, worst[q] / used,
-                    at(0.5), at(0.9));
+        const auto at = [&](double f) {
+            return v.empty() ? 0.0 : v[std::min(v.size() - 1, std::size_t(f * v.size()))];
+        };
+        std::printf(
+            "shuffle: %-13s per_cell kernel=%.2f sorted=%.2f random_mean=%.2f best=%.2f worst=%.2f "
+            "spread_p50=%.3f spread_p90=%.3f\n",
+            names[q], kernel[q] / used, sorted[q] / used, mean[q] / used, best[q] / used, worst[q] / used, at(0.5),
+            at(0.9));
     }
 }
 
@@ -165,21 +167,25 @@ inline void clipping(const Exec& exec, const shell_voronoi::Grid<Memory>& grid, 
     }
     long long sent[shell_voronoi::status_count] = {};
     for (int i = 0; i < n; ++i) ++sent[plain(i, sm::warp_status)];
-    std::printf("measure: warp_status ok=%lld uncertified=%lld plane_overflow=%lld vertex_overflow=%lld "
-                "face_overflow=%lld degenerate=%lld\n",
-                sent[0], sent[1], sent[2], sent[3], sent[4], sent[5]);
+    std::printf(
+        "measure: warp_status ok=%lld uncertified=%lld plane_overflow=%lld vertex_overflow=%lld "
+        "face_overflow=%lld degenerate=%lld\n",
+        sent[0], sent[1], sent[2], sent[3], sent[4], sent[5]);
     // The share of all warp cycles spent in the slowest cells, and in the cells with the most clips.
     std::vector<long long> cycles(n);
     for (int i = 0; i < n; ++i) cycles[i] = plain(i, sm::cycles);
     std::vector<long long> sorted = cycles;
     std::sort(sorted.rbegin(), sorted.rend());
     const double total = std::accumulate(sorted.begin(), sorted.end(), 0.0);
-    auto top = [&](double f) { return std::accumulate(sorted.begin(), sorted.begin() + std::max(1, int(f * n)), 0.0) / total; };
+    auto top = [&](double f) {
+        return std::accumulate(sorted.begin(), sorted.begin() + std::max(1, int(f * n)), 0.0) / total;
+    };
     std::printf("measure: cycle_share slowest_1%%=%.4f slowest_10%%=%.4f slowest_0.1%%=%.4f\n", top(0.01), top(0.1),
                 top(0.001));
     std::vector<int> by_clips(n);
     std::iota(by_clips.begin(), by_clips.end(), 0);
-    std::sort(by_clips.begin(), by_clips.end(), [&](int a, int b) { return plain(a, sm::clipped) > plain(b, sm::clipped); });
+    std::sort(by_clips.begin(), by_clips.end(),
+              [&](int a, int b) { return plain(a, sm::clipped) > plain(b, sm::clipped); });
     double most = 0;
     for (int i = 0; i < std::max(1, n / 100); ++i) most += cycles[by_clips[i]];
     std::printf("measure: cycle_share most_clips_1%%=%.4f cycles_per_clip=%.1f cycles_per_test=%.1f\n", most / total,
@@ -189,13 +195,15 @@ inline void clipping(const Exec& exec, const shell_voronoi::Grid<Memory>& grid, 
                                         [&](double s, int i) { return s + plain(i, sm::tested); }));
     double sums[sm::count] = {};
     for (int i = 0; i < n; ++i)
-        for (int k = 0; k < sm::count; ++k) sums[k] += (k >= sm::tested_outside && k <= sm::in_open_outside ? balls : plain)(i, k);
-    std::printf("measure: ratios taken/tested=%.4f clipped/taken=%.4f cuts/clipped=%.4f tested_outside/tested=%.4f "
-                "taken_outside/taken=%.4f open/walk=%.4f open_outside/open=%.4f in_open_outside/tested=%.4f\n",
-                sums[sm::taken] / sums[sm::tested], sums[sm::clipped] / sums[sm::taken], sums[sm::cuts] / sums[sm::clipped],
-                sums[sm::tested_outside] / sums[sm::tested], sums[sm::taken_outside] / sums[sm::taken],
-                sums[sm::walk_open] / sums[sm::walk_cells], sums[sm::open_outside] / sums[sm::walk_open],
-                sums[sm::in_open_outside] / sums[sm::tested]);
+        for (int k = 0; k < sm::count; ++k)
+            sums[k] += (k >= sm::tested_outside && k <= sm::in_open_outside ? balls : plain)(i, k);
+    std::printf(
+        "measure: ratios taken/tested=%.4f clipped/taken=%.4f cuts/clipped=%.4f tested_outside/tested=%.4f "
+        "taken_outside/taken=%.4f open/walk=%.4f open_outside/open=%.4f in_open_outside/tested=%.4f\n",
+        sums[sm::taken] / sums[sm::tested], sums[sm::clipped] / sums[sm::taken], sums[sm::cuts] / sums[sm::clipped],
+        sums[sm::tested_outside] / sums[sm::tested], sums[sm::taken_outside] / sums[sm::taken],
+        sums[sm::walk_open] / sums[sm::walk_cells], sums[sm::open_outside] / sums[sm::walk_open],
+        sums[sm::in_open_outside] / sums[sm::tested]);
     if (!dump.empty()) {
         // Columns 0-14 as in shell_voronoi::measure, the vertex-ball columns from the second run.
         std::vector<int> data(std::size_t(n) * sm::count);
@@ -218,7 +226,8 @@ inline std::vector<std::vector<int>> neighbour_sets(const Mesh& mesh) {
     const auto neighbour = to_host(mesh.neighbour());
     std::vector<std::vector<int>> sets(n);
     for (int i = 0; i < n; ++i) {
-        for (int a = start(i); a < start(i + 1); ++a) sets[i].push_back(owner(face(a)) == i ? neighbour(face(a)) : owner(face(a)));
+        for (int a = start(i); a < start(i + 1); ++a)
+            sets[i].push_back(owner(face(a)) == i ? neighbour(face(a)) : owner(face(a)));
         std::sort(sets[i].begin(), sets[i].end());
     }
     return sets;
@@ -255,10 +264,11 @@ inline void step(const Mesh& mesh, std::vector<std::vector<int>>& before, int s)
             }
             cells_changed += changed;
         }
-    std::printf("step_measure: step=%d live_tets=%lld screened=%d failing_checked=%lld created=%d faces=%d "
-                "faces_rewalked=%d cells_changed=%lld new_neighbours=%lld lost=%lld in_2ring=%lld in_3ring=%lld\n",
-                s, live, state.screened, state.checked, state.touched_entries, mesh.faces(), mesh.face_rings().dirty_count,
-                cells_changed, added, lost, ring2, ring3);
+    std::printf(
+        "step_measure: step=%d live_tets=%lld screened=%d failing_checked=%lld created=%d faces=%d "
+        "faces_rewalked=%d cells_changed=%lld new_neighbours=%lld lost=%lld in_2ring=%lld in_3ring=%lld\n",
+        s, live, state.screened, state.checked, state.touched_entries, mesh.faces(), mesh.face_rings().dirty_count,
+        cells_changed, added, lost, ring2, ring3);
     before = std::move(now);
 }
 
