@@ -2,7 +2,7 @@
 
 A C++ library that builds exact Voronoi meshes of moving particles on GPUs. You hand it particle positions in a periodic box and get back the faces, cell volumes and centroids a finite-volume code needs. When the particles move, it repairs the mesh instead of rebuilding it, and the result stays exact. It is written in Kokkos: CUDA (validated on an A100 40 GB), plus OpenMP and Serial builds that run the same code for checks. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
 
-The topology is exact, and so is the geometry up to rounding in every box tested. A few fuzz cases, nearly all in boxes whose grid step is not a power of two, are still wrong ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); see [Limitations](#limitations-and-open-items).
+The topology is exact, and so is the geometry up to rounding in every box tested, except for a few fuzz cases where a build numbers one face twice ([#48](https://github.com/Ulli1991/voronoi-cpp/issues/48)) and two others not yet explained ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); see [Limitations](#limitations-and-open-items).
 
 The finite-volume hydro is a separate code, [luna-cpp](https://github.com/Ulli1991/luna-cpp), which takes only the mesh from here (as a submodule, through `voronoi_library` and `voronoi::Mesh`); this repository contains no solver.
 
@@ -114,7 +114,7 @@ Four points exactly on one circle: rounded arithmetic gives opposite answers in 
 
 ## Measured performance
 
-One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild and step rows are current (with the fixes of #29, #30, #35 and #36, 1305 MHz). The 256³ column is the code just before those fixes, at 1095 MHz; the fixes cost moving steps 1 to 3.5 % and rebuilds nothing.
+One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild and step rows are current (with the fixes of #29, #30, #35, #36 and #45, 1305 MHz). The 256³ column is the code just before those fixes, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
 
 | M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
@@ -124,9 +124,9 @@ One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: millio
 | Full rebuild, halo (1:10⁴ core to edge) | 14.1 | |
 | Full rebuild, lattice / wave | 49.2 / 37.9 | |
 | Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
-| Moving-mesh update, 0.03 spacings per step | 199 | 182 (with `update_cells()`) |
-| Moving-mesh update, 0.1 spacings per step | 115 | 129 (with `update_cells()`) |
-| Moving-mesh update, 0.3 spacings per step | 56.5 | |
+| Moving-mesh update, 0.03 spacings per step | 196 | 182 (with `update_cells()`) |
+| Moving-mesh update, 0.1 spacings per step | 114 | 129 (with `update_cells()`) |
+| Moving-mesh update, 0.3 spacings per step | 55.7 | |
 | `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings (older code) | 574 / 448 / 436 | |
 | Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (older code, bit-reproducible) | 154 / 94 / 51 | |
 
@@ -205,7 +205,8 @@ voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--de
 
 Open bugs, found by fuzzing the mesh against an oracle that shares no code with it:
 
-- **24 of about 116,000 fuzz cases are still wrong,** 23 of them in boxes whose grid step is not a power of two and one in a unit cube, after the fix of [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29) removed 398 of 423 ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)). The cause is not known.
+- **A full build can number one face twice** ([#48](https://github.com/Ulli1991/voronoi-cpp/issues/48)): two rows of one pair with the same ring; the cells around it are then wrong (closure 0.02, total volume off by 1e-4), and `update()` does not see it. Found in 3 boxes of the CPU fuzz and once at 4.5M particles on the A100.
+- Of the 24 fuzz cases of [#45](https://github.com/Ulli1991/voronoi-cpp/issues/45), 19 were rounding and are fixed (centres stored in grid steps, below); 3 are #48, and 2 are not explained: a repaired mesh 2.5 % off a fresh build in one cell (fresh_volume, hcp box), and a cell centroid 1e-3 of the cell off brute force in a unit cube.
 - OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
 - The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, but only 316 on the A100, none of them with millions of points.
 
@@ -219,7 +220,7 @@ Other limits:
 - A cell may hold up to 16000 planes and 32000 vertices during its exact clipping; past 128 planes or 256 vertices it is built on the host. Past those limits `update()` refuses, naming them. Particles around a void cost O(k²) at the start: about 1 s at k = 2000, 2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
 - A step of order the box (random kicks of 0.6 box) can end the device repair with nothing stuck on a mesh that covers the torus many times. `update()` sees it in the total volume of the cells, off the box by more than 1e-6, and rebuilds (`Report::overlapped`). That check is on the volume alone: a wrong mesh whose volumes still add up to the box within 1e-6 would pass it.
 - `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries (10 at 2.1M cells, none below 200000); the rest is a rebuild, which needs the memory of a start. The host path stops after 2²⁰ tetrahedra of local Delaunay builds (about a second on one core) and the step rebuilds instead ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
-- Geometry rounds with the positions: the relative volume of a cell h grid steps wide is good to about 4e-8 / h. Position differences are taken in whole grid steps, so a box whose step is not a power of two is as good as any other (fixed in [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)); the 1 to 3.5 % it costs moving steps buys that. It is exact down to clumps of 512 steps (error 8e-10), and particles one grid step apart are still exact.
+- Geometry rounds with the positions: the relative volume of a cell h grid steps wide is good to about 4e-8 / h. Position differences are taken in whole grid steps (fixed in [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)), and circumcentres are computed and stored in grid steps, wrapped into the box, so equal centres of cospherical tetrahedra get equal bits whatever corner or periodic image they come from ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); a box whose step is not a power of two is then as good as any other. #29 costs moving steps 1 to 3.5 %, #45 another 1 to 2 %. It is exact down to clumps of 512 steps (error 8e-10), and particles one grid step apart are still exact.
 - The device repair breaks down near one spacing of motion per step (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU), repair limited to active regions, and refinement and derefinement are not implemented yet; `update()` takes an `active` list for later.
 - Box sides from 1e-75 to 3e77 (`Mesh<3>`, `Mesh<2>`): past these the geometry, which multiplies up to four lengths, over- or underflows a double (measured: exact from 1e-76 to 3e77 with 907 points, from 1e-75 with 262144, wrong past 1e78). Float face rows narrow it to 1e-16 to 1e20, float gradient weights to 1e-37 to 1e43. Outside, the constructor throws `std::invalid_argument` ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)). Boxes in cgs units (3.086e24) are inside.

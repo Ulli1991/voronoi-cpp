@@ -165,11 +165,14 @@ int main(int argc, char** argv) {
         tet_mesh::circumcentres(exec, x, 1.0, mesh);
         const auto centre = to_host(mesh.centre);
         const ep_i128 twice_z = ep_i128(C) * C + ep_i128(D) * D + 1 - ep_i128(A) * C - ep_i128(B) * D;
-        const double expected[3] = {origin + 0.5 * A * step, origin + 0.5 * B * step, origin + 0.5 * double(twice_z) * step};
+        // Stored in grid steps, wrapped into [0, 2^30).
+        const double from_origin[3] = {0.5 * A, 0.5 * B, 0.5 * double(twice_z)};
         double error = 0, r2 = 0;
         for (int a = 0; a < 3; ++a) {
-            error = std::max(error, std::abs(centre(0, a) - expected[a]));
-            r2 += (expected[a] - origin) * (expected[a] - origin);
+            double expected = std::fmod(origin / step + from_origin[a], exact_predicates::scale);
+            if (expected < 0) expected += exact_predicates::scale;
+            error = std::max(error, std::abs(centre(0, a) - expected));
+            r2 += from_origin[a] * from_origin[a];
         }
         check.expect(error < 1e-12 * std::sqrt(r2), "sliver circumcentre is exact (error / radius " +
                                                        sci(error / std::sqrt(r2)) + ")");

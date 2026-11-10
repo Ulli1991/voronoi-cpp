@@ -30,7 +30,7 @@ template <class MemorySpace>
 struct Mesh {
     Quads<MemorySpace> vertex;     // particles
     Quads<MemorySpace> adjacent;   // tetrahedron across the face opposite vertex k, -1 if none
-    Points4<MemorySpace> centre;   // circumcentre, unwrapped near vertex 0, and squared radius
+    Points4<MemorySpace> centre;   // circumcentre in grid steps in [0, period), and squared radius in box units
     // Owned faces (owner < neighbour); face f's ring is ring[ring_start(f), ring_start(f) + ring_length(f)).
     Kokkos::View<int*, MemorySpace> owner, neighbour, ring_start, ring_length, ring;
     // Bit k: this tetrahedron represents its edge k (see edge_ends), the Voronoi face of that pair.
@@ -253,12 +253,6 @@ using Box = exact_predicates::Box;
 // division only if d is within an ulp of half a side.
 KOKKOS_INLINE_FUNCTION double wrap(double d, double side, double inverse) {
     return d - side * Kokkos::nearbyint(d * inverse);
-}
-// The 3D wrap of a vector d to the nearest image in `box`.
-// Used by: faces, tet_repair::move_screened.
-KOKKOS_INLINE_FUNCTION Vec3 wrap(Vec3 d, const Box& box) {
-    return {wrap(d.x, box.side[0], box.inverse[0]), wrap(d.y, box.side[1], box.inverse[1]),
-            wrap(d.z, box.side[2], box.inverse[2])};
 }
 // The 2D wrap of a vector d to the nearest image in `box`.
 // Used by: tri_mesh::faces.
@@ -891,17 +885,16 @@ KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x)
 
 namespace R = rounded;
 
-// Offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images) of corners v.
+// Offsets d[k] = x(v[k + 1]) - x(v[0]) (nearest images) of corners v, in whole grid steps.
 template <class X>
 KOKKOS_INLINE_FUNCTION void rounded_offsets(const X& x, const Box& box, const int* v, Vec3* d) {
     double e[3][3];
     for (int k = 0; k < 3; ++k)
         for (int a = 0; a < 3; ++a) {
             const double delta = R::sub(x(v[k + 1], a), x(v[0], a));
-            const double whole =
+            e[k][a] =
                 R::sub(Kokkos::nearbyint(R::mul(delta, box.per_step)),
                        R::mul(static_cast<double>(box.period[a]), Kokkos::nearbyint(R::mul(delta, box.inverse[a]))));
-            e[k][a] = R::mul(whole, box.step);
         }
     for (int k = 0; k < 3; ++k) d[k] = {e[k][0], e[k][1], e[k][2]};
 }
@@ -923,14 +916,46 @@ KOKKOS_INLINE_FUNCTION Vec3 rounded_circumcentre(const Vec3* d, double volume6) 
             R::mul(R::add(R::add(R::mul(bc.z, aa), R::mul(ca.z, bb)), R::mul(ab.z, cc)), scale)};
 }
 
-// Stores centre c relative to corner v0 as Mesh::centre row: absolute, and
-// the squared radius.
+// Stores centre c relative to corner v0 (grid steps) as Mesh::centre row t: wrapped into [0, period) and rounded once,
+// so equal centres get equal bits whatever corner and image they came from (#45); and the squared radius (box units).
 template <class X, class Centre>
-KOKKOS_INLINE_FUNCTION void store_centre(const X& x, int v0, Vec3 c, const Centre& centre, int t) {
-    centre(t, 0) = R::add(x(v0, 0), c.x);
-    centre(t, 1) = R::add(x(v0, 1), c.y);
-    centre(t, 2) = R::add(x(v0, 2), c.z);
-    centre(t, 3) = R::dot(c, c);
+KOKKOS_INLINE_FUNCTION void store_centre(const X& x, const Box& box, int v0, Vec3 c, const Centre& centre, int t) {
+    const double g[3] = {c.x, c.y, c.z};
+    for (int a = 0; a < 3; ++a) {
+        const double k = Kokkos::nearbyint(R::mul(x(v0, a), box.per_step)), period = static_cast<double>(box.period[a]);
+        double at = R::add(k, g[a]);
+        if (!(at >= 0 && at < period)) {  // k - n * period is a whole number, exact
+            const double n = Kokkos::floor(at / period);
+            at = R::add(R::sub(k, R::mul(n, period)), g[a]);
+            if (at >= period) at = R::add(R::sub(k, R::mul(n + 1, period)), g[a]);
+        }
+        centre(t, a) = at;
+    }
+    centre(t, 3) = R::mul(R::mul(R::dot(c, c), box.step), box.step);
+}
+
+// Whole grid steps k and periods of a point, for from_point. Used by: faces, tet_repair::move_screened.
+struct GridPoint {
+    double k[3], period[3];
+    template <class X>
+    KOKKOS_INLINE_FUNCTION GridPoint(const X& x, int i, const Box& box) {
+        for (int a = 0; a < 3; ++a) {
+            k[a] = Kokkos::nearbyint(x(i, a) * box.per_step);
+            period[a] = static_cast<double>(box.period[a]);
+        }
+    }
+};
+
+// Stored centre of row t minus point q, nearest image, in box units: exact up to one rounding.
+// Used by: faces, tet_repair::move_screened.
+template <class Centre>
+KOKKOS_INLINE_FUNCTION Vec3 from_point(const Centre& centre, int t, const GridPoint& q, double step) {
+    double d[3];
+    for (int a = 0; a < 3; ++a) {  // both in [0, period): one shift at most, and no division
+        const double e = centre(t, a) - q.k[a], p = q.period[a];
+        d[a] = (e > 0.5 * p ? e - p : e < -0.5 * p ? e + p : e) * step;
+    }
+    return {d[0], d[1], d[2]};
 }
 
 // The stored circumcentre of tetrahedron t with corners `corners` (any
@@ -954,13 +979,13 @@ KOKKOS_INLINE_FUNCTION void stored_centre(const X& x, const Box& box, const int*
         ep::i128 n[3];
         const ep::i128 det = ep::circumcentre(g[0], g[1], g[2], n);
         if (det != 0) {
-            const double unit = box.step / (2 * double(det));
+            const double unit = 1 / (2 * double(det));
             c = {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
         } else {
             c = rounded_circumcentre(d, volume6);
         }
     }
-    store_centre(x, v[0], c, centre, t);
+    store_centre(x, box, v[0], c, centre, t);
 }
 
 // 1. Circumcentres, one thread per tetrahedron: of the first `count` (all if negative) or of those listed in `only`.
@@ -994,7 +1019,8 @@ void faces(const ExecSpace& exec, const X& x, const Box& box,
             const int i = mesh.owner(f), j = mesh.neighbour(f);
             const int begin = mesh.ring_start(f), end = begin + mesh.ring_length(f);
             const Vec3 p = row(x, i);
-            auto vertex = [&](int m) { return wrap(row(mesh.centre, mesh.ring(m)) - p, box); };
+            const GridPoint q(x, i, box);
+            auto vertex = [&](int m) { return from_point(mesh.centre, mesh.ring(m), q, box.step); };
             const Vec3 dj = snapped_difference<3>(row(x, j) - p, box);
             // Fan triangles (first, previous, v): twice the area vector and (previous + v) weighted by the triangle's
             // area projected on dj, divided once per face (idea from Doug Rennehan's plume, commit 6cbb429).

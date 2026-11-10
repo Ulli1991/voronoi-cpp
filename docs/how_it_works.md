@@ -103,7 +103,7 @@ The control flow of one `update()`:
 |---|---|---|
 | `vertex(t, 0..3)` | tetrahedron | its four particles |
 | `adjacent(t, k)` | tetrahedron | the tetrahedron across the face opposite corner k |
-| `centre(t)` | tetrahedron | its circumcentre (a Voronoi vertex) and squared radius |
+| `centre(t)` | tetrahedron | its circumcentre (a Voronoi vertex) in grid steps, in [0, period), and squared radius |
 | `edges(t)` | tetrahedron | 6 bits: which of its edges it represents; every edge has exactly one representative, so a scan over the bits numbers the faces |
 | `owner(f)`, `neighbour(f)` | face | the two particles, owner < neighbour |
 | `ring_start(f)`, `ring_length(f)`, `ring` | face | the tetrahedra around the edge, in a canonical order |
@@ -161,7 +161,7 @@ In 2D the same scheme runs with Lawson's 2-2 flip:
 
 **How.**
 
-1. `circumcentres`: one per created tetrahedron (all of them after a build). The corners are sorted by id and every operation is rounded on its own, with no fused multiply-add, so the same tetrahedron gets the same bits whichever kernel computes it. Slivers are computed on the integer grid.
+1. `circumcentres`: one per created tetrahedron (all of them after a build). The corners are sorted by id and every operation is rounded on its own, with no fused multiply-add, so the same tetrahedron gets the same bits whichever kernel computes it. Slivers are computed on the integer grid. A centre is computed and stored in grid steps, wrapped into the box and rounded once, so the centres of cospherical tetrahedra, equal in exact arithmetic, get equal bits whichever corner and periodic image they came from ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); `faces` takes a vertex as the centre minus the owner's whole grid step, rounded once.
 2. `update_face_rings`: numbers the faces from the edge bits. A face keeps its ring unless a created tetrahedron lies on it, in which case the ring is walked again around the edge.
 3. `faces`: one thread per face. The face polygon (the circumcentres of its ring) is cut into a fan of triangles. Their area vectors sum to the face's area, and their centroids, weighted by area, give the face centroid. Each of the two cells gets the pyramid over the face, area · d / 6 with d the vector between the generators, added by atomics.
 

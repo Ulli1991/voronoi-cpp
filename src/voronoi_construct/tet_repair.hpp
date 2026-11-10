@@ -374,7 +374,9 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
         "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
             st.dirty(t) = 0;
             if (!st.alive(t)) return;
-            auto from = [&](Vec3 c, int v) { return tet_mesh::wrap(tet_mesh::row(x, v) - c, box); };
+            auto from = [&](int v) {
+                return tet_mesh::from_point(centre, t, tet_mesh::GridPoint(x, v, box), box.step);
+            };
             // Corners sorted by particle id and the centre in rounded arithmetic, as tet_mesh::stored_centre for
             // created tetrahedra: the same bits whichever kernel and corner order computed it.
             int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
@@ -392,8 +394,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             // Well shaped and clearly positive (in the stored corner order), else decide exactly.
             bool suspect = !(parity * volume6 > 1e-3 * shape);
             const Vec3 c = tet_mesh::rounded_circumcentre(d, volume6);
-            tet_mesh::store_centre(x, v[0], c, centre, t);
-            const Vec3 at{centre(t, 0), centre(t, 1), centre(t, 2)};
+            tet_mesh::store_centre(x, box, v[0], c, centre, t);
             const double r2 = centre(t, 3);
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
@@ -402,7 +403,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
                 if (u < t) continue;
                 const int far = tet_mesh::far_vertex(m, t, u);
                 if (far < 0) continue;
-                const Vec3 e = from(at, far);
+                const Vec3 e = from(far);
                 suspect = dot(e, e) < r2 + margin;
             }
             if (suspect) detail::mark(st, t);
