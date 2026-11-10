@@ -40,8 +40,8 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 whose name starts with a given prefix; ctest runs one group per prefix. A case
 requires the exact mesh, or accepts a refusal (an exception) in its place; it
 never accepts a wrong mesh without an error. A case of an open problem would
-carry its issue, be skipped by default and run with `--known`: on CUDA,
-`box.snap_twice.3.09e+24` (#26) and `repro.serial` (#27).
+carry its issue, be skipped by default and run with `--known`: `repro.serial`
+(#27).
 ctest runs a subset within its time budget;
 `MESH_CASES_FULL=1` runs the whole matrix, as the A100 job does. On the A100 a
 failing case of a rare outcome needs repeats: `large.random_walk.10` is wrong

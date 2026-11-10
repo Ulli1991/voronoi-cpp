@@ -16,6 +16,8 @@ The control flow of one `update()`:
 
 **Why.** Rounded arithmetic can answer "inside or outside?" differently for the same four points, depending on their order or on which thread asks. Two cells would then disagree about a face they share, and the mesh would have holes. On the grid, differences are exact integers, so a predicate can be computed exactly whenever doubles are not sure. Each predicate first evaluates its determinant in double with a bound on the rounding error. Only when the value lies inside the bound does it repeat the evaluation in integers: 128 bits for the orientation, a 256-bit sum for the in-sphere test (in 2D, 64 and 128 bits).
 
+**Float keys.** The warp clipping keeps its float keys and plane normals in units of the tile width, so the size of the box never reaches them: a cube of side 3.086e24 builds on CUDA ([#26](https://github.com/Ulli1991/voronoi-cpp/issues/26)).
+
 **Ties.** Points that lie exactly on one sphere (on a lattice, for example) give an exact zero. The tie is broken by symbolic perturbation: each point's lift |p|² is raised by εⁱᵈ, so the particle with the lowest id is raised most. Every caller, in any argument order, gets the same answer, so the mesh is one well-defined Delaunay tetrahedralization even for cospherical input.
 
 ![Snapping and exact ties](figures/construction_exact.png)

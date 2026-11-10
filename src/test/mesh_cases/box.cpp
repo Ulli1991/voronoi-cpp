@@ -112,8 +112,7 @@ void box_cases() {
             c.expect(r.ok(), r.text());
         });
     for (const double side : {1.0, 3.0, 0.7, 0.1, 1e-3, 1.0 / 3, 3.086e24})
-        add(
-            "box.snap_twice." + sci(side),
+        add("box.snap_twice." + sci(side),
             [=](Check& c) {
                 // Snapping a snapped position must keep it: the mesh's positions
                 // are k * step and tet_start snaps them again.
@@ -136,8 +135,7 @@ void box_cases() {
                 m.update(to_device(lattice));
                 const auto r = oracle::check(mc::grid_of(m), mc::tets_of(m));
                 c.expect(r.ok(), "the lattice in that box: " + r.text());
-            },
-            side > 1e20 ? on_cuda(26) : 0);
+            });
     for (const std::string what : {"nan", "inf", "huge"})
         add("box.nonfinite." + what, [=](Check& c) {
             const Points p = make_points("jittered", 4096);

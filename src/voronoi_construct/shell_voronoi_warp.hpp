@@ -167,9 +167,9 @@ __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uin
 
 // Clip by the bisector with a particle at offset d (all lanes pass the same
 // d). Returns ok when the plane does not cut or after the cut is applied.
-// Used by: Kernel, once per candidate particle.
-__device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, double& radius2, Vec3 d,
-                    int neighbour) {
+// `unit` scales the float normal (Kernel::unit). Used by: Kernel, once per candidate particle.
+__device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, double& radius2, Vec3 d, int neighbour,
+                           double unit) {
     const int l = lane();
     const double offset = 0.5 * dot(d, d);
     // A vertex is cut off when side > 64 eps |d| R, compared in squares.
@@ -265,9 +265,9 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     }
     live = (live & ~removed) | made_low | std::uint64_t(made_high) << 32;
     if (l == 0) {
-        c.nx[plane] = static_cast<float>(d.x);
-        c.ny[plane] = static_cast<float>(d.y);
-        c.nz[plane] = static_cast<float>(d.z);
+        c.nx[plane] = static_cast<float>(d.x * unit);
+        c.ny[plane] = static_cast<float>(d.y * unit);
+        c.nz[plane] = static_cast<float>(d.z * unit);
         c.neighbour[plane] = neighbour;
     }
     planes = plane + 1;
@@ -314,6 +314,9 @@ struct Kernel {
     // Persistent warps take cells from this counter until none are left, so a slow cell holds up only its own warp.
     Kokkos::View<int, MemorySpace> next_cell;
     Selection<MemorySpace> selection;
+    // A power of two near 1 / the narrowest tile width: float keys and normals are in these units, so they neither
+    // overflow nor underflow in any box (#26), and scaling by a power of two keeps their bits and order.
+    double unit = 1, unit2 = 1;  // unit2 = unit^2
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
@@ -364,12 +367,12 @@ struct Kernel {
                         positions(slot, 2) + image(packed, 2) * side[2] - p.z};
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
-                if (k >= 4.0f * static_cast<float>(radius2) * 1.0001f) break;
+                if (k >= 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f) break;
                 const int q = __shfl_sync(all_lanes, slot, i);
                 const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
                              __shfl_sync(all_lanes, mine.z, i)};
                 const int before = planes;
-                status = clip(c, planes, live, radius2, d, q);
+                status = clip(c, planes, live, radius2, d, q, unit);
                 ++clipped;
                 cuts += planes > before;
             }
@@ -412,7 +415,7 @@ struct Kernel {
                     if (buffered + __popc(taking) > lanes) flush();
                     if (take) {
                         const int index = buffered + __popc(taking & ((1u << l) - 1));
-                        c.candidate_distance2[index] = static_cast<float>(d2);
+                        c.candidate_distance2[index] = static_cast<float>(d2 * unit2);
                         c.candidate_slot[index] = q;
                         c.candidate_image[index] = packed;
                     }
@@ -637,6 +640,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
         const bool rings = out.with_rings(), cube = grid.cube();
         const double half_width = detail::start_half_width(grid.box);
+        const double unit = std::ldexp(1.0, -std::ilogb(grid.narrowest)), unit2 = unit * unit;
         using Memory = typename ExecSpace::memory_space;
         const Stencil<Memory> stencil = make_stencil(exec);
         Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
@@ -659,24 +663,27 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if (!selection.all())
                 Kokkos::parallel_for("shell_voronoi::construct_warp_local", policy,
                                      warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell,
-                                                                             selection});
+                                                                             selection, unit, unit2});
             else if (rings)
                 Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
-                                     warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, selection});
+                                     warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell,
+                                                                      selection, unit, unit2});
             else if (off_base > 0 && cube)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
                                      warp::Kernel<Memory, true, false, false, true>{grid, out, half_width, stencil,
-                                                                                    next_cell, selection});
+                                                                                    next_cell, selection, unit, unit2});
             else if (off_base > 0)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, selection});
+                                     warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell,
+                                                                       selection, unit, unit2});
             else if (cube)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, false, false, false, true>{grid, out, half_width, stencil,
-                                                                                     next_cell, selection});
+                                     warp::Kernel<Memory, false, false, false, true>{
+                                         grid, out, half_width, stencil, next_cell, selection, unit, unit2});
             else
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, selection});
+                                     warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell,
+                                                                        selection, unit, unit2});
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed, selection);
         });
         return;

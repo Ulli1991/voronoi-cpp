@@ -214,7 +214,6 @@ Other limits:
 
 - Bit-reproducible moving runs cost 2.4 to 4.7 % on the mesh step alone.
 - CUDA and Serial give different last bits of volumes and centroids ([#27](https://github.com/Ulli1991/voronoi-cpp/issues/27)).
-- On CUDA a build in a cube of side 3.086e24 aborts with an illegal device address ([#26](https://github.com/Ulli1991/voronoi-cpp/issues/26), open); the other sides tested and OpenMP do not.
 - Clipping alone is not watertight on uniform random input at 2.1M cells; the exact start makes the mesh exact.
 - Particles on one grid position (grid step box / 2³⁰) have no Voronoi cell. `update()` refuses them on every path with a `std::runtime_error` naming a pair by id, and does not merge them. Finding out takes a rebuild, so such a step costs one. After a refusal there is no mesh (no faces, no particles) and the next `update()` builds from scratch. Zero particles are a `std::invalid_argument` and change nothing.
 - `update()` does not look at its input: a NaN or infinite coordinate is snapped to some grid position, with no error.
