@@ -281,9 +281,9 @@ Stats finish(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
         });
 
     // The next device repair starts from the patches' edges; their slots need centres.
-    tri_repair::detail::reserve(state.list, edges.size(), false);
-    tri_repair::detail::reserve(state.next, edges.size(), false);
-    tri_repair::detail::reserve(state.touched, state.touched_count + slots.size(), true);
+    tri_repair::detail::reserve(state.list, edges.size());
+    tri_repair::detail::reserve(state.next, edges.size());
+    tri_repair::detail::reserve(state.touched, state.touched_count + slots.size(), state.touched_count);
     const auto list_host = Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(edges.data(), edges.size());
     const auto slots_host = Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(slots.data(), slots.size());
     Kokkos::deep_copy(exec, Kokkos::subview(state.list, std::make_pair(std::size_t(0), edges.size())), list_host);

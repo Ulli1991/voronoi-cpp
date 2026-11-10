@@ -442,8 +442,9 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         if (work_needed > work_capacity) {
             work_capacity = work_needed + work_needed / 2;
             Kokkos::resize(Kokkos::WithoutInitializing, s.work, work_capacity);
-            Kokkos::resize(Kokkos::WithoutInitializing, s.plans, work_capacity);
-            Kokkos::resize(Kokkos::WithoutInitializing, s.freed, work_capacity);
+            // Plans and freed slots are written afresh after the listing: nothing to copy (#47).
+            Kokkos::realloc(Kokkos::WithoutInitializing, s.plans, work_capacity);
+            Kokkos::realloc(Kokkos::WithoutInitializing, s.freed, work_capacity);
             work = s.work;
             plans = s.plans;
             freed = s.freed;

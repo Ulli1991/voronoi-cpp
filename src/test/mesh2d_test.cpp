@@ -42,6 +42,17 @@ auto host(const V& v) {
     return h;
 }
 
+// The first `rows` rows only: the rest of a mesh array is capacity the mesh never writes (#47).
+template <class V>
+auto host(const V& v, std::size_t rows) {
+    Kokkos::View<typename V::non_const_data_type, typename V::memory_space> used("used_rows", rows);
+    if constexpr (V::rank() == 1)
+        Kokkos::deep_copy(used, Kokkos::subview(v, std::make_pair(std::size_t(0), rows)));
+    else
+        Kokkos::deep_copy(used, Kokkos::subview(v, std::make_pair(std::size_t(0), rows), Kokkos::ALL));
+    return host(used);
+}
+
 X device(const Points& p) {
     X v("x", p.size());
     auto h = Kokkos::create_mirror_view(v);
@@ -288,9 +299,9 @@ void check_triangles(Check& check, const Mesh& mesh, const Box& box, const std::
 void check_cells(Check& check, const Mesh& mesh, const Points& p, const Box& box, const std::string& name) {
     const auto volume = host(mesh.volume());
     const auto centroid = host(mesh.centroid());
-    const auto start = host(mesh.cell_face_start()), list = host(mesh.cell_face());
-    const auto owner = host(mesh.owner()), neighbour = host(mesh.neighbour());
-    const auto area = host(mesh.area()), fc = host(mesh.face_centroid());
+    const auto start = host(mesh.cell_face_start()), list = host(mesh.cell_face(), 2 * mesh.faces());
+    const auto owner = host(mesh.owner(), mesh.faces()), neighbour = host(mesh.neighbour(), mesh.faces());
+    const auto area = host(mesh.area(), mesh.faces()), fc = host(mesh.face_centroid(), mesh.faces());
     const auto positions = host(mesh.positions());
     const int n = mesh.particles();
     const double scale = std::sqrt(box.volume() / n);
@@ -360,9 +371,9 @@ Bits bits_of(const Mesh& mesh) {
     Bits b;
     const auto volume = host(mesh.volume());
     const auto centroid = host(mesh.centroid());
-    const auto start = host(mesh.cell_face_start()), list = host(mesh.cell_face());
-    const auto owner = host(mesh.owner()), neighbour = host(mesh.neighbour());
-    const auto area = host(mesh.area()), fc = host(mesh.face_centroid());
+    const auto start = host(mesh.cell_face_start()), list = host(mesh.cell_face(), 2 * mesh.faces());
+    const auto owner = host(mesh.owner(), mesh.faces()), neighbour = host(mesh.neighbour(), mesh.faces());
+    const auto area = host(mesh.area(), mesh.faces()), fc = host(mesh.face_centroid(), mesh.faces());
     for (int i = 0; i < mesh.particles(); ++i) {
         add(b.values, volume(i));
         add(b.values, centroid(i, 0));
@@ -523,17 +534,28 @@ void test_clip(Check& check) {
     for (int i = 0; i < 200; ++i) h(i) = 7 * i;
     Kokkos::deep_copy(cells, h);
     const auto rings = mesh.clip(x, cells);
-    const auto degree = host(rings.degree), start = host(rings.start), ring = host(rings.ring), status = host(rings.status);
-    const auto first = host(mesh.cell_face_start()), list = host(mesh.cell_face());
-    const auto owner = host(mesh.owner()), neighbour = host(mesh.neighbour());
+    // Only the listed cells are built: gather them on the device, as the rest of the arrays is never written (#47).
+    constexpr int most = 32;
+    Kokkos::View<int * [2 + most], Kokkos::LayoutRight, Memory> gathered("gathered", 200);
+    Kokkos::parallel_for(
+        "gather", Kokkos::RangePolicy<Exec>(0, 200), KOKKOS_LAMBDA(int c) {
+            const int i = cells(c);
+            gathered(c, 0) = rings.status(i);
+            gathered(c, 1) = rings.status(i) == polygon_clip::ok ? rings.degree(i) : 0;
+            for (int m = 0; m < Kokkos::min(gathered(c, 1), most); ++m)
+                gathered(c, 2 + m) = rings.ring(rings.start(i) + m);
+        });
+    const auto got = host(gathered);
+    const auto first = host(mesh.cell_face_start()), list = host(mesh.cell_face(), 2 * mesh.faces());
+    const auto owner = host(mesh.owner(), mesh.faces()), neighbour = host(mesh.neighbour(), mesh.faces());
     long long different = 0;
     for (int c = 0; c < 200; ++c) {
         const int i = h(c);
         std::vector<int> a, b;
-        for (int m = 0; m < degree(i); ++m) a.push_back(ring(start(i) + m));
+        for (int m = 0; m < std::min(got(c, 1), most); ++m) a.push_back(got(c, 2 + m));
         for (int k = first(i); k < first(i + 1); ++k) b.push_back(owner(list(k)) == i ? neighbour(list(k)) : owner(list(k)));
         std::sort(a.begin(), a.end());
-        different += a != b || status(i) != polygon_clip::ok;
+        different += a != b || got(c, 0) != polygon_clip::ok || got(c, 1) > most;
     }
     check.expect(different == 0, "clip: the rings of listed cells are their Delaunay neighbours");
 }

@@ -106,12 +106,12 @@ Result check(const M& mesh, int cells = 32, bool check_fresh = true) {
         std::sort(sorted.begin(), sorted.end());
         for (std::size_t i = 1; i < sorted.size(); ++i) r.duplicates += sorted[i] == sorted[i - 1];
     }
-    const auto owner = to_host(mesh.owner());
-    const auto neighbour = to_host(mesh.neighbour());
+    const auto owner = to_host(mesh.owner(), mesh.faces());
+    const auto neighbour = to_host(mesh.neighbour(), mesh.faces());
     const auto area = face_areas(mesh);
     const auto volume = to_host(mesh.volume());
     const auto& box = mesh.sides();
-    const auto face_centroid = to_host(mesh.face_centroid());
+    const auto face_centroid = to_host(mesh.face_centroid(), mesh.faces());
 
     std::vector<std::array<double, 3>> sum(n, {0, 0, 0});
     std::vector<double> magnitude(n, 0);
@@ -212,8 +212,8 @@ bool arbitrate(const M& mesh, std::ostream& out, int faces = 8) {
     const Reference reference = clipped(x, mesh.sides());
     long long bad_status = 0;
     for (const int s : reference.status) bad_status += s != shell_voronoi::ok;
-    const auto owner = to_host(mesh.owner());
-    const auto neighbour = to_host(mesh.neighbour());
+    const auto owner = to_host(mesh.owner(), mesh.faces());
+    const auto neighbour = to_host(mesh.neighbour(), mesh.faces());
     const auto area = face_areas(mesh);
     const auto volume = to_host(mesh.volume());
     std::vector<std::pair<double, int>> extra;

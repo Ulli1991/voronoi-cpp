@@ -4,6 +4,7 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -49,14 +50,15 @@ struct State {
 };
 
 namespace detail {
+// Room for `size` entries of v, keeping its first `keep`; the rest is not copied, as nothing wrote it (#47).
 // Used by: screen, repair, tri_finish::finish.
 template <class V>
-void reserve(V& v, std::size_t size, bool keep) {
+void reserve(V& v, std::size_t size, std::size_t keep = 0) {
     if (v.extent(0) >= size) return;
-    if (keep)
-        Kokkos::resize(v, size + size / 2);
-    else
-        Kokkos::realloc(Kokkos::WithoutInitializing, v, size + size / 2);
+    V grown(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label()), size + size / 2);
+    const auto kept = std::make_pair(std::size_t(0), std::min(keep, v.extent(0)));
+    if (keep > 0) Kokkos::deep_copy(Kokkos::subview(grown, kept), Kokkos::subview(v, kept));
+    v = grown;
 }
 // 32-bit integer hash (multiply/xorshift mix) used to spread a flip token over the lock keys.
 // Used by: Screen::operator(), Apply::operator().
@@ -158,8 +160,8 @@ void screen(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_s
         state.area_stale = bad > 0;
         state.touched_count = 0;
         if (failing <= static_cast<long long>(state.list.extent(0))) return;
-        detail::reserve(state.list, static_cast<std::size_t>(failing), false);
-        detail::reserve(state.next, static_cast<std::size_t>(failing), false);
+        detail::reserve(state.list, static_cast<std::size_t>(failing));
+        detail::reserve(state.next, static_cast<std::size_t>(failing));
     }
 }
 
@@ -381,9 +383,10 @@ Stats repair(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
             break;
         }
         if (wanted == 0) break;
-        detail::reserve(state.next, static_cast<std::size_t>(4 * wanted), false);
-        detail::reserve(state.touched, static_cast<std::size_t>(state.touched_count + 2 * wanted), true);
-        detail::reserve(state.flipped, state.touched.extent(0), true);
+        detail::reserve(state.next, static_cast<std::size_t>(4 * wanted));
+        detail::reserve(state.touched, static_cast<std::size_t>(state.touched_count + 2 * wanted),
+                        static_cast<std::size_t>(state.touched_count));
+        detail::reserve(state.flipped, state.touched.extent(0), static_cast<std::size_t>(state.touched_count) / 2);
         Kokkos::deep_copy(exec, Kokkos::subview(state.used, 0), 0);
         long long flips = 0, entries = 0;
         Kokkos::parallel_reduce("tri_repair::apply", Range(exec, 0, state.entries),

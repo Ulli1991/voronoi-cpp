@@ -98,6 +98,17 @@ auto host(const V& v) {
     return h;
 }
 
+// The first `rows` rows only: the rest of a mesh array is capacity the mesh never writes (#47).
+template <class V>
+auto host(const V& v, std::size_t rows) {
+    Kokkos::View<typename V::non_const_data_type, typename V::memory_space> used("used_rows", rows);
+    if constexpr (V::rank() == 1)
+        Kokkos::deep_copy(used, Kokkos::subview(v, std::make_pair(std::size_t(0), rows)));
+    else
+        Kokkos::deep_copy(used, Kokkos::subview(v, std::make_pair(std::size_t(0), rows), Kokkos::ALL));
+    return host(used);
+}
+
 // Builds the mesh of a grid in a box and reads it back. Used by: every case. Throws what the mesh throws.
 template <int D>
 Snapshot<D> run(const ep::BoxN<D>& box, const Grid<D>& grid) {
@@ -115,8 +126,8 @@ Snapshot<D> run(const ep::BoxN<D>& box, const Grid<D>& grid) {
     voronoi::Mesh<D, Exec> mesh(Exec{}, box);
     mesh.update(x);
     mesh.update_cells();
-    const auto owner = host(mesh.owner()), neighbour = host(mesh.neighbour());
-    const auto area = host(mesh.area()), fc = host(mesh.face_centroid());
+    const auto owner = host(mesh.owner(), mesh.faces()), neighbour = host(mesh.neighbour(), mesh.faces());
+    const auto area = host(mesh.area(), mesh.faces()), fc = host(mesh.face_centroid(), mesh.faces());
     const auto volume = host(mesh.volume());
     const auto centroid = host(mesh.centroid());
     for (int i = 0; i < n; ++i) {

@@ -16,8 +16,8 @@ using Face = std::pair<int, int>;
 // The faces of a mesh by particle pair: area vector from the lower id. `rename` maps the mesh's particle
 // numbers to those of another run (permutation test). Used by: the face, permutation and local-rebuild sections.
 std::map<Face, Point> faces_of(const Mesh& mesh, const std::vector<int>& rename = {}) {
-    const auto owner = to_host(mesh.owner());
-    const auto neighbour = to_host(mesh.neighbour());
+    const auto owner = to_host(mesh.owner(), mesh.faces());
+    const auto neighbour = to_host(mesh.neighbour(), mesh.faces());
     const auto area = face_areas(mesh);
     std::map<Face, Point> faces;
     for (int f = 0; f < mesh.faces(); ++f) {
@@ -58,8 +58,8 @@ int main(int argc, char** argv) {
     check.expect(first.rebuilt && first.start.exact, "the first update builds an exact mesh");
 
     {  // faces once, owner < neighbour, closing every cell; volumes fill the box
-        const auto owner = to_host(mesh.owner());
-        const auto neighbour = to_host(mesh.neighbour());
+        const auto owner = to_host(mesh.owner(), mesh.faces());
+        const auto neighbour = to_host(mesh.neighbour(), mesh.faces());
         const auto area = face_areas(mesh);
         const auto volume = to_host(mesh.volume());
         std::vector<Point> closure(n, Point{0, 0, 0});
@@ -88,9 +88,9 @@ int main(int argc, char** argv) {
     }
     {  // per-cell face lists
         const auto start = to_host(mesh.cell_face_start());
-        const auto face = to_host(mesh.cell_face());
-        const auto owner = to_host(mesh.owner());
-        const auto neighbour = to_host(mesh.neighbour());
+        const auto face = to_host(mesh.cell_face(), 2 * mesh.faces());
+        const auto owner = to_host(mesh.owner(), mesh.faces());
+        const auto neighbour = to_host(mesh.neighbour(), mesh.faces());
         std::vector<int> seen(mesh.faces(), 0);
         long long wrong = 0;
         for (int i = 0; i < n; ++i) {
@@ -162,9 +162,10 @@ int main(int argc, char** argv) {
         const auto& local = mesh.clip(x, cells);
         const auto status = to_host(local.status);
         const auto owned = to_host(local.owned_count);
-        const auto start = to_host(local.face_start);
-        const auto neighbour = to_host(local.neighbour);
-        const auto area = to_host(local.area);
+        const OwnedFaces packed = owned_faces(local);
+        const auto& start = packed.start;
+        const auto& neighbour = packed.neighbour;
+        const auto& area = packed.area;
         const auto faces = faces_of(mesh);
         std::vector<char> is_listed(n, 0);
         for (int i : listed) is_listed[i] = 1;
@@ -173,7 +174,7 @@ int main(int argc, char** argv) {
         long long bad = 0;
         for (int i : listed) {
             bad += status(i) != shell_voronoi::ok;
-            for (int f = start(i); f < start(i) + owned(i); ++f) {
+            for (long long f = start[i]; f < start[i] + owned(i); ++f) {
                 const int j = neighbour(f);
                 const double sign = i < j ? 1 : -1;
                 const Face pair = std::minmax(i, j);

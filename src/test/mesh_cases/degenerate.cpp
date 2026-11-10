@@ -101,7 +101,7 @@ void degenerate_cases() {
             for (auto& q : p) q[0] = wrap(q[0] + 256 * grid_step);
             for (int s = 0; s < 2; ++s) {
                 const auto area = face_areas(m);
-                const auto centroid = to_host(m.face_centroid());
+                const auto centroid = to_host(m.face_centroid(), m.faces());
                 long long zero = 0, bad = 0;
                 for (int f = 0; f < m.faces(); ++f) {
                     double a2 = 0;

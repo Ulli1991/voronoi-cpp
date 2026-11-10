@@ -18,11 +18,11 @@ using namespace support;
 // Used by: the from_rings check in main (tet_mesh::from_rings).
 std::set<std::array<int, 4>> tets_from_rings(const shell_voronoi::Cells<Memory>& cells) {
     const auto owned = to_host(cells.owned_count);
-    const auto start = to_host(cells.ring_start);
-    const auto rings = to_host(cells.rings);
+    std::vector<long long> start;
+    const auto rings = ring_entries(cells, start);
     std::set<std::array<int, 4>> tets;
     for (int i = 0; i < static_cast<int>(owned.extent(0)); ++i)
-        for (long long f = 0, at = start(i); f < owned(i); ++f) {
+        for (long long f = 0, at = start[i]; f < owned(i); ++f) {
             const int j = rings(at), k = rings(at + 1);
             for (int m = 0; m < k; ++m) {
                 std::array<int, 4> key{i, j, rings(at + 2 + m), rings(at + 2 + (m + 1) % k)};
@@ -108,10 +108,10 @@ int main(int argc, char** argv) {
                     represented.push_back(std::minmax(vertex(t, a), vertex(t, b)));
                 }
         const auto owned = to_host(cells.owned_count);
-        const auto start = to_host(cells.ring_start);
-        const auto rings = to_host(cells.rings);
+        std::vector<long long> start;
+        const auto rings = ring_entries(cells, start);
         for (int i = 0; i < n; ++i)
-            for (long long f = 0, at = start(i); f < owned(i); ++f, at += 2 + rings(at + 1))
+            for (long long f = 0, at = start[i]; f < owned(i); ++f, at += 2 + rings(at + 1))
                 owned_faces.push_back({i, rings(at)});
         std::sort(represented.begin(), represented.end());
         std::sort(owned_faces.begin(), owned_faces.end());

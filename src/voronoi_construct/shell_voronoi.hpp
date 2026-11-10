@@ -53,7 +53,7 @@ struct Cells {
     // a part-used block per warp; built: cells to build (all by default, fewer for a local rebuild).
     Cells(int n, bool with_diagnostics, int faces_per_cell = 10, int built = -1) : Cells(n) {
         if (built < 0) built = n;
-        face_start = Kokkos::View<int*, MemorySpace>(uninitialized("cell_face_start"), n);
+        face_start = Kokkos::View<int*, MemorySpace>("cell_face_start", n);  // zeroed: copied whole (#47)
         face_used = Kokkos::View<unsigned*, MemorySpace>("cell_face_used", 1);
         reallocate(static_cast<long long>(faces_per_cell) * built +
                    static_cast<long long>(face_block) * Kokkos::min(built, 8192));
@@ -64,7 +64,7 @@ struct Cells {
     // Cells that record face rings, room for `entries` (about 60 per cell).
     static Cells with_rings(int n, long long entries) {
         Cells c(n);
-        c.ring_start = Kokkos::View<long long*, MemorySpace>(uninitialized("cell_ring_start"), n);
+        c.ring_start = Kokkos::View<long long*, MemorySpace>("cell_ring_start", n);  // zeroed: copied whole (#47)
         c.ring_used = Kokkos::View<unsigned*, MemorySpace>("cell_ring_used", chunks(n));
         c.reallocate(entries);
         return c;
@@ -463,6 +463,38 @@ void copy_back(const From& from, const To& to) {
     Kokkos::deep_copy(to, mirror);
 }
 
+// A host pool of the size of device pool `from`, not copied: the host pass only adds entries (#47).
+// Used by: construct_huge.
+template <class To, class From>
+To host_pool(const From& from) {
+    if (from.data() == nullptr) return To{};
+    return To(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(from.label())), from.extent(0));
+}
+
+// Device pool `to` = host pool `from` at the entries the host pass added: per chunk c of `chunks`, from `before(c)` to
+// `after(c)` (at most the chunk). The rest of a pool is capacity no build wrote, and is not copied (#47).
+// Used by: construct_huge.
+template <class From, class To, class Used>
+void copy_back_added(const From& from, const To& to, const Used& before, const Used& after) {
+    if (to.data() == nullptr) return;
+    const std::size_t chunks = before.extent(0), chunk = to.extent(0) / chunks;
+    for (std::size_t c = 0; c < chunks; ++c) {
+        const auto rows = std::make_pair(c * chunk + std::min<std::size_t>(before(c), chunk),
+                                         c * chunk + std::min<std::size_t>(after(c), chunk));
+        if (rows.second <= rows.first) continue;
+        if constexpr (To::rank() == 1) {
+            Kokkos::deep_copy(Kokkos::subview(to, rows), Kokkos::subview(from, rows));
+        } else {
+            Kokkos::View<typename To::non_const_value_type*, Kokkos::HostSpace> column("column",
+                                                                                       rows.second - rows.first);
+            for (int a = 0; a < static_cast<int>(to.extent(1)); ++a) {
+                Kokkos::deep_copy(column, Kokkos::subview(from, rows, a));
+                Kokkos::deep_copy(Kokkos::subview(to, rows, a), column);
+            }
+        }
+    }
+}
+
 // The cells that overflowed big exact cells: exact cells of huge capacity, on
 // the host, with the grid and the results copied there and back unless they
 // are there already. A rare path: its cost per cell grows as faces x vertices.
@@ -500,13 +532,15 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
         c.volume = host_copy<decltype(c.volume)>(out.volume);
         c.centroid = host_copy<decltype(c.centroid)>(out.centroid);
         c.face_start = host_copy<decltype(c.face_start)>(out.face_start);
-        c.neighbour = host_copy<decltype(c.neighbour)>(out.neighbour);
-        c.area = host_copy<decltype(c.area)>(out.area);
-        c.face_centroid = host_copy<decltype(c.face_centroid)>(out.face_centroid);
+        c.neighbour = host_pool<decltype(c.neighbour)>(out.neighbour);
+        c.area = host_pool<decltype(c.area)>(out.area);
+        c.face_centroid = host_pool<decltype(c.face_centroid)>(out.face_centroid);
         c.face_used = host_copy<decltype(c.face_used)>(out.face_used);
-        c.rings = host_copy<decltype(c.rings)>(out.rings);
+        c.rings = host_pool<decltype(c.rings)>(out.rings);
         c.ring_start = host_copy<decltype(c.ring_start)>(out.ring_start);
         c.ring_used = host_copy<decltype(c.ring_used)>(out.ring_used);
+        const auto face_before = host_copy<decltype(c.face_used)>(out.face_used);
+        const auto ring_before = host_copy<decltype(c.ring_used)>(out.ring_used);
         const Selection<HostMemory> s{host_copy<Kokkos::View<int*, HostMemory>>(selection.slots),
                                       host_copy<Kokkos::View<char*, HostMemory>>(selection.listed)};
         construct_pass<Huge>(Host{}, g, make_stencil(Host{}), c, Pass::overflowed, s);
@@ -516,11 +550,11 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
         copy_back(c.volume, out.volume);
         copy_back(c.centroid, out.centroid);
         copy_back(c.face_start, out.face_start);
-        copy_back(c.neighbour, out.neighbour);
-        copy_back(c.area, out.area);
-        copy_back(c.face_centroid, out.face_centroid);
+        copy_back_added(c.neighbour, out.neighbour, face_before, c.face_used);
+        copy_back_added(c.area, out.area, face_before, c.face_used);
+        copy_back_added(c.face_centroid, out.face_centroid, face_before, c.face_used);
         copy_back(c.face_used, out.face_used);
-        copy_back(c.rings, out.rings);
+        copy_back_added(c.rings, out.rings, ring_before, c.ring_used);
         copy_back(c.ring_start, out.ring_start);
         copy_back(c.ring_used, out.ring_used);
     }

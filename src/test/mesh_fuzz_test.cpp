@@ -98,10 +98,10 @@ void check_snap(const M& mesh, const Points& x, Outcome& out, int at) {
 // the separation, duplicates of a pair, each centroid on its bisector, float rows.
 template <class M>
 void check_faces(const M& mesh, const voronoi::Report& report, Outcome& out, int at) {
-    const auto owner = support::to_host(mesh.owner());
-    const auto neighbour = support::to_host(mesh.neighbour());
+    const auto owner = support::to_host(mesh.owner(), mesh.faces());
+    const auto neighbour = support::to_host(mesh.neighbour(), mesh.faces());
     const auto area = support::face_areas(mesh);
-    const auto centroid = support::to_host(mesh.face_centroid());
+    const auto centroid = support::to_host(mesh.face_centroid(), mesh.faces());
     const auto g = mesh_check::grid_of(mesh);
     const int faces = mesh.faces(), n = mesh.particles();
     if (report.faces != faces)
@@ -165,11 +165,11 @@ void check_faces(const M& mesh, const voronoi::Report& report, Outcome& out, int
 template <class M>
 void check_cell_geometry(const M& mesh, const oracle::Grid& g, int sample, Outcome& out, int at) {
     const int n = mesh.particles();
-    const auto owner = support::to_host(mesh.owner());
-    const auto neighbour = support::to_host(mesh.neighbour());
-    const auto fc = support::to_host(mesh.face_centroid());
+    const auto owner = support::to_host(mesh.owner(), mesh.faces());
+    const auto neighbour = support::to_host(mesh.neighbour(), mesh.faces());
+    const auto fc = support::to_host(mesh.face_centroid(), mesh.faces());
     const auto start = support::to_host(mesh.cell_face_start());
-    const auto list = support::to_host(mesh.cell_face());
+    const auto list = support::to_host(mesh.cell_face(), 2 * mesh.faces());
     const auto centroid = support::to_host(mesh.centroid());
     const int stride = std::max(1, n / std::max(sample, 1));
     double worst_cell = 0, worst_face = 0;
@@ -224,9 +224,9 @@ template <class M>
 void check_lists(const M& mesh, Outcome& out, int at) {
     const int n = mesh.particles(), faces = mesh.faces();
     const auto start = support::to_host(mesh.cell_face_start());
-    const auto list = support::to_host(mesh.cell_face());
-    const auto owner = support::to_host(mesh.owner());
-    const auto neighbour = support::to_host(mesh.neighbour());
+    const auto list = support::to_host(mesh.cell_face(), 2 * mesh.faces());
+    const auto owner = support::to_host(mesh.owner(), mesh.faces());
+    const auto neighbour = support::to_host(mesh.neighbour(), mesh.faces());
     if (start(0) != 0 || start(n) != 2 * faces) {
         out.hit(wrong, "list_bounds", "start(n) " + std::to_string(start(n)) + " faces " + std::to_string(faces), at);
         return;
@@ -272,11 +272,11 @@ void check_weights(const M& mesh, const oracle::Grid& g, Outcome& out, int at) {
     if constexpr (M::with_weights) {
         const int n = mesh.particles();
         const auto start = support::to_host(mesh.cell_face_start());
-        const auto list = support::to_host(mesh.cell_face());
-        const auto owner = support::to_host(mesh.owner());
-        const auto neighbour = support::to_host(mesh.neighbour());
+        const auto list = support::to_host(mesh.cell_face(), 2 * mesh.faces());
+        const auto owner = support::to_host(mesh.owner(), mesh.faces());
+        const auto neighbour = support::to_host(mesh.neighbour(), mesh.faces());
         const auto centroid = support::to_host(mesh.centroid());
-        const auto weights = support::to_host(mesh.gradient_weights());
+        const auto weights = support::to_host(mesh.gradient_weights(), 2 * mesh.faces());
         const double tolerance = std::is_same_v<typename M::WeightReal, float> ? 5e-2 : 1e-6;
         const double gradient[3] = {1, -2, 3};
         long long not_finite = 0, off = 0;

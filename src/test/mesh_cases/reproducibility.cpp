@@ -32,9 +32,9 @@ std::vector<std::uint64_t> trace(const Points& start, double displacement, int s
         const auto volume = to_host(mesh.volume());
         const auto centroid = to_host(mesh.centroid());
         const auto start_of = to_host(mesh.cell_face_start());
-        const auto owner = to_host(mesh.owner());
-        const auto neighbour = to_host(mesh.neighbour());
-        const auto face = to_host(mesh.cell_face());
+        const auto owner = to_host(mesh.owner(), mesh.faces());
+        const auto neighbour = to_host(mesh.neighbour(), mesh.faces());
+        const auto face = to_host(mesh.cell_face(), 2 * mesh.faces());
         std::uint64_t topology = 1469598103934665603ull, geometry = topology;
         for (std::size_t i = 0; i < p.size(); ++i) {
             put(geometry, bits(volume(i)));

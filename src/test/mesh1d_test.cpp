@@ -27,6 +27,17 @@ auto host(const V& v) {
     return h;
 }
 
+// The first `rows` rows only: the rest of a mesh array is capacity the mesh never writes (#47).
+template <class V>
+auto host(const V& v, std::size_t rows) {
+    Kokkos::View<typename V::non_const_data_type, typename V::memory_space> used("used_rows", rows);
+    if constexpr (V::rank() == 1)
+        Kokkos::deep_copy(used, Kokkos::subview(v, std::make_pair(std::size_t(0), rows)));
+    else
+        Kokkos::deep_copy(used, Kokkos::subview(v, std::make_pair(std::size_t(0), rows), Kokkos::ALL));
+    return host(used);
+}
+
 // Uploads 1D positions. Used by: every section that updates the mesh.
 X device(const std::vector<double>& x) {
     X v("x", x.size());
@@ -50,10 +61,11 @@ struct Snapshot {
 // Reads the mesh into a Snapshot. Used by: the moving-mesh section.
 Snapshot read(const Mesh& mesh) {
     const int n = mesh.particles(), faces = mesh.faces();
-    const auto owner = host(mesh.owner()), neighbour = host(mesh.neighbour()), list = host(mesh.cell_face());
-    const auto area = host(mesh.area()), fc = host(mesh.face_centroid());
-    const auto volume = host(mesh.volume());
-    const auto centroid = host(mesh.centroid()), positions = host(mesh.positions());
+    const auto owner = host(mesh.owner(), mesh.faces()), neighbour = host(mesh.neighbour(), mesh.faces()),
+               list = host(mesh.cell_face(), 2 * mesh.particles());
+    const auto area = host(mesh.area(), mesh.faces()), fc = host(mesh.face_centroid(), mesh.faces());
+    const auto volume = host(mesh.volume(), n);
+    const auto centroid = host(mesh.centroid(), n), positions = host(mesh.positions(), n);
     Snapshot s;
     for (int i = 0; i < n; ++i) {
         s.volume.push_back(volume(i));
@@ -173,10 +185,10 @@ long long common(const Interval& a, const Interval& b, bool periodic) {
 // Returns "" when the report is right. Used by: changes_on.
 std::string check_report(const Mesh::Changes& c, const std::vector<Interval>& parents, const std::vector<Interval>& children,
                          const std::vector<int>& child_of_request, const std::vector<Interval>& before, double step, bool periodic) {
-    const auto id = host(c.id);
-    const auto neighbour = host(c.neighbour);
-    const auto overlap = host(c.overlap);
-    const auto volume = host(c.volume);
+    const auto id = host(c.id, c.requested);
+    const auto neighbour = host(c.neighbour, c.requested);
+    const auto overlap = host(c.overlap, c.requested);
+    const auto volume = host(c.volume, c.requested);
     for (int r = 0; r < c.requested; ++r) {
         if (id(r) < 0) continue;
         const Interval& cell = children[child_of_request[r]];
@@ -232,7 +244,7 @@ void changes_on(Check& check, bool periodic, const Exec& exec, std::mt19937_64& 
             const X requests = device(points);
             const std::size_t old_n = x.size();
             const Mesh::Changes& c = mesh.insert(requests);
-            const auto id = host(c.id);
+            const auto id = host(c.id, c.requested);
             std::vector<int> child_of_request(points.size(), -1);
             x.resize(old_n + static_cast<std::size_t>(c.done));
             for (int r = 0; r < c.requested; ++r) {
@@ -263,8 +275,8 @@ void changes_on(Check& check, bool periodic, const Exec& exec, std::mt19937_64& 
             for (std::size_t r = 0; r < ids.size(); ++r) requests_host(r) = ids[r];
             Kokkos::deep_copy(requests, requests_host);
             const Mesh::Changes& c = mesh.remove(requests);
-            const auto id = host(c.id);
-            const auto moved = host(c.moved);
+            const auto id = host(c.id, c.requested);
+            const auto moved = host(c.moved, c.moves);
             std::vector<int> cell_of_request(ids.size(), -1);
             for (int r = 0; r < c.requested; ++r) {
                 if (id(r) >= 0)
@@ -325,10 +337,10 @@ void transfer_at_a_wall(Check& check, const Exec& exec) {
     double total = 0;
     for (int i = 0; i < 64; ++i) total += mass[i] = 1.0 + 0.3 * std::sin(i * 0.37);
     const Mesh::Changes& c = mesh.insert(device({0.01, 1.99}));
-    const auto id = host(c.id);
-    const auto neighbour = host(c.neighbour);
-    const auto overlap = host(c.overlap);
-    const auto volume = host(c.volume);
+    const auto id = host(c.id, c.requested);
+    const auto neighbour = host(c.neighbour, c.requested);
+    const auto overlap = host(c.overlap, c.requested);
+    const auto volume = host(c.volume, c.requested);
     check.expect(neighbour(0, 0) == -1 && neighbour(1, 1) == -2 && c.done == 2, "insertion next to the walls: the wall is reported");
     mass.resize(66);
     for (int r = 0; r < 2; ++r) {
@@ -350,10 +362,8 @@ void transfer_at_a_wall(Check& check, const Exec& exec) {
     x.push_back(1.99);
     mesh.update(device(x));
     check.expect(mesh.sorts() == 0, "the next update finds the order good");
-    check.expect(host(mesh.line().order)(0) == id(0),
-                 "the new point is the first of the line");
-    check.expect(host(mesh.line().order)(65) == id(1),
-                 "and the other the last");
+    check.expect(host(mesh.line().order, mesh.particles())(0) == id(0), "the new point is the first of the line");
+    check.expect(host(mesh.line().order, mesh.particles())(65) == id(1), "and the other the last");
 }
 
 }  // namespace

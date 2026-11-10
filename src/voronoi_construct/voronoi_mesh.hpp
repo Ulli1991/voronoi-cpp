@@ -408,7 +408,7 @@ private:
     template <class X>
     void snap(const X& x) {
         if (static_cast<int>(positions_.extent(0)) != n_)
-            positions_ = tet_mesh::Points4<Memory>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("positions")), n_);
+            positions_ = tet_mesh::Points4<Memory>("positions", n_);  // zeroed once: the 4th column is padding (#47)
         detail::snap_positions(exec_, x, box_, positions_);
     }
 

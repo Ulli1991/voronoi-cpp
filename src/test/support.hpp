@@ -68,6 +68,100 @@ auto to_host(const View& v) {
     return Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, v);
 }
 
+// Host copy of the first `rows` rows of v: a mesh array has capacity past what the mesh writes, and copying unwritten
+// memory is what compute-sanitizer's initcheck reports (#47). Used by: tests reading mesh arrays.
+template <class View>
+auto to_host(const View& v, std::size_t rows) {
+    Kokkos::View<typename View::non_const_data_type, typename View::memory_space> used(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("used_rows")), rows);
+    const auto range = std::make_pair(std::size_t(0), rows);
+    if constexpr (View::rank() == 1)
+        Kokkos::deep_copy(used, Kokkos::subview(v, range));
+    else
+        Kokkos::deep_copy(used, Kokkos::subview(v, range, Kokkos::ALL));
+    return to_host(used);
+}
+
+// The new starts of cell t's entries [start(t), start(t) + length[t]) of a clipping pool, packed in cell order (n + 1,
+// on the device); the rest of a pool is capacity no build writes (#47). Used by: pack_to_host.
+inline Kokkos::View<long long*, Memory> packed_starts(const std::vector<long long>& length,
+                                                      std::vector<long long>& packed) {
+    const std::size_t n = length.size();
+    packed.assign(n + 1, 0);
+    for (std::size_t t = 0; t < n; ++t) packed[t + 1] = packed[t] + length[t];
+    Kokkos::View<long long*, Memory> offset("packed_offset", n + 1);
+    Kokkos::deep_copy(offset, Kokkos::View<const long long*, Kokkos::HostSpace>(packed.data(), n + 1));
+    return offset;
+}
+
+// A pool of one value per entry, packed on the host (see packed_starts). Used by: owned_faces, ring_entries.
+template <class Pool, class Start>
+Kokkos::View<int*, Kokkos::HostSpace> pack_to_host(const Pool& pool, const Start& start,
+                                                   const std::vector<long long>& length,
+                                                   std::vector<long long>& packed) {
+    const auto offset = packed_starts(length, packed);
+    Kokkos::View<int*, Memory> out(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("packed_pool")),
+                                   packed.back());
+    Kokkos::parallel_for(
+        "support::pack", Kokkos::RangePolicy<Exec>(0, static_cast<int>(length.size())), KOKKOS_LAMBDA(int t) {
+            for (long long f = 0; f < offset(t + 1) - offset(t); ++f) out(offset(t) + f) = pool(start(t) + f);
+        });
+    return Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, out);
+}
+
+// A pool of vectors, packed on the host (see packed_starts). Used by: owned_faces.
+template <class Pool, class Start>
+Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> pack3_to_host(const Pool& pool, const Start& start,
+                                                                                const std::vector<long long>& length,
+                                                                                std::vector<long long>& packed) {
+    const auto offset = packed_starts(length, packed);
+    Kokkos::View<double* [3], Kokkos::LayoutRight, Memory> out(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("packed_pool")), packed.back());
+    Kokkos::parallel_for(
+        "support::pack3", Kokkos::RangePolicy<Exec>(0, static_cast<int>(length.size())), KOKKOS_LAMBDA(int t) {
+            for (long long f = 0; f < offset(t + 1) - offset(t); ++f)
+                for (int a = 0; a < 3; ++a) out(offset(t) + f, a) = pool(start(t) + f, a);
+        });
+    return Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, out);
+}
+
+// The owned faces of a clipping build on the host: cell t's are [start[t], start[t + 1]) of the packed arrays.
+// Filled by owned_faces. Used by: check_cells, by_particle, voronoi_mesh_test.
+struct OwnedFaces {
+    std::vector<long long> start;
+    Kokkos::View<int*, Kokkos::HostSpace> neighbour;
+    Kokkos::View<double* [3], Kokkos::LayoutRight, Kokkos::HostSpace> area, centroid;
+};
+
+inline OwnedFaces owned_faces(const shell_voronoi::Cells<Memory>& cells) {
+    const auto owned = to_host(cells.owned_count);
+    const std::vector<long long> length(owned.data(), owned.data() + owned.extent(0));
+    OwnedFaces f;
+    f.neighbour = pack_to_host(cells.neighbour, cells.face_start, length, f.start);
+    f.area = pack3_to_host(cells.area, cells.face_start, length, f.start);
+    f.centroid = pack3_to_host(cells.face_centroid, cells.face_start, length, f.start);
+    return f;
+}
+
+// The face rings of a clipping build on the host, cell t's at [start[t], start[t + 1]); see owned_faces.
+// Used by: mesh_test.
+inline Kokkos::View<int*, Kokkos::HostSpace> ring_entries(const shell_voronoi::Cells<Memory>& cells,
+                                                          std::vector<long long>& start) {
+    const auto owned = cells.owned_count;
+    const auto ring_start = cells.ring_start;
+    const auto rings = cells.rings;
+    Kokkos::View<long long*, Memory> entries("ring_entries", owned.extent(0));
+    Kokkos::parallel_for(
+        "support::ring_lengths", Kokkos::RangePolicy<Exec>(0, static_cast<int>(owned.extent(0))), KOKKOS_LAMBDA(int t) {
+            long long length = 0;
+            for (int f = 0; f < owned(t); ++f) length += 2 + rings(ring_start(t) + length + 1);
+            entries(t) = length;
+        });
+    const auto length = to_host(entries);
+    return pack_to_host(rings, ring_start, std::vector<long long>(length.data(), length.data() + length.extent(0)),
+                        start);
+}
+
 // Degenerate layouts "<layout>@<perturbation>" (perturbation in spacings, uniform in each coordinate):
 // sc, bcc, fcc lattices; shells of 12 points (12 cells meet at the centre); planes; pairs with a twin.
 // Used by: make_points_off_grid, for the "sc@..." / "shells@..." kinds of start_test, repair_test, voronoi_mesh_test.
@@ -323,9 +417,10 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     const auto status = to_host(cells.status);
     const auto face_count = to_host(cells.face_count);
     const auto owned_count = to_host(cells.owned_count);
-    const auto start = to_host(cells.face_start);
-    const auto neighbour = to_host(cells.neighbour);
-    const auto centroid = to_host(cells.face_centroid);
+    const OwnedFaces packed = owned_faces(cells);
+    const auto& start = packed.start;
+    const auto& neighbour = packed.neighbour;
+    const auto& centroid = packed.centroid;
     const auto volume = to_host(cells.volume);
     const auto closure = to_host(cells.closure);
     const auto work = to_host(cells.work);
@@ -352,7 +447,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
     for (int t = 0; t < n; t += stride)
         for (int f = 0; f < owned_count(t); ++f) {
             Point c;
-            for (int a = 0; a < 3; ++a) c[a] = x(t, a) + centroid(start(t) + f, a);
+            for (int a = 0; a < 3; ++a) c[a] = x(t, a) + centroid(start[t] + f, a);
             auto distance = [&](int k) {
                 double d2 = 0;
                 for (int a = 0; a < 3; ++a) {
@@ -361,7 +456,7 @@ inline int check_cells(const shell_voronoi::Cells<Memory>& cells, const Position
                 }
                 return std::sqrt(d2);
             };
-            const double own = distance(t), other = distance(neighbour(start(t) + f));
+            const double own = distance(t), other = distance(neighbour(start[t] + f));
             double closest = own;
             for (int k = 0; k < n; ++k) closest = std::min(closest, distance(k));
             const double error = std::max(std::abs(own - other), own - closest) / own;
@@ -426,8 +521,9 @@ struct Reference {
 // The cells of a clipping build, by particle.
 inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells) {
     const auto owned = to_host(cells.owned_count);
-    const auto start = to_host(cells.face_start);
-    const auto neighbour = to_host(cells.neighbour);
+    const OwnedFaces packed = owned_faces(cells);
+    const auto& start = packed.start;
+    const auto& neighbour = packed.neighbour;
     const auto volume = to_host(cells.volume);
     const auto status = to_host(cells.status);
     const int n = static_cast<int>(owned.extent(0));
@@ -435,7 +531,7 @@ inline Reference by_particle(const shell_voronoi::Cells<Memory>& cells) {
                 std::vector<int>(status.data(), status.data() + n)};
     for (int i = 0; i < n; ++i)
         for (int f = 0; f < owned(i); ++f) {
-            const int j = neighbour(start(i) + f);
+            const int j = neighbour(start[i] + f);
             r.neighbours[i].push_back(j);
             r.neighbours[j].push_back(i);
         }
@@ -565,8 +661,8 @@ Comparison compare_with_rebuild(const M& mesh, const Positions& x) {
             c.missing += i < j && !std::binary_search(neighbours[i].begin(), neighbours[i].end(), j);
     }
     c.clipped_faces /= 2;
-    const auto owner = to_host(mesh.owner());
-    const auto neighbour = to_host(mesh.neighbour());
+    const auto owner = to_host(mesh.owner(), mesh.faces());
+    const auto neighbour = to_host(mesh.neighbour(), mesh.faces());
     const auto area = face_areas(mesh);
     c.faces = mesh.faces();
     for (int f = 0; f < c.faces; ++f) {
@@ -577,7 +673,7 @@ Comparison compare_with_rebuild(const M& mesh, const Positions& x) {
                                                         area(f, 2) * area(f, 2)) / (spacing * spacing));
     }
     const auto start = to_host(mesh.cell_face_start());
-    const auto list = to_host(mesh.cell_face());
+    const auto list = to_host(mesh.cell_face(), mesh.cells_current() ? 2 * mesh.faces() : 0);
     c.wrong_lists = mesh.cells_current() ? std::abs(start(n) - 2 * mesh.faces()) : 0;
     for (int i = 0; i < n; ++i)
         for (int a = start(i), last = -1; mesh.cells_current() && a < start(i + 1) && c.wrong_lists == 0; ++a) {
