@@ -468,10 +468,8 @@ inline void separate(Points& x, const Box& box, Rng& rng) {
     std::vector<std::array<int, 3>> taken;
     taken.reserve(x.size());
     for (const auto& o : order) taken.push_back(o.first);
-    bool any = false;
     for (std::size_t i = 1; i < order.size(); ++i) {
         if (order[i].first != order[i - 1].first) continue;
-        any = true;
         std::array<int, 3> k = order[i].first;
         do {
             const int a = rng.below(3);
@@ -480,7 +478,6 @@ inline void separate(Points& x, const Box& box, Rng& rng) {
         } while (std::binary_search(taken.begin(), taken.end(), k));
         for (int a = 0; a < 3; ++a) x[order[i].second][a] = static_cast<double>(k[a]) * box.step;
     }
-    (void)any;
 }
 
 // The fewest particles that leave the cells of an even set inside the reach
