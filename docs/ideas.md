@@ -4,14 +4,14 @@ Every idea from the research review of 2026-11-08, checked on 2026-11-09 against
 
 Where we stand, for scale: one A100, double precision, 2.1M cells. Full rebuild 19.7 M cells/s on uniform random points and 39.4 on jittered ones; exact start 17.7; moving step with cell lists 154 M cells/s at 0.03 spacings. Memory 2319 B/cell with the hydro, so about 256³ fits on a 40 GB A100, against a target of 384³ (about 720 B/cell). We think both speed and memory are still well short of what the hardware allows.
 
-Status: **done** (in the code), **next** (first in line), **open** (a real candidate, not started), **research** (bigger, uncertain).
+Status: **done** (in the code), **next** (first in line), **open** (a real candidate, not started), **research** (bigger, uncertain), **dropped** (a first test said no).
 
 ## Measure first
 
 | ID | Idea | Buys | First test | Status |
 |---|---|---|---|---|
-| A | Cost attribution per cell: candidates tested, planes kept, clips, vertices, topology edits, repair rounds, scratch size, register spills, bytes written; tails, not only means; Nsight Compute stalls and divergence | decides every speed item below | histograms on jittered, uniform, clustered, halo and anisotropic input | next |
-| R3 | The gap between what we store and what the hydro needs: neighbours, area vectors, face centroids, volumes, centroids, face motion | memory | list every array by B/cell and its reader (the memory profile has most of it, #28) | next |
+| A | Cost attribution per cell: candidates tested, planes kept, clips, vertices, topology edits, repair rounds, scratch size, register spills, bytes written; tails, not only means; Nsight Compute stalls and divergence | decides every speed item below | histograms on jittered, uniform, clustered, halo and anisotropic input | done, [measure_2026-11-10.md](measure_2026-11-10.md) |
+| R3 | The gap between what we store and what the hydro needs: neighbours, area vectors, face centroids, volumes, centroids, face motion | memory | list every array by B/cell and its reader (the memory profile has most of it, #28) | done, [measure_2026-11-10.md](measure_2026-11-10.md) |
 | R9 | Time to solution at fixed error as the final score, not cells/s | right decisions | already used in luna-cpp; apply to every mesh change that affects the hydro | done, keep |
 
 ## Speed of construction (rebuild and start)
@@ -19,7 +19,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 | ID | Idea | Buys | First test | Status |
 |---|---|---|---|---|
 | B | Candidate order: nearest first (ours), best-first with geometric bounds, directional support bounds, predicted cut strength; previous neighbours first so the cell shrinks early | fewer clips, mostly on clustered input | V3's spread test below | open |
-| V3 | Learned or tuned clipping order: offline orders, derivative-free tuning first, then differentiable ranking (NeuralSort, Blondel et al.), Enzyme on the scoring surrogate only | fewer clips | shuffle the same candidates, measure the spread in work; drop it if the spread is small | open |
+| V3 | Learned or tuned clipping order: offline orders, derivative-free tuning first, then differentiable ranking (NeuralSort, Blondel et al.), Enzyme on the scoring surrogate only | fewer clips | shuffle the same candidates, measure the spread in work; drop it if the spread is small | dropped: the shuffle test showed little spread, [measure_2026-11-10.md](measure_2026-11-10.md) |
 | R8 | Bounds that prove a bisector cannot cut the current cell: support function or directional box, cascaded before the exact clip, as in Taveira et al. 2026 | fewer clips, clustered input | microbenchmark: rejection rate, false positives, cost per test against a clip | next |
 | C | Cell representation: explicit vertices and edges (ours), plane-index triplets, compact fixed capacity, a hybrid for small and large cells; same plane sequence for all | speed, registers | replay recorded plane sequences through each representation | open |
 | O7, R7 | Kernel portfolio: a lean kernel for ordinary cells and a separate queue for the large tail; classifier cost included | speed on clustered input | needs A's tail histogram; then end-to-end time with dispatch | open |
