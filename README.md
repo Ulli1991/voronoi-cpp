@@ -230,12 +230,12 @@ Other limits:
 
 ## Roadmap
 
-Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the refusals above, a mesh fuzz driver, and the fixes of the silent volume errors ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), the 2D hang ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)) and a bad read in the host fallback ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)).
+Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the refusals above, a mesh fuzz driver, and the fixes of the silent volume errors ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), the 2D hang ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)) and a bad read in the host fallback ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)), the reach rule ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)), a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)), cgs-sized boxes on CUDA ([#26](https://github.com/Ulli1991/voronoi-cpp/issues/26)) and a stated box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)).
 
-1. Find the cause of the remaining fuzz failures ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)) Done: the box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)), the reach rule ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)) and a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
-2. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
-3. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
-4. Mesh speed: a re-sort when the order has decayed ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)), faces numbered by owner, then repair rounds and the fixed cost per step.
+1. Find the cause of the remaining fuzz failures ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)), and run the fuzz on the GPU at millions of points.
+2. Mesh speed: measure the cost per cell first, then a re-sort when the order has decayed ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)), faces numbered by owner, fewer clips, and the repair rounds and fixed cost per step.
+3. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
+4. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
 5. Clustered rebuild tuning.
 6. Multi-GPU: overlapped against blocking communication across two nodes first.
 7. Refinement and derefinement in 3D.
