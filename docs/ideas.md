@@ -51,7 +51,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 | #28 | Ranked savings from the memory profile: float faces (197 B/cell), `tet_centre` float or not stored (125 to 250), repair lists (112), tetrahedron spare 1/32 (56), one position array (56), ring pool (42), idle cell list (41), 16-bit ring lengths (25); lower start peak | 384³ on one A100 | apply in that order, measuring B/cell and speed at each | next |
 | R3 | Store only what the hydro reads; compute face geometry on the fly where it is cheaper than storing it | memory, maybe speed | the reader list from R3 above | open |
 | R6 | Precision by condition: float where geometry is well conditioned, double or exact near uncertain decisions; topology is never approximate | memory and speed | error of float face moments against double across inputs, and the hydro error it causes | open |
-| — | 64-bit offsets past 325³ (ring pool) and 508³ (cell faces) | correctness at large sizes | needed before 384³ | open |
+| — | 64-bit offsets: the ring pool's 32-bit offsets overflow between 256³ and 384³, the cell faces' between 384³ and 512³ | correctness at large sizes | needed before 384³ | open |
 | R14 | Fuse face geometry with the hydro's flux: compute a face's geometry and use it at once, instead of storing faces and reading them back | memory (face arrays are 197 B/cell each for area and centroid) and memory traffic | geometry write and read traffic in the profile, then a small fused face and flux kernel; MUSCL-Hancock needs cell gradients first, so full fusion may not be possible | research |
 
 ## Accuracy of geometry
