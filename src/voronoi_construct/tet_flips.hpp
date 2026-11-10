@@ -32,7 +32,8 @@ struct Mesh {
 // What finish() did (flips23/flips32 are the device repairs it reran). Used by: Mesh::update (Report::host_*).
 struct Stats {
     long long flips23 = 0, flips32 = 0, rebuilt = 0;  // device flips and local rebuilds
-    int stuck = 0;                                    // entries finish() left
+    long long work = 0;  // tetrahedra the local Delaunay builds created (the host's cost, see budget)
+    int stuck = 0;       // entries finish() left
 };
 
 namespace detail {
@@ -102,7 +103,7 @@ inline std::vector<int> replace(Mesh& m, const std::vector<int>& old, std::vecto
 // tetrahedron (corners n..n+3), near to far, each located by walking from the previous cavity. Returns the live
 // tetrahedra, or nothing if point location fails. `p` are offsets from the local origin, `id` their particle ids.
 // Used by: rebuild.
-inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id) {
+inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id, long long* work = nullptr) {
     const int n = static_cast<int>(p.size());
     long long extent = 1;
     for (const auto& q : p) extent = std::max({extent, std::abs(q[0]), std::abs(q[1]), std::abs(q[2])});
@@ -200,6 +201,7 @@ inline std::vector<Tet> delaunay(std::vector<ep::Offset> p, std::vector<int> id)
     std::vector<Tet> out;
     for (std::size_t t = 0; t < tet.size(); ++t)
         if (alive[t]) out.push_back(tet[t]);
+    if (work != nullptr) *work += static_cast<long long>(tet.size());
     return out;
 }
 
@@ -242,7 +244,7 @@ inline std::vector<int> vertices_of(const Mesh& m, const std::vector<int>& tets)
 // the old boundary exactly; otherwise adds the particles of the faces that did not fit and retries. Returns the
 // new tetrahedra, or nothing after eight tries or if a particle would be lost. t, u: the stuck triangle's tetrahedra.
 // Used by: repair.
-inline std::vector<int> rebuild(Mesh& m, int t, int u) {
+inline std::vector<int> rebuild(Mesh& m, int t, int u, long long* work = nullptr) {
     std::vector<int> seeds = vertices_of(m, u < 0 ? std::vector<int>{t} : std::vector<int>{t, u});
     for (int attempt = 0; attempt < 8; ++attempt) {
         const std::vector<int> old = stars(m, t, seeds);
@@ -260,7 +262,7 @@ inline std::vector<int> rebuild(Mesh& m, int t, int u) {
         }
         std::vector<Tet> fresh;
         bool reaches_corner = false;
-        for (Tet s : delaunay(local, id)) {
+        for (Tet s : delaunay(local, id, work)) {
             bool keep = false;
             for (int& v : s) {
                 if (v >= static_cast<int>(id.size())) {
@@ -318,11 +320,11 @@ inline bool fails(const Mesh& m, int t, int u) {
 
 // Rebuild the surroundings of every inverted tetrahedron and failing triangle of m locally, in up to eight passes
 // while rebuilds succeed. m is the host region copy. Used by: finish.
-inline Stats repair(Mesh& m) {
+inline Stats repair(Mesh& m, long long budget = std::numeric_limits<long long>::max()) {
     Stats stats;
     for (long long pass = 0, before = -1; pass < 8 && stats.rebuilt > before; ++pass) {
         before = stats.rebuilt;
-        for (int t = 0; t < m.count; ++t) {
+        for (int t = 0; t < m.count && stats.work <= budget; ++t) {
             if (!m.alive(t)) continue;
             int u = -1;
             if (ep::orient(m.point, detail::tet(m, t).data()) > 0) {
@@ -330,7 +332,7 @@ inline Stats repair(Mesh& m) {
                     if (m.adjacent(t, k) >= 0 && detail::fails(m, t, m.adjacent(t, k))) u = m.adjacent(t, k);
                 if (u < 0) continue;
             }
-            stats.rebuilt += !detail::rebuild(m, t, u).empty();  // else stuck: the device lists it again
+            stats.rebuilt += !detail::rebuild(m, t, u, &stats.work).empty();  // else stuck: the device lists it again
         }
     }
     return stats;
@@ -386,10 +388,13 @@ int stuck_region(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace:
 
 // Finish a device repair that left stuck entries: repair the tetrahedra near them on the host, write back,
 // rerun the device repair; entries that remain grow the region once, the rest is stats.stuck.
+// Past `budget` tetrahedra made by the local Delaunay builds (Stats::work) it stops, writes nothing back and reports
+// itself stuck (#33).
 // Used by: voronoi::Mesh<3>::update (when the device repair is stuck and the fallback policy allows the host).
 template <class ExecSpace>
 Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_space>& dm,
-             tet_repair::State<typename ExecSpace::memory_space>& state) {
+             tet_repair::State<typename ExecSpace::memory_space>& state,
+             long long budget = std::numeric_limits<long long>::max()) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     Stats total;
@@ -450,7 +455,13 @@ Stats finish(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 if (it == local.end()) outside[detail::face_key(detail::tet(m, i), k)] = u;
             }
         }
-        total.rebuilt += repair(m).rebuilt;
+        const Stats host = repair(m, budget - total.work);
+        total.rebuilt += host.rebuilt;
+        total.work += host.work;
+        if (total.work > budget) {  // the device mesh is left as it was, stuck: the caller rebuilds
+            total.stuck = Kokkos::max(total.stuck, 1);
+            return total;
+        }
 
         // Changed and new tetrahedra back, with global numbers.
         const int added = m.count - size;

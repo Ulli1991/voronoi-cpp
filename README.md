@@ -207,7 +207,6 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 
 - **24 of about 116,000 fuzz cases are still wrong,** all in boxes whose grid step is not a power of two, after the fix of [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29) removed 398 of 423 ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)). The cause is not known.
 - **Non-finite or negative geometry with no error** at extreme box sizes ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)). The fuzz drew sides from 1e-140 to 1e141; the usable range is not measured or stated yet.
-- `Fallback::host` has no bound on its work: minutes on hundreds of particles ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
 - OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
 - The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, but only 316 on the A100, none of them with millions of points.
 
@@ -221,7 +220,7 @@ Other limits:
 - `update()` does not look at its input: a NaN or infinite coordinate is snapped to some grid position, with no error.
 - A cell may hold up to 16000 planes and 32000 vertices during its exact clipping; past 128 planes or 256 vertices it is built on the host. Past those limits `update()` refuses, naming them. Particles around a void cost O(k²) at the start: about 1 s at k = 2000, 2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
 - A step of order the box (random kicks of 0.6 box) can end the device repair with nothing stuck on a mesh that covers the torus many times. `update()` sees it in the total volume of the cells, off the box by more than 1e-6, and rebuilds (`Report::overlapped`). That check is on the volume alone: a wrong mesh whose volumes still add up to the box within 1e-6 would pass it.
-- `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries (10 at 2.1M cells, none below 200000); the rest is a rebuild, which needs the memory of a start.
+- `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries (10 at 2.1M cells, none below 200000); the rest is a rebuild, which needs the memory of a start. The host path stops after 2²⁰ tetrahedra of local Delaunay builds (about a second on one core) and the step rebuilds instead ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
 - Geometry rounds with the positions: the relative volume of a cell h grid steps wide is good to about 4e-8 / h. Position differences are taken in whole grid steps, so a box whose step is not a power of two is as good as any other (fixed in [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)); the 1 to 3.5 % it costs moving steps buys that. It is exact down to clumps of 512 steps (error 8e-10), and particles one grid step apart are still exact.
 - The device repair breaks down near one spacing of motion per step (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU), repair limited to active regions, and refinement and derefinement are not implemented yet; `update()` takes an `active` list for later.
@@ -234,7 +233,7 @@ Other limits:
 
 Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the refusals above, a mesh fuzz driver, and the fixes of the silent volume errors ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), the 2D hang ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)) and a bad read in the host fallback ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)).
 
-1. Find the cause of the remaining fuzz failures ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)), then state the box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)), the reach limit ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)) and a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
+1. Find the cause of the remaining fuzz failures ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)) and of the non-finite geometry in extreme boxes ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)). Done: the reach rule ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)) and a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
 2. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
 3. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
 4. Mesh speed: a re-sort when the order has decayed ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)), faces numbered by owner, then repair rounds and the fixed cost per step.

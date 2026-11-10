@@ -141,7 +141,7 @@ In 2D the same scheme runs with Lawson's 2-2 flip:
 
 **Rebuild.** Otherwise the mesh is built from scratch (stages 2 to 4).
 
-**Which one.** `Fallback::cheapest` (the default) uses the host only when the stuck entries number at most n / 200000, because the host costs from 0.1 ms to tens of ms per entry and a rebuild has a fixed cost. `Fallback::host` and `Fallback::rebuild` force one path. No clock decides, so the same input takes the same path. An unfinished repair always rebuilds.
+**Which one.** `Fallback::cheapest` (the default) uses the host only when the stuck entries number at most n / 200000, because the host costs from 0.1 ms to tens of ms per entry and a rebuild has a fixed cost. `Fallback::host` and `Fallback::rebuild` force one path. The host stops after `host_budget` (2²⁰) tetrahedra made by its local Delaunay builds, about a second on one core, writes nothing back and leaves the step to a rebuild: unbounded, it took 15 minutes on 501 particles that all moved ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)). No clock decides, so the same input takes the same path. An unfinished repair always rebuilds.
 
 **The volume check.** A step of the order of the box can leave tetrahedra whose corners see each other through different periodic images. Every local test passes, but the mesh covers the torus several times. After the geometry, `update()` compares the total cell volume with the box (within 1e-6) and rebuilds if it is off (`Report::overlapped`). This catches only meshes whose volume is wrong.
 

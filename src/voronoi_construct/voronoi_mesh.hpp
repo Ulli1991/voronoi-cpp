@@ -123,8 +123,10 @@ struct Timings {
 // What update() does when the device repair leaves triangles it cannot repair: repair around them on the host
 // (tet_flips; a rebuild if that does not finish), rebuild from scratch on the device, or (cheapest) choose by the
 // number of stuck entries (host only up to n / 200000, none below 200000 cells). No clock decides: the same input
-// takes the same path.
+// takes the same path. The host stops after host_budget tetrahedra of local Delaunay builds (about a second on one
+// core; the host repairs the fuzz finished took up to 1.7e6) and the mesh is rebuilt instead (#33).
 enum class Fallback { cheapest, host, rebuild };
+constexpr long long host_budget = 1LL << 20;
 
 // The mesh in D dimensions: one interface, an engine per D (3D tetrahedra, 2D voronoi_mesh_2d.hpp, 1D sorted_mesh.hpp).
 //
@@ -191,7 +193,7 @@ public:
             (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 200000 <= n_)) {
             tet_flips::Stats host;
             try {
-                host = tet_flips::finish(exec_, tets_, state_);
+                host = tet_flips::finish(exec_, tets_, state_, host_budget);
             } catch (const std::exception&) {
                 host.stuck = 1;
             }
