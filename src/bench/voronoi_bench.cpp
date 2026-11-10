@@ -1,6 +1,7 @@
 // Bench for the mesh pipeline (the voronoi::Mesh stage of a solver step), not a test: `rebuild` and `step`;
 // flags in docs/design.md. step mirrors a moving run: advect points -> Mesh::update -> update_cells.
 
+#include "device_memory.hpp"
 #include "support.hpp"
 
 #include <cstdint>
@@ -8,11 +9,7 @@
 #include <cstring>
 #include <map>
 #include <string>
-#include <unordered_map>
 #include <utility>
-#ifdef KOKKOS_ENABLE_CUDA
-#include <cuda_runtime_api.h>
-#endif
 #if defined(VORONOI_MEASURE)
 #include "measure.hpp"
 #endif
@@ -20,58 +17,6 @@
 namespace {
 
 using namespace support;
-
-// Device memory accounting through the Kokkos Tools allocation callbacks: current and peak bytes per phase, and the
-// live allocations at the peak. Used by: rebuild, step (phase() after each stage), main (start() with --memory).
-struct DeviceMemory {
-    static inline bool on = false;
-    static inline std::unordered_map<const void*, std::pair<std::string, std::uint64_t>> live;
-    static inline std::uint64_t current = 0, peak = 0;
-    static inline std::map<std::string, std::uint64_t> at_peak;
-
-    static bool device(const Kokkos_Profiling_SpaceHandle& h) { return std::strcmp(h.name, Memory::name()) == 0; }
-    static void allocate(Kokkos_Profiling_SpaceHandle h, const char* label, const void* ptr, std::uint64_t size) {
-        if (!device(h)) return;
-        live[ptr] = {label, size};
-        current += size;
-        if (current <= peak) return;
-        peak = current;
-        at_peak.clear();
-        for (const auto& [p, entry] : live) at_peak[entry.first] += entry.second;
-    }
-    static void deallocate(Kokkos_Profiling_SpaceHandle h, const char*, const void* ptr, std::uint64_t) {
-        if (!device(h)) return;
-        const auto it = live.find(ptr);
-        if (it == live.end()) return;
-        current -= it->second.second;
-        live.erase(it);
-    }
-    static void start() {
-        on = true;
-        Kokkos::Tools::Experimental::set_allocate_data_callback(allocate);
-        Kokkos::Tools::Experimental::set_deallocate_data_callback(deallocate);
-    }
-    // Report the phase that ends here (per cell for n cells), then start the next.
-    static void phase(const std::string& name, int n, bool details = true) {
-        if (!on) return;
-        Kokkos::fence();
-        std::cout << "memory: phase=" << name << " current_MB=" << current / 1e6 << " peak_MB=" << peak / 1e6
-                  << " peak_bytes_per_cell=" << double(peak) / n;
-#ifdef KOKKOS_ENABLE_CUDA
-        // Everything the GPU holds: Kokkos views, CUDA context, kernel local memory.
-        std::size_t free = 0, total = 0;
-        cudaMemGetInfo(&free, &total);
-        std::cout << " gpu_used_MB=" << (total - free) / 1e6;
-#endif
-        std::cout << "\n";
-        if (details)
-            for (const auto& [label, bytes] : at_peak)
-                std::cout << "  " << label << " " << bytes / 1e6 << " MB " << double(bytes) / n << " B/cell\n";
-        peak = current;
-        at_peak.clear();
-        for (const auto& [p, entry] : live) at_peak[entry.first] += entry.second;
-    }
-};
 
 // Time per kernel label through the Kokkos Tools callbacks. Used by: main (start() with --kernels), step (report).
 struct KernelTimes {
@@ -178,7 +123,7 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     neighbor_search::configure(list, n, box, width);
     const double build_ms = median_ms(repeats, [&] { neighbor_search::build(exec, list, x); });
     const auto grid = shell_voronoi::make_grid(list);
-    DeviceMemory::phase("positions_and_cell_list", n);
+    DeviceMemory<Memory>::phase("positions_and_cell_list", n);
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0] << ","
               << box.side[1] << "," << box.side[2] << " tiles=" << list.tiles[0] << "x" << list.tiles[1] << "x"
               << list.tiles[2] << " grid=" << (1 << list.levels) << "^3_per_tile repeats=" << repeats << "\n";
@@ -189,7 +134,7 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
               << " construct_Mcells_s=" << n / construct_ms / 1e3
               << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
     if (check) failures += check_cells(cells, x, std::cout, box);
-    DeviceMemory::phase("warp", n);
+    DeviceMemory<Memory>::phase("warp", n);
 #if defined(VORONOI_MEASURE)
     if (measure_every > 0) measure_bench::clipping(exec, grid, box, measure_every, dump);
 #else
@@ -282,7 +227,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " ring_entries_per_cell=" << double(cells.needed()) / n << "\n";
     }
 
-    DeviceMemory::phase("positions_and_bench_start_kernels", n, false);
+    DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);
     Mesh mesh(exec, box);
     {
         voronoi::Timings t;
@@ -292,7 +237,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " total_ms=" << t.build + t.geometry << " faces=" << r.faces
                   << " faces_per_cell=" << double(r.faces) / n << " cells_checksum=" << cells_checksum(mesh) << "\n";
     }
-    DeviceMemory::phase("start_and_prepare", n);
+    DeviceMemory<Memory>::phase("start_and_prepare", n);
     const Flow flow;
     int failures = 0;
 #if defined(VORONOI_MEASURE)
@@ -325,7 +270,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         failures += !c.pass();
         std::cout << "verify: step=" << s << " " << c << (c.pass() ? "  PASS" : "  FAIL") << "\n";
     }
-    DeviceMemory::phase("steps", n);
+    DeviceMemory<Memory>::phase("steps", n);
     KernelTimes::report(steps - 1, n);
     return failures;
 }
@@ -334,7 +279,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
-    if (has_flag(argc, argv, "--memory")) DeviceMemory::start();
+    if (has_flag(argc, argv, "--memory")) DeviceMemory<Memory>::start();
     if (has_flag(argc, argv, "--kernels")) KernelTimes::start();
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
