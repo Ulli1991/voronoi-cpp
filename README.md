@@ -82,9 +82,43 @@ What a caller can rely on:
 
 What `update()` does with new positions. Normally the mesh is repaired by exact flips on the GPU, which is the green path. If a repair can't finish, or the first time, the mesh is rebuilt from scratch by clipping, the blue path. Input that can't give an exact mesh is refused with an error.
 
-Each step and each rebuild in detail, with the kernels of every stage, what they read and write, where the host waits for the GPU, and measured times: [one step](docs/figures/flow_step.png), [a rebuild](docs/figures/flow_rebuild.png). Where the data lives and how the GPU touches it: [the arrays](docs/figures/data_arrays.png), [access in the clipping](docs/figures/gpu_access_build.png), [access in a step](docs/figures/gpu_access_step.png), [pools and limits](docs/figures/memory_pools.png) ([how_it_works.md](docs/how_it_works.md#12-memory-order-and-numbering), sections 12 to 14).
+Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md); sections 12 to 14 cover memory order, the arrays and the pools.
 
-Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md). In the order a call runs them:
+### One step in detail
+
+![One step of update(x)](docs/figures/flow_step.png)
+
+Every stage of a step on a built mesh: its kernel (file and function), what it reads and writes, and whether it runs on the GPU or the host. The bars give each stage's share of a step at 128³ (22.98 ms). Flips, the ring walk and face geometry take most of it. Red marks are the 33 places per step where the host waits for the GPU.
+
+### A rebuild in detail
+
+![A full rebuild](docs/figures/flow_rebuild.png)
+
+The same for a full build: snap, cell list, clipping with face rings, the exact start, and the persistent arrays sized with spare room. It shows the pool-retry loop and the refusal.
+
+### Where the data lives
+
+![Arrays of the mesh](docs/figures/data_arrays.png)
+
+Every array, its bytes per cell, who writes and who reads it (luna-cpp included), and how long it stays valid. Everything is on the GPU; the host keeps only counts and nine pinned counters.
+
+### How the GPU touches memory
+
+![GPU access in the clipping](docs/figures/gpu_access_build.png)
+
+Clipping: particles in Morton slots, one warp per cell, lanes taking stencil cells of the cell list, and ring-pool chunks claimed by hash.
+
+![GPU access in a step](docs/figures/gpu_access_step.png)
+
+A step, on a small real mesh: each face computed once by its owner and read by both cells, which reads coalesce and which gather or scatter, a flip's gather and scatter over the tetrahedron rows, and the fixed-order sums of `update_cells()`.
+
+### Memory pools and limits
+
+![Memory pools](docs/figures/memory_pools.png)
+
+Peak bytes per cell against what one A100 40 GB holds at 256³ and 384³; where each 32-bit offset overflows (#50); how each pool is sized, grown, and what happens when it runs short.
+
+### The stages, in the order a call runs them
 
 1. **Snapping and exact predicates** (`exact_predicates.hpp`, `Mesh::snap`). Positions go to a grid of 2³⁰ steps across the box, where every geometric test can be done exactly. Ties are broken by particle id.
 2. **The cell list** (`neighbor_search.hpp`). Particles are sorted along a Morton curve, and each gets a grid level fitted to the local density.
@@ -134,7 +168,7 @@ One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: millio
 
 Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) are described in the measurements file.
 
-GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); start and steps with face lists take 2028 B/cell (2007 at 256³, where the GPU reports 34.8 GB in use in all). Each array, its bytes per cell and lifetime: [data_arrays.png](docs/figures/data_arrays.png); how the pools grow and where 32-bit offsets overflow: [memory_pools.png](docs/figures/memory_pools.png).
+GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); a step with face lists peaks at 1998 B/cell, the same at 128³ and 256³: 1950 for the mesh's arrays, the rest the bench's positions. The arrays and pools are in the figures above.
 
 A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilds at the cube's rate, 39.9 M cells/s for jittered input.
 
