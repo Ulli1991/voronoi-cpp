@@ -24,6 +24,7 @@ constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
 constexpr int min_blocks_per_sm = 5;
 constexpr std::uint8_t none = 255;
+static_assert(max_planes <= max_vertices, "Polyhedron::crossing is the scratch of Polyhedron::first");
 
 // One warp's polyhedron. Corners and adjacency hold three 8-bit indices each: corner k is a plane,
 // adjacency k the vertex across the edge from corner k to k + 1. A cut reuses free slots; a 64-bit
@@ -38,10 +39,11 @@ struct alignas(16) Polyhedron {
     std::uint32_t corner[max_vertices];
     std::uint32_t adjacent[max_vertices];
     std::uint8_t free_slots[max_vertices];  // stack of the slots not in use
-    std::uint32_t crossing[max_vertices];   // edges a cut crosses: removed, kept vertex, planes a, b
-    std::uint8_t starts[max_planes];        // new vertex whose hole edge starts at a plane
-    std::uint8_t ends[max_planes];          // ... and ends at a plane
-    std::uint8_t first[max_planes];         // a vertex on each face, for the face walk
+    // Edges a cut crosses (removed, kept vertex, planes a, b); after the cuts, scratch for `first` (Kernel::build).
+    std::uint32_t crossing[max_vertices];
+    std::uint8_t starts[max_planes];  // new vertex whose hole edge starts at a plane
+    std::uint8_t ends[max_planes];    // ... and ends at a plane
+    std::uint8_t first[max_planes];   // a vertex on each face, for the face walk
     float candidate_distance2[lanes];
     int candidate_slot[lanes];
     int candidate_image[lanes];
@@ -122,6 +124,7 @@ __device__ inline void store_byte(std::uint32_t& packed, int k, int value) {
 // The starting cube of half-width h around the generator; sets planes and the live-vertex mask.
 // Used by: Kernel (cell setup).
 __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uint64_t& live) {
+    __syncwarp(all_lanes);  // the previous cell's face walks read these slots (#46)
     const int l = lane();
     if (l < box_planes) {
         const int axis = l / 2;
@@ -238,8 +241,10 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         a[k] = byte(edge, 2);
         b[k] = byte(edge, 3);
         c.corner[s] = pack(a[k], b[k], plane);
-        const std::uint32_t back = c.adjacent[u];
-        store_byte(c.adjacent[u], byte(back, 0) == w ? 0 : byte(back, 1) == w ? 1 : 2, s);
+        // The edge (a, b) of w is (b, a) of u: the adjacency of u that starts at corner b leads back to w. Read from
+        // c.corner, which no lane writes here, as other lanes may write other bytes of c.adjacent[u] (#46).
+        const std::uint32_t corner_u = c.corner[u];
+        store_byte(c.adjacent[u], byte(corner_u, 0) == b[k] ? 0 : byte(corner_u, 1) == b[k] ? 1 : 2, s);
         c.starts[a[k]] = s;
         c.ends[b[k]] = s;
         slot[k] = s;
@@ -442,22 +447,29 @@ struct Kernel {
 
         // Outputs and the owner rule use particle ids: the planes' slots become the particles there.
         const int id = grid.order(t);
+        __syncwarp(all_lanes);  // lane 0 wrote the last plane's neighbour
         for (int k = 0; k < per_lane; ++k) {
             const int plane = l + k * lanes;
             if (plane >= box_planes && plane < planes) c.neighbour[plane] = grid.order(c.neighbour[plane]);
         }
 
         // Faces: lane l walks planes l and l + 32 around their vertices.
+        // Each face's walk starts at a fixed vertex, so the bits of area and centroid are fixed (#46): that of the last
+        // (k, e) below naming the plane, lowest lane first, the vertex the plain stores of before left on the A100.
+        std::uint32_t* const key = c.crossing;
         for (int k = 0; k < per_lane; ++k)
-            if (l + k * lanes < planes) c.first[l + k * lanes] = none;
+            if (l + k * lanes < planes) key[l + k * lanes] = 0;
+        __syncwarp(all_lanes);
+        for (int k = 0; k < per_lane; ++k)
+            if (live >> (l + k * lanes) & 1)
+                for (int e = 0; e < 3; ++e)
+                    atomicMax(&key[byte(c.corner[l + k * lanes], e)], std::uint32_t((3 * k + e) << 5 | (31 - l)) + 1);
         __syncwarp(all_lanes);
         for (int k = 0; k < per_lane; ++k) {
-            const int v = l + k * lanes;
-            if (live >> v & 1)
-                for (int e = 0; e < 3; ++e) c.first[byte(c.corner[v], e)] = v;
+            const int plane = l + k * lanes, won = int(key[plane]) - 1;
+            if (plane < planes) c.first[plane] = won < 0 ? none : 31 - (won & 31) + (won >> 5) / 3 * lanes;
         }
         __syncwarp(all_lanes);
-
 
         double volume = 0;
         Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
