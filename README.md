@@ -142,7 +142,7 @@ The rates above are early steps. On a smooth flow where every cell moves, the me
 
 ### GPU against a full CPU node, same code
 
-Older code (see the measurements file) built with the OpenMP backend on one Raven CPU node (2x Xeon Platinum 8360Y, 72 cores), against one A100, at 2,097,152 cells in double. Million cells (or cell updates) per second:
+Older code (see the measurements file) built with the OpenMP backend on one Raven CPU node (2x Xeon Platinum 8360Y, 72 cores), against one A100, at 2,097,152 cells in double, in M cells/s:
 
 | | 72-core CPU node | A100 | A100 / CPU |
 |---|---|---|---|
