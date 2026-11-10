@@ -205,10 +205,10 @@ voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--de
 
 Open bugs, found by fuzzing the mesh against an oracle that shares no code with it:
 
-- **A full build can number one face twice** ([#48](https://github.com/Ulli1991/voronoi-cpp/issues/48)): two rows of one pair with the same ring; the cells around it are then wrong (closure 0.02, total volume off by 1e-4), and `update()` does not see it. Found in 3 boxes of the CPU fuzz and once at 4.5M particles on the A100.
+- **A full build can number one face twice** ([#48](https://github.com/Ulli1991/voronoi-cpp/issues/48)): two rows of one pair with the same ring; the cells around it are then wrong (closure 0.02, total volume off by 1e-4), and `update()` does not see it. Found in 3 boxes of the CPU fuzz and in 3 of 604 A100 cases (up to 4.5M particles).
 - Of the 24 fuzz cases of [#45](https://github.com/Ulli1991/voronoi-cpp/issues/45), 19 were rounding and are fixed (centres stored in grid steps, below); 3 are #48, and 2 are not explained: a repaired mesh 2.5 % off a fresh build in one cell (fresh_volume, hcp box), and a cell centroid 1e-3 of the cell off brute force in a unit cube.
 - OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
-- The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, but only 316 on the A100, none of them with millions of points.
+- The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, and 920 on the A100, 604 of them from 3e4 to 1.6e7 particles (113 above a million). Of those 604, 85 ran out of time (120 s, or 280 s from a million up): builds with large cells, a void or nearly coplanar points take minutes ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49)).
 
 Other limits:
 
@@ -233,7 +233,7 @@ Other limits:
 
 Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the refusals above, a mesh fuzz driver, and the fixes of the silent volume errors ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), the 2D hang ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)) and a bad read in the host fallback ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)), the reach rule ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)), a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)), cgs-sized boxes on CUDA ([#26](https://github.com/Ulli1991/voronoi-cpp/issues/26)) and a stated box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)).
 
-1. Find the cause of the remaining fuzz failures ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)), and run the fuzz on the GPU at millions of points.
+1. Fix the doubled face of a build ([#48](https://github.com/Ulli1991/voronoi-cpp/issues/48)), bound the time of builds with large cells ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49)), and explain the last two cases of [#45](https://github.com/Ulli1991/voronoi-cpp/issues/45).
 2. Mesh speed: measure the cost per cell first, then a re-sort when the order has decayed ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)), faces numbered by owner, fewer clips, and the repair rounds and fixed cost per step.
 3. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
 4. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.

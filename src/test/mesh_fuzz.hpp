@@ -195,12 +195,15 @@ struct Profile {
 };
 inline Profile profile_of(std::uint64_t seed) {
     static const Profile profiles[] = {
-        {"small", 8, 600, 2000, 6},                                                    // the long CPU runs
-        {"api", 16, 600, 1000, 16},                                                    // long call sequences
-        {"medium", 32, 2000, 32768, 4},                                                // long CPU runs and the A100
-        {"large", 1000000, 32768, 262144, 3}, {"huge", 1000000, 1000000, 4000000, 2},  // the A100
+        {"small", 8, 600, 2000, 6},      // the long CPU runs
+        {"api", 16, 600, 1000, 16},      // long call sequences
+        {"medium", 32, 2000, 32768, 4},  // long CPU runs and the A100
+        {"large", 1000000, 32768, 262144, 3},
+        {"huge", 1000000, 1000000, 4000000, 2},   // the A100
+        {"giant", 1000000, 3000000, 6000000, 2},  // digit 7, the A100; with the parts up to 1.6e7
     };
-    return profiles[std::min<std::uint64_t>(seed / 1000000000000ULL, 4)];
+    const std::uint64_t digit = seed / 1000000000000ULL;
+    return profiles[digit == 7 ? 5 : std::min<std::uint64_t>(digit, 4)];
 }
 
 // ---------------------------------------------------------------- point sets

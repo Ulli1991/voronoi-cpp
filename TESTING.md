@@ -82,7 +82,7 @@ distance to its nearest neighbour), reach, faces per cell and corners per face.
 draws whole cases from one integer seed: box, points, the `Mesh` type and every
 call, as a plain `Script` that can be saved and replayed. Digits of the seed above
 10¹² choose the profile: 0 small, 1 long call sequences, 2 medium, 3 large, 4 huge
-n, 5 1D, 6 2D. A case ends `exact`, `refused` (a cause the input really has),
+n, 5 1D, 6 2D, 7 giant n (3 to 6 million before the added parts, for the A100). A case ends `exact`, `refused` (a cause the input really has),
 `valid` (a refusal of input that has a mesh, or with no clear cause), `bits`,
 `rough` (exact tetrahedra, geometry past rounding), `WRONG`, `CRASH` or `HANG`.
 Checked on top of `mesh_check::check`: snapping, face order and direction, centroids
@@ -101,7 +101,10 @@ mesh_fuzz_test min SEED|FILE --out=FILE                      # delta debugging, 
 until the issue is fixed (`--known=1` runs it). ctest skips seeds in boxes of
 non-dyadic step and of extreme side (#29; extreme sides are refused since #32), and counts `rough` without failing,
 so most of the checking is in the long runs: `scripts/mesh_fuzz_cpu.sh` (`small`),
-`scripts/mesh_fuzz_gpudev.sh` (15-minute chunks; resubmit the same command to go on).
+`scripts/mesh_fuzz_gpudev.sh` (15-minute chunks; resubmit the same command to go on),
+`scripts/mesh_fuzz_a100.sh` (CUDA, profiles large, huge and giant on the four A100 of a node, 15-minute chunks).
+Above 4096 particles a case is checked after its last call only, against brute force on 8 sampled cells and on all
+cells for closure, total volume, face pairing and the tetrahedra's empty spheres.
 The seeds of a run are tied to the generator: a changed generator needs a new base.
 With a coverage build a worker writes its counters before `_exit`.
 
