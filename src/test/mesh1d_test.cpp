@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <map>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -325,6 +326,43 @@ void changes_on(Check& check, bool periodic, const Exec& exec, std::mt19937_64& 
     check.expect(mesh.capacity() > capacity, ends + ": the arrays grew, from " + std::to_string(capacity) + " to " + std::to_string(mesh.capacity()));
 }
 
+// All particles on one grid step (#37): a periodic line then has no cells and is refused, naming a pair, on a fresh
+// build, after a move that keeps the order (no sort) and after a removal; the next update builds. Walls are fine.
+// Used by: main.
+void one_step(Check& check, const Exec& exec) {
+    const std::vector<double> same(5, 0.25), spread = {0.1, 0.2, 0.3, 0.4, 0.5};
+    auto refusal = [](auto&& call) {
+        try {
+            call();
+        } catch (const std::runtime_error& e) {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    Mesh walls(exec, ep::BoxN<1>(1.0), voronoi::Ends::walls);
+    const std::string walls_refused = refusal([&] { walls.update(device(same)); });
+    check.expect(walls_refused.empty() && oracle(walls, same, sorted_mesh::Grid(1.0), false).empty(),
+                 "walls, all particles on one grid step: the oracle's cells");
+    Mesh mesh(exec, ep::BoxN<1>(1.0));
+    const std::string fresh = refusal([&] { mesh.update(device(same)); });
+    check.expect(fresh.find("particles 0 and 1") != std::string::npos,
+                 "periodic, all particles on one grid step: refused, naming a pair (" + fresh + ")");
+    mesh.update(device(spread));
+    const bool built = oracle(mesh, spread, sorted_mesh::Grid(1.0), true).empty();
+    const std::string moved = refusal([&] { mesh.update(device(same)); });
+    check.expect(built && !moved.empty() && mesh.sorts() == 0,
+                 "periodic, moved onto one grid step with the order kept (no sort): refused (" + moved + ")");
+    std::vector<double> four = same;
+    four[4] = 0.7;
+    mesh.update(device(four));
+    Kokkos::View<int*, Memory> last("ids", 1);
+    Kokkos::deep_copy(last, 4);
+    const std::string removed = refusal([&] { mesh.remove(last); });
+    const std::string after = refusal([&] { mesh.update(device(spread)); });
+    check.expect(!removed.empty() && after.empty() && oracle(mesh, spread, sorted_mesh::Grid(1.0), true).empty(),
+                 "periodic, a removal that leaves one grid step: refused (" + removed + "); the next update builds");
+}
+
 // Insertion at the two ends of a line with walls: a transfer by the report
 // conserves to rounding, and no sort runs. Used by: main.
 void transfer_at_a_wall(Check& check, const Exec& exec) {
@@ -450,5 +488,6 @@ int main(int argc, char* argv[]) {
     changes_on(check, true, exec, rng);
     changes_on(check, false, exec, rng);
     transfer_at_a_wall(check, exec);
+    one_step(check, exec);
     return check.failed() != 0;
 }

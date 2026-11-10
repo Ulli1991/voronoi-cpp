@@ -209,7 +209,6 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 - **Non-finite or negative geometry with no error** at extreme box sizes ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)). The fuzz drew sides from 1e-140 to 1e141; the usable range is not measured or stated yet.
 - Valid input can be refused below the stated 3/16 limit, with largest radii from 0.112 of the shortest side ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `Fallback::host` has no bound on its work: minutes on hundreds of particles ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
-- A periodic `Mesh<1>` with all particles on one grid step gives volumes summing to 0, silently ([#37](https://github.com/Ulli1991/voronoi-cpp/issues/37)).
 - OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
 - The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, but only 316 on the A100, none of them with millions of points.
 
@@ -228,6 +227,7 @@ Other limits:
 - The device repair breaks down near one spacing of motion per step (stuck triangles, host or rebuild fallback); substepping helps.
 - Ghost particles (multi-GPU), repair limited to active regions, and refinement and derefinement are not implemented yet; `update()` takes an `active` list for later.
 - Periodic boxes only (any three sides; see the certification limit above for thin slabs). Only 1D has walls.
+- A periodic `Mesh<1>` with every particle on one grid step has no cells: `update()`, `order()` and `remove()` refuse it with a `std::runtime_error` naming a pair ([#37](https://github.com/Ulli1991/voronoi-cpp/issues/37)); after the refusal there is no mesh and the next `update()` builds. Doubled particles are otherwise allowed in 1D, ties by id.
 - `voronoi::Mesh<2>` refuses as `Mesh<3>` does: particles on one grid position by name, cells out of certified reach, no particles. A refused update leaves no mesh and the next builds. Its repair is checked by the sum of the signed areas (`Report::overlapped`), and a step that leaves triangles wider than half a period, or takes more than 1000 rounds, ends in a rebuild.
 - Memory limits 3D on one A100 to about 256³ today: 2319 B/cell with the hydro, of which the start peak alone is 1728. The target is 384³, about 720 B/cell ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)).
 

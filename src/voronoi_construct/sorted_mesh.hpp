@@ -216,11 +216,13 @@ public:
             snap_all(x);
             sorter_.sort(exec_, keys_, ids_, line_);
             report.rebuilt = true;
+            if (periodic_ && one_step()) refuse_one_step();
         } else if (!still_sorted(x)) {
             snap_all(x);
             sorter_.sort(exec_, keys_, ids_, line_);
             report.rebuilt = true;
             ++sorts_;
+            if (periodic_ && one_step()) refuse_one_step();
         }
         current_ = false;
         return report;
@@ -494,6 +496,7 @@ public:
         n_ = kept;
         line_.n = n_;
         current_ = false;
+        if (periodic_ && one_step()) refuse_one_step();
         return changes_;
     }
 
@@ -588,26 +591,54 @@ public:
 
     // Snaps x into the line's slots and counts the slots out of order: a
     // periodic line is still sorted (as a cycle) with exactly one descent,
-    // one with walls with none.
+    // one with walls with none. A periodic descent between equal keys means all
+    // particles are on one step (the descent joins the largest key to the
+    // smallest), which is refused.
     // Used by: order.
     template <class X>
     bool still_sorted(const X& x) {
         const Line line = line_;
         const sorted_mesh::Grid grid = grid_;
         const bool periodic = periodic_;
-        int descents = 0;
+        long long descents = 0;  // count, plus 2^32 for each between equal keys
         Kokkos::parallel_reduce(
             "mesh1::check_order", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
-            KOKKOS_LAMBDA(int s, int& count) {
+            KOKKOS_LAMBDA(int s, long long& count) {
                 const int i = line.order(s);
                 const sorted_mesh::Key k = sorted_mesh::snap(x(i, 0), grid, periodic);
                 line.key(s) = k;
                 if (!periodic && s == line.n - 1) return;
                 const int t = s + 1 == line.n ? 0 : s + 1, j = line.order(t);
-                count += !sorted_mesh::before(k, i, sorted_mesh::snap(x(j, 0), grid, periodic), j);
+                const sorted_mesh::Key next = sorted_mesh::snap(x(j, 0), grid, periodic);
+                if (!sorted_mesh::before(k, i, next, j)) count += 1 + (k == next ? 1LL << 32 : 0);
             },
             descents);
-        return descents == (periodic ? 1 : 0);
+        if (periodic && descents == 1 + (1LL << 32)) refuse_one_step();
+        return (descents & 0xffffffffLL) == (periodic ? 1 : 0);
+    }
+
+    // Whether every particle of the line is on one grid step. Used by: order (after a sort), remove.
+    bool one_step() {
+        const Line line = line_;
+        int differ = 0;
+        Kokkos::parallel_reduce(
+            "mesh1::one_step", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
+            KOKKOS_LAMBDA(int s, int& count) { count += line.key(s) != line.key(line.slot(s, 1)); }, differ);
+        return differ == 0;
+    }
+
+    // A periodic line with every particle on one grid step has no cells (the whole line would be one gap): refused as
+    // Mesh<3> refuses coincident particles, naming a pair, and leaving no mesh, so the next update builds (#37).
+    // Used by: order, still_sorted, remove.
+    [[noreturn]] void refuse_one_step() {
+        const auto ids = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},
+                                                             Kokkos::subview(line_.order, std::make_pair(0, 2)));
+        const int n = n_;
+        n_ = -1;
+        const auto [a, b] = std::minmax(ids(0), ids(1));
+        throw std::runtime_error("voronoi::Mesh<1>: particles " + std::to_string(a) + " and " + std::to_string(b) +
+                                 " are on one position of the snapping grid, as are all " + std::to_string(n) +
+                                 ": a periodic line needs two positions at least; move them apart");
     }
 
     // The entries of `sorted` (of length count) that are at most `value`.
