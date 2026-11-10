@@ -165,7 +165,7 @@ std::vector<std::string> positional(int argc, char** argv) {
 // The `rebuild` mode: times the cell list and each construction variant (thread, exact, warp) on one point set
 // and cross-checks their volumes. args: rebuild <n> <distribution> [variants] [repeats]. Returns the failure count.
 // Used by: main.
-int rebuild(const std::vector<std::string>& args, const Box& box, double width_factor, bool check, int measure_every,
+int rebuild(const std::vector<std::string>& args, const Box& box, bool check, int measure_every,
             const std::string& dump) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
@@ -176,7 +176,7 @@ int rebuild(const std::vector<std::string>& args, const Box& box, double width_f
     const int n = static_cast<int>(x.extent(0));
     neighbor_search::CellList<Exec> list;
     const double width = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
-    neighbor_search::configure(list, n, box, width_factor * width);
+    neighbor_search::configure(list, n, box, width);
     const double build_ms = median_ms(repeats, [&] { neighbor_search::build(exec, list, x); });
     const auto grid = shell_voronoi::make_grid(list);
     DeviceMemory::phase("positions_and_cell_list", n);
@@ -215,47 +215,6 @@ int rebuild(const std::vector<std::string>& args, const Box& box, double width_f
     return failures;
 }
 
-// Adjacency faults of a host mesh: neighbours that are dead, that do not
-// share the face, or that do not point back. Used by: step (--debug).
-void report_adjacency(const tet_flips::Mesh& m, const char* when) {
-    long long dead = 0, wrong_face = 0, no_back = 0;
-    for (int t = 0; t < m.count; ++t) {
-        if (!m.alive(t)) continue;
-        for (int k = 0; k < 4; ++k) {
-            const int u = m.adjacent(t, k);
-            if (u < 0) continue;
-            if (!m.alive(u)) {
-                ++dead;
-                continue;
-            }
-            int shared = 0, back = 0;
-            for (int a = 0; a < 4; ++a) {
-                shared += a != k && tet_mesh::position(m, u, m.vertex(t, a)) >= 0;
-                back += m.adjacent(u, a) == t;
-            }
-            wrong_face += shared != 3;
-            no_back += back != 1;
-        }
-    }
-    std::cout << "  adjacency " << when << ": to_dead=" << dead << " wrong_face=" << wrong_face << " no_back=" << no_back
-              << "\n";
-}
-
-// The stuck entries the last device repair left, by reason. Used by: step (--debug).
-void report_stuck(const tet_repair::State<Memory>& state) {
-    const int stuck = Kokkos::min(state.host_counters(tet_repair::counter::stuck), static_cast<int>(state.stuck.extent(0)));
-    const auto list = to_host(state.stuck);
-    long long inverted = 0, unflippable = 0, rejected = 0;
-    for (int i = 0; i < stuck; ++i) {
-        const int k = list(i, 1);
-        inverted += k == tet_repair::inverted;
-        rejected += k == tet_repair::rejected;
-        unflippable += k >= 0;
-    }
-    std::cout << "  stuck by reason: inverted=" << inverted << " unflippable=" << unflippable
-              << " rejected=" << rejected << "\n";
-}
-
 // A checksum of the per-cell face lists and the bits of the cell volumes
 // and centroids (FNV-1a), to compare builds of the same mesh. Used by: step (build report).
 std::uint64_t cells_checksum(const Mesh& mesh) {
@@ -282,44 +241,6 @@ std::uint64_t cells_checksum(const Mesh& mesh) {
     return h;
 }
 
-// Cells at a corner of a live tetrahedron created since the last move, and
-// cells whose set of other particles differs from `before` (updated). Used by: step (--touched).
-void report_touched(const Mesh& mesh, std::vector<std::vector<int>>& before) {
-    const int n = mesh.particles();
-    const auto start = to_host(mesh.cell_face_start());
-    const auto face = to_host(mesh.cell_face());
-    const auto owner = to_host(mesh.owner());
-    const auto neighbour = to_host(mesh.neighbour());
-    std::vector<std::vector<int>> now(n);
-    for (int i = 0; i < n; ++i) {
-        now[i].reserve(start(i + 1) - start(i));
-        for (int a = start(i); a < start(i + 1); ++a) {
-            const int f = face(a);
-            now[i].push_back(owner(f) == i ? neighbour(f) : owner(f));
-        }
-        std::sort(now[i].begin(), now[i].end());
-    }
-    long long changed = 0;
-    if (!before.empty())
-        for (int i = 0; i < n; ++i) changed += now[i] != before[i];
-    const auto& state = mesh.repair_state();
-    long long touched = n;
-    if (state.touched_entries >= 0) {
-        const auto list = to_host(state.touched_list);
-        const auto alive = to_host(state.alive);
-        const auto vertex = to_host(mesh.tetrahedra().vertex);
-        std::vector<char> mark(n, 0);
-        for (int e = 0; e < state.touched_entries; ++e)
-            if (alive(list(e)))
-                for (int c = 0; c < 4; ++c) mark[vertex(list(e), c)] = 1;
-        touched = std::count(mark.begin(), mark.end(), 1);
-    }
-    std::cout << "touched: created_tets=" << state.touched_entries << " cells_at_created=" << touched
-              << " fraction=" << double(touched) / n << " cells_faces_changed=" << changed
-              << " fraction_changed=" << double(changed) / n << "\n";
-    before = std::move(now);
-}
-
 // A checksum of the bits of the cell volumes and centroids. Used by: step (--checksum).
 std::uint64_t geometry_checksum(const Mesh& mesh) {
     const auto volume = to_host(mesh.volume());
@@ -340,8 +261,7 @@ std::uint64_t geometry_checksum(const Mesh& mesh) {
 // The `step` mode: build the mesh, then `steps` times advect the points, Mesh::update and update_cells, timing the
 // phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
 // Used by: main.
-int step(const std::vector<std::string>& args, const Box& box, bool verify, bool debug, bool touched, bool checksum,
-         voronoi::Fallback fallback, bool measure) {
+int step(const std::vector<std::string>& args, const Box& box, bool verify, bool checksum, bool measure) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -355,9 +275,6 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     Positions x = to_device(points);
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0]
               << "," << box.side[1] << "," << box.side[2] << " displacement=" << displacement << " steps=" << steps
-              << " fallback=" << (fallback == voronoi::Fallback::host      ? "host"
-                                  : fallback == voronoi::Fallback::rebuild ? "rebuild"
-                                                                           : "cheapest")
               << "\n";
 
     {
@@ -384,7 +301,6 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
 
     DeviceMemory::phase("positions_and_bench_start_kernels", n, false);
     Mesh mesh(exec, box);
-    mesh.set_fallback(fallback);
     {
         voronoi::Timings t;
         const voronoi::Report r = mesh.update(x, &t);
@@ -396,8 +312,6 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     DeviceMemory::phase("start_and_prepare", n);
     const Flow flow;
     int failures = 0;
-    std::vector<std::vector<int>> faces_before;
-    if (touched) report_touched(mesh, faces_before);
 #if defined(VORONOI_MEASURE)
     std::vector<std::vector<int>> sets_before;
     if (measure) measure_bench::step(mesh, sets_before, 0);
@@ -419,15 +333,10 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " host_rebuilt=" << r.host_rebuilds << " rebuilt=" << r.rebuilt << " rebuild_ms=" << t.build
                   << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
                   << " cells_ms=" << t.cells << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3 << "\n";
-        if (touched) report_touched(mesh, faces_before);
 #if defined(VORONOI_MEASURE)
         if (measure) measure_bench::step(mesh, sets_before, s);
 #endif
         if (checksum) std::cout << "geometry_checksum: step=" << s << " " << geometry_checksum(mesh) << "\n";
-        if (debug) {
-            report_stuck(mesh.repair_state());
-            report_adjacency(host_tetrahedra(mesh), "after step");
-        }
         if (!verify) continue;
         const Comparison c = compare_with_rebuild(mesh, x);
         failures += !c.pass();
@@ -446,21 +355,15 @@ int main(int argc, char** argv) {
     if (has_flag(argc, argv, "--kernels")) KernelTimes::start();
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
-        return rebuild(args, box_flag(argc, argv), flag_value(argc, argv, "--width", 1.0),
-                       !has_flag(argc, argv, "--no-check"), static_cast<int>(flag_value(argc, argv, "--measure", 0)),
-                       dump_flag(argc, argv)) != 0;
+        return rebuild(args, box_flag(argc, argv), !has_flag(argc, argv, "--no-check"),
+                       static_cast<int>(flag_value(argc, argv, "--measure", 0)), dump_flag(argc, argv)) != 0;
     if (args.size() >= 4 && args[0] == "step")
-        return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--debug"),
-                    has_flag(argc, argv, "--touched"), has_flag(argc, argv, "--checksum"),
-                    has_flag(argc, argv, "--fallback=rebuild") ? voronoi::Fallback::rebuild
-                    : has_flag(argc, argv, "--fallback=host")  ? voronoi::Fallback::host
-                                                               : voronoi::Fallback::cheapest,
+        return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--measure")) != 0;
-    std::cerr
-        << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--width=f] [--no-check] [--memory]\n"
-           "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
-           "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--debug]\n"
-           "                          [--fallback=host|rebuild] [--memory] [--kernels] [--touched] [--measure]\n"
-           "       both: [--box=Lx,Ly,Lz]\n";
+    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--no-check] [--memory]\n"
+                 "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
+                 "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
+                 "                          [--memory] [--kernels] [--measure]\n"
+                 "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }
