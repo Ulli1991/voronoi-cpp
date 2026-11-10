@@ -146,7 +146,8 @@ def figures(data):
     axes[1].set_xscale("log")
     axes[1].set_xlabel("fraction of cells, slowest first")
     axes[1].set_ylabel("share of warp cycles")
-    axes[1].plot([1e-6, 1], [1e-6, 1], color="0.5", linestyle=":", linewidth=1)
+    equal = np.geomspace(1e-6, 1, 200)
+    axes[1].plot(equal, equal, color="0.5", linestyle=":", linewidth=1)
     axes[1].set_xlim(1e-6, 1)
     for ax in axes:
         figstyle.decorate(ax)
