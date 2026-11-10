@@ -77,10 +77,20 @@ ncu)  # ncu <rebuild|step> <n> <kind> [box]: registers, local memory, occupancy,
     else
         re='(snap|move_screened|circumcentres|number_faces|update_face_rings|tet_mesh::faces|cells_incremental|finish_incremental|CellSortWarp|CellSumsWarp|tet_repair::repair|total_volume|sort_and_sum)'
         timeout 800 "$NCU" "${common[@]}" --kernel-name "regex:$re" --launch-count 400 \
-            $bin/voronoi_bench_plain step "$n" "$kind" "${5:-0.1}" 3 --box="$box" >"$bin/ncu_step_${kind}_$n-$SLURM_JOB_ID.csv"
+            $bin/voronoi_bench_plain step "$n" "$kind" "${5:-0.1}" 3 --box="$box" >"$bin/ncu_step_${kind}_${n}_${5:-0.1}-$SLURM_JOB_ID.csv"
     fi
     echo "ncu exit $?"
     dcgmi profile --resume 2>/dev/null
+    ;;
+nsys)  # nsys <n> <kind> <d>: launches, copies and gaps of 20 steps against 10 (difference = 10 steps)
+    module load nsight_systems/2026
+    for steps in 10 20; do
+        tag="$bin/nsys_${2}_$1_$3_$steps-$SLURM_JOB_ID"
+        nsys profile -t cuda --cuda-memory-usage=false -s none --cpuctxsw=none -o "$tag" --force-overwrite true \
+            $bin/voronoi_bench_plain step "$1" "$2" "$3" "$steps" | grep -c gpuflips
+        nsys stats -q --report cuda_api_sum,cuda_gpu_kern_sum,cuda_gpu_mem_time_sum --format csv -o "$tag" "$tag.nsys-rep" >/dev/null 2>&1
+        nsys export --type sqlite -o "$tag.sqlite" --force-overwrite true "$tag.nsys-rep" >/dev/null 2>&1
+    done
     ;;
 memory)  # memory <n> <kind>: arrays at the peak of a moving step
     $bin/voronoi_bench_plain step "$1" "$2" 0.1 4 --memory
