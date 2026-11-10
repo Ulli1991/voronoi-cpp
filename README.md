@@ -82,6 +82,8 @@ What a caller can rely on:
 
 What `update()` does with new positions. Normally the mesh is repaired by exact flips on the GPU, which is the green path. If a repair can't finish, or the first time, the mesh is rebuilt from scratch by clipping, the blue path. Input that can't give an exact mesh is refused with an error.
 
+Each step and each rebuild in detail, with the kernels of every stage, what they read and write, where the host waits for the GPU, and measured times: [one step](docs/figures/flow_step.png), [a rebuild](docs/figures/flow_rebuild.png). Where the data lives and how the GPU touches it: [the arrays](docs/figures/data_arrays.png), [access in the clipping](docs/figures/gpu_access_build.png), [access in a step](docs/figures/gpu_access_step.png), [pools and limits](docs/figures/memory_pools.png) ([how_it_works.md](docs/how_it_works.md#12-memory-order-and-numbering), sections 12 to 14).
+
 Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md). In the order a call runs them:
 
 1. **Snapping and exact predicates** (`exact_predicates.hpp`, `Mesh::snap`). Positions go to a grid of 2³⁰ steps across the box, where every geometric test can be done exactly. Ties are broken by particle id.
@@ -132,7 +134,7 @@ One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: millio
 
 Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) are described in the measurements file.
 
-GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); start and steps with face lists take 2028 B/cell (2007 at 256³, where the GPU reports 34.8 GB in use in all).
+GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); start and steps with face lists take 2028 B/cell (2007 at 256³, where the GPU reports 34.8 GB in use in all). Each array, its bytes per cell and lifetime: [data_arrays.png](docs/figures/data_arrays.png); how the pools grow and where 32-bit offsets overflow: [memory_pools.png](docs/figures/memory_pools.png).
 
 A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilds at the cube's rate, 39.9 M cells/s for jittered input.
 

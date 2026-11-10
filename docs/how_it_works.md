@@ -2,11 +2,20 @@
 
 One section per stage, in the order a call to `voronoi::Mesh<3>::update` runs them. Each says what the stage does, what goes in and comes out, why it is done this way, what can go wrong and how that is caught, and where to read the code. 2D and 1D follow at the end. Finer details are in [design.md](design.md).
 
-The figures are drawn by `scripts/construction_figures.py` from real point sets. The geometry comes from Python ports of the library's 2D code, checked against `scipy.spatial` (see [design.md](design.md#construction-figures-scriptsconstruction_figurespy)). Most of them are 2D, where a picture is honest. 3D does the same with one more dimension, and the text says where it differs.
+The construction figures are drawn by `scripts/construction_figures.py` from real point sets. The geometry comes from Python ports of the library's 2D code, checked against `scipy.spatial` (see [design.md](design.md#construction-figures-scriptsconstruction_figurespy)). Most of them are 2D, where a picture is honest. 3D does the same with one more dimension, and the text says where it differs.
+The figures of the control flow, the data, the GPU access patterns and the memory pools (sections 12 to 14) are drawn by `scripts/flow_detail.py`, `data_figure.py`, `access_figures.py` and `memory_figure.py`. Their rules are read from the code of main, their numbers come from [measure_2026-11-10.md](measure_2026-11-10.md), [measurements.md](measurements.md) and the README, and each figure names its source.
 
 The control flow of one `update()`:
 
 ![Control flow of Mesh::update](figures/flow_mesh.png)
+
+**One step, in detail.** Each box names its kernels (file: function), what they read and write, and whether they run on the GPU or the host. The bars are each stage's kernel time per step at 128³, jittered input, 0.1 spacings per step: the Kokkos Tools table of [measure_2026-11-10.md](measure_2026-11-10.md#a-cost-of-a-moving-step), 22.98 ms in all. The red marks are where the host waits for the GPU: it copies a count back and fences (the sliver count, the work size and counters of each flip round, the face count, the ring totals, the volume sum), because the count sizes the next launch. Nsight Systems counts 33 such synchronisations and 61 launches per step on that input. What to take from it: the flip rounds and the bookkeeping of face numbers and rings are over half of a step (12.8 ms), the geometry itself (centres, faces, cell sums) a fifth (4.6 ms). The waits cost little at this size: 21.75 ms of GPU time in 22.2 ms of wall time.
+
+![One step of update() in detail](figures/flow_step.png)
+
+**A rebuild, in detail.** The clipping with face rings, the exact start, then the persistent arrays, sized from the start with spare room. The host waits after each clipping pass (the count of off-base levels and of overflowing cells, the use of every pool chunk) and after each scan and check of the start. What to take from it: at 128³ a start is about 200 ms, 29 % of it clipping; a step rebuilds only when the repair cannot finish, which none of the measured steps at 0.03 to 0.3 spacings needed, and then it costs 7 to 15 steps.
+
+![A rebuild in detail](figures/flow_rebuild.png)
 
 ## 1. Snapping and exact predicates
 
@@ -204,3 +213,37 @@ The same stages on triangles, with a few differences.
 **What can go wrong.** A periodic line with all particles on one grid step is refused (see above, #37). Fewer than 3 particles are a `std::invalid_argument`.
 
 **Read.** `sorted_mesh.hpp`.
+
+## 12. Memory order and numbering
+
+Which index each array uses, and in which order its rows lie. This section is the one place for it; `scripts/mesh_order.py` holds the labels the figures use. A change of order (the re-sort, [#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)) updates both and renders the figures again.
+
+| Index | Order | Arrays, and where it is set |
+|---|---|---|
+| particle i | the caller's index | `positions`, `cell_volume`, `cell_centroid`, `cell_face_start`, `tet_repair_point`. The mesh never re-sorts particles; `voronoi_bench` numbers them along a Morton curve (`--unsorted`: as generated). |
+| slot q | Morton order of the cell list, ties by id | `slot_positions`, `slot_fine_keys`, `slot_levels`; `particle_order(q)` is the particle in slot q. Rebuild and `clip()` only (`neighbor_search.hpp`: `build`). |
+| tetrahedron t | slot of `tet_vertex` | at a start, `assemble`'s order, grouped by the face of each tetrahedron's two smallest particles (`tet_mesh.hpp`: `assemble`); a flip reuses its old slots, then pops freed ones, then appends (`tet_repair.hpp`: `repair`). |
+| face f | the scan over edge bits | f = `face_rings_start(t)` + the rank of the edge among t's set bits, redone every update (`tet_mesh.hpp`: `number_faces`); `owner(f) < neighbour(f)`. |
+| list entry k | per cell, by the other particle | `cell_face(k)` for k in [`cell_face_start(i)`, `cell_face_start(i + 1)`) (`tet_cells.hpp`: `sort_list`, `CellSortWarp`). |
+| ring entry | per face, canonical | `pool[ring_start(f), ring_start(f) + ring_length(f))`, from the tetrahedron whose other two ids are least (`tet_mesh.hpp`: `walk_edge_canonical`). |
+
+## 13. Where the data lives, and how the GPU touches it
+
+![The arrays of Mesh<3>](figures/data_arrays.png)
+
+**The arrays.** Every array of the mesh is device memory; none is mirrored. The host keeps only the counts that size the next launch, nine counters in pinned memory that the repair copies back, and short-lived copies for a host finish, for cells that overflow on the device and for a refusal's message. The bars are the bytes per cell at the peak of a step (section C of [measure_2026-11-10.md](measure_2026-11-10.md#c-memory-by-array-at-the-peak-of-a-moving-step-r3)); writers and readers are read from the code, and luna-cpp reads through `voronoi::Mesh`. What to take from it: four kinds of array hold 72 % of the 1950 B/cell, the two ring pools (501), the face geometry (394), the tetrahedron rows (250) and their centres (250). Most arrays are rewritten every step; only the tetrahedra and the ring pool in use are kept and edited where flips change them, and the spare ring pool is scratch that any call may overwrite.
+
+![GPU access in the clipping](figures/gpu_access_build.png)
+
+**Access in the clipping.** (a) The cell list sorts particles along a Morton curve, but the mesh's own arrays stay in the caller's order: a step kernel's locality is whatever order the caller gives. (b) One warp builds one cell: each lane takes one grid cell of the stencil, nearest first, and walks its run of slots; the 32 runs lie apart, so a load does not coalesce across lanes, but each lane's run is contiguous. Candidates go through a 32-entry buffer in shared memory, sorted by a warp bitonic sort and broadcast by shuffles to all lanes, which cut the polyhedron together. The measured kernel waits on memory for only 5 to 8 % of its stalls. (c) A cell claims its ring entries with one atomic in one of n/1024 chunks, picked by a hash of its slot, so neighbouring cells spread over chunks instead of queueing on one counter. The example runs are computed with the library's Morton keys and stencil on 512 random points.
+
+![GPU access in a step](figures/gpu_access_step.png)
+
+**Access in a step.** (d) A face is computed once, by one thread and for both cells: its own rows (owner, ring start, area) are read and written coalesced; its ring's circumcentres are a gather of one 32-byte sector each; the volumes are a scatter of two atomics. (e) A flip plans and votes on rows spread over the tetrahedron array and writes back pointers into its neighbours' rows. (f) `update_cells()` gives each cell 4 lanes, which gather its list in batches of 4 and add the pyramids by shuffles in list order, so the bits equal a sequential loop on every run. The example is a Delaunay mesh of 216 jittered points numbered along a Morton curve, its faces numbered by the library's rule. What to take from it: the step kernels are gathers and scatters through `vertex`, `ring` and the face numbers, and they wait on memory for 63 to 93 % of their stalls at 280 to 860 GB/s ([measure_2026-11-10.md](measure_2026-11-10.md#a-cost-of-a-moving-step)); the order of particles, tetrahedra and faces decides how many sectors they touch.
+
+## 14. Memory management
+
+![Pools and limits](figures/memory_pools.png)
+
+**Pools.** Each growing array is sized from the start with spare room and grown in place when a step needs more: the tetrahedra by 1/8, the faces and the cell lists by 1/32, the ring pools to 1.5 times the start's entries. Nothing that runs out is lost. A full clipping chunk builds again with a larger pool, at most three times and once more in `rebuild`, then refuses; a full ring pool compacts into its spare; a flip without a slot loses its vote and retries next round after the arrays grow; a full created list makes that step walk every face. `Kokkos::resize` copies, so old and new arrays are both allocated while the tetrahedra grow. (a) The mesh peaks at 1950 B/cell in a step and lower at the start; with luna-cpp's hydro a moving run needs 2319 B/cell, which fits one A100 40 GB at 256³, while 384³ would need about 700 B/cell in all. (b) The pools are indexed by 32-bit ints: the ring pool offsets and the start's ring slots overflow between 256³ and 384³, the cell face lists between 384³ and 512³, the tetrahedron slots between 512³ and 768³. The first two need 64-bit offsets before 384³ ([ideas.md](ideas.md#memory)).
+
