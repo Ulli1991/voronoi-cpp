@@ -27,7 +27,7 @@ inputs() {  # n kind box for one size: 128 or 256
 }
 case "$mode" in
 smoke)
-    $bin/voronoi_bench_measure rebuild 262144 clustered warp 1 --no-check --measure=64 --dump=$bin/smoke.npy
+    $bin/voronoi_bench_measure rebuild 262144 clustered 1 --no-check --measure=64 --dump=$bin/smoke.npy
     $bin/voronoi_bench_measure step 262144 jittered 0.1 3 --measure
     ;;
 clip)  # clip <128|256> [every]: counters per cell, cycle tails, shuffle test
@@ -37,7 +37,7 @@ clip)  # clip <128|256> [every]: counters per cell, cycle tails, shuffle test
         tag="${kind}_$n"; [[ "$box" != 1 ]] && tag="slab_$n"
         echo "== clip $tag box=$box"
         dump=""; [[ "$1" == 128 ]] && dump="--dump=$bin/clip_$tag.npy"
-        $bin/voronoi_bench_measure rebuild "$n" "$kind" warp 1 --no-check --box="$box" --measure="${2:-1024}" $dump
+        $bin/voronoi_bench_measure rebuild "$n" "$kind" 1 --no-check --box="$box" --measure="${2:-1024}" $dump
     done
     ;;
 rate)  # rate <128|256>: plain rebuild rates of the same inputs, with kernel times
@@ -45,7 +45,7 @@ rate)  # rate <128|256>: plain rebuild rates of the same inputs, with kernel tim
     for row in "${rows[@]}"; do
         read -r n kind box <<<"$row"
         echo "== rate $kind $n box=$box"
-        $bin/voronoi_bench_plain rebuild "$n" "$kind" warp 5 --no-check --box="$box"
+        $bin/voronoi_bench_plain rebuild "$n" "$kind" 5 --no-check --box="$box"
     done
     ;;
 step)  # step <n> <kind> <box> <measured steps> <displacements...>: changes per step (measure build), kernel times (plain)
@@ -73,7 +73,7 @@ ncu)  # ncu <rebuild|step> <n> <kind> [box]: registers, local memory, occupancy,
     dcgmi profile --pause 2>/dev/null
     if [[ "$what" == rebuild ]]; then
         timeout 800 "$NCU" "${common[@]}" --kernel-name "regex:warp::Kernel" --launch-count 1 \
-            $bin/voronoi_bench_plain rebuild "$n" "$kind" warp 1 --no-check --box="$box" >"$bin/ncu_rebuild_${kind}_$n-$SLURM_JOB_ID.csv"
+            $bin/voronoi_bench_plain rebuild "$n" "$kind" 1 --no-check --box="$box" >"$bin/ncu_rebuild_${kind}_$n-$SLURM_JOB_ID.csv"
     else
         re='(snap|move_screened|circumcentres|number_faces|update_face_rings|tet_mesh::faces|cells_incremental|finish_incremental|CellSortWarp|CellSumsWarp|tet_repair::repair|total_volume|sort_and_sum)'
         timeout 800 "$NCU" "${common[@]}" --kernel-name "regex:$re" --launch-count 400 \

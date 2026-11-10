@@ -168,7 +168,7 @@ Brute force exists only in tests and the benchmark, never in the library:
 `scripts/bench_a100.sh` runs, besides ctest:
 
 ```sh
-voronoi_bench rebuild 2097152 <kind> warp 3                  # check_cells PASS/FAIL per kind
+voronoi_bench rebuild 2097152 <kind> 3                       # check_cells PASS/FAIL per kind
 voronoi_bench step 262144 <kind> 0.3 3 --verify              # jittered uniform clustered halo lattice wave
 ```
 

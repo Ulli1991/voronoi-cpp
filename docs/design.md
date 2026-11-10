@@ -159,7 +159,7 @@ level(q) is the grid level whose cells hold about one particle near slot q: the 
 
 ## Benchmark drivers (voronoi_bench.cpp, mesh2d_bench.cpp)
 
-voronoi_bench rebuild <n> <distribution> [variants=all] [repeats=5] [--no-check]: full rebuild by clipping. Variants thread, exact and warp, selected by substring. Every variant's cells are checked (support::check_cells, PASS/FAIL; brute force on a sample, seconds at 2.1M) unless --no-check.
+voronoi_bench rebuild <n> <distribution> [repeats=5] [--no-check]: full rebuild by the warp clipping (the per-thread kernel on CPU backends and for overflow cells). The cells are checked (support::check_cells, PASS/FAIL; brute force on a sample, seconds at 2.1M) unless --no-check.
 
 voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify]: the persistent mesh (voronoi::Mesh): the start kernels (clipping with rings, from_rings, tet_start::build) and the mesh's start, then `steps` steps of the flow, `displacement` spacings each: device repair (screened), the fallback when stuck (the cheaper of host and rebuild, voronoi::Fallback::cheapest), circumcentres, face rings, faces and cells. --verify compares every step with an exact rebuild (support::compare_with_rebuild).
 
@@ -213,3 +213,4 @@ Each line names the last commit that had it: `git show <commit>:<path>` brings i
 - The warp kernel's local mode (`construct_warp` with a `Selection`, `Kernel<..., local>`), unused since `clip()` builds exact cells (#30): 61e9914, `src/voronoi_construct/shell_voronoi_warp.hpp`.
 - The `active` argument of `update()` in 3D, 2D and 1D, accepted and ignored: 61e9914, `voronoi_mesh.hpp`, `voronoi_mesh_2d.hpp`, `sorted_mesh.hpp`.
 - `voronoi_bench` flags no script or note used: `--width` (cell-list width factor), `--debug` (adjacency and stuck reports), `--touched` (cells near created tetrahedra), `--fallback=host|rebuild`: 1316317, `src/bench/voronoi_bench.cpp`.
+- The `thread` and `exact` variants of `voronoi_bench rebuild` and their volume cross-check (the `clipping` test compares the three kernels): 0c9a193, `src/bench/voronoi_bench.cpp`.

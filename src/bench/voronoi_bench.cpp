@@ -162,16 +162,15 @@ std::vector<std::string> positional(int argc, char** argv) {
     return args;
 }
 
-// The `rebuild` mode: times the cell list and each construction variant (thread, exact, warp) on one point set
-// and cross-checks their volumes. args: rebuild <n> <distribution> [variants] [repeats]. Returns the failure count.
+// The `rebuild` mode: times the cell list and the warp clipping on one point set and checks the cells.
+// args: rebuild <n> <distribution> [repeats]. Returns the failure count.
 // Used by: main.
 int rebuild(const std::vector<std::string>& args, const Box& box, bool check, int measure_every,
             const std::string& dump) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
-    const std::string selection = args.size() > 3 ? args[3] : "all";
-    const int repeats = args.size() > 4 ? std::max(1, std::stoi(args[4])) : 5;
+    const int repeats = args.size() > 3 ? std::max(1, std::stoi(args[3])) : 5;
     const Positions x = to_device(make_points(kind, requested, box));
     const int n = static_cast<int>(x.extent(0));
     neighbor_search::CellList<Exec> list;
@@ -184,29 +183,13 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
               << box.side[1] << "," << box.side[2] << " tiles=" << list.tiles[0] << "x" << list.tiles[1] << "x"
               << list.tiles[2] << " grid=" << (1 << list.levels) << "^3_per_tile repeats=" << repeats << "\n";
     int failures = 0;
-    std::vector<double> first_volumes;
-    for (const std::string variant : {"thread", "exact", "warp"}) {
-        if (selection != "all" && variant.find(selection) == std::string::npos) continue;
-        shell_voronoi::Cells<Memory> cells(n, true);
-        const double construct_ms = median_ms(repeats, [&] {
-            if (variant == "thread") shell_voronoi::construct(exec, grid, cells);
-            if (variant == "exact") shell_voronoi::construct(exec, grid, cells, {}, true);
-            if (variant == "warp") shell_voronoi::construct_warp(exec, grid, cells);
-        });
-        std::cout << variant << ": build_ms=" << build_ms << " construct_ms=" << construct_ms
-                  << " construct_Mcells_s=" << n / construct_ms / 1e3
-                  << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-        if (check) failures += check_cells(cells, x, std::cout, box);
-        const auto volume = to_host(cells.volume);
-        if (first_volumes.empty()) {
-            first_volumes.assign(volume.data(), volume.data() + n);
-        } else {
-            double worst = 0;
-            for (int t = 0; t < n; ++t) worst = std::max(worst, std::abs(volume(t) - first_volumes[t]) / first_volumes[t]);
-            std::cout << "  max_relative_volume_difference_to_first_variant=" << worst << "\n";
-        }
-        DeviceMemory::phase(variant, n);
-    }
+    shell_voronoi::Cells<Memory> cells(n, true);
+    const double construct_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
+    std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
+              << " construct_Mcells_s=" << n / construct_ms / 1e3
+              << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
+    if (check) failures += check_cells(cells, x, std::cout, box);
+    DeviceMemory::phase("warp", n);
 #if defined(VORONOI_MEASURE)
     if (measure_every > 0) measure_bench::clipping(exec, grid, box, measure_every, dump);
 #else
@@ -360,7 +343,7 @@ int main(int argc, char** argv) {
     if (args.size() >= 4 && args[0] == "step")
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--measure")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [variants] [repeats] [--no-check] [--memory]\n"
+    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [repeats] [--no-check] [--memory]\n"
                  "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure]\n"

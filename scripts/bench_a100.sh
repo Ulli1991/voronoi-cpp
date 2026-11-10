@@ -16,7 +16,7 @@ build="${1:-build-cuda}"
 nvidia-smi -L
 ctest --test-dir "$build" --output-on-failure
 for kind in jittered uniform clustered halo lattice wave; do
-    "$build/voronoi_bench" rebuild 2097152 "$kind" warp 3
+    "$build/voronoi_bench" rebuild 2097152 "$kind" 3
 done
 for kind in jittered uniform clustered halo lattice wave; do
     "$build/voronoi_bench" step 262144 "$kind" 0.3 3 --verify | grep -E "^start|verify"
