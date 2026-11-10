@@ -382,7 +382,7 @@ inline Summary run(const Options& o) {
         voronoi::Timings timing;
         voronoi::Report r;
         try {
-            r = mesh.update(x, {}, &timing);
+            r = mesh.update(x, &timing);
             mesh.update_cells(&timing);
         } catch (const std::exception& e) {
             s.refused = true;

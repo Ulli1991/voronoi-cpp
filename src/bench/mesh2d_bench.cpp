@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
                 });
             exec.fence();
             Kokkos::Timer timer;
-            const voronoi::Report report = mesh.update(x, {}, &t);
+            const voronoi::Report report = mesh.update(x, &t);
             mesh.update_cells(&t);
             exec.fence();
             total += timer.seconds();

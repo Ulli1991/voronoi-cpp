@@ -182,11 +182,10 @@ public:
     Mesh(const ExecSpace& exec, double side, Ends ends = Ends::periodic) : Mesh(exec, ep::BoxN<1>(side), ends) {}
 
     // New positions x(i, 0) in [0, L) (walls: outside ones go to the nearest end step). Builds on the first call or when
-    // the particle count changed. `active` and `timings` as Mesh<3> (unused).
+    // the particle count changed. `timings` as Mesh<3> (unused).
     // Used by: callers, every step (snap -> order -> geometry).
     template <class X>
-    Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
-        (void)active;
+    Report update(const X& x, Timings* timings = nullptr) {
         (void)timings;
         Report report = order(x);
         geometry();

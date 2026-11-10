@@ -494,7 +494,7 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
         try {
             const Positions x = device(o.x);
             report = o.kind == Op::rebuild ? mesh.rebuild(x, timed ? &timings : nullptr)
-                                           : mesh.update(x, {}, timed ? &timings : nullptr);
+                                           : mesh.update(x, timed ? &timings : nullptr);
             timed = false;
         } catch (const std::exception& e) {
             timed = false;

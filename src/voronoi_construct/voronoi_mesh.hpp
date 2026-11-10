@@ -204,10 +204,9 @@ public:
     // New positions of all particles, x(i, a) in [0, side[a]) (any device view). Repairs the mesh, or builds it on the
     // first call or when the particle count changed; exact on return, or a std::runtime_error saying what is wrong.
     // After a refusal there is no mesh and the next update() builds from scratch; no particles is a std::invalid_argument
-    // and leaves the object as it was. `active` (particle ids) is accepted for a later regional repair; unused today.
+    // and leaves the object as it was.
     template <class X>
-    Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
-        (void)active;
+    Report update(const X& x, Timings* timings = nullptr) {
         if (!built() || static_cast<int>(x.extent(0)) != n_) return rebuild(x, timings);
         Report report;
         Kokkos::Timer timer;

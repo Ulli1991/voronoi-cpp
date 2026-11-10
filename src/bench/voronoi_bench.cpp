@@ -387,7 +387,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     mesh.set_fallback(fallback);
     {
         voronoi::Timings t;
-        const voronoi::Report r = mesh.update(x, {}, &t);
+        const voronoi::Report r = mesh.update(x, &t);
         mesh.update_cells(&t);
         std::cout << "mesh: build_ms=" << t.build << " geometry_ms=" << t.geometry << " cells_ms=" << t.cells
                   << " total_ms=" << t.build + t.geometry << " faces=" << r.faces
@@ -410,7 +410,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         exec.fence();
         if (s == 2) KernelTimes::total.clear();
         voronoi::Timings t;
-        const voronoi::Report r = mesh.update(x, {}, &t);
+        const voronoi::Report r = mesh.update(x, &t);
         mesh.update_cells(&t);
         // step_ms: the device step (repair, geometry) without a fallback; cells_ms (face lists, volumes, centroids) is on top.
         const double step_ms = t.repair + t.geometry;

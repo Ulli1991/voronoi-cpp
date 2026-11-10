@@ -40,8 +40,7 @@ public:
     // exact on return, or a std::runtime_error (then there is no mesh and the next update() builds).
     // Used by: callers every step; calls rebuild when stuck or overlapping.
     template <class X>
-    Report update(const X& x, const View<const int*>& active = {}, Timings* timings = nullptr) {
-        (void)active;
+    Report update(const X& x, Timings* timings = nullptr) {
         if (!built() || static_cast<int>(x.extent(0)) != n_) return rebuild(x, timings);
         Report report;
         Kokkos::Timer timer;
