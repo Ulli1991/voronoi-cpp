@@ -166,7 +166,7 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
         if (round == 0) stats.bad_tets = report.bad_tets;
         stats.tets = count;
         if (report.ok()) {
-            tet_mesh::represent_dropped(exec, mesh, face_start);
+            tet_mesh::represent(exec, mesh);
             stats.exact = true;
             break;
         }

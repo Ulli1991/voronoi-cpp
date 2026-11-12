@@ -41,14 +41,19 @@ void snap_positions(const ExecSpace& exec, const X& x, const ep::Box& box,
         });
 }
 
-// The sum of the cell volumes.
-// Used by: Mesh::geometry, for update()'s check that the repaired mesh fills the box exactly once.
-template <class ExecSpace, class Volume>
-double total_volume(const ExecSpace& exec, const Volume& volume) {
+// The sum of the cell volumes, and the live tetrahedra of the first `count` slots (count >= cells).
+// Used by: Mesh::geometry, for the checks that the mesh fills the box once and numbers each edge once.
+template <class ExecSpace, class Volume, class Alive>
+double total_volume(const ExecSpace& exec, const Volume& volume, const Alive& alive, int count, int& live) {
     double total = 0;
+    const int n = static_cast<int>(volume.extent(0));
     Kokkos::parallel_reduce(
-        "voronoi::total_volume", Kokkos::RangePolicy<ExecSpace>(exec, 0, volume.extent(0)),
-        KOKKOS_LAMBDA(int i, double& sum) { sum += volume(i); }, total);
+        "voronoi::total_volume", Kokkos::RangePolicy<ExecSpace>(exec, 0, Kokkos::max(count, n)),
+        KOKKOS_LAMBDA(int i, double& sum, int& tets) {
+            if (i < n) sum += volume(i);
+            if (i < count) tets += alive(i) != 0;
+        },
+        total, live);
     return total;
 }
 
@@ -134,6 +139,7 @@ struct Report {
     int rounds = 0;                // device repair rounds
     int stuck = 0;                 // triangles the device repair could not repair
     bool overlapped = false;       // the repair's mesh did not fill the box once: rebuilt
+    bool miscounted = false;       // the repair's faces were not cells + tetrahedra (Euler, #48): rebuilt
     long long host_flips = 0;      // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
     int faces = 0;
@@ -244,7 +250,8 @@ public:
             // A step of order the box leaves tetrahedra whose corners see each other through different images: every
             // local test passes and the mesh covers the torus many times.
             report.overlapped = !(Kokkos::abs(total_volume_ / box_.volume() - 1) < 1e-6);
-            if (!report.overlapped) return report;
+            report.miscounted = !euler(report.faces);
+            if (!report.overlapped && !report.miscounted) return report;
         }
         // A rebuild, also for what the host left: from x as given, so a re-sort of this update is undone.
         Report rebuilt = rebuild(x, timings);
@@ -254,6 +261,7 @@ public:
         rebuilt.host_flips = report.host_flips;
         rebuilt.host_rebuilds = report.host_rebuilds;
         rebuilt.overlapped = report.overlapped;
+        rebuilt.miscounted = report.miscounted;
         return rebuilt;
     }
 
@@ -304,6 +312,13 @@ public:
         if (layout_.resorts()) resort(timings);
         report.resorted = resorted_;
         report.faces = geometry(timings);
+        if (!euler(report.faces)) {
+            const std::string why = "voronoi::Mesh: a build numbered " + std::to_string(report.faces) + " faces for " +
+                                    std::to_string(live_tets_) + " tetrahedra of " + std::to_string(n_) +
+                                    " cells; an edge has no face or two (#48)";
+            forget();
+            throw std::runtime_error(why);
+        }
         return report;
     }
 
@@ -442,6 +457,9 @@ public:
 
 private:
     bool built() const { return state_.alive.extent(0) > 0; }
+    // On the torus V - E + F - T = 0 and F = 2T: a mesh has cells + tetrahedra edges, each one face.
+    // Used by: update, rebuild, after geometry.
+    bool euler(int faces) const { return static_cast<long long>(faces) == static_cast<long long>(n_) + live_tets_; }
 
     // No mesh any more: the next update() builds from scratch.
     // Used by: rebuild (start and on refusal).
@@ -524,7 +542,7 @@ private:
         }
         if (layout_.far > 0 && since_sort_ % 16 == 0)
             far_share_ = mesh_order::far_share(exec_, face_owner_, face_neighbour_);
-        total_volume_ = detail::total_volume(exec_, geometry_.volume);
+        total_volume_ = detail::total_volume(exec_, geometry_.volume, state_.alive, state_.count, live_tets_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
         cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
@@ -570,6 +588,7 @@ private:
     Fallback fallback_ = Fallback::cheapest;
     int repair_rounds_ = 1000;
     double total_volume_ = 0;  // of the cells, from the last geometry()
+    int live_tets_ = 0;        // tetrahedra, from the last geometry()
     bool cells_current_ = false;
     int updates_since_lists_ = 1;       // updates since the last update_cells()
     bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last
