@@ -257,6 +257,24 @@ std::uint64_t cells_checksum(const Mesh& mesh) {
     return h;
 }
 
+// A checksum of the start's tetrahedra as sets of particles, independent of their numbering and corner order: the
+// sum of a mix of each sorted quadruple. Used by: step (the start line).
+std::uint64_t tets_checksum(const tet_mesh::Mesh<Memory>& mesh) {
+    const auto vertex = to_host(mesh.vertex);
+    std::uint64_t sum = 0;
+    for (std::size_t t = 0; t < vertex.extent(0); ++t) {
+        int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+        std::sort(v, v + 4);
+        std::uint64_t h = 0;
+        for (const int a : v) {
+            h = (h ^ static_cast<std::uint32_t>(a)) * 0x9e3779b97f4a7c15ull;
+            h ^= h >> 31;
+        }
+        sum += h;
+    }
+    return sum;
+}
+
 // Flow::advect on `threads` host threads, one block of points each (the same result). Used by: step.
 void advect(const Flow& flow, Points& points, double distance, const Box& box, int threads) {
     std::vector<std::thread> pool;
@@ -492,7 +510,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         std::cout << "start: clip_ms=" << clip_ms << " from_rings_ms=" << from_rings_ms << " start_ms=" << start_ms
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
-                  << " tets=" << tets << " per_cell=" << double(tets) / n
+                  << " tets=" << tets << " tets_checksum=" << tets_checksum(mesh) << " per_cell=" << double(tets) / n
                   << " ring_entries_per_cell=" << double(cells.needed()) / n << "\n";
     }
 
