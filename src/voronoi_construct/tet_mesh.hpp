@@ -321,7 +321,7 @@ KOKKOS_INLINE_FUNCTION bool sliver(const Vec3* d, double& volume6, double& shape
 // every cell ok), without hashing: tetrahedron (i, j, q_m, q_m+1) is emitted only by the face of its two smallest
 // particles, and each triangle's two tetrahedra are adjacent in the ring of its two smallest particles' face.
 // Faces in CSR come back in face_start (cell t owns [face_start(t), face_start(t + 1))). Returns the number of ring
-// slots or adjacencies not resolved (0 for a consistent build); edges without a face are left to represent_dropped.
+// slots or adjacencies not resolved (0 for a consistent build); representatives are left to represent.
 // Used by: tet_start::build (every round).
 template <class ExecSpace>
 int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
@@ -481,62 +481,48 @@ int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpac
             }
         },
         open);
-    // Each face's first ring tetrahedron represents its edge (bits gathered
-    // with 32-bit atomics, then narrowed to bytes).
-    Kokkos::View<int*, Memory> bits("tet_edge_bits", tets);
-    Kokkos::parallel_for(
-        "tet_mesh::represent", Range(exec, 0, faces), KOKKOS_LAMBDA(int g) {
-            const int e = ring(ring_start(g));
-            if (e < 0) return;
-            int a = -1, b = -1;
-            for (int k = 0; k < 4; ++k) {
-                if (vertex(e, k) == owner(g)) a = k;
-                if (vertex(e, k) == neighbour(g)) b = k;
-            }
-            if (a >= 0 && b >= 0) Kokkos::atomic_or(&bits(e), 1 << edge_index(a, b));
-        });
-    const auto edges = mesh.edges;
-    Kokkos::parallel_for(
-        "tet_mesh::edge_bytes", Range(exec, 0, tets),
-        KOKKOS_LAMBDA(int e) { edges(e) = static_cast<std::uint8_t>(bits(e)); });
     return unresolved + open;
 }
 
-// After assemble on a consistent mesh: an edge without a face (the owner's cell dropped a rounding-level face its
-// neighbour kept) is represented by the lowest-numbered tetrahedron around it, so every edge has one representative.
-// Used by: tet_start::build, once the start passes check.
+// After assemble, on a mesh that passed tet_start::check: every edge is represented by the lowest-numbered
+// tetrahedron around it. From the tetrahedra alone: two faces of one pair in a rounded cell gave two (#48).
+// Used by: tet_start::build, from_rings.
 template <class ExecSpace>
-void represent_dropped(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_space>& mesh,
-                       const Kokkos::View<int*, typename ExecSpace::memory_space>& face_start) {
-    const auto vertex = mesh.vertex;
-    const auto neighbour = mesh.neighbour;
-    const auto ring_start = mesh.ring_start;
-    const auto ring = mesh.ring;
+void represent(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_space>& mesh) {
     const auto edges = mesh.edges;
     Kokkos::parallel_for(
-        "tet_mesh::represent_dropped",
-        Kokkos::RangePolicy<ExecSpace>(exec, 0, static_cast<int>(vertex.extent(0))), KOKKOS_LAMBDA(int e) {
+        "tet_mesh::represent", Kokkos::RangePolicy<ExecSpace>(exec, 0, static_cast<int>(mesh.vertex.extent(0))),
+        KOKKOS_LAMBDA(int e) {
+            int bits = 0;
             for (int k = 0; k < 6; ++k) {
                 int ka, kb;
                 edge_ends(k, ka, kb);
-                const int a = vertex(e, ka), b = vertex(e, kb), low = Kokkos::min(a, b), high = Kokkos::max(a, b);
-                int first = -1;
-                for (int g = face_start(low); g < face_start(low + 1); ++g)
-                    if (neighbour(g) == high) first = ring(ring_start(g));
-                if (first >= 0 && position(mesh, first, a) >= 0 && position(mesh, first, b) >= 0) continue;
-                if (lowest_around_edge(mesh, e, a, b) == e) edges(e) |= static_cast<std::uint8_t>(1 << k);
+                const int a = mesh.vertex(e, ka), b = mesh.vertex(e, kb);
+                // Walk until a lower tetrahedron: most walks stop after a step or two.
+                int current = e, before = -1;
+                for (int steps = 0; steps < max_ring_length; ++steps) {
+                    const int next = next_around_edge(mesh, current, before, a, b);
+                    if (next < 0 || next == e) {
+                        bits |= 1 << k;
+                        break;
+                    }
+                    if (next < e) break;
+                    before = current;
+                    current = next;
+                }
             }
+            edges(e) = static_cast<std::uint8_t>(bits);
         });
-    exec.fence();  // the caller drops these views next
+    exec.fence();  // the caller drops views next
 }
 
-// assemble, then represent_dropped if it resolved everything; returns assemble's unresolved count.
+// assemble, then represent if it resolved everything; returns assemble's unresolved count.
 template <class ExecSpace>
 int from_rings(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
                Mesh<typename ExecSpace::memory_space>& mesh) {
     Kokkos::View<int*, typename ExecSpace::memory_space> face_start;
     const int unresolved = assemble(exec, cells, mesh, face_start);
-    if (unresolved == 0) represent_dropped(exec, mesh, face_start);
+    if (unresolved == 0) represent(exec, mesh);
     return unresolved;
 }
 

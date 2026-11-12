@@ -69,6 +69,7 @@ std::string category(const std::string& what) {
     if (has("need more than")) return "overflow";
     if (has("not exact")) return "not_exact";
     if (has("too elongated")) return "elongated";
+    if (has("an edge has no face or two")) return "face_count";
     if (has("Allocation") || has("bad_alloc") || has("allocation")) return "memory";
     return "unknown";
 }
@@ -815,7 +816,8 @@ void run_2d(std::uint64_t seed, Outcome& out, std::string& label, bool verbose) 
             ++out.refusals;
             const std::string what = e.what(), c = category(what);
             if (verbose) std::cout << "refused: " << what << '\n' << std::flush;
-            out.hit(c == "unknown" ? valid : refused, c, what, t);
+            // face_count: the library caught its own wrong numbering (#48), a bug all the same.
+            out.hit(c == "face_count" ? wrong : c == "unknown" ? valid : refused, c, what, t);
             if (mesh.faces() != 0) out.hit(wrong, "after_refusal", "a refused update left a mesh", t);
             if (out.refusals >= 3) return;
         }
@@ -1128,11 +1130,15 @@ Script shrink(const Script& start, const std::string& program, const std::string
 
 // --------------------------------------------------------------------- ctest
 
-std::string header_of(const std::string& path) {
+// A saved case's header: `known <issue>` skips it, `expect exact` accepts nothing else.
+std::string header_of(const std::string& path, bool& exact_only) {
     std::ifstream in(path);
     std::string text, known;
-    while (std::getline(in, text) && text.rfind("ops ", 0) != 0)
+    exact_only = false;
+    while (std::getline(in, text) && text.rfind("ops ", 0) != 0) {
         if (text.rfind("known ", 0) == 0) known = text.substr(6);
+        exact_only = exact_only || text == "expect exact";
+    }
     return known;
 }
 
@@ -1150,14 +1156,16 @@ void smoke(Check& c, const std::string& directory, double seconds, bool with_kno
     }
     std::sort(names.begin(), names.end());
     for (const std::string& name : names) {
-        const std::string path = directory + "/" + name, known = header_of(path);
+        bool exact_only = false;
+        const std::string path = directory + "/" + name, known = header_of(path, exact_only);
         if (!known.empty() && !with_known) {
             std::cout << "skipped, known: " << name << " " << known << '\n' << std::flush;
             continue;
         }
         Outcome o;
         run_script(load(path), o, Limits{});
-        c.expect(o.kind <= valid || o.kind == rough, "case " + name + " " + o.signature + " " + o.detail);
+        c.expect(exact_only ? o.kind == exact : o.kind <= valid || o.kind == rough,
+                 "case " + name + " " + o.signature + " " + o.detail);
     }
     for (const std::uint64_t seed : cycling_2d) {
         Outcome o;

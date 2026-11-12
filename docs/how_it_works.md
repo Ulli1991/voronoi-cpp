@@ -106,7 +106,9 @@ The control flow of one `update()`, with its decisions:
 
 **What can go wrong.** If the result is still not exact, `update()` throws. The message says why: particles on one grid point (named), uncertified cells, cells too large for the exact clipping, or else the counts of each status.
 
-**Read.** `tet_start.hpp` (`build`, `check`), `tet_mesh.hpp` (`assemble`, `represent_dropped`).
+**Representatives.** Once the check passes, each Delaunay edge is given one tetrahedron, the lowest-numbered around it (`represent`), and a scan over these numbers the faces. The rings are not used for that: a rounded cell can name a face twice while the tetrahedra are right (#48). After the geometry the face count must be cells + tetrahedra (Euler's formula on the torus); a build that misses it is refused.
+
+**Read.** `tet_start.hpp` (`build`, `check`), `tet_mesh.hpp` (`assemble`, `represent`).
 
 ## 5. The persistent tetrahedra
 
@@ -162,7 +164,7 @@ In 2D the same scheme runs with Lawson's 2-2 flip:
 
 **Which one.** `Fallback::cheapest` (the default) uses the host only when the stuck entries number at most n / 200000, because the host costs from 0.1 ms to tens of ms per entry and a rebuild has a fixed cost. `Fallback::host` and `Fallback::rebuild` force one path. The host stops after `host_budget` (2²⁰) tetrahedra made by its local Delaunay builds, about a second on one core, writes nothing back and leaves the step to a rebuild: unbounded, it took 15 minutes on 501 particles that all moved ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)). No clock decides, so the same input takes the same path. An unfinished repair always rebuilds.
 
-**The volume check.** A step of the order of the box can leave tetrahedra whose corners see each other through different periodic images. Every local test passes, but the mesh covers the torus several times. After the geometry, `update()` compares the total cell volume with the box (within 1e-6) and rebuilds if it is off (`Report::overlapped`). This catches only meshes whose volume is wrong.
+**The volume check.** A step of the order of the box can leave tetrahedra whose corners see each other through different periodic images. Every local test passes, but the mesh covers the torus several times. After the geometry, `update()` compares the total cell volume with the box (within 1e-6) and rebuilds if it is off (`Report::overlapped`). It also counts the faces: Euler's formula on the torus (V − E + F − T = 0, every triangle in two tetrahedra) leaves cells + tetrahedra edges, one face each, so a face missing or numbered twice rebuilds too (`Report::miscounted`, #48). The two checks catch meshes whose volume or face count is wrong, not others.
 
 **Refusals.** No particles is a `std::invalid_argument` and changes nothing. Particles on one grid point, cells too wide to certify, and cells too large for the exact clipping are a `std::runtime_error` that says which. After a refusal there is no mesh, and the next `update()` builds from scratch.
 

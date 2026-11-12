@@ -1,5 +1,5 @@
-label ratio uniform+jit+poly+gauss+near steps:3, (min of 2002960643.case, WRONG:face_repeated)
-known 48
+label ratio uniform+jit+poly+gauss+near steps:3, (min of 2002960643.case, WRONG:face_repeated; two faces of one pair, #48)
+expect exact
 sides 0x1.b4c2c130cb13ap-1 0x1.4e6d1955bd017p-1 0x1.911560934694ap-1
 variant 0
 ops 1
