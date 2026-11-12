@@ -189,6 +189,47 @@ std::vector<std::string> positional(int argc, char** argv) {
     return args;
 }
 
+// A checksum of a clipping build, per cell by particle id: status, counts, the bits of volume and centroid, then the
+// owned faces as stored (neighbour, area, centroid bits) or the ring entries. Used by: rebuild, step (start line).
+std::uint64_t clip_checksum(const shell_voronoi::Cells<Memory>& cells) {
+    const auto status = to_host(cells.status);
+    const auto owned = to_host(cells.owned_count);
+    const auto face_count = to_host(cells.face_count);
+    const auto volume = to_host(cells.volume);
+    const auto centroid = to_host(cells.centroid);
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](std::uint64_t u) { h = (h ^ u) * 1099511628211ull; };
+    auto bits = [](double d) {
+        std::uint64_t u;
+        std::memcpy(&u, &d, sizeof u);
+        return u;
+    };
+    const int n = static_cast<int>(status.extent(0));
+    for (int i = 0; i < n; ++i) {
+        mix(static_cast<std::uint64_t>(status(i)) << 48 | static_cast<std::uint64_t>(face_count(i)) << 24 | owned(i));
+        mix(bits(volume(i)));
+        for (int a = 0; a < 3; ++a) mix(bits(centroid(i, a)));
+    }
+    if (cells.with_rings()) {
+        const auto start = to_host(cells.ring_start);
+        const auto rings = to_host(cells.rings);
+        for (int i = 0; i < n; ++i)
+            for (long long at = start(i), f = 0; status(i) == 0 && f < owned(i); ++f, at += 2 + rings(at + 1))
+                for (long long e = at; e < at + 2 + rings(at + 1); ++e) mix(static_cast<std::uint64_t>(rings(e)));
+        return h;
+    }
+    const auto start = to_host(cells.face_start);
+    const auto neighbour = to_host(cells.neighbour);
+    const auto area = to_host(cells.area);
+    const auto face_centroid = to_host(cells.face_centroid);
+    for (int i = 0; i < n; ++i)
+        for (int f = start(i); status(i) == 0 && f < start(i) + owned(i); ++f) {
+            mix(static_cast<std::uint64_t>(neighbour(f)));
+            for (int a = 0; a < 3; ++a) mix(bits(area(f, a)) ^ bits(face_centroid(f, a)) << 1);
+        }
+    return h;
+}
+
 // The `rebuild` mode: times the cell list and the warp clipping on one point set and checks the cells.
 // args: rebuild <n> <distribution> [repeats]. Returns the failure count.
 // Used by: main.
@@ -221,7 +262,10 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
               << " construct_Mcells_s=" << n / construct_ms / 1e3
               << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-    if (check) failures += check_cells(cells, x, std::cout, box);
+    if (check) {
+        std::cout << "clip_checksum=" << clip_checksum(cells) << "\n";
+        failures += check_cells(cells, x, std::cout, box);
+    }
     DeviceMemory<Memory>::phase("warp", n);
 #if defined(VORONOI_MEASURE)
     if (measure_every > 0) measure_bench::clipping(exec, grid, box, measure_every, dump);
@@ -501,6 +545,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         tet_mesh::Mesh<Memory> mesh;
         tet_start::Stats start;
         const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
+        const std::uint64_t rings_checksum = clip_checksum(cells);
         const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
         const double start_ms = median_ms(repeats, [&] {
             shell_voronoi::construct_warp(exec, grid, cells);
@@ -511,7 +556,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
                   << " tets=" << tets << " tets_checksum=" << tets_checksum(mesh) << " per_cell=" << double(tets) / n
-                  << " ring_entries_per_cell=" << double(cells.needed()) / n << "\n";
+                  << " ring_entries_per_cell=" << double(cells.needed()) / n << " rings_checksum=" << rings_checksum
+                  << "\n";
     }
 
     DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);
