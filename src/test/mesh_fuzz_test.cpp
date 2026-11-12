@@ -266,51 +266,6 @@ void check_lists(const M& mesh, Outcome& out, int at) {
         }
 }
 
-// Least-squares weights give back the gradient of a linear field: the fit
-// is exact there, with no intercept.
-template <class M>
-void check_weights(const M& mesh, const oracle::Grid& g, Outcome& out, int at) {
-    if constexpr (M::with_weights) {
-        const int n = mesh.particles();
-        const auto start = support::to_host(mesh.cell_face_start());
-        const auto list = support::to_host(mesh.cell_face(), 2 * mesh.faces());
-        const auto owner = support::to_host(mesh.owner(), mesh.faces());
-        const auto neighbour = support::to_host(mesh.neighbour(), mesh.faces());
-        const auto centroid = support::to_host(mesh.centroid());
-        const auto weights = support::to_host(mesh.gradient_weights(), 2 * mesh.faces());
-        const double tolerance = std::is_same_v<typename M::WeightReal, float> ? 5e-2 : 1e-6;
-        const double gradient[3] = {1, -2, 3};
-        long long not_finite = 0, off = 0;
-        double worst = 0;
-        for (int i = 0; i < n; ++i) {
-            double sum[3] = {0, 0, 0};
-            if (start(i + 1) - start(i) < 4) continue;  // no fit
-            for (int k = start(i); k < start(i + 1); ++k) {
-                const int f = list(k), j = owner(f) == i ? neighbour(f) : owner(f);
-                const oracle::Offset d = oracle::difference(g, i, j);
-                double du = 0;
-                for (int a = 0; a < 3; ++a)
-                    du += gradient[a] * (double(d[a]) * g.step + centroid(j, a) - centroid(i, a));
-                for (int a = 0; a < 3; ++a) {
-                    not_finite += !std::isfinite(weights(k, a));
-                    sum[a] += static_cast<double>(weights(k, a)) * du;
-                }
-            }
-            double e = 0;
-            for (int a = 0; a < 3; ++a) e = std::max(e, std::abs(sum[a] - gradient[a]));
-            worst = std::max(worst, e);
-            off += e > tolerance;
-        }
-        if (not_finite > 0) out.hit(wrong, "weights_finite", std::to_string(not_finite) + " weights", at);
-        if (off > 0) out.hit(bits, "weights_fit", std::to_string(off) + " cells, worst " + std::to_string(worst), at);
-    } else {
-        (void)mesh;
-        (void)g;
-        (void)out;
-        (void)at;
-    }
-}
-
 // update_cells of a repaired mesh: the same bits as from a fresh build.
 template <class M>
 void check_cell_bits(const M& mesh, Outcome& out, int at) {
@@ -409,9 +364,9 @@ struct Limits {
 // A box outside the measured range of sides is refused at construction (#32): a refusal with that cause.
 // Used by: run.
 template <int D>
-bool usable_box(const exact_predicates::BoxN<D>& box, bool float_rows, bool float_weights, Outcome& out) {
+bool usable_box(const exact_predicates::BoxN<D>& box, bool float_rows, Outcome& out) {
     try {
-        voronoi::detail::usable(box, float_rows, float_weights);
+        voronoi::detail::usable(box, float_rows);
         return true;
     } catch (const std::invalid_argument& e) {
         out.hit(refused, "box_range", e.what(), 0);
@@ -422,7 +377,7 @@ bool usable_box(const exact_predicates::BoxN<D>& box, bool float_rows, bool floa
 template <class M>
 void run(const Script& s, Outcome& out, const Limits& limits) {
     const Box box(s.sides[0], s.sides[1], s.sides[2]);
-    if (!usable_box(box, M::float_rows, M::with_weights && std::is_same_v<typename M::WeightReal, float>, out)) return;
+    if (!usable_box(box, M::float_rows, out)) return;
     M mesh(Exec{}, box);
     bool timed = false, reach_measured = false;
     Points last;  // the positions the mesh is of
@@ -480,7 +435,6 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
                 const auto g = mesh_check::grid_of(mesh);
                 if (mesh.particles() <= limits.every_call) {
                     check_cell_geometry(mesh, g, limits.sample, out, at);
-                    check_weights(mesh, g, out, at);
                     check_cell_bits(mesh, out, at);
                 }
                 if (out.kind >= wrong) return;
@@ -634,13 +588,7 @@ void run(const Script& s, Outcome& out, const Limits& limits) {
 void run_script(const Script& s, Outcome& out, const Limits& limits) {
     switch (s.variant) {
         case float_rows:
-            run<voronoi::Mesh<3, Exec, float, void>>(s, out, limits);
-            break;
-        case float_weights:
-            run<voronoi::Mesh<3, Exec, double, float>>(s, out, limits);
-            break;
-        case double_weights:
-            run<voronoi::Mesh<3, Exec, double, double>>(s, out, limits);
+            run<voronoi::Mesh<3, Exec, float>>(s, out, limits);
             break;
         default:
             run<voronoi::Mesh<3, Exec>>(s, out, limits);

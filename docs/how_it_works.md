@@ -25,7 +25,7 @@ The control flow of one `update()`:
 
 **Why.** Rounded arithmetic can answer "inside or outside?" differently for the same four points, depending on their order or on which thread asks. Two cells would then disagree about a face they share, and the mesh would have holes. On the grid, differences are exact integers, so a predicate can be computed exactly whenever doubles are not sure. Each predicate first evaluates its determinant in double with a bound on the rounding error. Only when the value lies inside the bound does it repeat the evaluation in integers: 128 bits for the orientation, a 256-bit sum for the in-sphere test (in 2D, 64 and 128 bits).
 
-**Range.** The predicates are exact for any box, but the geometry (circumcentres, areas, volumes, weights) multiplies up to four lengths in doubles. It stays finite and exact for sides from 1e-75 to 3e77, narrower with float face rows (1e-16 to 1e20) or float gradient weights (1e-37 to 1e43); the constructor refuses other sides ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)).
+**Range.** The predicates are exact for any box, but the geometry (circumcentres, areas, volumes) multiplies up to four lengths in doubles. It stays finite and exact for sides from 1e-75 to 3e77, narrower with float face rows (1e-16 to 1e20); the constructor refuses other sides ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)).
 
 **Float keys.** The warp clipping keeps its float keys and plane normals in units of the tile width, so the size of the box never reaches them: a cube of side 3.086e24 builds on CUDA ([#26](https://github.com/Ulli1991/voronoi-cpp/issues/26)).
 
@@ -180,15 +180,15 @@ In 2D the same scheme runs with Lawson's 2-2 flip:
 
 ## 9. `update_cells()`
 
-**What.** Per-cell face lists, and volumes and centroids summed over them in a fixed order. With a `Weight` type it also computes least-squares gradient weights.
+**What.** Per-cell face lists, and volumes and centroids summed over them in a fixed order.
 
-**In and out.** In: the faces of the last update. Out: `cell_face_start`, `cell_face` (each cell's faces in increasing id of the other particle), `volume()` and `centroid()` (relative to the generator), and optionally `gradient_weights()`.
+**In and out.** In: the faces of the last update. Out: `cell_face_start`, `cell_face` (each cell's faces in increasing id of the other particle), `volume()` and `centroid()` (relative to the generator).
 
 **Why.** A solver gathering over a cell's faces needs the list. Sums in a fixed order give the same bits on every run. A pyramid's centroid lies 3/4 of the way from the generator to the face centroid (D/(D + 1) in D dimensions).
 
 **Incremental.** After a repair, only cells at a corner of a created tetrahedron can have gained or lost a face. When at most n/5 tetrahedra were created and the scratch fits, only those lists are sorted again; the others are renumbered. Every cell is summed again, because every face moved.
 
-**Read.** `tet_cells.hpp` (`cells`, `cells_incremental`, `gradient_weights`).
+**Read.** `tet_cells.hpp` (`cells`, `cells_incremental`).
 
 ## 10. 2D: `Mesh<2>`
 

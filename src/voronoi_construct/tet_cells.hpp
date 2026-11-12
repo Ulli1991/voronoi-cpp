@@ -2,9 +2,9 @@
 
 #include "tet_mesh.hpp"
 
-// Stage 5b (geometry): per-cell face lists, volumes and centroids, and the gradient weights, on top of tet_mesh.hpp's faces.
-// Called by Mesh::update_cells (3D: voronoi_mesh.hpp; 2D: voronoi_mesh_2d.hpp): cells or cells_incremental, then
-// gradient_weights. Same namespace as tet_mesh.hpp, which it needs for Box, Vec3 and the face arrays.
+// Stage 5b (geometry): per-cell face lists, volumes and centroids, on top of tet_mesh.hpp's faces.
+// Called by Mesh::update_cells (3D: voronoi_mesh.hpp; 2D: voronoi_mesh_2d.hpp): cells or cells_incremental.
+// Same namespace as tet_mesh.hpp, which it needs for Box, Vec3 and the face arrays.
 namespace tet_mesh {
 
 // Per-cell face lists (CSR) and cell geometry: cell i's faces are face(start(i)) .. face(start(i + 1) - 1) in increasing
@@ -429,67 +429,6 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
         });
     detail::finish_incremental<3>(exec, x, box, owner, neighbour, geometry, out,
                                   Kokkos::View<const int*, Memory>(renumber), rings.dirty, rings.dirty_count, lists);
-}
-
-// 4. Least-squares gradient weights of every per-cell list entry, as Arepo's prepare_gradient_operator: for cell i with
-// entries k (face f, other cell j), X_k = (1, d_k), d_k from the centroid of i to that of j (nearest image), w_k = |A_f|,
-// M = sum_k w_k X_k X_k^T; entry k gets weight(k) = w_k (M^-1 X_k)_{1..D}, so sum_k weight(k) (u_j - u_i) is the gradient
-// of the area-weighted fit u_j - u_i = a + g.d_k. In double (Cholesky of M), stored in the type of `out` (rows of D);
-// one thread per cell, after cells(). Used by: Mesh::update_cells (Weight != void).
-template <class ExecSpace, class Xs, int D, class Weights>
-void gradient_weights(const ExecSpace& exec, const Xs& x, const exact_predicates::BoxN<D>& box,
-                      const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
-                      const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
-                      const Geometry<typename ExecSpace::memory_space, D>& geometry,
-                      const CellFaces<typename ExecSpace::memory_space, D>& cells, const Weights& out) {
-    using Weight = typename Weights::value_type;
-    const int n = static_cast<int>(cells.volume.extent(0));
-    const auto start = cells.start, face = cells.face;
-    const auto centroid = cells.centroid;
-    const auto area = geometry.area;
-    Kokkos::parallel_for(
-        "tet_mesh::gradient_weights", Kokkos::RangePolicy<ExecSpace>(exec, 0, n), KOKKOS_LAMBDA(int i) {
-            constexpr int U = D + 1;
-            // Regressors (1, d) and weight of entry k.
-            auto regressors = [&](int k, double* X) {
-                const int f = face(k), o = owner(f), m = neighbour(f), j = o == i ? m : o;
-                X[0] = 1;
-                for (int a = 0; a < D; ++a)
-                    X[1 + a] = snapped_difference(x(j, a) - x(i, a), box, a) + centroid(j, a) - centroid(i, a);
-                double s = 0;
-                for (int a = 0; a < D; ++a) s += area(f, a) * area(f, a);
-                return Kokkos::sqrt(s);
-            };
-            double M[U][U] = {};
-            for (int k = start(i); k < start(i + 1); ++k) {
-                double X[U];
-                const double w = regressors(k, X);
-                for (int p = 0; p < U; ++p)
-                    for (int s = p; s < U; ++s) M[p][s] += w * X[p] * X[s];
-            }
-            double L[U][U] = {};
-            for (int p = 0; p < U; ++p)
-                for (int s = 0; s <= p; ++s) {
-                    double sum = M[s][p];
-                    for (int m = 0; m < s; ++m) sum -= L[p][m] * L[s][m];
-                    L[p][s] = p == s ? Kokkos::sqrt(sum) : sum / L[s][s];
-                }
-            for (int k = start(i); k < start(i + 1); ++k) {
-                double X[U], z[U], y[U];
-                const double w = regressors(k, X);
-                for (int p = 0; p < U; ++p) {
-                    double sum = X[p];
-                    for (int m = 0; m < p; ++m) sum -= L[p][m] * z[m];
-                    z[p] = sum / L[p][p];
-                }
-                for (int p = U - 1; p >= 0; --p) {
-                    double sum = z[p];
-                    for (int m = p + 1; m < U; ++m) sum -= L[m][p] * y[m];
-                    y[p] = sum / L[p][p];
-                }
-                for (int a = 0; a < D; ++a) out(k, a) = static_cast<Weight>(w * y[1 + a]);
-            }
-        });
 }
 
 }  // namespace tet_mesh

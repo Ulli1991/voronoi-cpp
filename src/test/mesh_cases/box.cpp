@@ -129,7 +129,6 @@ void box_cases() {
         };
         for (const double side : {1e-76, 1e78}) refused("side " + sci(side), [&] { Mesh(Exec{}, side); });
         refused("side 1e21, float face rows", [&] { voronoi::Mesh<3, Exec, float>(Exec{}, 1e21); });
-        refused("side 1e44, float weights", [&] { voronoi::Mesh<3, Exec, double, float>(Exec{}, 1e44); });
         refused("side 1e78 in 2D", [&] { voronoi::Mesh<2, Exec>(Exec{}, exact_predicates::BoxN<2>(1e78)); });
     });
     for (const double side : {1.0, 3.0, 0.7, 0.1, 1e-3, 1.0 / 3, 3.086e24})

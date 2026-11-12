@@ -99,7 +99,7 @@ inline const char* op_name(int kind) {
 }
 
 // Which Mesh a script runs on.
-enum Variant { plain, float_rows, float_weights, double_weights, variants };
+enum Variant { plain, float_rows };
 
 struct Script {
     std::string label;
@@ -942,7 +942,8 @@ inline Script make_script(std::uint64_t seed) {
     s.sides = make_box(rng, s.label);
     const Box box(s.sides[0], s.sides[1], s.sides[2]);
     s.sides = {box.side[0], box.side[1], box.side[2]};
-    if (rng.chance(0.25)) s.variant = rng.range(1, variants - 1);
+    // Draws 2 and 3 were the removed weight variants (0c9a193); drawn still, so seeds keep their scripts.
+    if (rng.chance(0.25)) s.variant = rng.range(1, 3) == 1 ? float_rows : plain;
     Points x = make_points(rng, box, profile, s.label);
     if (x.empty()) x.push_back({0, 0, 0});
     const int n = static_cast<int>(x.size());

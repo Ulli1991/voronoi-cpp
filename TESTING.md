@@ -86,7 +86,7 @@ n, 5 1D, 6 2D, 7 giant n (3 to 6 million before the added parts, for the A100). 
 `valid` (a refusal of input that has a mesh, or with no clear cause), `bits`,
 `rough` (exact tetrahedra, geometry past rounding), `WRONG`, `CRASH` or `HANG`.
 Checked on top of `mesh_check::check`: snapping, face order and direction, centroids
-on bisectors and against brute force, per-cell lists, gradient weights, float rows,
+on bisectors and against brute force, per-cell lists, float rows,
 `clip()`, and a refusal for reach against the measured largest cell.
 
 ```sh

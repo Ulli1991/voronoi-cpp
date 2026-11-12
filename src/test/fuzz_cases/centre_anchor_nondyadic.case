@@ -1,6 +1,6 @@
 label cube of side 6.18e-6 (step not a power of two), min of seed 2002097816: equal centres from rounded k * step anchors (#45)
 sides 0x1.9eaaafd594025p-18 0x1.9eaaafd594025p-18 0x1.9eaaafd594025p-18
-variant 2
+variant 0
 ops 1
 update 0 0 720
 0x1.95a0c213fd1fdp-18 0x1.1f43feb52eacdp-19 0x1.713a21bdf1ff4p-21

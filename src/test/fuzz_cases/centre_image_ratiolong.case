@@ -1,6 +1,6 @@
 label ratiolong box, min of seed 2001478046: equal centres stored from two periodic images (#45)
 sides 0x1.821708bc6e945p-40 0x1.0b0c4bdf32bfbp-39 0x1.c8f49bf7f2421p-39
-variant 2
+variant 0
 ops 1
 update 0 0 1048
 0x0p+0 0x1.b9e6d6bc3776cp-40 0x1.c8f49bf7f242p-39

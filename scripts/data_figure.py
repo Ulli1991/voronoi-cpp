@@ -35,7 +35,7 @@ GROUPS = [
     (mesh_order.FACE, [
         ("face_rings_owner, _neighbour", 66, "number_faces", f"faces, update_cells, {HYDRO}", ["step"]),
         ("face_rings_ring_start,\n_ring_length", 66, "number_faces, append_rings,\ncompact_rings", "faces", ["step"]),
-        ("face_area, face_centroid\ndouble[3] rows", 394, "faces", f"cell_sums, gradient_weights,\n{HYDRO}", ["step"]),
+        ("face_area, face_centroid\ndouble[3] rows", 394, "faces", f"cell_sums, {HYDRO}", ["step"]),
         ("face_rings_pool, two:\nin use and spare", 501, "append_rings, compact_rings;\nspare: the temporaries",
          f"faces (ring entries); spare:\n{HYDRO} via Mesh::scratch", ["kept", "scratch"]),
     ]),
@@ -50,8 +50,8 @@ GROUPS = [
     ]),
     ("list entry (2 per face)", [
         ("cell_face, cell_face_start,\ncell_face_cursor", 74, "update_cells: fill, sort",
-         f"cell_sums, gradient_weights,\n{HYDRO}", ["cells"]),
-        ("face_rows (FaceReal = float)\ncell_face_weights (Weight)", None, "faces; gradient_weights",
+         f"cell_sums, {HYDRO}", ["cells"]),
+        ("face_rows (FaceReal = float)", None, "faces",
          f"{HYDRO}", ["step", "cells"]),
     ]),
 ]
@@ -82,7 +82,7 @@ def main():
             y -= h / 2 + 0.12
             ax.text(cx["name"], y, name, fontsize=9.5, family=MONO, va="center", color=INK, linespacing=1.25)
             if bytes_ is None:
-                ax.text(cx["bar"], y, "not in the profile:\n32 B per face; 12 or 24 B\nper list entry", fontsize=9,
+                ax.text(cx["bar"], y, "not in the profile:\n32 B per face", fontsize=9,
                         va="center", color=FAINT, linespacing=1.2)
             else:
                 rect(ax, cx["bar"], y - 0.11, bytes_ * scale, 0.22, LIFE[lives[0]], lw=0.9, radius=0.02)

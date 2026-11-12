@@ -167,7 +167,7 @@ struct Changes {
 // update(x) snaps, rechecks the order and sorts again only if particles crossed; order(x) does only that.
 // Used by: voronoi::Mesh<1> users (FiniteVolume 1D).
 template <class ExecSpace>
-class Mesh<1, ExecSpace, double, void> {
+class Mesh<1, ExecSpace, double> {
 public:
     static constexpr int dimensions = 1;
     using Memory = typename ExecSpace::memory_space;

@@ -103,20 +103,16 @@ std::string not_exact(const Cells& cells, const Positions& positions) {
 
 // The box sides measured to give finite, correct geometry (#32). The double geometry multiplies up to four lengths:
 // exact from 1e-76 to 3e77 with 907 points, from 1e-75 with 262144 (smaller cells), wrong past 1e78. Float face rows
-// hold areas (exact 3e-17 to 1e20), float gradient weights inverse lengths (3e-38 to 1e43). Returns `box`, or throws
+// hold areas (exact 3e-17 to 1e20). Returns `box`, or throws
 // std::invalid_argument naming the range.
 // Used by: the Mesh<3> and Mesh<2> constructors.
 template <int D>
-const exact_predicates::BoxN<D>& usable(const exact_predicates::BoxN<D>& box, bool float_rows, bool float_weights) {
+const exact_predicates::BoxN<D>& usable(const exact_predicates::BoxN<D>& box, bool float_rows) {
     double low = 1e-75, high = 3e77;
     const char* why = "the double geometry";
     if (float_rows) {
         low = 1e-16, high = 1e20;
         why = "float face rows";
-    }
-    if (float_weights) {
-        low = std::max(low, 1e-37), high = std::min(high, 1e43);
-        why = float_rows ? "float face rows and gradient weights" : "float gradient weights";
     }
     for (int a = 0; a < D; ++a)
         if (!(box.side[a] >= low && box.side[a] <= high)) {
@@ -164,41 +160,34 @@ constexpr long long host_budget = 1LL << 20;
 //                    fallback, if stuck) -> geometry() (tet_mesh); a mesh not filling the box once -> rebuild(x).
 //   rebuild(x)       from scratch: snap -> index -> shell_voronoi clipping -> tet_start::build -> repair::prepare
 //                    -> geometry(). Throws std::runtime_error if the start is not exact.
-//   update_cells()   optional, after update/rebuild: per-cell face lists, volumes, centroids (and gradient weights).
+//   update_cells()   optional, after update/rebuild: per-cell face lists, volumes, centroids.
 //   accessors        faces(), owner(), neighbour(), area(), volume(), ... read the last update's result.
 //   clip(x, cells)   independent of the above: snap -> index -> clipping of the listed cells only.
 //
-// FaceReal = float adds one float row per face (face_rows()) for a reduced-precision solver; Weight = float or double
-// adds the least-squares gradient weights of every per-cell list entry (computed by update_cells()); void: none.
-template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class FaceReal = double, class Weight = void>
+// FaceReal = float adds one float row per face (face_rows()) for a reduced-precision solver.
+template <int D, class ExecSpace = Kokkos::DefaultExecutionSpace, class FaceReal = double>
 class Mesh;
 
 // Mesh<3>: the 3D Voronoi mesh (tets + shell clipping); the contract is described above.
 // Used by: luna-cpp and the tests, through Mesh<3>; Mesh<2> is in voronoi_mesh_2d.hpp.
-template <class ExecSpace, class FaceReal, class Weight>
-class Mesh<3, ExecSpace, FaceReal, Weight> {
+template <class ExecSpace, class FaceReal>
+class Mesh<3, ExecSpace, FaceReal> {
 public:
     static_assert(std::is_same_v<FaceReal, double> || std::is_same_v<FaceReal, float>, "FaceReal: double or float");
-    static_assert(std::is_void_v<Weight> || std::is_same_v<Weight, double> || std::is_same_v<Weight, float>,
-                  "Weight: void, double or float");
     static constexpr int dimensions = 3;
     static constexpr bool float_rows = std::is_same_v<FaceReal, float>;
-    static constexpr bool with_weights = !std::is_void_v<Weight>;
-    using WeightReal = std::conditional_t<with_weights, Weight, float>;
     using Memory = typename ExecSpace::memory_space;
     template <class T>
     using View = Kokkos::View<T, Memory>;
     using Positions = tet_mesh::Points4<Memory>;
     using Rows = Kokkos::View<const double* [3], Kokkos::LayoutRight, Memory>;  // area, centroids
     using FaceRows = Kokkos::View<const float* [8], Kokkos::LayoutRight, Memory>;
-    // Row k: the weight vector of list entry k (cell_face(k)).
-    using Weights = Kokkos::View<const WeightReal* [3], Kokkos::LayoutRight, Memory>;
 
     // A periodic box of sides box.side[a] (see exact_predicates::Box: sides are rounded to whole grid steps, side[]
     // holds them), or a cube.
     // Sides outside detail::usable are a std::invalid_argument.
     Mesh(const ExecSpace& exec, const ep::Box& box)
-        : exec_(exec), box_(detail::usable(box, float_rows, with_weights && std::is_same_v<WeightReal, float>)) {}
+        : exec_(exec), box_(detail::usable(box, float_rows)) {}
     Mesh(const ExecSpace& exec, double box) : Mesh(exec, ep::Box(box)) {}
 
     // New positions of all particles, x(i, a) in [0, side[a]) (any device view). Repairs the mesh, or builds it on the
@@ -336,7 +325,7 @@ public:
 
     // The per-cell face lists, and volumes and centroids summed over them in fixed order (bit-reproducible), for the
     // faces of the last update; does nothing if they are current. Incremental when few entries were touched.
-    // Used by: callers after update(); runs tet_mesh::cells_incremental, cells, gradient_weights.
+    // Used by: callers after update(); runs tet_mesh::cells_incremental, cells.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
         if (!built()) throw std::logic_error("voronoi::Mesh::update_cells: no mesh (no update yet, or it was refused)");
@@ -355,14 +344,6 @@ public:
                             scratch(tet_mesh::cells_scratch_bytes(faces())).data());
         }
         updates_since_lists_ = 0;
-        if constexpr (with_weights) {
-            // As many rows as list entries (2 per face), with the list's 1/32 spare.
-            const std::size_t entries = 2 * static_cast<std::size_t>(faces());
-            if (weights_.extent(0) < entries)
-                weights_ = Kokkos::View<WeightReal* [3], Kokkos::LayoutRight, Memory>(
-                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_face_weights")), entries + entries / 32);
-            tet_mesh::gradient_weights(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_, weights_);
-        }
         cells_current_ = true;
         lap(timer, timings, &Timings::cells);
     }
@@ -396,9 +377,6 @@ public:
     Rows centroid() const { return cells_.centroid; }
     View<const int*> cell_face_start() const { return cells_.start; }
     View<const int*> cell_face() const { return cells_.face; }
-    // Weight != void, after update_cells(): the gradient weights of list
-    // entry k (tet_mesh::gradient_weights), row k for cell_face(k).
-    Weights gradient_weights() const { return weights_; }
     // The snapped positions the geometry is computed from (padded to 32 bytes).
     tet_mesh::Points4<Memory> positions() const { return positions_; }
 
@@ -421,7 +399,6 @@ private:
         rings_ = tet_mesh::FaceRings<Memory>{};
         geometry_ = tet_mesh::Geometry<Memory>{};
         cells_ = tet_mesh::CellFaces<Memory>{};
-        weights_ = {};
         n_ = 0;
         cells_current_ = false;
         updates_since_lists_ = 1;
@@ -501,7 +478,6 @@ private:
     tet_mesh::Geometry<Memory> geometry_;
     tet_mesh::CellFaces<Memory> cells_;
     shell_voronoi::Cells<Memory> local_;
-    Kokkos::View<WeightReal* [3], Kokkos::LayoutRight, Memory> weights_;
 };
 
 }  // namespace voronoi

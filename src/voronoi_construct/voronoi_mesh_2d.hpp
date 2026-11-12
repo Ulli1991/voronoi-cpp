@@ -10,16 +10,12 @@ namespace voronoi {
 
 // Mesh<2>: the 2D Voronoi mesh (triangulation + polygon clipping), same interface as Mesh<3>.
 // Used by: voronoi_mesh.hpp (included at its end), for D = 2.
-template <class ExecSpace, class FaceReal, class Weight>
-class Mesh<2, ExecSpace, FaceReal, Weight> {
+template <class ExecSpace, class FaceReal>
+class Mesh<2, ExecSpace, FaceReal> {
 public:
     static_assert(std::is_same_v<FaceReal, double> || std::is_same_v<FaceReal, float>, "FaceReal: double or float");
-    static_assert(std::is_void_v<Weight> || std::is_same_v<Weight, double> || std::is_same_v<Weight, float>,
-                  "Weight: void, double or float");
     static constexpr int dimensions = 2;
     static constexpr bool float_rows = std::is_same_v<FaceReal, float>;
-    static constexpr bool with_weights = !std::is_void_v<Weight>;
-    using WeightReal = std::conditional_t<with_weights, Weight, float>;
     using Memory = typename ExecSpace::memory_space;
     template <class T>
     using View = Kokkos::View<T, Memory>;
@@ -27,12 +23,11 @@ public:
     using Positions = tri_mesh::Rows2<Memory>;
     using Rows = Kokkos::View<const double* [2], Kokkos::LayoutRight, Memory>;
     using FaceRows = Kokkos::View<const float* [8], Kokkos::LayoutRight, Memory>;
-    using Weights = Kokkos::View<const WeightReal* [2], Kokkos::LayoutRight, Memory>;
 
     // Sides outside detail::usable (measured in 3D) are a std::invalid_argument.
     Mesh(const ExecSpace& exec, const Box& box)
         : exec_(exec),
-          box_(detail::usable(box, float_rows, with_weights && std::is_same_v<WeightReal, float>)),
+          box_(detail::usable(box, float_rows)),
           point_("point2", 0, box) {}
     Mesh(const ExecSpace& exec, double side) : Mesh(exec, Box(side)) {}
 
@@ -190,13 +185,6 @@ public:
         lists_valid_ = true;
         patched_ = false;
         updates_since_lists_ = 0;
-        if constexpr (with_weights) {
-            const std::size_t entries = 2 * static_cast<std::size_t>(faces());
-            if (weights_.extent(0) < entries)
-                weights_ = Kokkos::View<WeightReal* [2], Kokkos::LayoutRight, Memory>(
-                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_face_weights")), entries);
-            tet_mesh::gradient_weights(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_, weights_);
-        }
         cells_current_ = true;
         lap(timer, timings, &Timings::cells);
     }
@@ -220,7 +208,6 @@ public:
     Rows centroid() const { return cells_.centroid; }
     View<const int*> cell_face_start() const { return cells_.start; }
     View<const int*> cell_face() const { return cells_.face; }
-    Weights gradient_weights() const { return weights_; }
     Positions positions() const { return positions_; }
 
     // Internals, for tests and the benchmark.
@@ -305,7 +292,6 @@ private:
         state_ = tri_repair::State<Memory>{};
         geometry_ = tet_mesh::Geometry<Memory, 2>{};
         cells_ = tet_mesh::CellFaces<Memory, 2>{};
-        weights_ = {};
         renumber_ = {};
         n_ = 0;
         cells_current_ = false;
@@ -371,7 +357,6 @@ private:
     tet_mesh::Geometry<Memory, 2> geometry_;
     tet_mesh::CellFaces<Memory, 2> cells_;
     View<char*> scratch_;
-    Kokkos::View<WeightReal* [2], Kokkos::LayoutRight, Memory> weights_;
 };
 
 }  // namespace voronoi
