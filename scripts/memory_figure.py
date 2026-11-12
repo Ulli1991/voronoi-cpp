@@ -89,7 +89,7 @@ POOLS = [
      "array by max(1/8, need) with resize (old and new alive at once); stuck: + count/64 + 1024"),
     ("Faces", "owner, neighbour, ring_*, area, ...", REPAIR,
      "the start's count + 1/32",
-     "number_faces writes at most the capacity; more faces: realloc + 1/32, scan again"),
+     "renumber resizes with 1/32 more; the number pool (ids, 1/4 spare) compacts in place when full"),
     ("Cell face lists", "cell_face  (update_cells)", SETUP,
      "2 × faces + faces / 16: a 1/32 spare", "realloc to the same rule (the lists are rebuilt)"),
     ("Repair lists", "work, plans, freed, stuck", REPAIR,

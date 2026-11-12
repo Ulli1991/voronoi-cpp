@@ -8,7 +8,8 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates are mill
 
 | Rows in the README table | Job | Commit |
 |---|---|---|
-| Moving-mesh update, `update_cells()`, update plus `update_cells()`, 128³ and 256³ | 32231679, 32231432 (interleaved with main 5d23b26; [step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
+| Moving-mesh update, update plus `update_cells()`, 128³ and 256³ | 32269165, 32237516 (interleaved with main 9e9ec03; [fewer bytes per step](#fewer-bytes-per-step-incremental-face-numbers-e-and-the-ring-re-walk-k2-2026-11-12)) | `step-bytes` (the ring re-walk commit) |
+| `update_cells()` alone | 32231679 ([step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
 | Full rebuilds at 2.1M | 31952136 (interleaved runs of main and this tree) | main 16e7769 |
 | Exact start, the sum row, at 2.1M | 31701509 | 2311937 |
 | The 256³ column, except the moving-mesh rows | 31694457 | f32c909 (older than the current code, which is faster there) |
@@ -153,6 +154,46 @@ Tried and left out:
 | The dirty-face count kept on the device: `append_rings` over 6 per touched tetrahedron, one wait instead of two in `update_face_rings` | 32226509 (Nsight Systems) | `update()` wall 0.8 % (0.03) and 1.8 % (0.1) slower: the wider launch costs more than the wait |
 
 What is left between the step and its ceiling (0.03 spacings, 128³). Nsight Systems (job 32231002, a `gpudev` node slower for both builds): per `update()` 44.4 → 48.0 launches, 26.6 → 20.7 synchronisations, kernel time 11.21 → 10.72 ms, host gap 1.12 → 0.97 ms (at 0.1: 19.97 → 18.29 ms of kernels, gap 1.30 → 1.12 ms). Per kernel, the time now (Kokkos Tools, job 32230610) against its bytes at 80 % of peak ([measure_2026-11-12.md](measure_2026-11-12.md)): `screen` 2.17 against 0.89 ms, `faces` 2.42 against 1.72, `apply` 1.08 against 0.24, `plan` 0.91 against 0.13, `face_numbers` 1.16 against 0.71, `append_rings` 0.71 against 0.35, `find` 0.48 against 0.12, `dirty_faces` 0.40 against 0.36: about 4.8 ms of kernel time and 1 ms of host gaps over the ceiling's 4.8 ms. Why it stays: `screen` and `faces` gather a 32-byte row per corner or ring entry from scattered tetrahedra and are bound by L1/L2 transactions and latency, not by registers any more; the repair's `plan`, `find` and `apply` are one thread per flip with long, divergent, dependent chains (the exact predicates' 128- and 256-bit fallbacks keep `plan` and `find` at 152 to 168 registers, and capping them spills); `face_numbers` is a scan whose result (the face count) the host must read before the next launches, as are the counts of each flip round. The next steps are structural: a warp per flip or per ring walk (K1), fewer bytes per flip (K2), face numbers kept for untouched tetrahedra (E, needs `number_faces`), and the count read-backs replaced by a device-side queue (R1).
+
+### Fewer bytes per step: incremental face numbers (E) and the ring re-walk (K2) (2026-11-12)
+
+Branch `step-bytes` on main 9e9ec03: `cbf2da6` the incremental face numbering (E, [#53](https://github.com/Ulli1991/voronoi-cpp/issues/53)), `d3cc1e2` memory to pay for it, then the ring re-walk (K2) with these docs. Builds: main (base), E (E and memory), K2 (K2 alone on main, not committed: worktree `voronoi-cpp-bytes-k2`), E+K2 (the branch). One A100 at 1305 MHz application clock (the SM clock each job logs is in the table), double, jittered input, median of steps 2 to 10 over two interleaved runs of each build, all builds in one job (`scripts/ab_step_a100.sh`, `scripts/ab_step_tables.py`; per-kernel bytes `scripts/bytes_a100.sh`, `scripts/bytes_tables.py`; logs in `build-cuda/jobs` of the `voronoi-cpp-bytes` worktree on Raven). The levers' shares from [measure_2026-11-12.md](measure_2026-11-12.md) were upper bounds: E −380 B/cell (1.15×), K2 1.28× at 0.03 and 1.85× at 0.1.
+
+**What changed.** E: a tetrahedron's faces are `ids(start(t) + rank)` in a pool of numbers; after a repair with at most count/16 created tetrahedra only the touched ones release and take numbers (in place when they have no more faces than before; the other freed numbers go to new faces in slot order by a scan, and faces above the new count move down), the rest keep theirs; with more created tetrahedra every face is numbered in slot order as before, which also restores the order. K2: a dirty face's ring is walked once into a buffer and written in canonical order from it (was: walked twice), into its old room when it is no longer than before (the ring pool compacts about half as often).
+
+| M cells/s, step (with `update_cells()`) | base | E | K2 | E+K2 | E+K2 against base |
+|---|---|---|---|---|---|
+| 128³, 0.03 spacings (job 32269165) | 205.5 (150.3) | 221.8 (160.7) | 205.6 (150.3) | 222.7 (161.1) | +8.4 % (+7.2 %) |
+| 128³, 0.1 | 126.2 (98.0) | 126.1 (97.1) | 129.7 (100.1) | 129.7 (99.3) | +2.8 % (+1.3 %) |
+| 128³, 0.3 | 63.6 (55.5) | 62.6 (54.6) | 66.2 (57.4) | 65.9 (57.2) | +3.5 % (+3.1 %) |
+| 256³, 0.03 spacings (job 32237516) | 280.7 (195.4) | 313.6 (212.9) | 284.0 (197.0) | 318.2 (214.9) | +13.4 % (+10.0 %) |
+| 256³, 0.1 | 194.8 (142.6) | 203.5 (148.4) | 200.1 (145.3) | 208.8 (151.2) | +7.2 % (+6.0 %) |
+| 256³, 0.3 | 108.0 (87.0) | 104.2 (81.7) | 113.6 (90.6) | 109.5 (85.6) | +1.5 % (−1.6 %) |
+| 500 steps at 0.1, Hilbert re-sort every 50, 128³ (job 32238599): step, step + cells, all with re-sorts | 148.6, 113.3, 111.9 | 150.9, 112.8, 111.1 | | 154.3, 114.8, 112.3 | +3.8 %, +1.3 %, +0.4 % |
+
+E gains most where few tetrahedra change (0.03 spacings, and 256³, where the flow shears half as much per step). At 0.3 it costs at 256³ and is neutral at 128³: once the flips fall below count/16, and the faces that take new numbers lose the slot order (`faces` and `cell_sums` read them scattered), and every face lookup goes through `ids` (`dirty_faces` +15 % at 0.1). K2 gains 0 to 5.2 % on its own (most at large spacings), mostly from `append_rings` (−23 % time at 0.1) and fewer ring compactions.
+
+DRAM bytes per cell of step 3, Nsight Compute, 128³, caches flushed (job 32237298; the E and E+K2 binaries then had the same kernels as the final ones):
+
+| B/cell, `update()` (`update_cells()`) | base | E | K2 | E+K2 |
+|---|---|---|---|---|
+| 0.03 spacings | 2717 (964) | 2398 (916) | 2707 (964) | 2392 (913) |
+| 0.1 spacings | 4292 (1083) | 4180 (1133) | 4239 (1083) | 4133 (1132) |
+| `face_numbers` / its replacement at 0.03 | 422 | 63 (`face_touched` 14, `face_offsets` 11, `face_release` 20, `face_assign` 13, `face_numbered` 5) | 421 | 63 |
+| repair and ring re-walk (`find`, `plan`, `apply`, `dirty_faces`, `append_rings`), per flip at 0.03 / 0.1 | 20.4 / 21.1 kB | 21.2 / 22.1 kB | 20.3 / 20.8 kB | 21.3 / 21.8 kB |
+
+E removes 359 B/cell of numbering at 0.03 and 263 at 0.1, but gives back 40 (0.03) and 151 (0.1) in `faces`, `dirty_faces` and `cell_sums`: net −319 and −112 B/cell. K2 cuts the re-walk's bytes per flip by 2 % only: one walk instead of two halves the rows read in `append_rings`, but those rows mostly hit L2 already (the second walk re-reads what the first just read); the DRAM bytes per flip stay about 21 kB against a target of 3 kB. What is left there is the repair's rounds (`find`, `plan`, `apply`: 9.7 kB per flip at 0.1, unchanged) and the partial walks of `dirty_faces` from every touched tetrahedron.
+
+Bits (jobs 32238014, 32238070, 32238146 jittered, 32238147, 32238148, 32238322 clustered; 30 steps each at 0.03, 0.1 and 0.3 spacings, 128³): `geometry_checksum`, `faces_checksum` and the new `lists_checksum` (each cell's list as other particles and owner bits) identical to main at every step for E and E+K2; `cells_checksum` hashes face numbers and differs, as it did between two runs of main. With faces by owner, the owner bit and a re-sort every 2 steps (job 32238180, 262,144 cells, 6 steps) the same checksums equal main's; `--verify` against a fresh rebuild passes at 0.3 spacings. A100 `ctest`: 22 of 22 pass (job 32238334). CI's host steps (gcc 15, sanitizers off and on, clang-tidy, ctest; host Kokkos 5.0.99 with OpenMP and 2 threads, where CI builds a Serial Kokkos 5.0.2): 22 of 22 pass with sanitizers off and on (jobs 32238509, 32238627); clang-tidy 21 stops on `mesh_fuzz_test.cpp`, unchanged here and on main ([#56](https://github.com/Ulli1991/voronoi-cpp/issues/56)). In one clustered 0.3 run E+K2 left 6 triangles stuck at step 2, which the host finish repaired (the repair's flip order follows atomics; clustered 0.3 sticks in some steps on main too, [measure_2026-11-12.md](measure_2026-11-12.md)); its checksums equal main's.
+
+Memory: peak over 10 steps, 128³ (job 32238100): 1998.29 → 1979.05 B/cell at 0.03 spacings and 2028.38 → 2010.04 at 0.3 for E and E+K2; K2 alone is unchanged. E adds `face_rings_ids` (41 B/cell, a quarter spare) and `face_rings_numbered` (7.8); the repair's free list sized to its use (31 → under 2 B/cell) and the cell list freed after a build (37 B/cell, absent at the step's peak) pay for it.
+
+luna-cpp (branch `resort` a82092c, the first that builds against main's API without gradient weights), moving Sedov 128³, 50 steps, two runs of each build (jobs 32238510, 32238511): the final `Q`, `x` and `volume` hashes equal those on main's voronoi-cpp, with the default layout and with faces by owner, the owner bit and a re-sort every 10 steps. luna-cpp reads `cell_face` lists, `area`, `face_centroid`, `owner` and `neighbour` as before; only the face numbers differ (see below). Mesh throughput there 274 → 311 M cells/s (+13.6 %), with faces by owner 198.8 → 221.7 (+11.5 %); the whole hydro step 71.4 → 73.7 M cells/s (+3.2 %) and 70.5 → 73.1 (+3.7 %).
+
+**Face numbering, for callers.** As before, faces are numbered 0 .. faces() − 1, `owner(f) < neighbour(f)`, each cell's list is sorted by the other particle, and with `Layout::owner_faces` the numbers go by owner. What changed: without the owner layout a face's number no longer follows the slot order of the tetrahedra after every update; it stays the same from update to update while the tetrahedron representing its edge is not touched by a flip, and a new face takes a freed number. Numbers were never stable across updates before; a caller that keyed data by face number across an update (luna-cpp does not) now sees most numbers kept, not all.
+
+
+**Left to the 5× budget.** The step now moves 2392 B/cell at 0.03 spacings and 4133 at 0.1 (step 3, 128³; main 69de1d3 moved 2866 and 4795, main 9e9ec03 2717 and 4292). The 5× budgets are 1269 and 2182 B/cell: 1123 and 1951 B/cell still to go, with every kernel at 80 % of peak besides. By kernel at 0.03: `faces` 1005 and `cell_sums` 737 (R14 and float centres, R6), `screen` 528 (K4), the repair and ring re-walk 617 (the repair's rounds and the `dirty_faces` walks, K2), the numbering now 63.
 
 ## Removed, and where to find it
 

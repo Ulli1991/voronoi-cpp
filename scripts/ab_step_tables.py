@@ -25,7 +25,8 @@ for path in sys.argv[1:]:
                 steps[(tag, int(n), kind, d)].append((float(f["step_ms"]), float(f["cells_ms"])))
         elif rest.startswith("geometry_checksum"):
             sums[(int(n), kind, d, int(s.group(1)))][tag] = rest.split(" ", 2)[2]
-print("| cells | spacings | " + " | ".join(f"{t}: step, step + cells" for t in tags) + " | step B/A, with cells |")
+print("| cells | spacings | " + " | ".join(f"{t}: step, step + cells" for t in tags) + " | step and with cells, against "
+      + tags[0] + " |")
 print("|---|---|" + "---|" * (len(tags) + 1))
 for n, kind, d in sorted({k[1:] for k in steps}):
     row, rates = [], []
@@ -38,14 +39,14 @@ for n, kind, d in sorted({k[1:] for k in steps}):
         b = n / statistics.median(x[0] + x[1] for x in v) / 1e3
         rates.append((a, b))
         row.append(f"{a:.1f}, {b:.1f} ({len(v)} steps)")
-    ratio = f"{rates[-1][0] / rates[0][0]:.3f}, {rates[-1][1] / rates[0][1]:.3f}" if len(rates) > 1 else ""
+    ratio = "; ".join(f"{r[0] / rates[0][0]:.3f}, {r[1] / rates[0][1]:.3f}" for r in rates[1:])
     print(f"| {n} {kind} | {d} | " + " | ".join(row) + f" | {ratio} |")
-# Per checksum (geometry, cells, faces): steps where every build agrees, and where they do not.
-for field in range(3):
+# Per checksum (geometry, cells, faces, lists): steps where every build agrees, and where they do not.
+for field in range(4):
     same = differ = 0
     for key, by in sorted(sums.items()):
-        vals = {v.split()[field].split("=")[-1] for v in by.values()}
+        vals = {(v.split() + [""] * 4)[field].split("=")[-1] for v in by.values()}
         if len(by) > 1:
             same += len(vals) == 1
             differ += len(vals) > 1
-    print(f"{['geometry', 'cells', 'faces'][field]}_checksum: {same} steps identical, {differ} differ")
+    print(f"{['geometry', 'cells', 'faces', 'lists'][field]}_checksum: {same} steps identical, {differ} differ")

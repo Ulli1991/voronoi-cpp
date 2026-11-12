@@ -522,7 +522,8 @@ private:
             tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count);
         else
             tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count, created);
-        const int faces = tet_mesh::update_face_rings(exec_, tets_, state_.count, state_.touched, created, rings_);
+        const int faces = tet_mesh::update_face_rings(exec_, tets_, state_.count, state_.touched, created, rings_,
+                                                      View<const char*>(state_.alive));
         if (faces > static_cast<int>(geometry_.area.extent(0))) {
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, faces + faces / 32);
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 32);

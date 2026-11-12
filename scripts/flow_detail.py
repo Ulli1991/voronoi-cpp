@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Draws docs/figures/flow_step.png and flow_rebuild.png: each stage of Mesh<3>::update and of Mesh<3>::rebuild with
 its kernels, what they read and write, GPU or host, where the host waits, and measured times. Times are copied from
-docs/measure_2026-11-10.md; everything else is read from the code of main (cited file: function)."""
+docs/measure_2026-11-10.md (before the incremental numbering of boxes 6 and 7); everything else is read from the code
+of main (cited file: function)."""
 from diagram import (FAINT, HOSTC, INK, REBUILD, REFUSE, REPAIR, SETUP, TEST, WAIT, arrow, canvas, card, card_height,
                      diamond, finish, legend_chips, rect, save, wait)
 
@@ -127,17 +128,17 @@ def step_figure():
     arrow(ax, [(sx + 0.3, dy - hf_h + 0.3), (sx + 0.3, done_y), (x0 + w, done_y)], label="done",
           at=(x0 + w + 0.7, done_y), size=9.5)
 
-    y, h = c.box("6  Number the faces", "tet_mesh.hpp: update_face_rings → detail::number_faces",
-                 "a scan over all tetrahedron slots: face slot s = start(t) + rank of the edge among t's bits;\n"
-                 "writes owner, neighbour, ring_start, ring_length; a kept face takes its old ring\n"
-                 "through the renumber table (in the spare pool)", REPAIR)
+    y, h = c.box("6  Number the faces", "tet_mesh.hpp: update_face_rings → detail::renumber (or renumber_all)",
+                 "touched slots listed by a scan, a thread per edge: own numbers kept for edges of the same rank,\n"
+                 "the rest freed; freed numbers go to new faces, both in slot order; above-count faces move down.\n"
+                 "Over count/16 created tetrahedra: every face in slot order, kept rings through a table", REPAIR)
     time_bar(ax, tx, y + h / 2, STEP_MS["numbers"])
-    c.wait(y, "host reads the face count; over capacity: realloc with 1/32 more, scan again")
+    c.wait(y, "host reads the touched and freed counts; more faces: resize with 1/32 more")
 
     y, h = c.box("7  Walk the dirty rings", "tet_mesh.hpp: update_face_rings  (dirty_faces, append_rings)",
-                 "a thread per created tetrahedron: its 6 edges; atomic_exchange claims each face once\n"
-                 "a thread per dirty face (10.4 % here): walk around the edge, claim room at the pool's\n"
-                 "end (atomic_fetch_add), walk again in canonical order; old rings stay as gaps", REPAIR)
+                 "a thread per edge of each created tetrahedron; atomic_exchange claims each face once\n"
+                 "a thread per dirty face (10.4 % here): one walk into a buffer, written canonically into its\n"
+                 "old room if it fits, else at the pool's end (atomic_fetch_add); old rings stay as gaps", REPAIR)
     time_bar(ax, tx, y + h / 2 + 0.2, STEP_MS["dirty"])
     time_bar(ax, tx, y + h / 2 - 0.25, STEP_MS["compact"], "compact")
     c.wait(y, "host reads both totals; pool full: copy every ring to the spare pool, swap")

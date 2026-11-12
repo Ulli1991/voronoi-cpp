@@ -173,22 +173,29 @@ KOKKOS_INLINE_FUNCTION int lowest_around_edge(const M& m, int t, int i, int j) {
     return lowest;
 }
 
+// The other two particles of u (not i, j), smaller first, packed: the key of the canonical ring order.
+template <class M>
+KOKKOS_INLINE_FUNCTION long long ring_key(const M& m, int u, int i, int j) {
+    int lo = -1, hi = -1;
+    for (int c = 0; c < 4; ++c) {
+        const int v = m.vertex(u, c);
+        if (v == i || v == j) continue;
+        if (lo < 0)
+            lo = v;
+        else
+            hi = v;
+    }
+    if (lo > hi) Kokkos::kokkos_swap(lo, hi);
+    return (static_cast<long long>(lo) << 32) | static_cast<unsigned>(hi);
+}
+
 // The ring of edge i-j from t written to ring[] in canonical order: from the tetrahedron whose other two particle ids
-// (smaller first) are least, towards the smaller of its two ring neighbours, so face sums do not depend on which
-// tetrahedron represents the face. Open rings: walk_edge from t. Ring is an int* or gives room via ring(steps).
+// (smaller first, ring_key) are least, towards the smaller of its two ring neighbours, so face sums do not depend on
+// which tetrahedron represents the face. Open rings: walk_edge from t. Ring is an int* or gives room via ring(steps).
 // Returns the number of steps, as walk_edge.
 template <class M, class Ring>
 KOKKOS_INLINE_FUNCTION int walk_edge_canonical(const M& m, int t, int i, int j, Ring ring) {
-    auto key = [&](int u) {  // the other two particles of u, packed
-        int lo = -1, hi = -1;
-        for (int c = 0; c < 4; ++c) {
-            const int v = m.vertex(u, c);
-            if (v == i || v == j) continue;
-            if (lo < 0) lo = v; else hi = v;
-        }
-        if (lo > hi) Kokkos::kokkos_swap(lo, hi);
-        return (static_cast<long long>(lo) << 32) | static_cast<unsigned>(hi);
-    };
+    auto key = [&](int u) { return ring_key(m, u, i, j); };
     // First walk: the least key, its predecessor and successor on the ring.
     int current = t, before = -1, steps = 0, best = -1, best_before = -1, best_after = -1, last = -1;
     long long best_key = 0, before_key = 0, after_key = 0, last_key = 0, first_key = 0;
@@ -1033,7 +1040,8 @@ template <class ExecSpace>
 int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_space>& mesh, int count,
                       const Kokkos::View<char*, typename ExecSpace::memory_space>& touched,
                       const Kokkos::View<const int*, typename ExecSpace::memory_space>& touched_list,
-                      FaceRings<typename ExecSpace::memory_space>& rings) {
+                      FaceRings<typename ExecSpace::memory_space>& rings,
+                      const Kokkos::View<const char*, typename ExecSpace::memory_space>& alive = {}) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     using Borrowed = typename FaceRings<Memory>::Borrowed;
@@ -1063,10 +1071,10 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
         faces = few ? detail::renumber(exec, mesh, count, touched, rings)
                     : detail::renumber_all(exec, mesh, count, touched, rings);
         rings.renumber_valid = true;
-        // Room for the dirty list after the kept ints (the renumbering keeps its place).
+        // Room for the dirty list and its old starts after the kept ints (the renumbering keeps its place).
         auto& spare = rings.pool[1 - rings.in_use];
-        if (spare.extent(0) < rings.kept_ints + static_cast<std::size_t>(faces)) {
-            Kokkos::resize(spare, rings.kept_ints + static_cast<std::size_t>(faces) + faces / 32);
+        if (spare.extent(0) < rings.kept_ints + 2 * static_cast<std::size_t>(faces)) {
+            Kokkos::resize(spare, rings.kept_ints + 2 * static_cast<std::size_t>(faces) + faces / 32);
             auto& r = rings.renumber;
             const std::size_t flags = (static_cast<std::size_t>(rings.renumbered) + 3) / 4;
             if (r.table.data()) r.table = Borrowed(spare.data(), r.table.extent(0));
@@ -1086,9 +1094,11 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     rings.dirty = all ? Borrowed() : Borrowed(rings.pool[1 - rings.in_use].data() + rings.kept_ints, faces);
     const auto dirty = rings.dirty;
 
-    // Dirty faces (a touched tetrahedron on their ring): ring_start ~representative, listed once in `dirty`.
+    // Dirty faces (a touched tetrahedron on their ring): ring_start ~representative, listed once in `dirty`, the old
+    // ring's start in `was` (the list's room after it).
     Kokkos::deep_copy(exec, listed, 0);
     int dirty_faces = 0;
+    const Borrowed was = all ? Borrowed() : Borrowed(rings.dirty.data() + faces, faces);
     if (!all) {
         const bool from_list = touched_list.data() != nullptr;
         // A thread per edge of each touched tetrahedron, so a warp's walks are alike (one thread per tetrahedron: 1.9x
@@ -1100,19 +1110,24 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
             KOKKOS_LAMBDA(long long e, int& sum) {
                 const int s = static_cast<int>(e / 6), k = static_cast<int>(e - 6 * s);
                 const int t = from_list ? touched_list(s) : s;
-                if (!from_list && !touched(t)) return;
+                // The list keeps tetrahedra a later flip of the step freed; their adjacency is stale.
+                if ((!from_list && !touched(t)) || (alive.data() && !alive(t))) return;
                 int ka, kb, representative = -1;
                 edge_ends(k, ka, kb);
                 const int f =
                     edge_face(mesh, numbers, touched, t, mesh.vertex(t, ka), mesh.vertex(t, kb), representative);
-                if (f < 0 || Kokkos::atomic_exchange(&ring_start(f), ~representative) < 0) return;
-                dirty(claim(&listed(), 1)) = f;
+                if (f < 0) return;
+                const int old = Kokkos::atomic_exchange(&ring_start(f), ~representative);
+                if (old < 0) return;
+                const int at = claim(&listed(), 1);
+                dirty(at) = f;
+                was(at) = old;
                 ++sum;
             },
             dirty_faces);
     }
-    // The dirty faces' rings, one kernel: walked, room claimed in the pool, walked again canonically; a ring without
-    // room stays dirty for the compaction.
+    // The dirty faces' rings, a thread each: walked once, written canonically into the old room if they fit, else
+    // appended; a ring without room stays dirty (ring_start ~representative) for the compaction.
     int dirty_entries = 0;
     if (!all) {
         const auto pool = rings.pool[rings.in_use];
@@ -1121,15 +1136,52 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
         Kokkos::parallel_reduce(
             "tet_mesh::append_rings", Range(exec, 0, dirty_faces),
             KOKKOS_LAMBDA(int s, int& sum) {
-                const int f = dirty(s), representative = ~ring_start(f);
+                const int f = dirty(s), representative = ~ring_start(f), i = owner(f), j = neighbour(f);
+                const int old_start = was(s), old_length = ring_length(f);
                 int at = -1;
-                auto place = [&](int steps) -> int* {
-                    at = base + claim(&listed(), steps);
-                    return at + steps <= room ? &pool(at) : nullptr;
+                auto place = [&](int length) -> int* {
+                    if (old_length >= length) {
+                        at = old_start;
+                    } else {
+                        at = base + claim(&listed(), length);
+                        sum += length;
+                    }
+                    return at + length <= room ? &pool(at) : nullptr;
                 };
-                const int length = walk_edge_canonical(mesh, representative, owner(f), neighbour(f), place);
+                // One walk from the representative: the ring, and the place of its least key (ring_key).
+                constexpr int held = 32;
+                int ring[held];
+                int current = representative, before = -1, steps = 0, best = 0;
+                long long best_key = 0;
+                bool closed = false;
+                for (; steps < held; ++steps) {
+                    ring[steps] = current;
+                    const long long key = ring_key(mesh, current, i, j);
+                    if (steps == 0 || key < best_key) {
+                        best = steps;
+                        best_key = key;
+                    }
+                    const int next = next_around_edge(mesh, current, before, i, j);
+                    if (next < 0) break;
+                    before = current;
+                    current = next;
+                    if (current == representative) {
+                        closed = true;
+                        ++steps;
+                        break;
+                    }
+                }
+                int length = steps;
+                if (!closed || steps < 3) {
+                    length = walk_edge_canonical(mesh, representative, i, j, place);
+                } else if (int* out = place(steps)) {
+                    // From the least key towards the smaller of its two neighbours, as walk_edge_canonical.
+                    const long long after = ring_key(mesh, ring[(best + 1) % steps], i, j),
+                                    prior = ring_key(mesh, ring[(best + steps - 1) % steps], i, j);
+                    const int step = after < prior ? 1 : steps - 1;
+                    for (int r = 0, k = best; r < steps; ++r, k = (k + step) % steps) out[r] = ring[k];
+                }
                 ring_length(f) = length;
-                sum += length;
                 if (at + length <= room) ring_start(f) = at;
                 // Faces without an old number: ~f in the list.
                 if (touched(representative)) dirty(s) = ~f;
