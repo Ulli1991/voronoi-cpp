@@ -7,6 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#if defined(__CUDA_ARCH__)
+#include <cooperative_groups.h>
+#endif
 
 // Stage 5 (geometry) plus the mesh data structure of stages 3-4: built by tet_start, edited by tet_repair/tet_flips.
 // Mesh::update calls circumcentres -> update_face_rings -> faces; per step: one circumcentre per new tetrahedron, face
@@ -16,6 +19,25 @@ namespace tet_mesh {
 using shell_voronoi::Vec2;
 using shell_voronoi::Vec3;
 using shell_voronoi::VecN;
+
+// Adds `value` to the counter at `counter` and returns its old value plus what the calling threads before this one
+// added: on CUDA one atomic per group of threads that call it together (all must name the same counter), else one each.
+KOKKOS_INLINE_FUNCTION int claim(int* counter, int value) {
+#if defined(__CUDA_ARCH__)
+    namespace cg = cooperative_groups;
+    const cg::coalesced_group g = cg::coalesced_threads();
+    int inclusive = value;
+    for (int d = 1; d < static_cast<int>(g.size()); d <<= 1) {
+        const int before = g.shfl_up(inclusive, d);
+        if (static_cast<int>(g.thread_rank()) >= d) inclusive += before;
+    }
+    int base = 0;
+    if (g.thread_rank() == g.size() - 1) base = atomicAdd(counter, inclusive);
+    return g.shfl(base, g.size() - 1) + inclusive - value;
+#else
+    return Kokkos::atomic_fetch_add(counter, value);
+#endif
+}
 
 // One tetrahedron's entries are contiguous (row-major on every backend): a random access touches one memory sector.
 template <class MemorySpace>
@@ -710,24 +732,23 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     int dirty_faces = 0;
     if (!all) {
         const bool from_list = touched_list.data() != nullptr;
+        // A thread per edge of each touched tetrahedron, so a warp's walks are alike (one thread per tetrahedron: 1.9x
+        // slower). 64-bit indices: six per tetrahedron overflow int past 357M tetrahedra.
         Kokkos::parallel_reduce(
             "tet_mesh::dirty_faces",
-            Range(exec, 0, from_list ? static_cast<int>(touched_list.extent(0)) : count),
-            KOKKOS_LAMBDA(int s, int& sum) {
+            Kokkos::RangePolicy<ExecSpace, Kokkos::IndexType<long long>>(
+                exec, 0, 6LL * (from_list ? static_cast<long long>(touched_list.extent(0)) : count)),
+            KOKKOS_LAMBDA(long long e, int& sum) {
+                const int s = static_cast<int>(e / 6), k = static_cast<int>(e - 6 * s);
                 const int t = from_list ? touched_list(s) : s;
                 if (!from_list && !touched(t)) return;
-                int found[6], n = 0;
-                for (int k = 0; k < 6; ++k) {
-                    int ka, kb, representative = -1;
-                    edge_ends(k, ka, kb);
-                    const int f =
-                        edge_face(mesh, start, touched, t, mesh.vertex(t, ka), mesh.vertex(t, kb), representative);
-                    if (f >= 0 && Kokkos::atomic_exchange(&ring_start(f), ~representative) >= 0) found[n++] = f;
-                }
-                if (n == 0) return;
-                const int at = Kokkos::atomic_fetch_add(&listed(), n);
-                for (int q = 0; q < n; ++q) dirty(at + q) = found[q];
-                sum += n;
+                int ka, kb, representative = -1;
+                edge_ends(k, ka, kb);
+                const int f =
+                    edge_face(mesh, start, touched, t, mesh.vertex(t, ka), mesh.vertex(t, kb), representative);
+                if (f < 0 || Kokkos::atomic_exchange(&ring_start(f), ~representative) < 0) return;
+                dirty(claim(&listed(), 1)) = f;
+                ++sum;
             },
             dirty_faces);
     }
@@ -744,7 +765,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                 const int f = dirty(s), representative = ~ring_start(f);
                 int at = -1;
                 auto place = [&](int steps) -> int* {
-                    at = base + Kokkos::atomic_fetch_add(&listed(), steps);
+                    at = base + claim(&listed(), steps);
                     return at + steps <= room ? &pool(at) : nullptr;
                 };
                 const int length = walk_edge_canonical(mesh, representative, owner(f), neighbour(f), place);
@@ -1088,8 +1109,10 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
     const bool with_rows = out.rows.extent(0) > 0;
     const bool mapped = slot.data() != nullptr;
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
+    // At most 80 registers (78 unbounded): 6 blocks of 128 per SM, 7 % faster on the A100; 64 registers spill.
     Kokkos::parallel_for(
-        "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.owner.extent(0)), KOKKOS_LAMBDA(int f) {
+        "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 6>>(exec, 0, mesh.owner.extent(0)),
+        KOKKOS_LAMBDA(int f) {
             const int s = mapped ? slot(f) : f;
             const int i = mesh.owner(s), j = mesh.neighbour(s);
             const int begin = mesh.ring_start(s), end = begin + mesh.ring_length(s);

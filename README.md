@@ -160,7 +160,7 @@ Four points exactly on one circle: rounded arithmetic gives opposite answers in 
 
 ## Measured performance
 
-One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild and step rows are current (with the fixes of #29, #30, #35, #36 and #45, 1305 MHz). The 256³ column is the code just before those fixes, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
+One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild rows are current (with the fixes of #29, #30, #35, #36 and #45, 1305 MHz); the step rows, at 128³ and 256³, are the step kernels of 2026-11-12 (1305 MHz). The other 256³ entries are the code just before those fixes, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
 
 | M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
@@ -170,13 +170,15 @@ One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: millio
 | Full rebuild, halo (1:10⁴ core to edge) | 14.1 | |
 | Full rebuild, lattice / wave | 49.2 / 37.9 | |
 | Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
-| Moving-mesh update, 0.03 spacings per step | 196 | 182 (with `update_cells()`) |
-| Moving-mesh update, 0.1 spacings per step | 114 | 129 (with `update_cells()`) |
-| Moving-mesh update, 0.3 spacings per step | 55.7 | |
-| `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings (older code) | 574 / 448 / 436 | |
-| Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (older code, bit-reproducible) | 154 / 94 / 51 | |
+| Moving-mesh update, 0.03 spacings per step | 205 | 281 (196 with `update_cells()`) |
+| Moving-mesh update, 0.1 spacings per step | 126 | 194 (142 with `update_cells()`) |
+| Moving-mesh update, 0.3 spacings per step | 63.6 | 108 (86.9 with `update_cells()`) |
+| `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 559 / 440 / 432 | |
+| Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | 150 / 98.2 / 55.5 | |
 
 Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) are described in the measurements file.
+
+The step kernels of 2026-11-12 (register limits on `faces` and `screen`, warp-aggregated counters, a thread per edge in `dirty_faces`, one host wait per flip round) made the step 5.4 / 11.0 / 12.8 % faster at 0.03 / 0.1 / 0.3 spacings at 128³ (6.3 / 9.3 / 15.0 % at 256³) with the same bits and arrays. The step at 0.03 now runs at 47 % of what its memory traffic allows on the A100 (434 M cells/s with every kernel at 80 % of peak bandwidth; [measure_2026-11-12.md](docs/measure_2026-11-12.md)).
 
 GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); a step with face lists peaks at 1998 B/cell, the same at 128³ and 256³: 1950 for the mesh's arrays, the rest the bench's positions. The arrays and pools are in the figures above.
 

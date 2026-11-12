@@ -53,6 +53,7 @@ struct State {
     int free_count = 0;
     int touched_entries = 0;
     unsigned long long round = 0;
+    bool screen_counts = false;  // host_counters hold move_screened's counts, which repair starts from
 #if defined(VORONOI_MEASURE)
     int screened = 0;       // measurement build only: tetrahedra the screen listed, last repair
     long long checked = 0;  // failing triangles the rounds handled, last repair
@@ -273,7 +274,7 @@ KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
 // Add stuck entry (t, k) to State::stuck (k: corner, or inverted/rejected). Used by: repair.
 template <class Counters, class Stuck>
 KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& stuck, int t, int k) {
-    const int at = Kokkos::atomic_fetch_add(&counters(counter::stuck), 1);
+    const int at = tet_mesh::claim(&counters(counter::stuck), 1);
     if (at < static_cast<int>(stuck.extent(0))) {
         stuck(at, 0) = t;
         stuck(at, 1) = k;
@@ -283,7 +284,7 @@ KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& st
 // List t as dirty unless it already is. Used by: move_screened, repair, tet_flips::detail::mark_stuck/finish.
 template <class State>
 KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
-    if (Kokkos::atomic_exchange(&s.dirty(t), 1) == 0) s.listed(Kokkos::atomic_fetch_add(&s.counters(counter::listed), 1)) = t;
+    if (Kokkos::atomic_exchange(&s.dirty(t), 1) == 0) s.listed(tet_mesh::claim(&s.counters(counter::listed), 1)) = t;
 }
 
 }  // namespace detail
@@ -370,8 +371,10 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
     const auto counters = s.counters;
     const auto slivers = s.freed;  // free until the repair starts; counter::freed counts them
     const double snap = box.step * 1.7320508075688772;  // largest move by snapping
+    // At most 64 registers (72 unbounded): 8 blocks of 128 per SM, 6 % faster on the A100.
     Kokkos::parallel_for(
-        "tet_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, s.count), KOKKOS_LAMBDA(int t) {
+        "tet_repair::screen", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 8>>(exec, 0, s.count),
+        KOKKOS_LAMBDA(int t) {
             st.dirty(t) = 0;
             if (!st.alive(t)) return;
             auto from = [&](int v) {
@@ -386,7 +389,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             double volume6, shape;
             // Slivers: suspect; their centres are computed exactly below.
             if (tet_mesh::rounded_sliver(d, volume6, shape)) {
-                const int at = Kokkos::atomic_fetch_add(&counters(counter::freed), 1);
+                const int at = tet_mesh::claim(&counters(counter::freed), 1);
                 if (at < static_cast<int>(slivers.extent(0))) slivers(at) = t;
                 detail::mark(st, t);
                 return;
@@ -410,6 +413,7 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
         });
     Kokkos::deep_copy(exec, s.host_counters, counters);
     exec.fence();
+    s.screen_counts = true;
     const int sliver_count = s.host_counters(counter::freed);
     if (sliver_count > static_cast<int>(slivers.extent(0)))
         tet_mesh::circumcentres(exec, x, box, m, s.count);
@@ -461,7 +465,11 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
     };
     // The stuck list fills for the whole repair.
     clear(counter::stuck);
-    read();
+    if (s.screen_counts)
+        host(counter::stuck) = 0;
+    else
+        read();
+    s.screen_counts = false;
     int dirty_count = host(counter::listed);
 #if defined(VORONOI_MEASURE)
     s.screened = dirty_count;
@@ -485,6 +493,10 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         clear(counter::freed);
         const int stuck_before = host(counter::stuck);
         grow(0, stuck_before + dirty_count);
+        // At most 4 failing triangles per listed tetrahedron and one stuck entry each: when the lists hold that, the work
+        // count is read with the apply step's counters, one wait per round instead of two.
+        const bool ahead = 4LL * dirty_count <= work_capacity &&
+                           stuck_before + 5LL * dirty_count <= static_cast<long long>(stuck.extent(0));
         for (bool again = true; again;) {
             clear(counter::work);
             Kokkos::parallel_for(
@@ -501,13 +513,14 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         if (u < 0 || (dirty(u) && u < t)) continue;
                         const int far = tet_mesh::far_vertex(m, t, u);
                         if (far < 0 || !ep::in_sphere(point, v, o, far)) continue;
-                        const int at = Kokkos::atomic_fetch_add(&counters(counter::work), 1);
+                        const int at = tet_mesh::claim(&counters(counter::work), 1);
                         if (at < work_capacity) {
                             work(at, 0) = t;
                             work(at, 1) = k;
                         }
                     }
                 });
+            if (ahead) break;
             read();
             again = host(counter::work) > work_capacity;
             if (again) {
@@ -519,14 +532,12 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         Kokkos::parallel_for(
             "tet_repair::unlist", Range(exec, 0, dirty_count), KOKKOS_LAMBDA(int i) { dirty(listed(i)) = 0; });
         Kokkos::deep_copy(exec, Kokkos::subview(counters, std::make_pair(counter::listed, counter::created)), 0);
-        const int items = host(counter::work);
-        stats.checked += items;
-        if (items == 0) {
-            // A triangle stuck earlier may have become flippable since: look at the stuck ones again while that still
-            // makes progress.
+        // A triangle stuck earlier may have become flippable since: look at the stuck ones again while that still makes
+        // progress. Returns whether the repair is finished.
+        auto retry = [&] {
             const long long flips = stats.flips23 + stats.flips32;
             finished = host(counter::stuck) == 0 || flips == flips_at_last_retry;
-            if (finished) break;
+            if (finished) return true;
             flips_at_last_retry = flips;
             const int listed_stuck = Kokkos::min(host(counter::stuck), static_cast<int>(stuck.extent(0)));
             Kokkos::parallel_for(
@@ -537,15 +548,21 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
             clear(counter::stuck);
             read();
             dirty_count = host(counter::listed);
+            return false;
+        };
+        // Ahead: plan and apply over the bound; their threads past the count return.
+        const int bound = ahead ? 4 * dirty_count : host(counter::work);
+        if (bound == 0) {
+            if (retry()) break;
             continue;
         }
-        ++stats.rounds;
-        const unsigned long long token = ++s.round << 32;
+        const unsigned long long token = (s.round + 1) << 32;
 
         // 2-4. Plan, vote, apply; losers stay dirty for the next round.
-        grow(0, host(counter::stuck) + items);  // at most one stuck entry per plan
+        if (!ahead) grow(0, host(counter::stuck) + bound);  // at most one stuck entry per plan
         Kokkos::parallel_for(
-            "tet_repair::plan", Range(exec, 0, items), KOKKOS_LAMBDA(int i) {
+            "tet_repair::plan", Range(exec, 0, bound), KOKKOS_LAMBDA(int i) {
+                if (i >= counters(counter::work)) return;
                 const unsigned long long vote = token | detail::priority(i);
                 const int t = work(i, 0), k = work(i, 1);
                 detail::Plan p;
@@ -568,7 +585,8 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         const int free_top = s.free_count;
         const int count = s.count;
         Kokkos::parallel_for(
-            "tet_repair::apply", Range(exec, 0, items), KOKKOS_LAMBDA(int i) {
+            "tet_repair::apply", Range(exec, 0, bound), KOKKOS_LAMBDA(int i) {
+                if (i >= counters(counter::work)) return;
                 const unsigned long long vote = token | detail::priority(i);
                 const detail::Plan p = detail::unpack(plans(i));
                 if (p.kind <= 0) return;
@@ -620,7 +638,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 }
                 for (int r = p.freshes; r < p.olds; ++r) {
                     alive(p.old[r]) = 0;
-                    freed(Kokkos::atomic_fetch_add(&counters(counter::freed), 1)) = p.old[r];
+                    freed(tet_mesh::claim(&counters(counter::freed), 1)) = p.old[r];
                 }
                 for (int r = 0; r < p.freshes; ++r) {
                     int v[4] = {p.fresh[r][0], p.fresh[r][1], p.fresh[r][2], p.fresh[r][3]};
@@ -672,9 +690,10 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 int listing[3], listings = 0;
                 for (int r = 0; r < p.freshes; ++r)
                     if (r >= p.olds || !st.touched(slot[r])) listing[listings++] = slot[r];
-                const int listed_at = Kokkos::atomic_fetch_add(&counters(counter::created), listings);
+                const int listed_at = tet_mesh::claim(&counters(counter::created), listings);
                 for (int q = 0; q < listings; ++q)
-                    if (listed_at + q < static_cast<int>(st.touched_list.extent(0))) st.touched_list(listed_at + q) = listing[q];
+                    if (listed_at + q < static_cast<int>(st.touched_list.extent(0)))
+                        st.touched_list(listed_at + q) = listing[q];
                 for (int r = 0; r < p.olds; ++r) st.touched(p.old[r]) = 1;
                 for (int r = 0; r < p.freshes; ++r) {
                     st.touched(slot[r]) = 1;
@@ -682,6 +701,14 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 }
             });
         read();
+        const int items = host(counter::work);
+        stats.checked += items;
+        if (items == 0) {  // ahead, and nothing failed: plan and apply did nothing
+            if (retry()) break;
+            continue;
+        }
+        ++s.round;
+        ++stats.rounds;
         dirty_count = host(counter::listed);
         // Pops used, growth, and the slots freed this round onto the free list.
         const int popped = Kokkos::min(host(counter::pops), free_top);

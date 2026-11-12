@@ -8,9 +8,10 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates are mill
 
 | Rows in the README table | Job | Commit |
 |---|---|---|
-| Full rebuilds, moving-mesh update, `update_cells()`, update plus `update_cells()` at 2.1M | 31952136 (interleaved runs of main and this tree) | main 16e7769 |
+| Moving-mesh update, `update_cells()`, update plus `update_cells()`, 128³ and 256³ | 32231679, 32231432 (interleaved with main 5d23b26; [step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
+| Full rebuilds at 2.1M | 31952136 (interleaved runs of main and this tree) | main 16e7769 |
 | Exact start, the sum row, at 2.1M | 31701509 | 2311937 |
-| The 256³ column | 31694457 | f32c909 (older than the current code, which is faster there) |
+| The 256³ column, except the moving-mesh rows | 31694457 | f32c909 (older than the current code, which is faster there) |
 | Moving-mesh rows (also in research_notes/mesh_speed_2026-11-04.md) | 31886231, 31886232 | |
 
 Moving-mesh update rates are per step of a smooth flow that moves the points by the given number of mean interparticle spacings, spacing = (box volume / n)^(1/3). Steps are medians of steps 2 to 10 on jittered points. At 256³ the step moves particles by the same number of spacings, but the flow varies on the box scale, so neighbours shear half as much per step (half the flips per cell).
@@ -119,6 +120,39 @@ P1 leaves only the clips that cut (it is the clip's own test) and halves the par
 With the R8 box in use the work falls as counted (job 32222999: particles read 76 to 31 jittered, 103 to 75 uniform; clips 48 to 39 uniform; no cell sent to the thread kernel), yet the time rises. Nsight Compute (job 32224827, uniform): 4.6 % more instructions, but stalls for instruction fetch (`no_instruction`) rise from 28 % to 43 % of samples, and local loads from 175M to 258M (stack frames of 176 to 208 bytes become 192 to 256, registers capped at 96). The warp kernel is limited by its instruction cache and registers, so any test added to the walk costs more than the work it removes; even the variant with the bounds compiled out is 2 to 5 % slower. Lattice input, where no grid cell is skipped, shows the fixed cost: 10 to 22 %.
 
 Rigour of the variants: a bound skipped a grid cell or particle only with a margin above rounding (the cell widened by 64 ε of the longest side; the ball box widened by 2^-14 R, above the rounding of 64 later cuts, which stay in the hull of the current vertices); a cut whose new vertex lies past its kept end (that end within the tolerance outside) would send a cell that skipped anything to the thread kernel. None of this is in the library: the branch keeps the counters only, and the plain build's kernel is the same SASS as main's.
+
+### Step kernels at today's bytes (2026-11-12)
+
+Branch `step-kernels` against main 5d23b26 (with the re-sort, layout off, and the #48 fix), one A100 at 1305 MHz application clock, double, jittered input, median of steps 2 to 10 over two interleaved runs of each build (scripts `scripts/ab_step_a100.sh`, `scripts/ab_step_tables.py`; logs in `build-cuda/jobs` of the `voronoi-cpp-step` worktree on Raven). The target was the bandwidth ceiling of [measure_2026-11-12.md](measure_2026-11-12.md) at today's bytes: 434 M cells/s for the step at 0.03 spacings, 320 with `update_cells()`, 259 at 0.1. Nothing stored changed.
+
+| M cells/s | main | step-kernels | gain | ceiling (share reached) |
+|---|---|---|---|---|
+| step, 0.03 / 0.1 / 0.3 spacings, 128³ (job 32231679) | 194.0 / 113.9 / 56.4 | 204.5 / 126.4 / 63.6 | +5.4 / +11.0 / +12.8 % | 434 / 259 / – (47 / 49 %) |
+| step + `update_cells()`, same | 144.0 / 90.4 / 49.9 | 149.6 / 98.2 / 55.5 | +3.9 / +8.6 / +11.2 % | 320 at 0.03 (47 %) |
+| step, 0.03 / 0.1 / 0.3, 256³ (job 32231432) | 264.2 / 177.6 / 93.6 | 280.7 / 194.1 / 107.6 | +6.3 / +9.3 / +15.0 % | |
+| step + `update_cells()`, 256³ | 187.3 / 133.2 / 77.6 | 195.5 / 142.2 / 86.9 | +4.4 / +6.8 / +12.0 % | |
+
+On main c505cc6 (before #48) the same changes gave +5.3 / +10.6 / +12.9 % (job 32230977) and +6.8 / +10.4 / +12.8 % at 256³ (job 32230698); on a `gpudev` node that ran slower for both builds +5.8 / +9.8 / +11.7 % (job 32231522). Bits: `geometry_checksum` (cell volumes and centroids) and a numbering-free face checksum (owner, neighbour, area and centroid bits, faces sorted by pair) are identical to main at every step of 0.03, 0.1 and 0.3 spacings, jittered and clustered, 128³ (job 32231523 on 5d23b26, and 32230464, 32230931 on c505cc6; 30 steps each); the start's `cells_checksum` too. The per-step `cells_checksum` hashes face numbers, which follow the repair's slot order (atomics): it differs between two runs of main itself (job 32225953), so it cannot compare builds. Peak device memory is unchanged: 1998.29 B/cell over steps at 0.03 spacings and 2028.37 at 0.3, both builds (job 32231678). A100 `ctest`: 22 of 22 pass (job 32231298).
+
+Each lever on its own, 128³, against the build before it in the same job (step rate at 0.03 / 0.1 spacings):
+
+| lever | job | step | kernel |
+|---|---|---|---|
+| One wait per flip round: when the work and stuck lists hold 4 failing triangles per listed tetrahedron, `plan` and `apply` run over that bound and their threads past the device count return; the count is read with the apply step's counters. The screen's count read is reused for the repair's first round | 32225960 (Nsight Systems), 32225565 | `update()` wall 11.15 → 10.96 ms (+1.7 %) at 0.03, 19.43 → 19.33 ms (+0.5 %) at 0.1; synchronisations 26.6 → 20.7 and 31.7 → 25.6 | |
+| Launch bounds: `faces` at most 80 registers (128 threads, 6 blocks per SM), `screen` at most 64 (128, 8) | 32225763 | +3.8 / +3.8 % | `faces` 2.95 → 2.74 ms, `screen` 2.65 → 2.50 ms at 0.03 |
+| Warp-aggregated counters (`tet_mesh::claim`): one atomic per group of threads on a shared counter (dirty lists, work list, stuck list, freed slots, created tetrahedra, ring pool) | 32225953 | −0.1 / +2.6 % | `apply` 3.24 → 2.83 ms at 0.1 |
+| `dirty_faces` with a thread per edge of each touched tetrahedron (was a thread per tetrahedron, six walks each) | 32225953 | +1.9 / +4.4 % | `dirty_faces` 0.68 → 0.42 ms at 0.03, 2.38 → 1.22 ms at 0.1 |
+
+Tried and left out:
+
+| lever | job | result |
+|---|---|---|
+| `find`, `plan`, `apply` capped at 64 or 80 registers | 32225408 | slower: they spill; `find` 0.46 → 0.72 to 0.76 ms at 0.03, the step 3 to 7 % slower. At 128 registers no change |
+| `faces` at 64 registers | 32225408 | `faces` 4 % slower (spills) |
+| Winners of the vote compacted (a kernel lists them, 2→3 and 3→2 flips apart, in the work list's room) before `apply` | 32225565, 32230610 | +1.0 / +0.9 % alone, but +0.3 / −2.5 % on top of the levers above: `apply` 1.08 → 0.89 ms, the extra kernel 0.27 ms |
+| The dirty-face count kept on the device: `append_rings` over 6 per touched tetrahedron, one wait instead of two in `update_face_rings` | 32226509 (Nsight Systems) | `update()` wall 0.8 % (0.03) and 1.8 % (0.1) slower: the wider launch costs more than the wait |
+
+What is left between the step and its ceiling (0.03 spacings, 128³). Nsight Systems (job 32231002, a `gpudev` node slower for both builds): per `update()` 44.4 → 48.0 launches, 26.6 → 20.7 synchronisations, kernel time 11.21 → 10.72 ms, host gap 1.12 → 0.97 ms (at 0.1: 19.97 → 18.29 ms of kernels, gap 1.30 → 1.12 ms). Per kernel, the time now (Kokkos Tools, job 32230610) against its bytes at 80 % of peak ([measure_2026-11-12.md](measure_2026-11-12.md)): `screen` 2.17 against 0.89 ms, `faces` 2.42 against 1.72, `apply` 1.08 against 0.24, `plan` 0.91 against 0.13, `face_numbers` 1.16 against 0.71, `append_rings` 0.71 against 0.35, `find` 0.48 against 0.12, `dirty_faces` 0.40 against 0.36: about 4.8 ms of kernel time and 1 ms of host gaps over the ceiling's 4.8 ms. Why it stays: `screen` and `faces` gather a 32-byte row per corner or ring entry from scattered tetrahedra and are bound by L1/L2 transactions and latency, not by registers any more; the repair's `plan`, `find` and `apply` are one thread per flip with long, divergent, dependent chains (the exact predicates' 128- and 256-bit fallbacks keep `plan` and `find` at 152 to 168 registers, and capping them spills); `face_numbers` is a scan whose result (the face count) the host must read before the next launches, as are the counts of each flip round. The next steps are structural: a warp per flip or per ring walk (K1), fewer bytes per flip (K2), face numbers kept for untouched tetrahedra (E, needs `number_faces`), and the count read-backs replaced by a device-side queue (R1).
 
 ## Removed, and where to find it
 

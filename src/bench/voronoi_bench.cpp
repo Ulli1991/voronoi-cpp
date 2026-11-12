@@ -556,7 +556,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
 #endif
         if (checksum)
             std::cout << "geometry_checksum: step=" << s << " " << geometry_checksum(mesh)
-                      << " cells_checksum=" << cells_checksum(mesh) << " faces_checksum=" << faces_checksum(mesh) << "\n";
+                      << " cells_checksum=" << cells_checksum(mesh) << " faces_checksum=" << faces_checksum(mesh)
+                      << "\n";
         if (!verify) continue;
         const Comparison c = compare_with_rebuild(mesh, to_device(points));
         failures += !c.pass();
