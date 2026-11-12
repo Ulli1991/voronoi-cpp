@@ -15,7 +15,7 @@
 // compiles the upstream voronoi.cu into this unit). Volumes are those of the cells whose status is success (security
 // radius reached, no overflow); others are NaN and counted.
 //   voronoi_gpu_liu <points file> [--repeats=3] [--width=<shell width in mean spacings>] [--volumes=file]
-// K from params.h (PRESET 0, upstream default: K 90).
+// K from params.h (PRESET 0 white noise K 90, the upstream default; 1 perturbed grid K 90; 2 blue noise K 35).
 
 #include "libbench.hpp"
 #include "gpu_images.hpp"
@@ -163,8 +163,9 @@ int main(int argc, char** argv) {
     for (int variant = 0; variant < 2; ++variant) {
         const bool cell_centric = variant == 0;
         if (!only.empty() && only != (cell_centric ? "cell" : "tet")) continue;
-        s.variant = cell_centric ? "cell-centric: cells, then clipped by the tetrahedra"
-                                 : "tet-centric: tetrahedra clipped by the cells";
+        s.variant = std::string(cell_centric ? "cell-centric: cells, then clipped by the tetrahedra"
+                                             : "tet-centric: tetrahedra clipped by the cells") +
+                    ", K " + std::to_string(_K_) + " (PRESET " + std::to_string(PRESET) + ")";
         s.timed = std::string("points in host memory (double) to volumes in host memory: padding, float conversion, "
                               "kn_prepare (H2D, grid sort), kn_solve, ") +
                   (cell_centric ? "voro_cell_test_GPU_param + clipped_voro_cell_test_GPU_param"

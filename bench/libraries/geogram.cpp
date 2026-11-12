@@ -1,5 +1,5 @@
 // geogram (Bruno Levy, https://github.com/BrunoLevy/geogram) in the library benchmark (CONTRACT.md, libbench.hpp).
-//   geogram_bench <points file> --variant=pdel|pdel-cells|pdel-nonper|pdel-nonper-dual --threads=T [--repeats=3]
+//   geogram_bench <points file> --variant=pdel|pdel-cells|pdel-nonper|pdel-nonper-faces --threads=T [--repeats=3]
 //                 [--volumes=file] [--width=w]
 //
 // Variants:
@@ -12,14 +12,15 @@
 //                     parallel over cells with GEO::parallel_for_slice (one slice per thread).
 //   pdel-nonper       GEO::Delaunay::create(3, "PDEL") (ParallelDelaunay3d, non-periodic) on the points padded with
 //                     periodic images in a shell of width w (built inside the clock). Delaunay only.
-//   pdel-nonper-dual  the same + volumes of the n original cells from the tetrahedra (ours: signed orthoscheme
-//                     decomposition, 24 per tetrahedron, std::atomic_ref adds). Untimed check: a cell is exact if every
-//                     tetrahedron incident to it has its circumball inside the padded cube; others get NaN volumes.
+//   pdel-nonper-faces the same + the full cells of the n originals from the tetrahedra (ours: dual_cells.hpp, volumes,
+//                     centroids, faces with neighbours and areas). Untimed check: a cell is exact if every tetrahedron
+//                     incident to it has its circumball inside the padded cube; others get NaN volumes.
 //
 // Threads: geogram runs its thread groups through OpenMP (the library is built with -fopenmp, so GEO_OPENMP and the
 // OMPThreadManager); the run script sets OMP_NUM_THREADS = T and this driver Process::set_max_threads(T). The count
 // geogram uses (Process::maximum_concurrent_threads()) is what the record says and is checked to equal T.
 
+#include "dual_cells.hpp"
 #include "libbench.hpp"
 
 #include <geogram/basic/common.h>
@@ -98,7 +99,7 @@ void voronoi_cells(const GEO::PeriodicDelaunay3d& del, GEO::index_t n, Cells& c)
 }
 
 // Periodic images of the points within w of a face (edges and corners included), appended after the n originals.
-std::vector<double> padded(const double* xyz, std::uint64_t n, double w) {
+std::vector<double> padded(const double* xyz, std::uint64_t n, double w, std::vector<std::uint32_t>* source = nullptr) {
     std::vector<double> p(xyz, xyz + 3 * n);
     for (std::uint64_t i = 0; i < n; ++i) {
         const double* x = xyz + 3 * i;
@@ -114,6 +115,7 @@ std::vector<double> padded(const double* xyz, std::uint64_t n, double w) {
                     p.push_back(x[0] + a);
                     p.push_back(x[1] + b);
                     p.push_back(x[2] + c);
+                    if (source) source->push_back(std::uint32_t(i));
                 }
     }
     return p;
@@ -123,20 +125,7 @@ inline double det3(const double* a, const double* b, const double* c) {
     return a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
 }
 
-// Circumcentre of triangle (a, b, c) and of tetrahedron (a, b, c, d) (double, from the tetrahedron's frame at a).
-void circumcentre3(const double* a, const double* b, const double* c, double* o) {
-    double u[3], v[3], n[3];
-    for (int d = 0; d < 3; ++d) u[d] = b[d] - a[d], v[d] = c[d] - a[d];
-    n[0] = u[1] * v[2] - u[2] * v[1];
-    n[1] = u[2] * v[0] - u[0] * v[2];
-    n[2] = u[0] * v[1] - u[1] * v[0];
-    const double uu = u[0] * u[0] + u[1] * u[1] + u[2] * u[2], vv = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-    const double nn = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
-    // o - a = (uu (v x n) + vv (n x u)) / (2 |n|^2)
-    double vxn[3] = {v[1] * n[2] - v[2] * n[1], v[2] * n[0] - v[0] * n[2], v[0] * n[1] - v[1] * n[0]};
-    double nxu[3] = {n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]};
-    for (int d = 0; d < 3; ++d) o[d] = a[d] + (uu * vxn[d] + vv * nxu[d]) / (2 * nn);
-}
+// Circumcentre of tetrahedron (a, b, c, d) (double, from the tetrahedron's frame at a).
 void circumcentre4(const double* a, const double* b, const double* c, const double* e, double* o) {
     double u[3], v[3], w[3];
     for (int d = 0; d < 3; ++d) u[d] = b[d] - a[d], v[d] = c[d] - a[d], w[d] = e[d] - a[d];
@@ -149,56 +138,42 @@ void circumcentre4(const double* a, const double* b, const double* c, const doub
     for (int d = 0; d < 3; ++d) o[d] = a[d] + (uu * vxw[d] + vv * wxu[d] + ww * uxv[d]) / D;
 }
 
-// Volumes of the Voronoi cells of the first n vertices from the tetrahedra of `del`: for tetrahedron t, vertex i and
-// each ordered pair (j, k) of the other three (l the last), the orthoscheme (p_i, mid(i,j), cc(i,j,k), cc(t)) with
-// the sign of orient(i,j,k,l). Their sum over the tetrahedra incident to i is the volume of the cell of i.
-void dual_volumes(const GEO::Delaunay& del, GEO::index_t n, std::vector<double>& volume) {
-    volume.assign(n, 0.0);
-    const GEO::index_t nt = del.nb_cells();
-    GEO::parallel_for_slice(0, nt, [&](GEO::index_t b, GEO::index_t e) {
-        for (GEO::index_t t = b; t < e; ++t) {
-            GEO::index_t v[4];
-            const double* p[4];
-            bool any = false;
-            for (int q = 0; q < 4; ++q) {
-                v[q] = del.cell_vertex(t, GEO::index_t(q));
-                p[q] = del.vertex_ptr(v[q]);
-                any = any || v[q] < n;
+// The tetrahedra of a padded Delaunay as dual::build's source: cells of the originals (index < n); neighbours keyed by
+// padded index, labelled by their original (source: original of each image).
+struct GeoTets {
+    const GEO::Delaunay& del;
+    const std::vector<GEO::index_t>& t;  // tetrahedra with an original corner
+    const std::vector<std::uint32_t>& source;
+    GEO::index_t n;
+    std::uint64_t tets() const { return t.size(); }
+    GEO::index_t id(std::uint64_t k, int a) const { return del.cell_vertex(t[k], GEO::index_t(a)); }
+    bool owner(std::uint64_t k, int a) const { return id(k, a) < n; }
+    std::uint64_t cell(std::uint64_t k, int a) const { return id(k, a); }
+    std::uint64_t key(std::uint64_t k, int, int b) const { return id(k, b); }
+    std::int64_t label(std::uint64_t k, int, int b) const {
+        const GEO::index_t i = id(k, b);
+        return i < n ? std::int64_t(i) : std::int64_t(source[i - n]);
+    }
+    void relative(std::uint64_t k, int a, int b, double* r) const {
+        const double *p = del.vertex_ptr(id(k, a)), *q = del.vertex_ptr(id(k, b));
+        for (int d = 0; d < 3; ++d) r[d] = q[d] - p[d];
+    }
+};
+
+// The full cells of the n originals (ours, dual_cells.hpp, OpenMP).
+dual::Cells padded_cells(const GEO::Delaunay& del, GEO::index_t n, const std::vector<std::uint32_t>& source) {
+    std::vector<GEO::index_t> t;
+    for (GEO::index_t c = 0; c < del.nb_cells(); ++c)
+        for (GEO::index_t a = 0; a < 4; ++a)
+            if (del.cell_vertex(c, a) < n) {
+                t.push_back(c);
+                break;
             }
-            if (!any) continue;
-            double ct[3];
-            circumcentre4(p[0], p[1], p[2], p[3], ct);
-            for (int a = 0; a < 4; ++a) {
-                if (v[a] >= n) continue;
-                double sum = 0;
-                for (int bj = 0; bj < 4; ++bj) {
-                    if (bj == a) continue;
-                    double m[3];
-                    for (int d = 0; d < 3; ++d) m[d] = 0.5 * (p[a][d] + p[bj][d]);
-                    for (int ck = 0; ck < 4; ++ck) {
-                        if (ck == a || ck == bj) continue;
-                        const int dl = 6 - a - bj - ck;
-                        double cf[3], x[3], y[3], z[3], e1[3], e2[3], e3[3];
-                        circumcentre3(p[a], p[bj], p[ck], cf);
-                        for (int d = 0; d < 3; ++d) {
-                            x[d] = m[d] - p[a][d];
-                            y[d] = cf[d] - p[a][d];
-                            z[d] = ct[d] - p[a][d];
-                            e1[d] = p[bj][d] - p[a][d];
-                            e2[d] = p[ck][d] - p[a][d];
-                            e3[d] = p[dl][d] - p[a][d];
-                        }
-                        const double s = det3(e1, e2, e3) > 0 ? 1.0 : -1.0;
-                        sum += s * det3(x, y, z);
-                    }
-                }
-                std::atomic_ref<double>(volume[v[a]]).fetch_add(sum / 6.0, std::memory_order_relaxed);
-            }
-        }
+    return dual::build(GeoTets{del, t, source, n}, n, [&](std::uint64_t i, double* x) {
+        for (int d = 0; d < 3; ++d) x[d] = del.vertex_ptr(GEO::index_t(i))[d];
     });
 }
 
-// Untimed: NaN for every original cell with an incident tetrahedron whose circumball leaves [-w, 1 + w]^3.
 std::uint64_t mark_inexact(const GEO::Delaunay& del, GEO::index_t n, double w, std::vector<double>& volume) {
     std::uint64_t bad = 0;
     for (GEO::index_t t = 0; t < del.nb_cells(); ++t) {
@@ -295,32 +270,38 @@ int main(int argc, char** argv) {
                 if (cells) volume = std::move(c.volume);
             }
         };
-    } else if (variant == "pdel-nonper" || variant == "pdel-nonper-dual") {
-        const bool dual = variant == "pdel-nonper-dual";
-        s.variant = dual ? "ParallelDelaunay3d PDEL on padded points + dual volumes (ours)"
-                         : "ParallelDelaunay3d PDEL on padded points (Delaunay)";
-        s.outputs = dual ? "Delaunay tetrahedra, volumes" : "Delaunay tetrahedra";
+    } else if (variant == "pdel-nonper" || variant == "pdel-nonper-faces") {
+        const bool faces = variant == "pdel-nonper-faces";
+        s.variant = faces ? "ParallelDelaunay3d PDEL on padded points + faces (ours)"
+                          : "ParallelDelaunay3d PDEL on padded points (Delaunay)";
+        s.outputs = faces ? "Delaunay tetrahedra; cells (ours): volumes centroids faces areas neighbours"
+                          : "Delaunay tetrahedra";
         std::ostringstream pw;
         pw << "images: shell of width " << width;
         s.periodic = pw.str();
-        s.timed = std::string("points in host memory to tetrahedra") + (dual ? " and volumes" : "") +
-                  " in host memory: padding, Delaunay::create(3, PDEL), set_vertices" + (dual ? ", dual volumes" : "");
-        body = [&, dual](bool keep) {
-            const std::vector<double> p = padded(xyz, n, width);
+        s.timed = std::string("points in host memory to tetrahedra") + (faces ? " and full cells" : "") +
+                  " in host memory: padding, Delaunay::create(3, PDEL), set_vertices" +
+                  (faces ? ", our cells (OpenMP)" : "");
+        body = [&, faces](bool keep) {
+            std::vector<std::uint32_t> source;
+            const std::vector<double> p = padded(xyz, n, width, &source);
             GEO::Delaunay_var del = GEO::Delaunay::create(3, "PDEL");
             del->set_vertices(GEO::index_t(p.size() / 3), p.data());
-            std::vector<double> v;
-            if (dual) dual_volumes(*del, ni, v);
+            dual::Cells c;
+            if (faces) c = padded_cells(*del, ni, source);
             t_end = libbench::now();
             if (keep) {
                 std::uint64_t bad = 0;
-                if (dual) {
-                    volume = std::move(v);
+                double closure = 0;
+                if (faces) {
+                    volume = c.volume;
                     bad = mark_inexact(*del, ni, width, volume);
+                    closure = dual::worst_closure(c);
                 }
                 std::ostringstream o;
                 o << ",\"padded_points\":" << p.size() / 3 << ",\"tetrahedra\":" << del->nb_cells()
                   << ",\"cells_not_exact\":" << bad;
+                if (faces) o << ",\"faces\":" << c.face_start.back() << ",\"worst_closure\":" << closure;
                 extra = o.str();
                 std::ostringstream note;
                 note << "padded set " << p.size() / 3 << " points (" << p.size() / 3 - n
@@ -346,7 +327,7 @@ int main(int argc, char** argv) {
             body(false);
             return t_end - t0;
         });
-    if (variant == "pdel-cells" || variant == "pdel-nonper-dual")
+    if (variant == "pdel-cells" || variant == "pdel-nonper-faces")
         libbench::write_volumes(libbench::option(argc, argv, "volumes"), volume);
     // Sizes of the output (from the first, untimed run), one extra line per invocation as library_bench does.
     std::cout << "{\"library\":\"geogram\",\"variant\":\"" << s.variant << "\",\"input\":\""

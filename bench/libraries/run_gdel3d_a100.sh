@@ -23,7 +23,7 @@ export LIBBENCH_LIB_VERSION="a429be8 + gdel3d.patch"
 clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temperature.gpu --format=csv,noheader | sed 's/^/# clocks: /' >&2; }
 nvidia-smi -L >&2
 clocks
-for kind in ${KINDS:-jittered uniform clustered halo}; do
+for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
     "$bin" "$data/points/${kind}_2097152.pts" --repeats=3 --volumes="$data/volumes/gdel3d-a100_${kind}_2097152.f64" "$@" \
         || echo "# gdel3d ${kind} 2097152 failed: exit $?" >&2
     clocks

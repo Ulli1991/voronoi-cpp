@@ -25,14 +25,14 @@ clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temper
 nvidia-smi -L >&2
 clocks
 for n in ${SIZES:-2097152 16777216}; do
-    for kind in ${KINDS:-jittered uniform clustered halo}; do
-        if [ "$n" = 2097152 ]; then
-            "$bin/vorogpu_k190" "$data/points/${kind}_${n}.pts" --volumes="$data/volumes/vorogpu-a100_${kind}_${n}.f64" "$@" \
-                || echo "# vorogpu k190 $kind $n failed: exit $?" >&2
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
+        # The code's three presets (README: white noise K 190, perturbed grid K 90, blue noise K 35); K 190 only at
+        # 2097152 (int index overflow at 16.8M padded points).
+        for k in 190 90 35; do
+            [ "$k" = 190 ] && [ "$n" != 2097152 ] && continue
+            "$bin/vorogpu_k$k" "$data/points/${kind}_${n}.pts" --volumes="$data/volumes/vorogpu-k$k-a100_${kind}_${n}.f64" \
+                || echo "# vorogpu k$k $kind $n failed: exit $?" >&2
             clocks
-        fi
-        "$bin/vorogpu_k90" "$data/points/${kind}_${n}.pts" --volumes="$data/volumes/vorogpu-k90-a100_${kind}_${n}.f64" "$@" \
-            || echo "# vorogpu k90 $kind $n failed: exit $?" >&2
-        clocks
+        done
     done
 done

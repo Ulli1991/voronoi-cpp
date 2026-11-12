@@ -23,7 +23,7 @@ for threads in 72 1; do
     sizes="2097152"
     [ "$threads" = 72 ] && sizes="2097152 16777216"
     for n in $sizes; do
-        for kind in jittered uniform clustered halo; do
+        for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
             for path in warp exact; do
                 "$build/library_bench" build "$data/points/${kind}_${n}.pts" --path=$path --repeats=3 \
                     --volumes="$data/volumes/voronoi-cpp-${path}-cpu${threads}_${kind}_${n}.f64"

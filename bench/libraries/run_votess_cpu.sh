@@ -23,9 +23,9 @@ V=/raven/u/uli/libbench-src/votess
 export OMP_PROC_BIND=false OMP_DYNAMIC=false
 export VOTESS_VERSION="f0f805f (main 2025-07-15), icpx 2025.3 -fsycl, CPU path"
 echo "# host $(hostname), nproc --all $(nproc --all), affinity $(taskset -cp $$)" >&2
-declare -A shell=([jittered]=4 [uniform]=4 [clustered]=8 [halo]=8)
+declare -A shell=([bluenoise]=4 [jittered]=4 [uniform]=4 [clustered]=8 [halo]=8)
 for n in ${SIZES:-2097152 16777216}; do
-    for kind in ${KINDS:-jittered uniform clustered halo}; do
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         for t in ${THREADS:-72 1}; do
             export OMP_NUM_THREADS=$t
             vol=""

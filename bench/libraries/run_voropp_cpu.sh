@@ -21,7 +21,7 @@ bin=/raven/u/uli/libbench-src/voropp/install/bin
 export OMP_PROC_BIND=spread OMP_PLACES=cores
 lscpu | grep -E 'Model name|^CPU\(s\)|MHz' >&2
 for n in ${SIZES:-2097152 16777216}; do
-    for kind in ${KINDS:-jittered uniform clustered halo}; do
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         pts="$data/points/${kind}_${n}.pts"
         # voro++ master's container_periodic exits on two points closer than 1e-5 (check_duplicate, common.cc).
         OMP_NUM_THREADS=1 "$bin/voropp_bench" "$pts" --volumes="$data/volumes/voropp-cpu_${kind}_${n}.f64" ||

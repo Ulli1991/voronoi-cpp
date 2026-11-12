@@ -5,13 +5,14 @@
 //   cgal_bench step  <trajectory file> [--steps=10] [--budget=600] [--volumes=file]   P3DT moving mesh
 //
 // Each build mode records two variants on the same points: "Delaunay" (the triangulation alone) and
-// "Delaunay + dual volumes (ours)" (the triangulation, then our loop over its tetrahedra that sums every cell's
-// volume from the dual: see dual_volumes). CGAL gives Delaunay tetrahedra only; it has no Voronoi volume function
-// (dual(v) of a periodic vertex returns the cell's polygon faces but not its volume), so the dual loop is ours.
+// "Delaunay + faces (ours)" (the triangulation, then the full Voronoi cells from its tetrahedra: volumes, centroids,
+// faces with neighbours and area vectors, by dual_cells.hpp on OpenMP threads, as many as the library's). CGAL gives
+// Delaunay tetrahedra only (dual(v) returns a cell's polygons, not its volume or areas), so the cells step is ours.
 //
 // Kernel: Exact_predicates_inexact_constructions_kernel (filtered exact orientation and in-sphere predicates,
 // double constructions). Points are exactly the doubles of the point file (on the 2^-30 grid).
 
+#include "dual_cells.hpp"
 #include "libbench.hpp"
 
 #include <CGAL/Delaunay_triangulation_3.h>
@@ -32,6 +33,7 @@
 #include <atomic>
 #include <memory>
 #include <unordered_map>
+#include <omp.h>
 
 namespace {
 
@@ -108,7 +110,7 @@ libbench::Setup setup(const std::string& library, const std::string& variant, in
                 std::to_string(TBB_VERSION_MINOR);
     s.device = device_name;
     s.threads = threads;
-    s.precision = "double, Epick (exact predicates, inexact constructions); dual volumes in double";
+    s.precision = "double, Epick (exact predicates, inexact constructions); our cells in double";
     return s;
 }
 
@@ -134,18 +136,55 @@ std::unique_ptr<P3DT> p3dt_build(const double* xyz, std::uint64_t n) {
     return tr;
 }
 
-// Volumes into each vertex's info. In the 1-sheeted cover every cell is stored once; point(c, i) is the vertex's
-// position with the cell's offset applied (unwrapped), so each tetrahedron is geometrically whole.
-void p3dt_volumes(P3DT& tr) {
-    for (auto v = tr.vertices_begin(); v != tr.vertices_end(); ++v) v->info().volume = 0;
-    for (auto c = tr.cells_begin(); c != tr.cells_end(); ++c) {
-        V p[4];
-        for (int i = 0; i < 4; ++i) {
-            const auto q = tr.point(c, i);
-            p[i] = {q.x(), q.y(), q.z()};
-        }
-        dual_volumes(p, [&](int a, double v) { c->vertex(a)->info().volume += v; });
+// The periodic tetrahedra as dual::build's source: every corner is a cell (vertex ids are numbered in the clock, in
+// vertex order: info().index); neighbours keyed by id and periodic offset relative to the corner, unwrapped positions.
+struct PTet {
+    std::uint32_t id[4];
+    std::int8_t off[4][3];
+    double x[4][3];
+};
+struct PTets {
+    const std::vector<PTet>& t;
+    std::uint64_t tets() const { return t.size(); }
+    bool owner(std::uint64_t, int) const { return true; }
+    std::uint64_t cell(std::uint64_t k, int a) const { return t[k].id[a]; }
+    std::uint64_t key(std::uint64_t k, int a, int b) const {
+        std::uint64_t code = 0;
+        for (int d = 0; d < 3; ++d) code = code * 5 + std::uint64_t(t[k].off[b][d] - t[k].off[a][d] + 2);
+        return std::uint64_t(t[k].id[b]) * 125 + code;
     }
+    std::int64_t label(std::uint64_t k, int, int b) const { return t[k].id[b]; }
+    void relative(std::uint64_t k, int a, int b, double* r) const {
+        for (int d = 0; d < 3; ++d) r[d] = t[k].x[b][d] - t[k].x[a][d];
+    }
+};
+
+// The full cells of a periodic triangulation, cells in the triangulation's vertex numbering (info().index, set
+// here when `number` is true; the step keeps the input numbering).
+dual::Cells p3dt_cells(P3DT& tr, bool number) {
+    std::uint32_t k = 0;
+    std::vector<std::array<double, 3>> position(tr.number_of_vertices());
+    for (auto v = tr.vertices_begin(); v != tr.vertices_end(); ++v) {
+        if (number) v->info().index = k++;
+        const auto& q = v->point();
+        position[v->info().index] = {q.x(), q.y(), q.z()};
+    }
+    std::vector<PTet> tets;
+    tets.reserve(tr.number_of_cells());
+    for (auto c = tr.cells_begin(); c != tr.cells_end(); ++c) {
+        PTet t;
+        for (int i = 0; i < 4; ++i) {
+            t.id[i] = c->vertex(i)->info().index;
+            const auto o = tr.periodic_point(c, i).second;
+            t.off[i][0] = std::int8_t(o.x()), t.off[i][1] = std::int8_t(o.y()), t.off[i][2] = std::int8_t(o.z());
+            const auto q = tr.point(c, i);
+            t.x[i][0] = q.x(), t.x[i][1] = q.y(), t.x[i][2] = q.z();
+        }
+        tets.push_back(t);
+    }
+    return dual::build(PTets{tets}, position.size(), [&](std::uint64_t i, double* x) {
+        for (int d = 0; d < 3; ++d) x[d] = position[i][d];
+    });
 }
 
 // Input index of every vertex, by its coordinates (outside the clock).
@@ -168,12 +207,6 @@ void p3dt_index(P3DT& tr, const double* xyz, std::uint64_t n) {
     }
 }
 
-std::vector<double> p3dt_volume_vector(P3DT& tr, std::uint64_t n) {
-    std::vector<double> volume(n, std::nan(""));
-    for (auto v = tr.vertices_begin(); v != tr.vertices_end(); ++v) volume[v->info().index] = v->info().volume;
-    return volume;
-}
-
 const char* const p3dt_name = "CGAL Periodic_3_Delaunay_triangulation_3";
 
 int p3dt(int argc, char** argv) {
@@ -182,28 +215,37 @@ int p3dt(int argc, char** argv) {
     const auto frames = libbench::read_frames(file);
     const std::uint64_t n = frames.n;
     const double* xyz = frames.frame(0);
+    omp_set_num_threads(1);  // a serial library: our cells step on one core too
     for (const bool volumes : {false, true}) {
-        auto s = setup(p3dt_name, volumes ? "Delaunay + dual volumes (ours)" : "Delaunay", 1);
-        s.outputs = volumes ? "Delaunay tetrahedra, volumes (ours, from the dual)" : "Delaunay tetrahedra";
+        auto s = setup(p3dt_name, volumes ? "Delaunay + faces (ours)" : "Delaunay", 1);
+        s.outputs = volumes ? "Delaunay tetrahedra; cells (ours): volumes centroids faces areas neighbours"
+                            : "Delaunay tetrahedra";
         s.periodic = "native (periodic unit cube, 1-sheeted cover)";
-        s.timed = volumes ? "points in host memory to triangulation and per-vertex volumes in host memory "
-                            "(Point conversion, range insert with spatial sort, dual volume loop)"
+        s.timed = volumes ? "points in host memory to triangulation and full cells in host memory (Point conversion, "
+                            "range insert with spatial sort, vertex numbering, our cells from the periodic tetrahedra)"
                           : "points in host memory to triangulation in host memory (Point conversion, range insert "
                             "with spatial sort and dummy points)";
-        s.note = "range insert, is_large_point_set=true; serial (class not parallel); destruction outside the clock";
+        s.note = "range insert, is_large_point_set=true; serial (class not parallel); cells numbered in the "
+                 "triangulation's vertex order; destruction outside the clock";
+        dual::Cells cells;
         auto body = [&](bool copy) {
             auto tr = p3dt_build(xyz, n);
-            if (volumes) p3dt_volumes(*tr);
+            if (volumes) cells = p3dt_cells(*tr, true);
             if (copy) {
                 if (!tr->is_1_cover()) throw std::runtime_error("not 1-sheeted");
                 std::cerr << "# p3dt " << file << ": " << tr->number_of_vertices() << " vertices, "
                           << tr->number_of_cells() << " cells\n";
                 if (volumes) {
+                    // Cell k is the k-th vertex in iteration order; the volumes file is in input order.
                     p3dt_index(*tr, xyz, n);
-                    const auto v = p3dt_volume_vector(*tr, n);
+                    std::vector<double> v(n, std::nan(""));
+                    std::size_t k = 0;
+                    for (auto u = tr->vertices_begin(); u != tr->vertices_end(); ++u) v[u->info().index] = cells.volume[k++];
                     long double sum = 0;
                     for (double x : v) sum += x;
-                    std::cerr << "# p3dt volume sum - 1 = " << double(sum - 1.0L) << "\n";
+                    std::cerr << "# p3dt volume sum - 1 = " << double(sum - 1.0L) << ", faces per cell "
+                              << double(cells.face_start.back()) / double(n) << ", worst closure "
+                              << dual::worst_closure(cells) << ", flat " << cells.flat << "\n";
                     libbench::write_volumes(libbench::option(argc, argv, "volumes"), v);
                 }
             }
@@ -244,10 +286,11 @@ int step(int argc, char** argv) {
             if (c >= 1.0) c = 0.0;
         return x;
     };
-    auto s = setup(p3dt_name, "moving mesh: remove + insert (hinted) per point, then dual volumes (ours)", 1);
-    s.outputs = "Delaunay tetrahedra, volumes (ours, from the dual)";
+    omp_set_num_threads(1);
+    auto s = setup(p3dt_name, "moving mesh: remove + insert (hinted) per point, then faces (ours)", 1);
+    s.outputs = "Delaunay tetrahedra; cells (ours): volumes centroids faces areas neighbours";
     s.periodic = "native (periodic unit cube, 1-sheeted cover)";
-    s.timed = "new positions in host memory to updated triangulation and per-vertex volumes, per step";
+    s.timed = "new positions in host memory to updated triangulation and full cells, per step";
     s.note = "every vertex moved each step (no test for unchanged stars); hint = cell of a former neighbour";
     const std::vector<double> x0 = wrapped(0);
     auto tr = p3dt_build(x0.data(), n);
@@ -256,6 +299,7 @@ int step(int argc, char** argv) {
     for (auto v = tr->vertices_begin(); v != tr->vertices_end(); ++v) handle[v->info().index] = v;
     double total = 0;
     int done = 0;
+    dual::Cells last;
     for (int f = 1; f <= steps; ++f) {
         const std::vector<double> x = wrapped(f);
         const double t0 = libbench::now();
@@ -268,7 +312,7 @@ int step(int argc, char** argv) {
             handle[i] = tr->insert(P3DT::Point(x[3 * i], x[3 * i + 1], x[3 * i + 2]), near->cell());
             handle[i]->info().index = std::uint32_t(i);
         }
-        p3dt_volumes(*tr);
+        last = p3dt_cells(*tr, false);
         const double seconds = libbench::now() - t0;
         libbench::record(s, file, libbench::input_name(file), n, "step", f, seconds, -1);
         total += seconds;
@@ -280,7 +324,7 @@ int step(int argc, char** argv) {
     }
     if (!tr->is_1_cover()) throw std::runtime_error("not 1-sheeted after moves");
     {
-        const auto v = p3dt_volume_vector(*tr, n);
+        const std::vector<double>& v = last.volume;  // in input order (the step keeps it)
         long double sum = 0;
         for (double c : v) sum += c;
         std::cerr << "# step volume sum - 1 = " << double(sum - 1.0L) << " after " << done << " steps\n";
@@ -288,16 +332,16 @@ int step(int argc, char** argv) {
         if (!out.empty()) libbench::write_volumes(out + "_step" + std::to_string(done) + ".f64", v);
     }
     tr.reset();
-    auto r = setup(p3dt_name, "moving mesh: full rebuild per step (range insert + dual volumes (ours))", 1);
+    auto r = setup(p3dt_name, "moving mesh: full rebuild per step (range insert + faces (ours))", 1);
     r.outputs = s.outputs;
     r.periodic = s.periodic;
-    r.timed = "points in host memory to triangulation and per-vertex volumes, a new triangulation per step";
+    r.timed = "points in host memory to triangulation and full cells, a new triangulation per step";
     r.note = "is_large_point_set=true; destruction of the previous triangulation outside the clock";
     for (int f = 1; f <= steps; ++f) {
         const std::vector<double> x = wrapped(f);
         const double t0 = libbench::now();
         auto t = p3dt_build(x.data(), n);
-        p3dt_volumes(*t);
+        const dual::Cells c = p3dt_cells(*t, true);
         const double seconds = libbench::now() - t0;
         libbench::record(r, file, libbench::input_name(file), n, "step", f, seconds, -1);
     }
@@ -411,11 +455,48 @@ std::uint64_t dt_volumes(DT& dt, std::uint64_t n, std::vector<double>& volume, b
     return outside;
 }
 
+// The padded triangulation's finite tetrahedra at an original point as dual::build's source: cells of the originals
+// (info < n), neighbours keyed by padded index and labelled by their original.
+struct DTets {
+    const std::vector<DT::Cell_handle>& c;
+    const std::vector<std::uint32_t>& source;
+    std::uint64_t n;
+    std::uint64_t tets() const { return c.size(); }
+    std::uint32_t id(std::uint64_t k, int a) const { return c[k]->vertex(a)->info(); }
+    bool owner(std::uint64_t k, int a) const { return id(k, a) < n; }
+    std::uint64_t cell(std::uint64_t k, int a) const { return id(k, a); }
+    std::uint64_t key(std::uint64_t k, int, int b) const { return id(k, b); }
+    std::int64_t label(std::uint64_t k, int, int b) const {
+        const std::uint32_t i = id(k, b);
+        return i < n ? i : source[i - n];
+    }
+    void relative(std::uint64_t k, int a, int b, double* r) const {
+        const auto &p = c[k]->vertex(a)->point(), &q = c[k]->vertex(b)->point();
+        r[0] = q.x() - p.x(), r[1] = q.y() - p.y(), r[2] = q.z() - p.z();
+    }
+};
+
+// The full cells of the originals (cell list serial: the container has no parallel range; cells on OpenMP threads).
+dual::Cells dt_cells(DT& dt, const Padded& p, std::uint64_t n, const double* xyz) {
+    std::vector<DT::Cell_handle> cells;
+    cells.reserve(dt.number_of_finite_cells());
+    for (auto c = dt.finite_cells_begin(); c != dt.finite_cells_end(); ++c)
+        for (int i = 0; i < 4; ++i)
+            if (c->vertex(i)->info() < n) {
+                cells.push_back(c);
+                break;
+            }
+    return dual::build(DTets{cells, p.source, n}, n, [&](std::uint64_t i, double* x) {
+        for (int d = 0; d < 3; ++d) x[d] = xyz[3 * i + d];
+    });
+}
+
 int dt3(int argc, char** argv) {
     const std::string file = argv[2];
     const int repeats = std::stoi(libbench::option(argc, argv, "repeats", "3"));
     const int threads = std::stoi(libbench::option(argc, argv, "threads", "72"));
     tbb::global_control control(tbb::global_control::max_allowed_parallelism, threads);
+    omp_set_num_threads(threads);  // our cells step on as many threads as CGAL's
     const auto frames = libbench::read_frames(file);
     const std::uint64_t n = frames.n;
     const double* xyz = frames.frame(0);
@@ -450,18 +531,20 @@ int dt3(int argc, char** argv) {
             "thread-safe); destruction outside the clock";
     for (const bool volumes : {false, true}) {
         auto s = setup("CGAL Delaunay_triangulation_3 (Parallel_tag, TBB)",
-                       volumes ? "Delaunay + dual volumes (ours)" : "Delaunay", threads);
-        s.outputs = volumes ? "Delaunay tetrahedra, volumes (ours, from the dual)" : "Delaunay tetrahedra";
+                       volumes ? "Delaunay + faces (ours)" : "Delaunay", threads);
+        s.outputs = volumes ? "Delaunay tetrahedra; cells (ours): volumes centroids faces areas neighbours"
+                            : "Delaunay tetrahedra";
         s.periodic = "images: shell of width " + std::to_string(w) + " (" + std::to_string(extra) + " extra points)";
         s.timed = std::string("points in host memory to ") +
-                  (volumes ? "triangulation and volumes of the n original cells in host memory (padding, insert "
-                             "with spatial sort, dual volume loop: serial cell list, TBB-parallel sum)"
+                  (volumes ? "triangulation and full cells of the n originals in host memory (padding, insert "
+                             "with spatial sort, our cells: serial cell list, OpenMP cells)"
                            : "triangulation in host memory (padding, insert with spatial sort, parallel insertion)");
         s.note = note.str();
+        dual::Cells cells;
         auto body = [&](std::unique_ptr<DT::Lock_data_structure>& lock) {
             const Padded p = pad(xyz, n, w);
             auto dt = dt_build(p, w, lock);
-            if (volumes) dt_volumes(*dt, n, volume, false, w);
+            if (volumes) cells = dt_cells(*dt, p, n, xyz);
             return dt;
         };
         libbench::run_protocol(
@@ -472,7 +555,11 @@ int dt3(int argc, char** argv) {
                 std::unique_ptr<DT::Lock_data_structure> lock;
                 auto dt = body(lock);
                 const double b = peak.stop();
-                if (volumes) libbench::write_volumes(libbench::option(argc, argv, "volumes"), volume);
+                if (volumes) {
+                    std::cerr << "# dt3 cells: faces per cell " << double(cells.face_start.back()) / double(n)
+                              << ", worst closure " << dual::worst_closure(cells) << ", flat " << cells.flat << "\n";
+                    libbench::write_volumes(libbench::option(argc, argv, "volumes"), cells.volume);
+                }
                 return b;
             },
             [&] {

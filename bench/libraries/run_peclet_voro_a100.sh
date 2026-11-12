@@ -22,7 +22,7 @@ clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temper
 nvidia-smi -L >&2
 clocks
 for n in ${SIZES:-2097152 16777216}; do
-    for kind in jittered uniform clustered halo; do
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         echo "# $kind $n plain" >&2
         "$bin" build "$data/points/${kind}_${n}.pts" --variant=plain --repeats=3 \
             --volumes="$data/volumes/peclet-voro-a100_${kind}_${n}.f64" || echo "# FAILED plain $kind $n: exit $?" >&2

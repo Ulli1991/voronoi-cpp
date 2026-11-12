@@ -2,9 +2,10 @@
 // (docs/library_benchmark.md): the 3D Delaunay triangulation (lower hull of the points lifted to the paraboloid) of
 // the points padded with periodic images (Qhull has no periodic box), through the reentrant library:
 // qh_new_qhull("qhull d Qbb Qz Qt"): d Delaunay, Qbb scale the last (lifted) coordinate as qdelaunay does, Qz add a
-// point at infinity (for cospherical inputs), Qt triangulated output (simplicial facets). Then the Voronoi volumes of
-// the originals from the lower-hull facets (images_dual.hpp). Single thread (Qhull is serial).
-//   qhull_bench <points file> --variant=delaunay|dual --width=<mean spacings> [--repeats=3] [--volumes=file]
+// point at infinity (for cospherical inputs), Qt triangulated output (simplicial facets). Then the full Voronoi cells of
+// the originals (volumes, centroids, faces with neighbours and areas) from the lower-hull facets (images_dual.hpp,
+// dual_cells.hpp). Single thread (Qhull is serial; our cells step runs on OMP_NUM_THREADS).
+//   qhull_bench <points file> --variant=delaunay|faces --width=<mean spacings> [--repeats=3] [--volumes=file]
 
 #include "images_dual.hpp"
 
@@ -56,7 +57,7 @@ struct Qhull {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: qhull_bench <points file> --variant=delaunay|dual --width=<spacings>\n");
+        std::fprintf(stderr, "usage: qhull_bench <points file> --variant=delaunay|faces --width=<spacings>\n");
         return 1;
     }
     libbench::Setup s;
@@ -65,6 +66,6 @@ int main(int argc, char** argv) {
     s.version = "2020.2 (8.0.2, github.com/qhull/qhull tag v8.0.2, 613debe)";
     s.device = "2x Xeon Platinum 8360Y";
     s.threads = 1;
-    s.precision = "double floating point, facet merging (Qt triangulates merged facets); dual volumes double";
+    s.precision = "double floating point, facet merging (Qt triangulates merged facets); our cells (dual_cells.hpp) double";
     return images::drive<Qhull>(argc, argv, s);
 }

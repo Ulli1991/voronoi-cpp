@@ -22,9 +22,11 @@ clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temper
 nvidia-smi -L >&2
 clocks
 for n in ${SIZES:-2097152 16777216}; do
-    for kind in ${KINDS:-jittered uniform clustered halo}; do
-        "$bin/voronoi_gpu_liu" "$data/points/${kind}_${n}.pts" \
-            --volumes="$data/volumes/voronoi-gpu-liu-a100_${kind}_${n}.f64" "$@" || echo "# liu $kind $n failed: exit $?" >&2
-        clocks
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
+        for preset in 0 1 2; do  # white noise K 90, perturbed grid K 90, blue noise K 35
+            "$bin/voronoi_gpu_liu_p$preset" "$data/points/${kind}_${n}.pts" \
+                --volumes="$data/volumes/voronoi-gpu-liu-p$preset-a100_${kind}_${n}.f64" || echo "# liu p$preset $kind $n failed: exit $?" >&2
+            clocks
+        done
     done
 done

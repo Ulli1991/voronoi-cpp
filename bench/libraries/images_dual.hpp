@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared by the drivers of the non-periodic Delaunay libraries (qhull.cpp, tetgen.cpp): the periodic box emulated by
-// padding with periodic images, Voronoi volumes from the Delaunay tetrahedra ("dual volumes (ours)"), and the
+// padding with periodic images, the full Voronoi cells from the Delaunay tetrahedra ("faces (ours)", dual_cells.hpp), and the
 // exactness certificate of the padding.
 //
 // Padding: the n points, then every periodic image x + s (s in {-1, 0, 1}^3, s != 0) that lies in [-w, 1 + w]^3.
@@ -13,24 +13,23 @@
 // has none inside it. required_width() returns the largest excursion of such a circumsphere beyond the unit box over
 // the tetrahedra incident to an original point; the padding is exact when it is <= w (up to the library's own
 // predicates: TetGen's are exact, Qhull's are floating point).
-//
-// Dual volumes: the Voronoi cell of vertex i is the union over its tetrahedra T and the ordered pairs (j, k) of the
-// other vertices of T of the signed simplex (p_i, midpoint of ij, circumcentre of ijk, circumcentre of T), signed by
-// the orientation of (i, j, k, l). The signs make the sum exact for tetrahedra whose circumcentre lies outside them.
 
+#include "dual_cells.hpp"
 #include "libbench.hpp"
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <array>
 #include <memory>
 #include <vector>
 
 namespace images {
 
 struct Padded {
-    std::vector<double> xyz;  // (n + images) * 3
-    std::uint64_t n = 0;      // originals first
+    std::vector<double> xyz;            // (n + images) * 3
+    std::vector<std::uint32_t> source;  // the original of each point (images after the n originals)
+    std::uint64_t n = 0;                // originals first
     std::uint64_t size() const { return xyz.size() / 3; }
 };
 
@@ -40,6 +39,8 @@ inline Padded pad(const double* xyz, std::uint64_t n, double w) {
     p.n = n;
     p.xyz.reserve(std::size_t(3 * n * std::pow(1 + 2 * w, 3) * 1.02) + 64);
     p.xyz.assign(xyz, xyz + 3 * n);
+    p.source.resize(n);
+    for (std::uint64_t i = 0; i < n; ++i) p.source[i] = static_cast<std::uint32_t>(i);
     for (std::uint64_t i = 0; i < n; ++i) {
         const double* x = xyz + 3 * i;
         int lo[3], hi[3];
@@ -54,6 +55,7 @@ inline Padded pad(const double* xyz, std::uint64_t n, double w) {
                     p.xyz.push_back(x[0] + sx);
                     p.xyz.push_back(x[1] + sy);
                     p.xyz.push_back(x[2] + sz);
+                    p.source.push_back(static_cast<std::uint32_t>(i));
                 }
     }
     return p;
@@ -78,46 +80,6 @@ inline bool tet_centre(const V3& u, const V3& v, const V3& w, V3& c) {
     return true;
 }
 
-// Circumcentre of the triangle (0, a, b) relative to its first vertex.
-inline V3 tri_centre(const V3& a, const V3& b) {
-    const V3 n = cross(a, b);
-    const double aa = dot(a, a), bb = dot(b, b), s = 0.5 / dot(n, n);
-    const V3 t = {aa * b.x - bb * a.x, aa * b.y - bb * a.y, aa * b.z - bb * a.z};
-    const V3 f = cross(t, n);
-    return {f.x * s, f.y * s, f.z * s};
-}
-
-// Adds the dual-volume contributions of tetrahedron (t[0..3]) to its original vertices (index < n). Returns false
-// (and adds nothing) for a flat tetrahedron.
-inline bool add_tet(const double* xyz, std::uint64_t n, const std::uint64_t t[4], double* volume) {
-    if (t[0] >= n && t[1] >= n && t[2] >= n && t[3] >= n) return true;
-    const double* p0 = xyz + 3 * t[0];
-    V3 c;
-    if (!tet_centre(sub(xyz + 3 * t[1], p0), sub(xyz + 3 * t[2], p0), sub(xyz + 3 * t[3], p0), c)) return false;
-    const double cc[3] = {p0[0] + c.x, p0[1] + c.y, p0[2] + c.z};
-    for (int a = 0; a < 4; ++a) {
-        if (t[a] >= n) continue;
-        const double* pi = xyz + 3 * t[a];
-        const V3 ci = sub(cc, pi);
-        double sum = 0;
-        for (int b = 0; b < 4; ++b) {
-            if (b == a) continue;
-            for (int k = 0; k < 4; ++k) {
-                if (k == a || k == b) continue;
-                const int l = 6 - a - b - k;
-                const V3 pj = sub(xyz + 3 * t[b], pi), pk = sub(xyz + 3 * t[k], pi), pl = sub(xyz + 3 * t[l], pi);
-                const double o = det(pj, pk, pl);
-                const V3 m = {0.5 * pj.x, 0.5 * pj.y, 0.5 * pj.z};
-                const V3 f = tri_centre(pj, pk);
-                const double v = det(m, f, ci);
-                sum += o > 0 ? v : -v;
-            }
-        }
-        volume[t[a]] += sum / 6;
-    }
-    return true;
-}
-
 // Excursion of the circumsphere of tetrahedron t beyond the unit box (<= 0 inside), or 0 if no original vertex.
 inline double excursion(const double* xyz, std::uint64_t n, const std::uint64_t t[4]) {
     if (t[0] >= n && t[1] >= n && t[2] >= n && t[3] >= n) return 0;
@@ -131,26 +93,55 @@ inline double excursion(const double* xyz, std::uint64_t n, const std::uint64_t 
     return e;
 }
 
+// The finite tetrahedra of a padded set as dual::build's source: the cells of the originals (index < n); neighbours
+// keyed by their padded index (each image its own key), labelled by their original.
+struct PaddedTets {
+    const Padded& p;
+    const std::vector<std::array<std::uint64_t, 4>>& t;
+    std::uint64_t tets() const { return t.size(); }
+    bool owner(std::uint64_t k, int a) const { return t[k][a] < p.n; }
+    std::uint64_t cell(std::uint64_t k, int a) const { return t[k][a]; }
+    std::uint64_t key(std::uint64_t k, int, int b) const { return t[k][b]; }
+    std::int64_t label(std::uint64_t k, int, int b) const { return p.source[t[k][b]]; }
+    void relative(std::uint64_t k, int a, int b, double* r) const {
+        for (int d = 0; d < 3; ++d) r[d] = p.xyz[3 * t[k][b] + d] - p.xyz[3 * t[k][a] + d];
+    }
+};
+
+// The full cells of the originals from the library's tetrahedra (copied out first, as part of the timed step).
+template <class Lib>
+dual::Cells padded_cells(const Padded& p, Lib& lib) {
+    std::vector<std::array<std::uint64_t, 4>> tets;
+    lib.each_tet([&](const std::uint64_t t[4]) {
+        if (t[0] < p.n || t[1] < p.n || t[2] < p.n || t[3] < p.n) tets.push_back({t[0], t[1], t[2], t[3]});
+    });
+    return dual::build(PaddedTets{p, tets}, p.n, [&](std::uint64_t i, double* x) {
+        for (int d = 0; d < 3; ++d) x[d] = p.xyz[3 * i + d];
+    });
+}
+
 // The protocol of a padded Delaunay library: Lib() builds the triangulation of a Padded set in Lib::build and lists
 // its finite tetrahedra in Lib::each_tet(f) (f(const uint64_t[4])); the destructor frees it.
-//   <driver> <points file> --variant=delaunay|dual --width=<w in mean spacings> [--repeats=3] [--volumes=file]
-// "delaunay" times padding + the library's Delaunay; "dual" times padding + Delaunay + dual volumes of the n originals.
+//   <driver> <points file> --variant=delaunay|faces --width=<w in mean spacings> [--repeats=3] [--volumes=file]
+// "delaunay" times padding + the library's Delaunay; "faces" times padding + Delaunay + the full cells of the n
+// originals (dual::build: volumes, centroids, faces with neighbours and area vectors).
 // The untimed first run measures peak memory, then (outside the peak and the clock) checks the certificate and,
-// for "dual", writes the volumes.
+// for "faces", writes the volumes.
 template <class Lib>
 int drive(int argc, char** argv, libbench::Setup s) {
     const std::string file = argv[1];
-    const std::string variant = libbench::option(argc, argv, "variant", "dual");
+    const std::string variant = libbench::option(argc, argv, "variant", "faces");
     const double spacings = std::stod(libbench::option(argc, argv, "width", "4"));
     const int repeats = std::stoi(libbench::option(argc, argv, "repeats", "3"));
     const auto frames = libbench::read_frames(file);
     const std::uint64_t n = frames.n;
     const double h = std::cbrt(1.0 / double(n)), w = spacings * h;
-    const bool dual = variant == "dual";
-    s.variant = dual ? s.variant + "; Delaunay + dual volumes (ours)" : s.variant + "; Delaunay";
-    s.outputs = dual ? "tetrahedra, volumes" : "tetrahedra";
-    s.timed = dual ? "points in host memory to padded set, tetrahedra and volumes of the n originals in host memory"
-                   : "points in host memory to padded set and tetrahedra in the library's host memory";
+    const bool faces = variant == "faces";
+    s.variant = faces ? s.variant + "; Delaunay + faces (ours)" : s.variant + "; Delaunay";
+    s.outputs = faces ? "tetrahedra; cells (ours): volumes centroids faces areas neighbours" : "tetrahedra";
+    s.timed = faces ? "points in host memory to padded set, tetrahedra and the full cells of the n originals in host "
+                      "memory (ours: dual_cells.hpp, OpenMP)"
+                    : "points in host memory to padded set and tetrahedra in the library's host memory";
     s.periodic = "images: every periodic image within w of the box";
     std::vector<double> volume;
     std::uint64_t flat = 0;
@@ -158,22 +149,18 @@ int drive(int argc, char** argv, libbench::Setup s) {
     std::unique_ptr<Padded> held_points;
     std::unique_ptr<Lib> held_lib;
     std::vector<double> v;
+    dual::Cells cells;
+    double closure = 0;
     const auto body = [&]() {
         held_points = std::make_unique<Padded>(pad(frames.frame(0), n, w));
         held_lib = std::make_unique<Lib>();
         held_lib->build(*held_points);
-        if (dual) {
-            v.assign(n, 0.0);
-            flat = 0;
-            const double* xyz = held_points->xyz.data();
-            held_lib->each_tet([&](const std::uint64_t t[4]) { flat += !add_tet(xyz, n, t, v.data()); });
-        }
+        if (faces) cells = padded_cells(*held_points, *held_lib);
     };
     const auto release = [&]() {
         held_lib.reset();
         held_points.reset();
-        v.clear();
-        v.shrink_to_fit();
+        cells = dual::Cells{};
     };
     const auto memory_run = [&]() {
         libbench::HostPeak peak;
@@ -181,8 +168,10 @@ int drive(int argc, char** argv, libbench::Setup s) {
         body();
         const double bytes = peak.stop();
         const std::uint64_t padded = held_points->size();
-        // Certificate and volume sum, outside the peak and the clock.
-        volume = v;
+        // Certificate, volume sum and closure, outside the peak and the clock.
+        volume = cells.volume;
+        flat = cells.flat;
+        closure = faces ? dual::worst_closure(cells) : 0;
         const double* xyz = held_points->xyz.data();
         double need = -INFINITY;
         std::uint64_t tets = 0;
@@ -190,6 +179,7 @@ int drive(int argc, char** argv, libbench::Setup s) {
             need = std::fmax(need, excursion(xyz, n, t));
             ++tets;
         });
+        const std::uint64_t faces_total = cells.face_start.empty() ? 0 : cells.face_start.back();
         release();
         double sum = 0;
         std::uint64_t missing = 0;
@@ -201,13 +191,14 @@ int drive(int argc, char** argv, libbench::Setup s) {
         std::snprintf(note, sizeof note,
                       "%sw = %g mean spacings = %.6g, %llu images (%.3f n); certificate: circumspheres of tetrahedra "
                       "at originals reach %.4g mean spacings beyond the box (%s); %llu tetrahedra; flat skipped %llu; "
-                      "sum of volumes - 1 = %.3g; nonpositive volumes %llu",
+                      "sum of volumes - 1 = %.3g; nonpositive volumes %llu; faces per cell %.3f; worst closure %.2g",
                       s.note.empty() ? "" : (s.note + "; ").c_str(), spacings, w, (unsigned long long)(padded - n), double(padded - n) / double(n),
                       need / h, need <= w ? "exact" : "NOT exact", (unsigned long long)tets,
-                      (unsigned long long)flat, dual ? sum - 1 : NAN, (unsigned long long)(dual ? missing : 0));
+                      (unsigned long long)flat, faces ? sum - 1 : NAN, (unsigned long long)(faces ? missing : 0),
+                      faces ? double(faces_total) / double(n) : 0.0, closure);
         std::fprintf(stderr, "# %s %s %s\n", s.library.c_str(), file.c_str(), note);
         s.note = note;
-        if (dual) libbench::write_volumes(libbench::option(argc, argv, "volumes"), volume);
+        if (faces) libbench::write_volumes(libbench::option(argc, argv, "volumes"), volume);
         volume.clear();
         volume.shrink_to_fit();
         return bytes;

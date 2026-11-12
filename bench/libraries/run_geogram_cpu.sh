@@ -3,7 +3,7 @@
 #   pdel              PeriodicDelaunay3d, native periodic, Delaunay only
 #   pdel-cells        PeriodicDelaunay3d + Voronoi cells (volumes, centroids, faces with neighbour and area)
 #   pdel-nonper       ParallelDelaunay3d (PDEL) on the points padded with periodic images, Delaunay only
-#   pdel-nonper-dual  the same + our dual volumes
+#   pdel-nonper-faces the same + our full cells (dual_cells.hpp: volumes, centroids, faces, areas, neighbours)
 # each 1 untimed run (peak memory, volumes) + 3 timed. Records (JSON lines) on stdout.
 #   sbatch -o bench/libraries/results/geogram-cpu-%j.jsonl -e /raven/u/uli/libbench-data/logs/geogram-cpu-%j.err \
 #       bench/libraries/run_geogram_cpu.sh [sizes] [inputs] [threads]
@@ -21,7 +21,7 @@ module load gcc/14
 root=/raven/u/uli/libbench-src/geogram
 data=/raven/u/uli/libbench-data
 sizes="${1:-2097152 16777216}"
-inputs="${2:-jittered uniform clustered halo}"
+inputs="${2:-jittered uniform clustered halo bluenoise}"
 threadlist="${3:-72 1}"
 export GEOGRAM_COMMIT="$(git -C "$root/src" rev-parse --short=12 HEAD)"
 # No OpenMP binding: with OMP_PROC_BIND=spread geogram's threads ran on one core (18 threads 20.8 s against 2.6 s
@@ -36,12 +36,12 @@ for n in $sizes; do
         [ -f "$pts" ] || { echo "# missing $pts" >&2; continue; }
         for t in $threadlist; do
             export OMP_NUM_THREADS=$t
-            for v in pdel pdel-cells pdel-nonper pdel-nonper-dual; do
+            for v in pdel pdel-cells pdel-nonper pdel-nonper-faces; do
                 vol=""
                 if [ "$t" = 72 ]; then
                     case $v in
                         pdel-cells) vol="--volumes=$data/volumes/geogram-pdel-cpu_${kind}_${n}.f64" ;;
-                        pdel-nonper-dual) vol="--volumes=$data/volumes/geogram-pdel-nonper-cpu_${kind}_${n}.f64" ;;
+                        pdel-nonper-faces) vol="--volumes=$data/volumes/geogram-pdel-nonper-cpu_${kind}_${n}.f64" ;;
                     esac
                 fi
                 echo "# $(date +%T) $v $kind $n threads $t" >&2

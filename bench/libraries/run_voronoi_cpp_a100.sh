@@ -1,5 +1,6 @@
 #!/bin/bash
-# voronoi-cpp in the library benchmark on one A100: warp rebuild and exact start on every point file, 1 untimed run
+# voronoi-cpp in the library benchmark on one A100: warp rebuild (device to device and host to host) and exact start on
+# every point file (env SIZES, KINDS select a subset; SKIP_STEP=1 skips the trajectory), 1 untimed run
 # (peak memory, volumes) + 3 timed; then the moving-mesh trajectory. Records (JSON lines) on stdout.
 #   sbatch -o bench/libraries/results/voronoi-cpp-a100-%j.jsonl bench/libraries/run_voronoi_cpp_a100.sh <build> <data>
 #SBATCH -J libbench_vcpp
@@ -19,15 +20,17 @@ export LIBBENCH_COMMIT="$(git -C "$SLURM_SUBMIT_DIR" rev-parse --short HEAD)$(gi
 clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temperature.gpu --format=csv,noheader | sed 's/^/# clocks: /' >&2; }
 nvidia-smi -L >&2
 clocks
-for n in 2097152 16777216; do
-    for kind in jittered uniform clustered halo; do
-        for path in warp exact; do
+for n in ${SIZES:-2097152 16777216}; do
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
+        for path in warp warp-host exact; do
             "$build/library_bench" build "$data/points/${kind}_${n}.pts" --path=$path --repeats=3 \
                 --volumes="$data/volumes/voronoi-cpp-${path}-a100_${kind}_${n}.f64"
             clocks
         done
     done
 done
-"$build/library_bench" step "$data/points/jittered_2097152_step0.03.trj" \
-    --volumes="$data/volumes/voronoi-cpp-step-a100_jittered_2097152_step10.f64"
+if [ -z "${SKIP_STEP:-}" ]; then
+    "$build/library_bench" step "$data/points/jittered_2097152_step0.03.trj" \
+        --volumes="$data/volumes/voronoi-cpp-step-a100_jittered_2097152_step10.f64"
+fi
 clocks

@@ -24,9 +24,9 @@ export PATH="$P/venv/bin:$PATH" TORCH_EXTENSIONS_DIR="$P/torch_ext" TORCH_CUDA_A
 clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temperature.gpu --format=csv,noheader | sed 's/^/# clocks: /' >&2; }
 nvidia-smi -L >&2
 clocks
-declare -A shell=([jittered]=4 [uniform]=5 [clustered]=8 [halo]=8)  # uniform 5: 4 failed the check at 16.8M (job 32230657)
+declare -A shell=([bluenoise]=4 [jittered]=4 [uniform]=5 [clustered]=8 [halo]=8)  # uniform 5: 4 failed the check at 16.8M (job 32230657)
 for n in ${SIZES:-2097152 16777216}; do
-    for kind in ${KINDS:-jittered uniform clustered halo}; do
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         w=${shell[$kind]}
         # halo at 16.8M: a status-0 cell of R 0.040 failed 2R <= w at 8 spacings (job 32230796); 24 spacings = 0.094.
         [ "$kind" = halo ] && [ "$n" = 16777216 ] && w=24

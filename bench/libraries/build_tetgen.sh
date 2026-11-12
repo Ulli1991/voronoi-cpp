@@ -26,7 +26,7 @@ g++ -O3 -march=native -DTETLIBRARY -c "$root/src/tetgen.cxx" -o tetgen.o
 g++ -O0 -DTETLIBRARY -c "$root/src/predicates.cxx" -o predicates.o
 ar rcs "$root/install/lib/libtet.a" tetgen.o predicates.o
 cp "$root/src/tetgen.h" "$root/install/include/"
-g++ -std=c++17 -O3 -march=native -DTETLIBRARY -I"$root/install/include" "$here/tetgen.cpp" -L"$root/install/lib" -ltet \
+g++ -std=c++17 -O3 -march=native -fopenmp -DTETLIBRARY -I"$root/install/include" "$here/tetgen.cpp" -L"$root/install/lib" -ltet \
     -o "$root/install/bin/tetgen_bench"
 g++ --version | head -1
 ls -l "$root/install/bin"

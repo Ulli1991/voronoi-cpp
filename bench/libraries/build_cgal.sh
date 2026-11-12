@@ -47,7 +47,7 @@ tbblib="$root/tbb/install/lib64"
 [ -d "$tbblib" ] || tbblib="$root/tbb/install/lib"
 
 # The driver.
-flags="-O3 -march=native -DNDEBUG -std=c++20"
+flags="-O3 -march=native -DNDEBUG -std=c++20 -fopenmp"
 mkdir -p "$root/cgal/bin"
 g++ $flags -DCGAL_LINKED_WITH_TBB -I"$root/cgal/CGAL-$cgal_version/include" -I"$BOOST_HOME/include" \
     -I"$root/tbb/install/include" "$here/cgal.cpp" -o "$root/cgal/bin/cgal_bench" \

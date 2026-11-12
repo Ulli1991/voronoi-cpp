@@ -29,7 +29,7 @@ lib=$(find "$root/build" -name 'libqhullstatic_r.a' | head -1)
 cp "$lib" "$root/install/lib/"
 mkdir -p "$root/install/include/libqhull_r"
 cp "$root"/src/src/libqhull_r/*.h "$root/install/include/libqhull_r/"
-g++ -std=c++17 -O3 -march=native -I"$root/install/include" "$here/qhull.cpp" -L"$root/install/lib" -lqhullstatic_r \
+g++ -std=c++17 -O3 -march=native -fopenmp -I"$root/install/include" "$here/qhull.cpp" -L"$root/install/lib" -lqhullstatic_r \
     -o "$root/install/bin/qhull_bench"
 g++ --version | head -1
 ls -l "$root/install/bin"

@@ -27,16 +27,18 @@ namespace {
 
 // The library's output copied out of each computed cell.
 struct Output {
-    std::vector<double> volume;  // input order
-    std::vector<int> faces;      // input order
+    std::vector<double> volume;    // input order
+    std::vector<double> centroid;  // input order, relative to the particle (voronoicell::centroid)
+    std::vector<int> faces;        // input order
     // Per thread, flat over its cells in computation order: owner id, then face areas and neighbour ids.
     struct Part {
         std::vector<int> owner, neighbour;
-        std::vector<double> area;
+        std::vector<double> area, normal;  // per face: area and unit outward normal (area vector = area x normal)
     };
     std::vector<Part> parts;
     void reset(std::uint64_t n, int threads) {
         volume.assign(n, NAN);
+        centroid.assign(3 * n, NAN);
         faces.assign(n, 0);
         parts.assign(threads, Part{});
     }
@@ -44,12 +46,16 @@ struct Output {
 
 template <class Cell>
 inline void take(Cell& c, int id, Output& out, Output::Part& part, std::vector<double>& area, std::vector<int>& nb) {
+    thread_local std::vector<double> normal;
     out.volume[id] = c.volume();
+    c.centroid(out.centroid[3 * id], out.centroid[3 * id + 1], out.centroid[3 * id + 2]);
     c.face_areas(area);
+    c.normals(normal);
     c.neighbors(nb);
     out.faces[id] = int(area.size());
     part.owner.push_back(id);
     part.area.insert(part.area.end(), area.begin(), area.end());
+    part.normal.insert(part.normal.end(), normal.begin(), normal.end());
     part.neighbour.insert(part.neighbour.end(), nb.begin(), nb.end());
 }
 
@@ -122,7 +128,7 @@ int main(int argc, char** argv) {
 #endif
     s.device = "2x Xeon Platinum 8360Y";
     s.threads = threads;
-    s.outputs = "volumes faces areas neighbours";
+    s.outputs = "volumes centroids faces areas (with unit normals) neighbours";
     s.periodic = "native";
     s.precision = "double floating point (no exact predicates; tolerance-based plane cuts)";
     s.timed = "points in host memory to container, every cell computed, volume, face areas and neighbour ids copied "

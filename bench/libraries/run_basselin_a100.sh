@@ -22,9 +22,14 @@ clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temper
 nvidia-smi -L >&2
 clocks
 for n in ${SIZES:-2097152 16777216}; do
-    for kind in ${KINDS:-jittered uniform clustered halo}; do
-        "$bin/basselin" "$data/points/${kind}_${n}.pts" \
-            --volumes="$data/volumes/basselin-a100_${kind}_${n}.f64" "$@" || echo "# basselin $kind $n failed: exit $?" >&2
-        clocks
+    for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
+        # The README's three settings (blue noise, perturbed grid, white noise), each on every input; the tables
+        # take the README's setting for the input's class (bluenoise: blue; jittered: perturbed grid; else white).
+        for kpv in "20 25 30 blue" "50 30 40 grid" "70 30 40 white"; do
+            set -- $kpv
+            "$bin/basselin" "$data/points/${kind}_${n}.pts" --K=$1 --P=$2 --V=$3 \
+                --volumes="$data/volumes/basselin-$4-a100_${kind}_${n}.f64" || echo "# basselin $kind $n $4 failed: exit $?" >&2
+            clocks
+        done
     done
 done

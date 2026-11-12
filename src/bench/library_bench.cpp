@@ -1,8 +1,9 @@
 // voronoi-cpp in the library benchmark (docs/library_benchmark.md), and the writer of its shared inputs.
 //   library_bench points <n> <distribution> <file>                         the generator's points, in its order
 //   library_bench trajectory <n> <distribution> <spacings> <steps> <file>  slot-ordered points and `steps` moves
-//   library_bench build <points file> [--path=warp|exact] [--repeats=3] [--volumes=file]
+//   library_bench build <points file> [--path=warp|warp-host|exact] [--repeats=3] [--volumes=file]
 //   library_bench step <trajectory file> [--volumes=file]
+//   library_bench lloyd <points file> <iterations> <file>                  blue noise: Lloyd-relaxed points
 // File formats and the record of each timed run: bench/libraries/libbench.hpp.
 
 #include "../../bench/libraries/libbench.hpp"
@@ -97,6 +98,30 @@ int build(int argc, char** argv) {
             const auto v = to_host(cells.volume);
             for (std::uint64_t i = 0; i < n; ++i) volume[i] = v(i);
         };
+    } else if (path == "warp-host") {
+        s = setup("warp clipping rebuild, host to host (copy in, cell list + construct_warp, copy out)",
+                  "volumes faces areas centroids",
+                  "points in host memory to cells in host memory: points copied to the device, cell list, grid, cell "
+                  "arrays, clipping, then volumes, centroids, per-cell face starts and counts and the whole face pool "
+                  "(neighbours, area vectors, face centroids) copied back");
+        const Points host = to_points(frames.frame(0), n);
+        body = [&](bool copy) {
+            const Positions xd = to_device(host);
+            neighbor_search::CellList<Exec> list;
+            neighbor_search::configure(list, static_cast<int>(n), box, std::cbrt(1.0 / double(n)));
+            neighbor_search::build(exec, list, xd);
+            shell_voronoi::Cells<Memory> cells(static_cast<int>(n), false);
+            shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(list), cells);
+            const auto v = to_host(cells.volume);
+            const auto c = to_host(cells.centroid);
+            const auto start = to_host(cells.face_start);
+            const auto count = to_host(cells.owned_count);
+            const auto nb = to_host(cells.neighbour);
+            const auto area = to_host(cells.area);
+            const auto fc = to_host(cells.face_centroid);
+            if (!copy) return;
+            for (std::uint64_t i = 0; i < n; ++i) volume[i] = v(i);
+        };
     } else {
         s = setup("exact start (Mesh::update from scratch + update_cells)",
                   "Delaunay tetrahedra, volumes faces areas centroids, per-cell face lists",
@@ -189,6 +214,41 @@ int step(int argc, char** argv) {
     return 0;
 }
 
+// Blue noise as in Ray et al. 2018 and Basselin et al. 2021 (centroidal Voronoi tessellation): Lloyd iterations from
+// the points of `in` in the periodic unit box, each moving every point to its cell's centroid (the warp build's centroid
+// is relative to the generator), wrapped and snapped to the 2^-30 grid. Prints the rms spread of the cell volumes
+// (relative to the mean) every 10 iterations.
+int lloyd(const std::string& in, int iterations, const std::string& out) {
+    const auto frames = libbench::read_frames(in);
+    const std::uint64_t n = frames.n;
+    Points p = to_points(frames.frame(0), n);
+    const Exec exec;
+    const Box box{};
+    for (int it = 1; it <= iterations; ++it) {
+        const Positions x = to_device(p);
+        neighbor_search::CellList<Exec> list;
+        neighbor_search::configure(list, static_cast<int>(n), box, std::cbrt(1.0 / double(n)));
+        neighbor_search::build(exec, list, x);
+        shell_voronoi::Cells<Memory> cells(static_cast<int>(n), false);
+        shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(list), cells);
+        const auto c = to_host(cells.centroid);
+        const auto v = to_host(cells.volume);
+        double s1 = 0, s2 = 0;
+        for (std::uint64_t i = 0; i < n; ++i) {
+            for (int a = 0; a < 3; ++a) p[i][a] = wrap(p[i][a] + c(i, a));
+            const double r = v(i) * double(n);
+            s1 += r, s2 += r * r;
+        }
+        to_grid(p);
+        if (it % 10 == 0 || it == iterations)
+            std::cout << "lloyd: iteration " << it << " volume/mean: rms spread "
+                      << std::sqrt(std::max(0.0, s2 / double(n) - (s1 / double(n)) * (s1 / double(n)))) << "\n";
+    }
+    libbench::write_frames(out, n, flat(p));
+    std::cout << "wrote " << n << " points to " << out << "\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -217,11 +277,13 @@ int main(int argc, char** argv) {
                   << "\n";
         return 0;
     }
+    if (mode == "lloyd" && argc >= 5) return lloyd(argv[2], std::stoi(argv[3]), argv[4]);
     if (mode == "build" && argc >= 3) return build(argc, argv);
     if (mode == "step" && argc >= 3) return step(argc, argv);
     std::cerr << "usage: library_bench points <n> <distribution> <file>\n"
                  "       library_bench trajectory <n> <distribution> <spacings> <steps> <file>\n"
-                 "       library_bench build <points file> [--path=warp|exact] [--repeats=3] [--volumes=file]\n"
-                 "       library_bench step <trajectory file> [--volumes=file]\n";
+                 "       library_bench build <points file> [--path=warp|warp-host|exact] [--repeats=3] [--volumes=file]\n"
+                 "       library_bench step <trajectory file> [--volumes=file]\n"
+                 "       library_bench lloyd <points file> <iterations> <file>\n";
     return 2;
 }

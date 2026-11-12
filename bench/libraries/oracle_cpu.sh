@@ -23,13 +23,13 @@ if [ $# -eq 0 ]; then
     done
     exit 0
 fi
-# Volumes named <library>-<device>_<input>_<n>[_step10].f64: grouped by their point file.
+# Volumes named <library>-<device>_<input>_<n>[_step<k>].f64 (k: the trajectory frame): grouped by their point file.
 for v in "$@"; do
     base=$(basename "$v" .f64)
     rest=${base#*_}
     case "$rest" in
-        *_step10) p="$data/points/${rest%_step10}_step0.03.trj@10" ;;
+        *_step[0-9]*) p="$data/points/${rest%_step*}_step0.03.trj@${rest##*_step}" ;;
         *) p="$data/points/${rest}.pts" ;;
     esac
-    "$check" "$p" 1000 "$v"
+    "$check" "$p" 1000 "$v" || echo "# oracle_check failed on $v: exit $?" >&2
 done

@@ -24,6 +24,7 @@ struct Padded {
     std::uint64_t n = 0;     // originals
     double w = 0;            // shell width (unit box lengths)
     std::vector<double> xyz; // (n + images) * 3
+    std::vector<std::uint32_t> source;  // the original of each image (index - n)
     std::uint64_t size() const { return xyz.size() / 3; }
 };
 
@@ -49,6 +50,7 @@ inline void pad(const double* x, std::uint64_t n, double w, Padded& p) {
     for (std::uint64_t i = 0; i < n; ++i) count[i + 1] += count[i];  // inclusive scan: images before point i+1
     const std::uint64_t total = n + count[n];
     p.xyz.resize(total * 3);
+    p.source.resize(total - n);
 #pragma omp parallel for schedule(static)
     for (std::int64_t i = 0; i < std::int64_t(n); ++i) {
         const double* q = x + 3 * i;
@@ -65,6 +67,7 @@ inline void pad(const double* x, std::uint64_t n, double w, Padded& p) {
                     p.xyz[3 * o] = q[0] + s[0][a];
                     p.xyz[3 * o + 1] = q[1] + s[1][b];
                     p.xyz[3 * o + 2] = q[2] + s[2][c];
+                    p.source[o - n] = std::uint32_t(i);
                     ++o;
                 }
     }
@@ -89,7 +92,7 @@ inline double to_box1000(const Padded& p, std::vector<Real>& out, int stride) {
 // (measured with gdel3d.cu: the width every Delaunay circumball incident to an original point needs, times a margin;
 // see default_width_spacings).
 inline double default_width_spacings(const std::string& input) {
-    if (input == "jittered") return 3.0;
+    if (input == "jittered" || input == "bluenoise") return 3.0;
     if (input == "uniform") return 5.0;
     if (input == "clustered") return 8.0;
     return 8.0;
