@@ -79,6 +79,14 @@ What a caller can rely on:
 
 ## How it works
 
+![The build, panel by panel](docs/figures/overview_build.png)
+
+![A step, panel by panel](docs/figures/overview_step.png)
+
+The whole method on one small example: 96 particles in a periodic square, the same particles in every panel, from the first build (1 to 5) through a step (6 to 10) to the fallbacks (11) and the optional re-sort (12). Each panel names the file and function that does it and whether it runs on the GPU or the host. The arrays are the library's own: `Mesh<2>` and its stages run on the host (Kokkos Serial) by `scripts/overview_figure.py`, which also draws the figures (PNG and PDF). The 2D mesh stands in for the 3D one: polygons for polyhedra, triangles for tetrahedra, 2-2 flips for 2-3 and 3-2 flips, `polygon_clip` for `shell_voronoi`; the second code line of a panel names the 3D code. The re-sort exists only in `Mesh<3>`; panel 12 numbers the particles along a 2D Hilbert curve instead. The many listed edges in panel 7 come from the tiny box: edges longer than a quarter of the box always go to the exact test.
+
+The control flow of `update()`, with its decisions:
+
 ![Control flow of Mesh::update](docs/figures/flow_mesh.png)
 
 What `update()` does with new positions. Normally the mesh is repaired by exact flips on the GPU, which is the green path. If a repair can't finish, or the first time, the mesh is rebuilt from scratch by clipping, the blue path. Input that can't give an exact mesh is refused with an error.

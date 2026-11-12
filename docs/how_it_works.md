@@ -5,7 +5,13 @@ One section per stage, in the order a call to `voronoi::Mesh<3>::update` runs th
 The construction figures are drawn by `scripts/construction_figures.py` from real point sets. The geometry comes from Python ports of the library's 2D code, checked against `scipy.spatial` (see [design.md](design.md#construction-figures-scriptsconstruction_figurespy)). Most of them are 2D, where a picture is honest. 3D does the same with one more dimension, and the text says where it differs.
 The figures of the control flow, the data, the GPU access patterns and the memory pools (sections 12 to 14) are drawn by `scripts/flow_detail.py`, `data_figure.py`, `access_figures.py` and `memory_figure.py`. Their rules are read from the code of main, their numbers come from [measure_2026-11-10.md](measure_2026-11-10.md), [measurements.md](measurements.md) and the README, and each figure names its source.
 
-The control flow of one `update()`:
+**The whole method on one example.** 96 particles in a periodic square (64 in a dense patch, 32 around it), the same particles in every panel: the build (1 to 5), a step (6 to 10), the fallbacks (11) and the optional re-sort (12). Each panel says what happens, which file and function do it, and whether it runs on the GPU or the host; the sections below take each stage in turn. `scripts/overview_figure.py` runs `Mesh<2>` and its stages on these particles through a small driver (`scripts/overview_mesh2d.cpp`, Kokkos Serial on the host) and draws what the library returns: slots and levels, rings, triangles, the screen's list, the flips, circumcentres, faces, cell lists and sums. The walk of the one clipped cell (panel 3) comes from the Python port of `construction_figures.py`, which the script checks against the library's slots, levels and the ring of every cell. 2D stands in for 3D: polygons for polyhedra, triangles for tetrahedra, 2-2 flips for 2-3 and 3-2 flips, `polygon_clip` and `tri_*` for `shell_voronoi` and `tet_*` (each panel's second code line names the 3D code); `update_cells()` is the same code in both. The re-sort exists only in `Mesh<3>`: panel 12 orders the particles along a 2D Hilbert curve on the library's 2D faces, after many steps of an area-preserving flow. Panel 11's jump leaves one inverted triangle; with `Fallback::host` the host replaces a patch of 11 triangles and the mesh is exact, while the default (`cheapest`) rebuilds, since 96 cells allow no host work (n / 4000). In panel 7 many edges are listed because the box is tiny: an edge longer than a quarter of the box always goes to the exact test. The PDFs next to the PNGs are for print, readable at two journal columns.
+
+![The build, panel by panel](figures/overview_build.png)
+
+![A step, panel by panel](figures/overview_step.png)
+
+The control flow of one `update()`, with its decisions:
 
 ![Control flow of Mesh::update](figures/flow_mesh.png)
 
