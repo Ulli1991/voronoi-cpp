@@ -435,6 +435,25 @@ std::uint64_t faces_checksum(const Mesh& mesh) {
     return h;
 }
 
+// A checksum of each cell's list as the other particles in list order (sorted by them) and the owner bits, so
+// independent of the face numbering: equal checksums mean equal lists as sets. Used by: step (--checksum).
+std::uint64_t lists_checksum(const Mesh& mesh) {
+    const auto start = to_host(mesh.cell_face_start());
+    const auto face = to_host(mesh.cell_face());
+    const auto owner = to_host(mesh.owner());
+    const auto neighbour = to_host(mesh.neighbour());
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](std::uint64_t u) { h = (h ^ u) * 1099511628211ull; };
+    for (int i = 0; i < mesh.particles(); ++i) {
+        mix(static_cast<std::uint64_t>(start(i + 1) - start(i)));
+        for (int a = start(i); a < start(i + 1); ++a) {
+            const int f = Mesh::list_face(face(a));
+            mix(static_cast<std::uint64_t>(owner(f) ^ neighbour(f) ^ i) << 1 | Mesh::list_owned(face(a)));
+        }
+    }
+    return h;
+}
+
 // The `step` mode: build the mesh, then `steps` times advect the points, Mesh::update and update_cells, timing the
 // phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
 // Used by: main.
@@ -557,7 +576,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         if (checksum)
             std::cout << "geometry_checksum: step=" << s << " " << geometry_checksum(mesh)
                       << " cells_checksum=" << cells_checksum(mesh) << " faces_checksum=" << faces_checksum(mesh)
-                      << "\n";
+                      << " lists_checksum=" << lists_checksum(mesh) << "\n";
         if (!verify) continue;
         const Comparison c = compare_with_rebuild(mesh, to_device(points));
         failures += !c.pass();
