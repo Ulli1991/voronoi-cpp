@@ -394,7 +394,7 @@ public:
         Kokkos::Timer timer;
         // Its temporaries live in the spare ring pool (see scratch).
         const auto& spare = rings_.pool[1 - rings_.in_use];
-        const std::size_t table = sizeof(int) * (static_cast<std::size_t>(rings_.renumbered) + rings_.dirty_count);
+        const std::size_t table = sizeof(int) * rings_.kept_ints;
         if (lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
             state_.touched_entries <= n_ / 5 &&
             table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <= spare.extent(0) * sizeof(int)) {

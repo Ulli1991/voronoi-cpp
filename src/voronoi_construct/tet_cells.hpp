@@ -71,13 +71,15 @@ KOKKOS_INLINE_FUNCTION void sort_list(const Ints& face, const Others& other, con
 // The sums of cells(), viewed through this: the lists of the `marked` cells
 // (all if `all`) are sorted and in `face`; an unmarked cell's list is its
 // old list (old_start, old_face) under new numbers (renumber), still sorted.
-template <int D, class X, class Areas, class Ints, class Const, class Marks, class Volume, class Centroids>
+template <int D, class X, class Areas, class Ints, class Const, class Marks, class Volume, class Centroids, class Map>
 struct CellLists {
     X x;
     exact_predicates::BoxN<D> box;
     Areas area, centroid;
     Ints start, face;
-    Const old_start, old_face, renumber, owner, neighbour;
+    Const old_start, old_face;
+    Map renumber;  // old face -> new face (-1: none), a View or tet_mesh::Renumber
+    Const owner, neighbour;
     Marks marked;
     Volume volume;
     Centroids cell_centroid;
@@ -203,21 +205,21 @@ struct CellSumsWarp {
 #endif
 
 // Sort the `marked` lists (all if `all`), then sum every cell.
-template <int D, class ExecSpace, class X, class Others, class Marks>
+template <int D, class ExecSpace, class X, class Others, class Marks, class Renumber>
 void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
                   const Geometry<typename ExecSpace::memory_space, D>& geometry,
                   const CellFaces<typename ExecSpace::memory_space, D>& out,
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& old_start,
-                  const Kokkos::View<const int*, typename ExecSpace::memory_space>& old_face,
-                  const Kokkos::View<const int*, typename ExecSpace::memory_space>& renumber,
+                  const Kokkos::View<const int*, typename ExecSpace::memory_space>& old_face, const Renumber& renumber,
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour, const Others& other,
                   const Marks& marked, bool all, bool sort = true) {
     using Memory = typename ExecSpace::memory_space;
     using Const = Kokkos::View<const int*, Memory>;
     using Ints = Kokkos::View<int*, Memory>;
-    using Lists = CellLists<D, X, typename Geometry<Memory, D>::Areas, Ints, Const, Marks,
-                            Kokkos::View<double*, Memory>, Kokkos::View<double* [D], Kokkos::LayoutRight, Memory>>;
+    using Lists =
+        CellLists<D, X, typename Geometry<Memory, D>::Areas, Ints, Const, Marks, Kokkos::View<double*, Memory>,
+                  Kokkos::View<double* [D], Kokkos::LayoutRight, Memory>, Renumber>;
     const int n = static_cast<int>(out.volume.extent(0));
     const Lists lists{x,        box,      geometry.area, geometry.centroid, out.start, out.face,   old_start,
                       old_face, renumber, owner,         neighbour,         marked,    out.volume, out.centroid,
@@ -294,8 +296,8 @@ void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& b
             face(at_owner) = f;
             face(at_neighbour) = f | side;
         });
-    detail::sort_and_sum<D>(exec, x, box, geometry, out, {}, {}, {}, owner, neighbour, other,
-                            Kokkos::View<const char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(), true);
+    detail::sort_and_sum<D>(exec, x, box, geometry, out, {}, {}, Kokkos::View<const int*, Memory>(), owner, neighbour,
+                            other, Kokkos::View<const char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(), true);
 }
 
 // Bytes of scratch cells_incremental needs after the renumbering table.
@@ -343,15 +345,14 @@ IncrementalLists<typename ExecSpace::memory_space> begin_incremental(
 // The lists and sums from the old lists, D = 2 or 3; l.marked is set for every cell that may have lost or gained a face;
 // renumber(f) is the new number of old face f (-1: none), and ~f in dirty[0, dirty_count) names each new face without one once.
 // With `bit`, new faces get not_owned in the neighbour's entry; kept entries keep theirs.
-template <int D, class ExecSpace, class X, class Dirty>
+template <int D, class ExecSpace, class X, class Renumber, class Dirty>
 void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
                         const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
                         const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
                         const Geometry<typename ExecSpace::memory_space, D>& geometry,
-                        CellFaces<typename ExecSpace::memory_space, D>& out,
-                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& renumber, const Dirty& dirty,
-                        int dirty_count, const IncrementalLists<typename ExecSpace::memory_space>& lists,
-                        bool bit = false) {
+                        CellFaces<typename ExecSpace::memory_space, D>& out, const Renumber& renumber,
+                        const Dirty& dirty, int dirty_count,
+                        const IncrementalLists<typename ExecSpace::memory_space>& lists, bool bit = false) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     using Unmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
@@ -420,16 +421,12 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
                        const FaceRings<typename ExecSpace::memory_space>& rings,
                        const Geometry<typename ExecSpace::memory_space, 3>& geometry,
                        CellFaces<typename ExecSpace::memory_space, 3>& out, char* scratch, bool bit = false) {
-    using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
-    using Unmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
-    using Ints = Kokkos::View<int*, Memory, Unmanaged>;
     const int n = static_cast<int>(out.volume.extent(0)), faces = static_cast<int>(owner.extent(0));
     const int old_faces = rings.renumbered;
-    // After the table and the dirty list (in the spare pool, update_face_rings).
-    const Ints renumber(reinterpret_cast<int*>(scratch), old_faces);
-    const auto lists = detail::begin_incremental<ExecSpace, 3>(exec, renumber.data() + old_faces + rings.dirty_count, n,
-                                                               old_faces, faces, out);
+    // After the renumbering and the dirty list (in the spare pool, update_face_rings).
+    const auto lists = detail::begin_incremental<ExecSpace, 3>(exec, reinterpret_cast<int*>(scratch) + rings.kept_ints,
+                                                               n, old_faces, faces, out);
     const auto marked = lists.marked;
     const auto vertex = mesh.vertex;
     Kokkos::parallel_for(
@@ -438,9 +435,8 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
             if (!alive(t)) return;
             for (int c = 0; c < 4; ++c) marked(vertex(t, c)) = 1;
         });
-    detail::finish_incremental<3>(exec, x, box, owner, neighbour, geometry, out,
-                                  Kokkos::View<const int*, Memory>(renumber), rings.dirty, rings.dirty_count, lists,
-                                  bit);
+    detail::finish_incremental<3>(exec, x, box, owner, neighbour, geometry, out, rings.renumber, rings.dirty,
+                                  rings.dirty_count, lists, bit);
 }
 
 }  // namespace tet_mesh

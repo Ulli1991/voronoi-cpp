@@ -171,9 +171,10 @@ public:
         // (tet_mesh::finish_incremental).
         const bool same_lists = lists_valid_ && updates_since_lists_ == 1 && !patched_;
         if (same_lists && state_.touched_count == 0) {
-            tet_mesh::detail::sort_and_sum<2>(exec_, positions_, box_, geometry_, cells_, {}, {}, {}, owner(), neighbour(),
-                                              View<int*>(), Kokkos::View<const char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(),
-                                              true, false);
+            tet_mesh::detail::sort_and_sum<2>(
+                exec_, positions_, box_, geometry_, cells_, {}, {}, View<const int*>(), owner(), neighbour(),
+                View<int*>(), Kokkos::View<const char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(), true,
+                false);
         } else if (same_lists && state_.touched_count <= n_ / 5) {
             incremental_lists();
         } else {
