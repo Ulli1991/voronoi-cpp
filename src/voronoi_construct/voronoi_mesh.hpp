@@ -103,11 +103,11 @@ std::string not_exact(const Cells& cells, const Positions& positions) {
 
 // The box sides measured to give finite, correct geometry (#32). The double geometry multiplies up to four lengths:
 // exact from 1e-76 to 3e77 with 907 points, from 1e-75 with 262144 (smaller cells), wrong past 1e78. Float face rows
-// hold areas (exact 3e-17 to 1e20). Returns `box`, or throws
+// hold areas (exact 3e-17 to 1e20). Returns a copy of `box`, or throws
 // std::invalid_argument naming the range.
 // Used by: the Mesh<3> and Mesh<2> constructors.
 template <int D>
-const exact_predicates::BoxN<D>& usable(const exact_predicates::BoxN<D>& box, bool float_rows) {
+exact_predicates::BoxN<D> usable(const exact_predicates::BoxN<D>& box, bool float_rows) {
     double low = 1e-75, high = 3e77;
     const char* why = "the double geometry";
     if (float_rows) {
@@ -186,8 +186,7 @@ public:
     // A periodic box of sides box.side[a] (see exact_predicates::Box: sides are rounded to whole grid steps, side[]
     // holds them), or a cube.
     // Sides outside detail::usable are a std::invalid_argument.
-    Mesh(const ExecSpace& exec, const ep::Box& box)
-        : exec_(exec), box_(detail::usable(box, float_rows)) {}
+    Mesh(const ExecSpace& exec, const ep::Box& box) : exec_(exec), box_(detail::usable(box, float_rows)) {}
     Mesh(const ExecSpace& exec, double box) : Mesh(exec, ep::Box(box)) {}
 
     // New positions of all particles, x(i, a) in [0, side[a]) (any device view). Repairs the mesh, or builds it on the
