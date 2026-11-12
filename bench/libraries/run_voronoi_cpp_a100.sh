@@ -22,7 +22,7 @@ nvidia-smi -L >&2
 clocks
 for n in ${SIZES:-2097152 16777216}; do
     for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
-        for path in warp warp-host exact; do
+        for path in ${PATHS:-warp warp-host exact}; do
             "$build/library_bench" build "$data/points/${kind}_${n}.pts" --path=$path --repeats=3 \
                 --volumes="$data/volumes/voronoi-cpp-${path}-a100_${kind}_${n}.f64"
             clocks

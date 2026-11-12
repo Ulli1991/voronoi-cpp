@@ -22,7 +22,7 @@ git -C "$root/src" checkout -q "$tag"
 cmake -S "$root/src" -B "$root/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
     -DCMAKE_C_FLAGS="-march=native" -DCMAKE_CXX_FLAGS="-march=native" -DCMAKE_INSTALL_PREFIX="$root/install" \
     -DBUILD_SHARED_LIBS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5  # CMake 4 refuses its cmake_minimum_required(3.0)
-cmake --build "$root/build" -j16 --target qhullstatic_r
+cmake --build "$root/build" -j"${JOBS:-16}" --target qhullstatic_r
 cmake --install "$root/build" 2>/dev/null || true  # installs headers and what was built
 mkdir -p "$root/install/bin" "$root/install/lib"
 lib=$(find "$root/build" -name 'libqhullstatic_r.a' | head -1)

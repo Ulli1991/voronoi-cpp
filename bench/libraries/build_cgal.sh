@@ -40,7 +40,7 @@ if [ ! -f install/lib64/libtbb.so ] && [ ! -f install/lib/libtbb.so ]; then
     tar xf dl/oneTBB-$tbb_version.tar.gz
     cmake -S oneTBB-$tbb_version -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$root/tbb/install" \
         -DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DTBB_STRICT=OFF
-    cmake --build build -j16
+    cmake --build build -j"${JOBS:-16}"
     cmake --install build
 fi
 tbblib="$root/tbb/install/lib64"

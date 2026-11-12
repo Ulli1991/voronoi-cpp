@@ -41,7 +41,7 @@ cmake -S "$root/src" -B "$root/build" \
     -DGEOGRAM_WITH_HLBFGS=OFF \
     -DGEOGRAM_WITH_LEGACY_NUMERICS=OFF \
     -DCMAKE_INSTALL_PREFIX="$root/install"
-cmake --build "$root/build" -j"${SLURM_CPUS_PER_TASK:-16}"
+cmake --build "$root/build" -j"${JOBS:-${SLURM_CPUS_PER_TASK:-16}}"
 cmake --install "$root/build"
 grep -E "^CMAKE_CXX_FLAGS(_RELEASE)?:" "$root/build/CMakeCache.txt" >&2 || true
 

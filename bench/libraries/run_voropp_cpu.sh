@@ -24,10 +24,15 @@ for n in ${SIZES:-2097152 16777216}; do
     for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         pts="$data/points/${kind}_${n}.pts"
         # voro++ master's container_periodic exits on two points closer than 1e-5 (check_duplicate, common.cc).
-        OMP_NUM_THREADS=1 "$bin/voropp_bench" "$pts" --volumes="$data/volumes/voropp-cpu_${kind}_${n}.f64" ||
-            echo "# FAILED voropp serial $kind $n: exit $?" >&2
+        # Single-core runs at 128^3 only.
+        if [ "$n" = 2097152 ]; then
+            OMP_NUM_THREADS=1 "$bin/voropp_bench" "$pts" --volumes="$data/volumes/voropp-cpu_${kind}_${n}.f64" ||
+                echo "# FAILED voropp serial $kind $n: exit $?" >&2
+        fi
         OMP_NUM_THREADS=72 "$bin/voropp_mt_bench" "$pts" --threads=72 \
             --volumes="$data/volumes/voropp-mt-cpu_${kind}_${n}.f64" || echo "# FAILED voropp mt 72 $kind $n: exit $?" >&2
-        OMP_NUM_THREADS=1 "$bin/voropp_mt_bench" "$pts" --threads=1 || echo "# FAILED voropp mt 1 $kind $n: exit $?" >&2
+        if [ "$n" = 2097152 ]; then
+            OMP_NUM_THREADS=1 "$bin/voropp_mt_bench" "$pts" --threads=1 || echo "# FAILED voropp mt 1 $kind $n: exit $?" >&2
+        fi
     done
 done

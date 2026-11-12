@@ -35,6 +35,7 @@ for n in $sizes; do
         pts="$data/points/${kind}_${n}.pts"
         [ -f "$pts" ] || { echo "# missing $pts" >&2; continue; }
         for t in $threadlist; do
+            [ "$t" = 1 ] && [ "$n" != 2097152 ] && continue  # single-core runs at 128^3 only
             export OMP_NUM_THREADS=$t
             for v in pdel pdel-cells pdel-nonper pdel-nonper-faces; do
                 vol=""

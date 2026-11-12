@@ -27,6 +27,7 @@ declare -A shell=([bluenoise]=4 [jittered]=4 [uniform]=4 [clustered]=8 [halo]=8)
 for n in ${SIZES:-2097152 16777216}; do
     for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         for t in ${THREADS:-72 1}; do
+            [ "$t" = 1 ] && [ "$n" != 2097152 ] && continue  # single-core runs at 128^3 only
             export OMP_NUM_THREADS=$t
             vol=""
             [ "$t" = 72 ] && vol="--volumes=$data/volumes/votess-cpu_${kind}_${n}.f64"

@@ -27,9 +27,14 @@ for n in $sizes; do
     for kind in $inputs; do
         pts="$data/points/${kind}_${n}.pts"
         [ -f "$pts" ] || { echo "# missing $pts" >&2; continue; }
+        # Single-core runs at 128^3 only (the serial periodic class takes about 8 min per call at 256^3).
+        if [ "$n" = 2097152 ]; then
         echo "# $(date +%T) p3dt $kind $n" >&2
         "$bin" p3dt "$pts" --repeats=3 --volumes="$data/volumes/cgal-p3dt-cpu_${kind}_${n}.f64" || echo "# p3dt $kind $n failed: $?" >&2
-        for threads in 72 1; do
+        fi
+        threadlist="72 1"
+        [ "$n" = 2097152 ] || threadlist=72
+        for threads in $threadlist; do
             echo "# $(date +%T) dt3 $threads threads $kind $n" >&2
             vol=""
             [ "$threads" = 72 ] && vol="--volumes=$data/volumes/cgal-dt3-par-cpu_${kind}_${n}.f64"

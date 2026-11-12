@@ -28,7 +28,7 @@ git -C "$root/src-dev" checkout -q "$dev"
 [ -f "$root/src-dev/config.mk" ] || cp "$root/src-dev/config.mk.template" "$root/src-dev/config.mk"
 build() {  # <source tree> <install dir> <flags>
     make -C "$1/src" clean >/dev/null
-    make -C "$1/src" -j16 libvoro++.a CXX=g++ CFLAGS="$3"
+    make -C "$1/src" -j"${JOBS:-16}" libvoro++.a CXX=g++ CFLAGS="$3"
     mkdir -p "$2/include" "$2/lib"
     cp "$1"/src/*.hh "$2/include/"
     cp "$1/src/libvoro++.a" "$2/lib/"

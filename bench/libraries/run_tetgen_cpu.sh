@@ -18,7 +18,7 @@ source /etc/profile.d/modules.sh
 module purge
 module load gcc/14
 data="${1:-/raven/u/uli/libbench-data}"
-sizes="${2:-2097152 16777216}"
+sizes="${2:-2097152}"  # serial: 128^3 only
 bin=/raven/u/uli/libbench-src/tetgen/install/bin
 export OMP_NUM_THREADS=1 OMP_PROC_BIND=spread OMP_PLACES=cores
 declare -A width=([bluenoise]=${WIDTH_bluenoise:-3} [jittered]=${WIDTH_jittered:-3} [uniform]=${WIDTH_uniform:-4} [clustered]=${WIDTH_clustered:-8} [halo]=${WIDTH_halo:-8})
