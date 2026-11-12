@@ -81,6 +81,7 @@ int build(int argc, char** argv) {
     const Box box{};
     const Exec exec;
     std::vector<double> volume(n);
+    const Points host = to_points(frames.frame(0), n);  // the warp-host path's input
     // One build; with copy, its volumes to `volume` (outside the clock: timed runs do not copy).
     std::function<void(bool)> body;
     libbench::Setup s;
@@ -104,7 +105,6 @@ int build(int argc, char** argv) {
                   "points in host memory to cells in host memory: points copied to the device, cell list, grid, cell "
                   "arrays, clipping, then volumes, centroids, per-cell face starts and counts and the whole face pool "
                   "(neighbours, area vectors, face centroids) copied back");
-        const Points host = to_points(frames.frame(0), n);
         body = [&](bool copy) {
             const Positions xd = to_device(host);
             neighbor_search::CellList<Exec> list;

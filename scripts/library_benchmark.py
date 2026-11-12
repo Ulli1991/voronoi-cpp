@@ -64,6 +64,17 @@ def summarise(records):
         out[g] = dict(median=statistics.median(rates), lo=min(rates), hi=max(rates), runs=len(rates),
                       bytes_per_cell=max(bpc) if bpc else None, jobs=sorted({r["job"] for r in rs}),
                       record=rs[0])
+    # A driver that times "X" and then "X + volumes" in one process starts the second with the allocator's memory of
+    # the first: its host high-water mark above the resident set at start is then too low (CGAL's padded Delaunay +
+    # volumes: 64 B/cell against 675 for the Delaunay alone). The "+ volumes" row reports at least its base row's peak.
+    for g, v in out.items():
+        k, phase, i, n = g
+        if "+" not in k[1] or v["bytes_per_cell"] is None:
+            continue
+        for h, w in out.items():
+            if h[1:] == (phase, i, n) and h[0][0] == k[0] and h[0][2] == k[2] and h[0][3] == k[3] and "+" not in h[0][1] \
+                    and w["bytes_per_cell"] is not None and k[1].startswith(h[0][1].split(" (")[0].split(";")[0]):
+                v["bytes_per_cell"] = max(v["bytes_per_cell"], w["bytes_per_cell"])
     return out
 
 
@@ -189,21 +200,32 @@ def pick(summary, lib, variant, device, threads):
     return None
 
 
+# Moving-mesh step rates shown in the third panel: (library, variant prefix, device prefix, threads, label).
+FIGURE_STEP = [
+    ("voronoi-cpp", "moving-mesh step", "A100", 1, "voronoi-cpp, A100"),
+    ("peclet-voro", "moving step", "A100", 1, "peclet-voro, A100"),
+    ("voronoi-cpp", "moving-mesh step", "2x Xeon", 72, "voronoi-cpp, 72 cores"),
+    ("peclet-voro", "moving step", "2x Xeon", 72, "peclet-voro, 72 cores"),
+    ("CGAL Periodic_3", "moving mesh: full rebuild", "2x Xeon", 1, "CGAL periodic, rebuild, 1 core"),
+    ("CGAL Periodic_3", "moving mesh: remove + insert", "2x Xeon", 1, "CGAL periodic, move, 1 core"),
+]
+
+
 def figure(summary, pub, path):
     figstyle.apply_style()
-    fig, axes = plt.subplots(1, 2, figsize=(2 * figstyle.FIGSIZE[0], 1.25 * figstyle.FIGSIZE[1]), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(3 * figstyle.FIGSIZE[0], 1.3 * figstyle.FIGSIZE[1]),
+                             gridspec_kw=dict(width_ratios=[1, 1, 0.55]))
     colours = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     markers = "osD^vP*Xh<>"
+    open_markers = "o^sDvp<>h"
     for ax, rows, published_rows, title in ((axes[0], FIGURE_GPU, FIGURE_PUBLISHED_GPU, "one A100"),
-                                            (axes[1], FIGURE_CPU, FIGURE_PUBLISHED_CPU, "one CPU node (72 cores)")):
+                                            (axes[1], FIGURE_CPU, FIGURE_PUBLISHED_CPU, "one CPU node")):
         figstyle.decorate(ax)
         xs = list(range(len(INPUTS)))
         j = 0
         for lib, variant, device, threads, label in rows:
             got = pick(summary, lib, variant, device, threads)
-            if not got:
-                continue
-            pts = [(x, got[i]) for x, i in zip(xs, INPUTS) if got[i]]
+            pts = [(x, got[i]) for x, i in zip(xs, INPUTS) if got and got[i]]
             if not pts:
                 continue
             c, m = colours[j % len(colours)], markers[j % len(markers)]
@@ -217,20 +239,47 @@ def figure(summary, pub, path):
         for code, n, dist in published_rows:
             for p in pub:
                 if p["code"].startswith(code) and p["n"] == n and dist in p["distribution"]:
-                    c = colours[(j + k) % len(colours)]
-                    ax.plot([x0 + 0.1 * (k - (len(published_rows) - 1) / 2)], [float(p["rate_Mcells_s"])],
-                            marker=markers[(j + k) % len(markers)], markerfacecolor="none", markeredgecolor=c,
+                    ax.plot([x0 + 0.12 * (k - (len(published_rows) - 1) / 2)], [float(p["rate_Mcells_s"])],
+                            marker=open_markers[k % len(open_markers)], markerfacecolor="none", markeredgecolor="0.25",
                             markeredgewidth=1.6, markersize=9, linestyle="none",
-                            label=f"{p['code'].split(' (')[0]}, {p['hardware']} (published)")
+                            label=f"{p['code'].split(' (')[0]}, {short_hardware(p['hardware'])}, n {float(n):.0e} (published)")
                     k += 1
                     break
         ax.set_xticks(xs + [x0])
         ax.set_xticklabels(INPUTS + ["published"])
         ax.set_yscale("log")
+        ax.set_ylim(0.01, 3e4)
         ax.set_xlabel(f"input, {SIZES[0]:,} cells; {title}")
-        figstyle.legend(ax, loc="upper right", fontsize=8.5)
+        figstyle.legend(ax, loc="upper right", fontsize=8.5, ncol=2)
     axes[0].set_ylabel("M cells/s, build with cell volumes")
+    ax = axes[2]
+    figstyle.decorate(ax)
+    for k, (lib, variant, device, threads, label) in enumerate(FIGURE_STEP):
+        got = None
+        for g, s in summary.items():
+            if g[1] == "step" and g[0][0].startswith(lib) and g[0][1].startswith(variant) and \
+                    g[0][2].startswith(device) and g[0][3] == threads:
+                got = s
+        if not got:
+            continue
+        ax.errorbar([k], [got["median"]], yerr=[[got["median"] - got["lo"]], [got["hi"] - got["median"]]],
+                    color=colours[k % len(colours)], marker=markers[k % len(markers)], markersize=8, linestyle="none",
+                    linewidth=2.2, label=label)
+    ax.set_yscale("log")
+    ax.set_ylim(0.001, 3e4)
+    ax.set_xlim(-0.7, len(FIGURE_STEP) - 0.3)
+    ax.set_xticks([])
+    ax.set_ylabel("M cells/s, moving step (0.03 spacings)")
+    ax.set_xlabel("jittered, 2,097,152 cells")
+    figstyle.legend(ax, loc="upper right", fontsize=8.5)
+    fig.tight_layout()
     fig.savefig(path)
+
+
+def short_hardware(h):
+    for a, b in (("NVIDIA ", ""), ("GeForce ", ""), ("Tesla ", ""), ("2x Intel Xeon ", "2x Xeon "), ("-40GB", "")):
+        h = h.replace(a, b)
+    return h.split(" 1.7 GHz")[0].split(" 2.40 GHz")[0]
 
 
 def main():
