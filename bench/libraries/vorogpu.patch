@@ -1,0 +1,107 @@
+diff --git a/knearests.cu b/knearests.cu
+index 04d508f..6020f9f 100644
+--- a/knearests.cu
++++ b/knearests.cu
+@@ -320,11 +320,11 @@ kn_problem *kn_prepare(float3 *points, int numpoints) {
+     memory_used += bufsize;
+     gpuMallocNMemset((void **)&kn->d_stored_points, 0x00, bufsize); 
+ 
+-    bufsize += kn->allocated_points*_K_*sizeof(int);
++    bufsize = kn->allocated_points*_K_*sizeof(int); // libbench: was +=, over-allocating by numpoints float3
+     memory_used += bufsize;
+     gpuMallocNMemset((void **)&kn->d_knearests, 0xFF, bufsize); 
+ 
+-    bufsize += kn->allocated_points*sizeof(int); // keep the track of reordering
++    bufsize = kn->allocated_points*sizeof(int); // keep the track of reordering (libbench: was +=, over-allocating by (K+3) ints per point)
+     memory_used += bufsize;
+     gpuMallocNMemset((void **)&kn->d_permutation, 0xFF, bufsize); 
+ 
+diff --git a/params.h b/params.h
+index 5a12f01..fdc40cc 100644
+--- a/params.h
++++ b/params.h
+@@ -1,4 +1,6 @@
++#ifndef PRESET // libbench: settable with -DPRESET
+ #define PRESET 2
++#endif
+ 
+ #if 0==PRESET               // conservative settings (white noise)
+ #define VORO_BLOCK_SIZE 16
+diff --git a/stopwatch.h b/stopwatch.h
+new file mode 100644
+index 0000000..6c73034
+--- /dev/null
++++ b/stopwatch.h
+@@ -0,0 +1,46 @@
++#ifndef _STOPWATCH_H_
++#define _STOPWATCH_H_
++
++#include <iostream>
++#if defined(__linux__)
++#   include <sys/times.h>
++#elif defined(WIN32) || defined(_WIN64)
++#   include <windows.h>
++#endif
++
++class Stopwatch {
++public:
++    Stopwatch(const char* taskname) : taskname_(taskname), start_(now()), last_tick_(now()) {
++        //std::cerr << taskname_ << "..." << std::endl;
++    }
++
++    ~Stopwatch() {
++        double elapsed = now() - start_;
++        std::cerr << taskname_ << ": " << elapsed << "s" << std::endl;
++    }
++
++    void tick(const char* tickname="tick") {
++        double elapsed = now() - start_;
++        std::cerr << taskname_ << "==>" << tickname << " :  delta = " << now() - last_tick_ << "s    sum= " << elapsed << std::endl;
++        last_tick_ = now();
++    }
++
++    static double now() {
++#if defined(__linux__)
++        tms now_tms;
++        return double(times(&now_tms)) / 100.0;
++#elif defined(WIN32) || defined(_WIN64)
++        return double(GetTickCount()) / 1000.0;
++#else
++        return 0.0;
++#endif
++    }
++
++private:
++    const char* taskname_;
++    double start_;
++    double last_tick_;
++};
++
++#endif // _STOPWATCH_H_
++
+diff --git a/voronoi.cu b/voronoi.cu
+index f922984..ef77919 100644
+--- a/voronoi.cu
++++ b/voronoi.cu
+@@ -620,11 +620,13 @@ __host__ __device__ void compute_voro_cell(
+     ConvexCell cc(seed, pts, &(gpu_stat[seed]));
+ 
+ 	//clip by tet
++	if (tet >= 0) { // libbench: tet < 0 = no tetrahedron, the cell in the box [-0.1, 1000.1]^3 (the 2018 paper)
+ 	float4 P0 = make_float4(tet_pts[4 * tet_indices[tet * 4]], tet_pts[4 * tet_indices[tet * 4] + 1], tet_pts[4 * tet_indices[tet * 4] + 2], tet_pts[4 * tet_indices[tet * 4] + 4]);
+ 	float4 P1 = make_float4(tet_pts[4 * tet_indices[tet * 4 + 1]], tet_pts[4 * tet_indices[tet * 4 + 1] + 1], tet_pts[4 * tet_indices[tet * 4 + 1] + 2], tet_pts[4 * tet_indices[tet * 4 + 1] + 4]);
+ 	float4 P2 = make_float4(tet_pts[4 * tet_indices[tet * 4 + 2]], tet_pts[4 * tet_indices[tet * 4 + 2] + 1], tet_pts[4 * tet_indices[tet * 4 + 2] + 2], tet_pts[4 * tet_indices[tet * 4 + 2] + 4]);
+ 	float4 P3 = make_float4(tet_pts[4 * tet_indices[tet * 4 + 3]], tet_pts[4 * tet_indices[tet * 4 + 3] + 1], tet_pts[4 * tet_indices[tet * 4 + 3] + 2], tet_pts[4 * tet_indices[tet * 4 + 3] + 4]);
+ 	cc.clip_tet_from_points(P0, P1, P2, P3);
++	}
+ 
+     FOR(v, _K_) {
+ 		unsigned int z = neigs[_K_ * seed + v];
+@@ -652,6 +654,7 @@ __global__ void voro_cell_test_GPU_param(float * pts, int nbpts, int nbtets, uns
+ 	int seed = blockIdx.x * blockDim.x + threadIdx.x;
+ 
+ 	if (seed < nbpts){
++		if (nbtets == 0) compute_voro_cell(pts, nbpts, neigs, gpu_stat, out_pts, seed, -1, tet_indices, tet_pts); // libbench
+ 		for (int tet = 0; tet < nbtets; ++tet) {
+ 			compute_voro_cell(pts, nbpts, neigs, gpu_stat, out_pts, seed, tet, tet_indices, tet_pts);
+ 		}

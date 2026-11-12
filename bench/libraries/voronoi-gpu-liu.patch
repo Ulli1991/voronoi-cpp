@@ -1,0 +1,32 @@
+diff --git a/knearests.cu b/knearests.cu
+index 04d508f..6020f9f 100644
+--- a/knearests.cu
++++ b/knearests.cu
+@@ -320,11 +320,11 @@ kn_problem *kn_prepare(float3 *points, int numpoints) {
+     memory_used += bufsize;
+     gpuMallocNMemset((void **)&kn->d_stored_points, 0x00, bufsize); 
+ 
+-    bufsize += kn->allocated_points*_K_*sizeof(int);
++    bufsize = kn->allocated_points*_K_*sizeof(int); // libbench: was +=, over-allocating by numpoints float3
+     memory_used += bufsize;
+     gpuMallocNMemset((void **)&kn->d_knearests, 0xFF, bufsize); 
+ 
+-    bufsize += kn->allocated_points*sizeof(int); // keep the track of reordering
++    bufsize = kn->allocated_points*sizeof(int); // keep the track of reordering (libbench: was +=, over-allocating by (K+3) ints per point)
+     memory_used += bufsize;
+     gpuMallocNMemset((void **)&kn->d_permutation, 0xFF, bufsize); 
+ 
+diff --git a/params.h b/params.h
+index 764e714..6a17f2e 100644
+--- a/params.h
++++ b/params.h
+@@ -1,7 +1,9 @@
+ #define KNEARESTS_MIN_N 14000
+ #define WIN_RANDOM(x) ((long long)(((double)rand() * x) / RAND_MAX)) // random int in [0, x]
+ 
++#ifndef PRESET // libbench: settable with -DPRESET
+ #define PRESET 0
++#endif
+ 
+ #if 0==PRESET               // conservative settings (white noise)
+ #define VORO_BLOCK_SIZE 16

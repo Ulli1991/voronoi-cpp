@@ -90,12 +90,20 @@ int main(int argc, char** argv) {
         }
         std::vector<double> sorted = err;
         std::sort(sorted.begin(), sorted.end());
+        // A missing sampled cell makes the error infinite: written as null (JSON has no inf), counted in the columns.
+        auto number = [](double x) {
+            char b[32];
+            if (!std::isfinite(x)) return std::string("null");
+            std::snprintf(b, sizeof b, "%.3e", x);
+            return std::string(b);
+        };
         std::printf(
             "{\"volumes\":\"%s\",\"points\":\"%s\",\"n\":%llu,\"sample\":%d,\"missing_or_nonpositive\":%lld,"
-            "\"sum_minus_box\":%.3e,\"median_rel_err\":%.3e,\"max_rel_err\":%.3e,\"cells_rel_err_above_1e-12\":%d,"
+            "\"sum_minus_box\":%s,\"median_rel_err\":%s,\"max_rel_err\":%s,\"cells_rel_err_above_1e-12\":%d,"
             "\"above_1e-6\":%d,\"above_1e-2\":%d}\n",
-            argv[f], points.c_str(), static_cast<unsigned long long>(n), sample, missing, double(sum - 1.0L),
-            sorted[sample / 2], sorted.back(), above12, above6, above2);
+            argv[f], points.c_str(), static_cast<unsigned long long>(n), sample, missing,
+            number(double(sum - 1.0L)).c_str(), number(sorted[sample / 2]).c_str(), number(sorted.back()).c_str(),
+            above12, above6, above2);
     }
     return 0;
 }
