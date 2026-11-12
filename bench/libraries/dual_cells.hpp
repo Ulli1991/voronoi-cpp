@@ -79,6 +79,19 @@ Cells build(const Tets& T, std::uint64_t n, const Position& position) {
             for (int a = 0; a < 4; ++a)
                 if (T.owner(t, a)) inc[at[T.cell(t, a)]++] = t * 4 + a;
     }
+    // Circumcentre of every tetrahedron once, relative to its corner 0 (parallel); flat ones flagged.
+    std::vector<D3> centre(m);
+    std::vector<unsigned char> flat(m, 0);
+#pragma omp parallel for schedule(static)
+    for (std::int64_t t = 0; t < std::int64_t(m); ++t) {
+        double r[3];
+        D3 q[3];
+        for (int b = 1; b < 4; ++b) {
+            T.relative(std::uint64_t(t), 0, b, r);
+            q[b - 1] = {r[0], r[1], r[2]};
+        }
+        flat[t] = !tet_centre(q[0], q[1], q[2], centre[t]);
+    }
     out.volume.assign(n, 0.0);
     out.centroid.assign(3 * n, 0.0);
     out.face_start.assign(n + 1, 0);
@@ -112,6 +125,10 @@ Cells build(const Tets& T, std::uint64_t n, const Position& position) {
             for (std::uint32_t e = count[i]; e < count[i + 1]; ++e) {
                 const std::uint64_t t = inc[e] / 4;
                 const int a = int(inc[e] % 4);
+                if (flat[t]) {
+                    ++part.flat;
+                    continue;
+                }
                 int other[3], o = 0;
                 for (int b = 0; b < 4; ++b)
                     if (b != a) other[o++] = b;
@@ -121,27 +138,30 @@ Cells build(const Tets& T, std::uint64_t n, const Position& position) {
                     T.relative(t, a, b, r);
                     p[b] = {r[0], r[1], r[2]};
                 }
-                D3 c;
-                if (!tet_centre(p[other[0]], p[other[1]], p[other[2]], c)) {
-                    ++part.flat;
-                    continue;
-                }
-                for (int b : other) {
+                D3 c = centre[t];  // relative to corner 0; corner 0 relative to corner a is p[0]
+                if (a != 0) c = {c.x + p[0].x, c.y + p[0].y, c.z + p[0].z};
+                // The three faces at corner a: circumcentres f[pair], pair (other[u], other[v]).
+                D3 f[3];
+                f[0] = tri_centre(p[other[0]], p[other[1]]);
+                f[1] = tri_centre(p[other[0]], p[other[2]]);
+                f[2] = tri_centre(p[other[1]], p[other[2]]);
+                auto face_of = [&](int u, int v) { return u + v == 1 ? f[0] : (u + v == 2 ? f[1] : f[2]); };
+                for (int u = 0; u < 3; ++u) {
+                    const int b = other[u];
                     const D3 mid = {0.5 * p[b].x, 0.5 * p[b].y, 0.5 * p[b].z};
                     D3 face{0, 0, 0};
-                    for (int k : other) {
-                        if (k == b) continue;
-                        const int l = 6 - a - b - k;
+                    for (int v = 0; v < 3; ++v) {
+                        if (v == u) continue;
+                        const int k = other[v], l = other[3 - u - v];
                         const double orient = dot(p[b], cross(p[k], p[l]));
-                        const D3 f = tri_centre(p[b], p[k]);
-                        const D3 half = cross(f - mid, c - mid);
+                        const D3 fc = face_of(u, v);
+                        const D3 half = cross(fc - mid, c - mid);
                         const double s = orient > 0 ? 0.5 : -0.5;
                         face = {face.x + s * half.x, face.y + s * half.y, face.z + s * half.z};
-                        const double v = s * 2 * dot(mid, cross(f, c)) / 6;  // signed simplex (0, mid, f, c)
-                        volume += v;
-                        const double w = v / 4;
-                        moment = {moment.x + w * (mid.x + f.x + c.x), moment.y + w * (mid.y + f.y + c.y),
-                                  moment.z + w * (mid.z + f.z + c.z)};
+                        const double w = s * dot(mid, half) / 3;  // signed simplex (0, mid, fc, c): mid . A / 3
+                        volume += w;
+                        moment = {moment.x + 0.25 * w * (mid.x + fc.x + c.x), moment.y + 0.25 * w * (mid.y + fc.y + c.y),
+                                  moment.z + 0.25 * w * (mid.z + fc.z + c.z)};
                     }
                     const std::uint64_t key = T.key(t, a, b);
                     std::size_t slot = 0;
