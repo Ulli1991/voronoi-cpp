@@ -4,6 +4,7 @@
 #include "device_memory.hpp"
 #include "support.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -407,6 +408,33 @@ std::uint64_t geometry_checksum(const Mesh& mesh) {
     return h;
 }
 
+// A checksum of the faces sorted by (owner, neighbour), so independent of the face numbering (which follows the
+// repair's slot order): the pair and the bits of area and centroid. Used by: step (--checksum).
+std::uint64_t faces_checksum(const Mesh& mesh) {
+    const auto owner = to_host(mesh.owner());
+    const auto neighbour = to_host(mesh.neighbour());
+    const auto area = to_host(mesh.area());
+    const auto centroid = to_host(mesh.face_centroid());
+    std::vector<int> order(mesh.faces());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        return std::make_pair(owner(a), neighbour(a)) < std::make_pair(owner(b), neighbour(b));
+    });
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](std::uint64_t u) { h = (h ^ u) * 1099511628211ull; };
+    auto bits = [](double d) {
+        std::uint64_t u;
+        std::memcpy(&u, &d, sizeof u);
+        return u;
+    };
+    for (const int f : order) {
+        mix(static_cast<std::uint64_t>(owner(f)) << 32 | static_cast<std::uint32_t>(neighbour(f)));
+        for (int a = 0; a < 3; ++a) mix(bits(area(f, a)));
+        for (int a = 0; a < 3; ++a) mix(bits(centroid(f, a)));
+    }
+    return h;
+}
+
 // The `step` mode: build the mesh, then `steps` times advect the points, Mesh::update and update_cells, timing the
 // phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
 // Used by: main.
@@ -526,7 +554,9 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
 #if defined(VORONOI_MEASURE)
         if (measure) measure_bench::step(mesh, sets_before, s);
 #endif
-        if (checksum) std::cout << "geometry_checksum: step=" << s << " " << geometry_checksum(mesh) << "\n";
+        if (checksum)
+            std::cout << "geometry_checksum: step=" << s << " " << geometry_checksum(mesh)
+                      << " cells_checksum=" << cells_checksum(mesh) << " faces_checksum=" << faces_checksum(mesh) << "\n";
         if (!verify) continue;
         const Comparison c = compare_with_rebuild(mesh, to_device(points));
         failures += !c.pass();
