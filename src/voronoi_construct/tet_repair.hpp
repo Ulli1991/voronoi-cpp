@@ -302,7 +302,6 @@ void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity
     Kokkos::resize(s.dirty, capacity);
     Kokkos::resize(s.listed, capacity);
     Kokkos::resize(s.lock, capacity);
-    Kokkos::resize(s.free_slots, capacity);
 }
 
 // Snapped positions and positive orientation of every tetrahedron; allocates the bookkeeping for `capacity`
@@ -322,7 +321,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
     s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", 0);
     s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", 0);
     s.lock = Kokkos::View<unsigned long long*, Memory>("tet_repair_lock", 0);
-    s.free_slots = Kokkos::View<int*, Memory>("tet_repair_free", 0);
+    s.free_slots = Kokkos::View<int*, Memory>("tet_repair_free", capacity / 64 + 1024);  // grows in repair
     reserve(m, s, capacity);
     s.work = Kokkos::View<int* [2], Memory>("tet_repair_work", work_capacity);
     s.plans = Kokkos::View<detail::Packed*, Memory>(
@@ -716,9 +715,12 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         s.count = Kokkos::min(count + host(counter::growth), capacity);
         const int freed_count = host(counter::freed);
         const int base = s.free_count;
+        // The free list holds only the slots 3->2 flips freed: sized to its use, not to the tetrahedra.
+        if (base + freed_count > static_cast<int>(s.free_slots.extent(0)))
+            Kokkos::resize(s.free_slots, base + freed_count + (base + freed_count) / 4);
+        const auto to_free = s.free_slots;
         Kokkos::parallel_for(
-            "tet_repair::release", Range(exec, 0, freed_count),
-            KOKKOS_LAMBDA(int i) { free_slots(base + i) = freed(i); });
+            "tet_repair::release", Range(exec, 0, freed_count), KOKKOS_LAMBDA(int i) { to_free(base + i) = freed(i); });
         s.free_count += freed_count;
         stats.flips23 += host(counter::flips23);
         stats.flips32 += host(counter::flips32);

@@ -290,6 +290,7 @@ public:
                 report.start = tet_start::build(exec_, grid, cells, tets_);
             }
             ring_entries_ = cells.capacity();
+            list_ = neighbor_search::CellList<ExecSpace>{};  // index() builds it again for the next clipping
             if (!report.start.exact) {
                 const std::string why = detail::not_exact(cells, positions_);
                 forget();
