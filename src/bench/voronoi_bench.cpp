@@ -13,6 +13,9 @@
 #if defined(VORONOI_MEASURE)
 #include "measure.hpp"
 #endif
+#if defined(KOKKOS_ENABLE_CUDA)
+#include <nvtx3/nvToolsExt.h>
+#endif
 
 namespace {
 
@@ -56,6 +59,52 @@ struct KernelTimes {
         std::sort(rows.rbegin(), rows.rend());
         for (const auto& [ms, label] : rows)
             std::cout << "kernel: " << label << " ms_per_step=" << ms << " Mcells_s=" << n / ms / 1e3 << "\n";
+    }
+};
+
+// --nvtx: an NVTX range per kernel label and per phase, so Nsight names and filters kernels by label.
+// Used by: main (start()), rebuild and step (Phase).
+struct Nvtx {
+    static inline bool on = false;
+    static void push(const char* label) {
+#if defined(KOKKOS_ENABLE_CUDA)
+        if (on) nvtxRangePushA(label);
+#else
+        (void)label;
+#endif
+    }
+    static void pop() {
+#if defined(KOKKOS_ENABLE_CUDA)
+        if (on) nvtxRangePop();
+#endif
+    }
+    static void begin(const char* label, std::uint32_t, std::uint64_t*) { push(label); }
+    static void end(std::uint64_t) { pop(); }
+    // Labels need Kokkos Tools callbacks, which fence every kernel; --nvtx=phases leaves them out (nsys counts).
+    static void start(bool labels) {
+        on = true;
+        if (!labels) return;
+        namespace E = Kokkos::Tools::Experimental;
+        E::set_begin_parallel_for_callback(begin);
+        E::set_end_parallel_for_callback(end);
+        E::set_begin_parallel_scan_callback(begin);
+        E::set_end_parallel_scan_callback(end);
+        E::set_begin_parallel_reduce_callback(begin);
+        E::set_end_parallel_reduce_callback(end);
+    }
+};
+
+// A phase range (fenced at both ends) while --nvtx is on. Used by: rebuild, step.
+struct Phase {
+    explicit Phase(const std::string& name) {
+        if (!Nvtx::on) return;
+        Kokkos::fence();
+        Nvtx::push(name.c_str());
+    }
+    ~Phase() {
+        if (!Nvtx::on) return;
+        Kokkos::fence();
+        Nvtx::pop();
     }
 };
 
@@ -121,7 +170,10 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     neighbor_search::CellList<Exec> list;
     const double width = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
     neighbor_search::configure(list, n, box, width);
-    const double build_ms = median_ms(repeats, [&] { neighbor_search::build(exec, list, x); });
+    const double build_ms = median_ms(repeats, [&] {
+        const Phase phase("list");
+        neighbor_search::build(exec, list, x);
+    });
     const auto grid = shell_voronoi::make_grid(list);
     DeviceMemory<Memory>::phase("positions_and_cell_list", n);
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0] << ","
@@ -129,7 +181,10 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
               << list.tiles[2] << " grid=" << (1 << list.levels) << "^3_per_tile repeats=" << repeats << "\n";
     int failures = 0;
     shell_voronoi::Cells<Memory> cells(n, true);
-    const double construct_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
+    const double construct_ms = median_ms(repeats, [&] {
+        const Phase phase("clip");
+        shell_voronoi::construct_warp(exec, grid, cells);
+    });
     std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
               << " construct_Mcells_s=" << n / construct_ms / 1e3
               << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
@@ -231,8 +286,14 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     Mesh mesh(exec, box);
     {
         voronoi::Timings t;
-        const voronoi::Report r = mesh.update(x, &t);
-        mesh.update_cells(&t);
+        const voronoi::Report r = [&] {
+            const Phase phase("start");
+            return mesh.update(x, &t);
+        }();
+        {
+            const Phase phase("start_cells");
+            mesh.update_cells(&t);
+        }
         std::cout << "mesh: build_ms=" << t.build << " geometry_ms=" << t.geometry << " cells_ms=" << t.cells
                   << " total_ms=" << t.build + t.geometry << " faces=" << r.faces
                   << " faces_per_cell=" << double(r.faces) / n << " cells_checksum=" << cells_checksum(mesh) << "\n";
@@ -252,8 +313,14 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         exec.fence();
         if (s == 2) KernelTimes::total.clear();
         voronoi::Timings t;
-        const voronoi::Report r = mesh.update(x, &t);
-        mesh.update_cells(&t);
+        const voronoi::Report r = [&] {
+            const Phase phase("s" + std::to_string(s) + "_update");
+            return mesh.update(x, &t);
+        }();
+        {
+            const Phase phase("s" + std::to_string(s) + "_cells");
+            mesh.update_cells(&t);
+        }
         // step_ms: the device step (repair, geometry) without a fallback; cells_ms (face lists, volumes, centroids) is on top.
         const double step_ms = t.repair + t.geometry;
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
@@ -281,6 +348,8 @@ int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     if (has_flag(argc, argv, "--memory")) DeviceMemory<Memory>::start();
     if (has_flag(argc, argv, "--kernels")) KernelTimes::start();
+    if (has_flag(argc, argv, "--nvtx") || has_flag(argc, argv, "--nvtx=phases"))
+        Nvtx::start(has_flag(argc, argv, "--nvtx"));
     const auto args = positional(argc, argv);
     if (args.size() >= 3 && args[0] == "rebuild")
         return rebuild(args, box_flag(argc, argv), !has_flag(argc, argv, "--no-check"),
@@ -292,6 +361,7 @@ int main(int argc, char** argv) {
                  "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure]\n"
+                 "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }
