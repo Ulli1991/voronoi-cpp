@@ -24,7 +24,9 @@ constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
 constexpr int min_blocks_per_sm = 5;
 constexpr std::uint8_t none = 255;
-static_assert(max_planes <= max_vertices, "Polyhedron::crossing is the scratch of Polyhedron::first");
+static_assert(max_planes <= max_vertices, "Polyhedron::crossing is the scratch of the least next neighbour per plane");
+static_assert(max_vertices * sizeof(double) >= 2 * max_planes * sizeof(std::uint32_t),
+              "Polyhedron::side is the ring order's scratch");
 
 // One warp's polyhedron. Corners and adjacency hold three 8-bit indices each: corner k is a plane,
 // adjacency k the vertex across the edge from corner k to k + 1. A cut reuses free slots; a 64-bit
@@ -603,22 +605,29 @@ struct Kernel {
             if (plane >= box_planes && plane < planes) c.neighbour[plane] = grid.order(c.neighbour[plane]);
         }
 
-        // Faces: lane l walks planes l and l + 32 around their vertices.
-        // Each face's walk starts at a fixed vertex, so the bits of area and centroid are fixed (#46): that of the last
-        // (k, e) below naming the plane, lowest lane first, the vertex the plain stores of before left on the A100.
-        std::uint32_t* const key = c.crossing;
+        // Faces: lane l walks planes l and l + 32, each from the vertex whose next neighbour has the least id. The
+        // ring starts at that neighbour, and the bits of area and centroid do not depend on slots (#46).
+        std::uint32_t* const least = c.crossing;
         for (int k = 0; k < per_lane; ++k)
-            if (l + k * lanes < planes) key[l + k * lanes] = 0;
+            if (l + k * lanes < planes) {
+                least[l + k * lanes] = ~0u;
+                c.first[l + k * lanes] = none;
+            }
         __syncwarp(all_lanes);
         for (int k = 0; k < per_lane; ++k)
-            if (live >> (l + k * lanes) & 1)
+            if (live >> (l + k * lanes) & 1) {
+                const std::uint32_t corner = c.corner[l + k * lanes];
                 for (int e = 0; e < 3; ++e)
-                    atomicMax(&key[byte(c.corner[l + k * lanes], e)], std::uint32_t((3 * k + e) << 5 | (31 - l)) + 1);
+                    atomicMin(&least[byte(corner, e)], std::uint32_t(c.neighbour[byte(corner, (e + 2) % 3)]));
+            }
         __syncwarp(all_lanes);
-        for (int k = 0; k < per_lane; ++k) {
-            const int plane = l + k * lanes, won = int(key[plane]) - 1;
-            if (plane < planes) c.first[plane] = won < 0 ? none : 31 - (won & 31) + (won >> 5) / 3 * lanes;
-        }
+        for (int k = 0; k < per_lane; ++k)
+            if (live >> (l + k * lanes) & 1) {
+                const std::uint32_t corner = c.corner[l + k * lanes];
+                for (int e = 0; e < 3; ++e)
+                    if (std::uint32_t(c.neighbour[byte(corner, (e + 2) % 3)]) == least[byte(corner, e)])
+                        c.first[byte(corner, e)] = static_cast<std::uint8_t>(l + k * lanes);
+            }
         __syncwarp(all_lanes);
 
         double volume = 0;
@@ -692,14 +701,30 @@ struct Kernel {
         if (status == ok && !(volume > 0)) status = degenerate;
 
         // The owned faces go to one block per cell that lane 0 claims: with rings, each face as neighbour, ring length
-        // and ring (Cells::rings), otherwise neighbour, area and centroid.
+        // and ring (Cells::rings) in increasing neighbour id, otherwise neighbour, area and centroid in plane order.
         int fits = 1;
         long long block = 0;
+        int ring_offset[per_lane] = {};
         if constexpr (with_rings) {
             int need = 0;
             for (int m = 0; m < owned_here; ++m) need += 2 + owned_length[m];
             int total = 0;
-            offset = exclusive_scan(need, total);
+            exclusive_scan(need, total);
+            // A face's ring follows those of the owned faces with smaller neighbours.
+            auto* const face_neighbour = reinterpret_cast<std::uint32_t*>(c.side);
+            auto* const face_need = face_neighbour + max_planes;
+            for (int m = 0; m < per_lane; ++m)
+                if (m < owned_here) {
+                    face_neighbour[offset + m] = std::uint32_t(c.neighbour[owned_plane[m]]);
+                    face_need[offset + m] = 2 + owned_length[m];
+                }
+            __syncwarp(all_lanes);
+            for (int m = 0; m < per_lane; ++m)
+                if (m < owned_here) {
+                    const std::uint32_t mine = std::uint32_t(c.neighbour[owned_plane[m]]);
+                    for (int g = 0; g < owned; ++g)
+                        if (face_neighbour[g] < mine) ring_offset[m] += face_need[g];
+                }
             if (l == 0 && status == ok) {
                 fits = claim_rings(out, id, total);
                 block = out.ring_start(id);
@@ -720,10 +745,12 @@ struct Kernel {
         }
         if (__shfl_sync(all_lanes, fits, 0) == 0) status = face_overflow;
         if (status == ok) {
-            long long at = __shfl_sync(all_lanes, block, 0) + offset;
+            const long long base = __shfl_sync(all_lanes, block, 0);
+            long long at = base + offset;
             for (int m = 0; m < owned_here; ++m) {
                 const int plane = owned_plane[m];
                 if constexpr (with_rings) {
+                    at = base + ring_offset[m];
                     out.rings(at) = c.neighbour[plane];
                     out.rings(at + 1) = owned_length[m];
                     at += 2;

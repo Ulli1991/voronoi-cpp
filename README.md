@@ -132,7 +132,7 @@ Peak bytes per cell against what one A100 40 GB holds at 256³ and 384³; where 
 
 1. **Snapping and exact predicates** (`exact_predicates.hpp`, `Mesh::snap`). Positions go to a grid of 2³⁰ steps across the box, where every geometric test can be done exactly. Ties are broken by particle id.
 2. **The cell list** (`neighbor_search.hpp`). Particles are sorted along a Morton curve, and each gets a grid level fitted to the local density.
-3. **Clipping** (`shell_grid.hpp`, `shell_cell.hpp`, `shell_voronoi.hpp`, `shell_voronoi_warp.hpp`, `shell_limits.hpp`). Each cell is cut from a large cube by its neighbours' bisectors, nearest first, until no particle within twice its radius is left.
+3. **Clipping** (`shell_grid.hpp`, `shell_cell.hpp`, `shell_voronoi.hpp`, `shell_voronoi_warp.hpp`, `shell_limits.hpp`). Each cell is cut from a large cube by its neighbours' bisectors, nearest first, until no particle within twice its radius is left. Its face rings are written in a canonical form (faces by neighbour id, each ring from its least id), so the mesh's numbering does not depend on how a cut keeps its vertices.
 4. **The exact start** (`tet_start.hpp`). The clipped face rings become tetrahedra, which are checked exactly; the cells around any error are clipped again exactly.
 5. **The persistent tetrahedra** (`tet_mesh.hpp`). Vertices, adjacency, circumcentres and face rings are kept from step to step.
 6. **The repair** (`tet_repair.hpp`). Each step screens for tetrahedra that may fail, then flips them in rounds on the device; votes settle conflicting flips.
@@ -224,7 +224,7 @@ Thirteen CTest programs, 22 tests, specify the library. Oracles, run times and w
 |---|---|
 | `exact_predicates` | signs equal an independent integer evaluation; ties; periodic images; snapping for any box |
 | `clipping` | cells certified, closing and on the bisectors (brute force); thread, warp and exact kernels agree |
-| `mesh` | `from_rings` against a host construction; adjacency, exact check, volumes |
+| `mesh` | `from_rings` against a host construction; adjacency, exact check, volumes; rings canonical and the same from the warp and the exact kernel |
 | `start` | the start is the Delaunay tetrahedralization (brute-force oracle) for 13 layouts and several boxes |
 | `repair` | after every step of a flow the mesh equals an exact rebuild |
 | `voronoi_mesh` | the contract of `voronoi::Mesh` that luna-cpp relies on |

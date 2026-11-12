@@ -77,6 +77,8 @@ The control flow of one `update()`, with its decisions:
 
 **Two kernels.** On CUDA one warp builds one cell in shared memory (`shell_voronoi_warp.hpp`): lanes share the vertices and planes, a cut is done by all lanes at once, and persistent warps take cells from a counter. Other backends, and cells that overflow the warp's capacities, use a thread per cell (`shell_voronoi.hpp`). Both use rounded cells in double, cutting a vertex when it lies beyond a bisector by more than a rounding tolerance. An exact cell (`ExactCell`) decides every cut by the exact perturbed in-sphere sign; the start uses it to patch (stage 4).
 
+**Canonical rings.** A cell writes its owned rings in increasing id of the neighbour, and each ring from the particle with the least id, in the direction set by the corner order (the same in both kernels). Every kernel, rounded or exact, warp or thread, writes the same entries for the same face, so the start numbers tetrahedra and faces the same way whichever kernel built a cell, whatever slots its vertices took and whatever the order of its cuts. The warp kernel also sums a face's area and centroid from that vertex, so its face geometry does not depend on slots either. Until 2026-11-12 a ring started at a vertex chosen by slot, which tied the mesh's numbering to the cut's bookkeeping.
+
 **Pools.** Faces and rings go into one shared pool. The ring pool is split into chunks, and each cell claims room in a chunk chosen by a hash of its slot, so that the claims do not all wait on one counter. A cell whose chunk is full is marked `face_overflow`, and the build runs again with a pool sized from what was needed.
 
 **What can go wrong**, by status:
