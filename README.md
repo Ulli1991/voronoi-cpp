@@ -242,8 +242,8 @@ sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A
 `voronoi_bench` (`src/bench/`) times and checks the pipeline:
 
 ```text
-voronoi_bench rebuild <n> <distribution> [repeats=5] [--no-check] [--memory] [--box=Lx,Ly,Lz]
-voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--memory] [--kernels] [--checksum] [--box=Lx,Ly,Lz]
+voronoi_bench rebuild <n> <distribution> [repeats=5] [--no-check] [--memory] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
+voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--memory] [--kernels] [--checksum] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
                     [--order=every] [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share] [--owner-faces] [--owner-bit] [--dump-cells=path]
 ```
 

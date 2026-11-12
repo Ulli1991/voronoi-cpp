@@ -12,6 +12,7 @@ Status: **done** (in the code), **next** (first in line), **open** (a real candi
 |---|---|---|---|---|
 | A | Cost attribution per cell: candidates tested, planes kept, clips, vertices, topology edits, repair rounds, scratch size, register spills, bytes written; tails, not only means; Nsight Compute stalls and divergence | decides every speed item below | histograms on jittered, uniform, clustered, halo and anisotropic input | done, [measure_2026-11-10.md](measure_2026-11-10.md) |
 | R3 | The gap between what we store and what the hydro needs: neighbours, area vectors, face centroids, volumes, centroids, face motion | memory | list every array by B/cell and its reader (the memory profile has most of it, #28) | done, [measure_2026-11-10.md](measure_2026-11-10.md) |
+| R20 | The bandwidth ceiling: DRAM bytes per cell of every kernel against the 5× and 10× budgets; FP32 geometry against double | decides the plan for the 5× goal | Nsight Compute per kernel, step, rebuild, start at 128³ | done, [measure_2026-11-12.md](measure_2026-11-12.md) |
 | R9 | Time to solution at fixed error as the final score, not cells/s | right decisions | already used in luna-cpp; apply to every mesh change that affects the hydro | done, keep |
 
 ## Speed of construction (rebuild and start)
@@ -96,6 +97,22 @@ For every speed claim: GPU and clock, compiler, precision, dimension, boundaries
 ## Sources to check
 
 voro++; Taveira et al. 2026 (arXiv 2605.06408); gDel3D; Ray et al. 2018; ParVoro++; kinetic Delaunay and certificate frameworks; differentiable Voronoi (arXiv 2312.16192); NeuralSort and Blondel et al.; Enzyme (no Kokkos support yet, CUDA experimental); Herbie and FPBench; Gappa; Z3; Alive2; NVIDIA Compute Sanitizer. "Local DeWall (2026)" was not found in a first search.
+
+## From the bandwidth ceiling (2026-11-12)
+
+Levers the numbers of [measure_2026-11-12.md](measure_2026-11-12.md) point to. Shares are of the step at 0.03 spacings (2866 B/cell, 39 % of peak); 5× needs 1269 B/cell with every kernel at 80 % of peak.
+
+| ID | Idea | Buys | First test | Status |
+|---|---|---|---|---|
+| K1 | Step kernels to 80 % of peak bandwidth: registers of `plan` and `find` (152, 168: 10 to 15 % warps active), `screen` and `faces` occupancy (33 to 39 %), a warp per flip in `apply` (6.5 threads per instruction), whole warps in the ring walks | 2.06× at today's bytes; needed for 5× in every case | `plan` and `find` under 64 registers, measured GB/s | open |
+| K2 | Repair and ring re-walk bytes per flip: 25 kB today (`find`, `plan`, `apply`, `dirty_faces`, `append_rings`); walk each touched edge once, rounds that read only what changed | 1.28× at 0.03, 1.85× at 0.1 spacings (630 and 2200 B/cell); 39 % of the 5× byte cut | bytes per flip in Nsight against the flips counted | open |
+| K3 | One snap pass, the integer point derived from positions | about 80 B/cell, 1.03× | merge `voronoi::snap` and `exact_predicates::snap` | open |
+| K4 | One tetrahedron-centric pass: screen, circumcentre once, and each tetrahedron's share of its six faces' area and centroid added to faces and cells | the only way found to 10× (about 500 B/cell against 635 allowed); also drops `tet_centre` and the stored rings | a prototype on fixed topology: bytes and time against `screen` + `face_numbers` + `faces` + `cell_sums` | research |
+| K5 | Clipping instructions per cell: issue (53 to 66 %) and divergence (21 to 23 of 32 threads) cap the warp kernel at 2.3× (jittered) and 2.7× (uniform); with P1, R8 and B at most 2.5× and 4.6× | the rebuild's 5× needs fewer instructions per clip (C, R16, float filters) or no clipping (D) | instructions per clip in Nsight, before and after P1 + R8 | open |
+| E (measured) | Face numbers kept for untouched tetrahedra: `face_numbers` (421 B/cell, all tetrahedra) over the touched ones only | about 380 B/cell, 1.15×; 24 % of the 5× byte cut | see E above | open |
+| R14 (measured) | Face geometry not stored: `faces` writes 397 B/cell and `cell_sums` reads 670 | 1.16× on the step, 1.38× with `update_cells()`; 25 % of the 5× byte cut, and 5× at 0.03 needs it | see R14 above | research |
+| R6 (measured) | Float `tet_centre` stored as offsets from a corner; float face area and centroid | centres: 235 B/cell per step (1.09×), 125 B/cell memory, closure kept exact; face rows: 191 to 382 B/cell per step, 197 memory, but closure breaks at 3e-8 and the error floor of small-amplitude waves rises 4× to 770× | part 2 of [measure_2026-11-12.md](measure_2026-11-12.md); next: the 1e-6 and 1e-8 waves with float relative centres | centres next; float rows only as an option for large-amplitude flows |
+| R1 (measured) | Host gaps between kernels: 1.0 to 1.2 ms per `update()` from 26 to 32 synchronisations and 20 to 25 count read-backs | 1.10× today; at 5× the step at 0.03 is 2.1 ms, so the gaps must go | see R1 above | open |
 
 ## From Doug Rennehan's plume (read at eb19338, 2026-11-06)
 
