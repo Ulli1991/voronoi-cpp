@@ -299,6 +299,40 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 }
 
 #if defined(VORONOI_MEASURE)
+// Measurement only: whether the box [lo, hi] comes within margin2 of the ball of some live vertex (plume P1).
+__device__ inline bool meets_a_ball(const Polyhedron& c, std::uint64_t live, const double (&lo)[3],
+                                    const double (&hi)[3], double margin2) {
+    for (std::uint64_t m = live; m != 0; m &= m - 1) {
+        const int w = __ffsll(static_cast<long long>(m)) - 1;
+        const double v[3] = {c.x[w], c.y[w], c.z[w]};
+        double gap2 = 0;
+        for (int a = 0; a < 3; ++a) {
+            const double g = Kokkos::max(0.0, Kokkos::max(lo[a] - v[a], v[a] - hi[a]));
+            gap2 += g * g;
+        }
+        if (gap2 <= v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + margin2) return true;
+    }
+    return false;
+}
+// Measurement only: the bounding box of the live vertices (with_balls: of their balls), over the warp (R8).
+__device__ inline void warp_bounds(const Polyhedron& c, std::uint64_t live, bool with_balls, double (&lo)[3],
+                                   double (&hi)[3]) {
+    for (int a = 0; a < 3; ++a) lo[a] = hi[a] = -1e300;  // lo holds the negated minimum
+    for (int k = 0; k < per_lane; ++k) {
+        const int w = lane() + k * lanes;
+        if (!(live >> w & 1)) continue;
+        const double v[3] = {c.x[w], c.y[w], c.z[w]};
+        const double r = with_balls ? Kokkos::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) : 0.0;
+        for (int a = 0; a < 3; ++a) {
+            lo[a] = Kokkos::max(lo[a], r - v[a]);
+            hi[a] = Kokkos::max(hi[a], v[a] + r);
+        }
+    }
+    for (int a = 0; a < 3; ++a) {
+        lo[a] = -warp_max(lo[a]);
+        hi[a] = warp_max(hi[a]);
+    }
+}
 // Measurement only: whether a particle at offset d lies in the ball of some live vertex (it would cut that vertex).
 __device__ inline bool in_a_ball(const Polyhedron& c, std::uint64_t live, double dx, double dy, double dz) {
     const double half = 0.5 * (dx * dx + dy * dy + dz * dz);
@@ -380,6 +414,7 @@ struct Kernel {
 #if defined(VORONOI_MEASURE)
         const long long started = clock64();
         const bool measuring = out.measure.extent(0) > 0, balls = measuring && out.balls;
+        const double longest = Kokkos::max(side[0], Kokkos::max(side[1], side[2]));
         const int sampled = measuring && out.sample_every > 0 && t % out.sample_every == 0 ? t / out.sample_every : -1;
         long long m[measure::count] = {};
         int recorded = 0;
@@ -415,6 +450,17 @@ struct Kernel {
                 const int q = __shfl_sync(all_lanes, slot, i);
                 const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
                              __shfl_sync(all_lanes, mine.z, i)};
+#if defined(VORONOI_MEASURE)
+                if (balls) {
+                    double lo[3], hi[3];
+                    warp_bounds(c, live, false, lo, hi);
+                    const double dd = dot(d, d), dv[3] = {d.x, d.y, d.z};
+                    double support = 0;
+                    for (int a = 0; a < 3; ++a) support += Kokkos::max(dv[a] * lo[a], dv[a] * hi[a]);
+                    m[measure::clips_r8] += support - 0.5 * dd >= -0x1p-30 * (dd + radius2);
+                    m[measure::clips_p1] += in_a_ball(c, live, d.x, d.y, d.z);
+                }
+#endif
                 const int before = planes;
                 status = clip(c, planes, live, radius2, d, q, unit);
                 ++clipped;
@@ -448,7 +494,9 @@ struct Kernel {
                                                   packed);
 #if defined(VORONOI_MEASURE)
                 if (measuring) {
-                    bool cell_outside = false;
+                    bool cell_outside = false, p1 = false, r8 = false;
+                    double union_lo[3] = {}, union_hi[3] = {};
+                    if (balls) warp_bounds(c, live, true, union_lo, union_hi);
                     if (balls && begin < end) {
                         const int code = stencil.offsets(e);
                         double lo[3], hi[3];
@@ -459,11 +507,28 @@ struct Kernel {
                             hi[a] = lo[a] + w;
                         }
                         cell_outside = !box_meets_a_ball(c, live, lo, hi);
+                        const double mu = 64 * Kokkos::Experimental::epsilon_v<double> * longest;
+                        const double slack = mu + 0x1p-15 * Kokkos::sqrt(radius2);
+                        double wide_lo[3], wide_hi[3];
+                        r8 = true;
+                        for (int a = 0; a < 3; ++a) {
+                            wide_lo[a] = lo[a] - mu;
+                            wide_hi[a] = hi[a] + mu;
+                            r8 = r8 && lo[a] - slack <= union_hi[a] && hi[a] + slack >= union_lo[a];
+                        }
+                        p1 = meets_a_ball(c, live, wide_lo, wide_hi, 0x1p-30 * radius2);
                     }
                     m[measure::walk_cells] += __popc(__ballot_sync(all_lanes, e < entries));
                     m[measure::walk_open] += __popc(__ballot_sync(all_lanes, begin < end));
                     m[measure::open_outside] += __popc(__ballot_sync(all_lanes, cell_outside));
                     m[measure::in_open_outside] += warp_sum(cell_outside ? end - begin : 0);
+                    m[measure::rounds] += warp_max(end - begin);
+                    m[measure::open_p1] += __popc(__ballot_sync(all_lanes, p1));
+                    m[measure::in_open_p1] += warp_sum(p1 ? end - begin : 0);
+                    m[measure::rounds_p1] += warp_max(p1 ? end - begin : 0);
+                    m[measure::open_r8] += __popc(__ballot_sync(all_lanes, r8));
+                    m[measure::in_open_r8] += warp_sum(r8 ? end - begin : 0);
+                    m[measure::rounds_r8] += warp_max(r8 ? end - begin : 0);
                 }
 #endif
                 const int most = warp_max(end - begin);

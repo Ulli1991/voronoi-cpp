@@ -22,7 +22,9 @@ namespace sm = shell_voronoi::measure;
 inline const char* column_name(int k) {
     static const char* names[] = {"tested",        "taken",           "clipped",     "cuts",           "vertices_end",
                                   "vertices_peak", "walk_cells",      "walk_open",   "tested_outside", "taken_outside",
-                                  "open_outside",  "in_open_outside", "warp_status", "cycles",         "batches"};
+                                  "open_outside",  "in_open_outside", "warp_status", "cycles",         "batches",
+                                  "rounds",        "open_p1",         "in_open_p1",  "rounds_p1",      "open_r8",
+                                  "in_open_r8",    "rounds_r8",       "clips_p1",    "clips_r8"};
     return names[k];
 }
 
@@ -161,7 +163,7 @@ inline void clipping(const Exec& exec, const shell_voronoi::Grid<Memory>& grid, 
     const auto balls = to_host(cells.measure);
     std::vector<long long> column(n);
     for (int k = 0; k < sm::count; ++k) {
-        const bool ball_column = k >= sm::tested_outside && k <= sm::in_open_outside;
+        const bool ball_column = (k >= sm::tested_outside && k <= sm::in_open_outside) || k >= sm::rounds;
         for (int i = 0; i < n; ++i) column[i] = (ball_column ? balls : plain)(i, k);
         distribution(column_name(k), column);
     }
@@ -196,7 +198,7 @@ inline void clipping(const Exec& exec, const shell_voronoi::Grid<Memory>& grid, 
     double sums[sm::count] = {};
     for (int i = 0; i < n; ++i)
         for (int k = 0; k < sm::count; ++k)
-            sums[k] += (k >= sm::tested_outside && k <= sm::in_open_outside ? balls : plain)(i, k);
+            sums[k] += ((k >= sm::tested_outside && k <= sm::in_open_outside) || k >= sm::rounds ? balls : plain)(i, k);
     std::printf(
         "measure: ratios taken/tested=%.4f clipped/taken=%.4f cuts/clipped=%.4f tested_outside/tested=%.4f "
         "taken_outside/taken=%.4f open/walk=%.4f open_outside/open=%.4f in_open_outside/tested=%.4f\n",
@@ -204,12 +206,19 @@ inline void clipping(const Exec& exec, const shell_voronoi::Grid<Memory>& grid, 
         sums[sm::tested_outside] / sums[sm::tested], sums[sm::taken_outside] / sums[sm::taken],
         sums[sm::walk_open] / sums[sm::walk_cells], sums[sm::open_outside] / sums[sm::walk_open],
         sums[sm::in_open_outside] / sums[sm::tested]);
+    std::printf(
+        "measure: bounds in_open_p1/tested=%.4f in_open_r8/tested=%.4f rounds_p1/rounds=%.4f rounds_r8/rounds=%.4f "
+        "clips_p1/clipped=%.4f clips_r8/clipped=%.4f cuts/clipped=%.4f\n",
+        sums[sm::in_open_p1] / sums[sm::tested], sums[sm::in_open_r8] / sums[sm::tested],
+        sums[sm::rounds_p1] / sums[sm::rounds], sums[sm::rounds_r8] / sums[sm::rounds],
+        sums[sm::clips_p1] / sums[sm::clipped], sums[sm::clips_r8] / sums[sm::clipped],
+        sums[sm::cuts] / sums[sm::clipped]);
     if (!dump.empty()) {
         // Columns 0-14 as in shell_voronoi::measure, the vertex-ball columns from the second run.
         std::vector<int> data(std::size_t(n) * sm::count);
         for (int i = 0; i < n; ++i)
             for (int k = 0; k < sm::count; ++k) {
-                const bool ball_column = k >= sm::tested_outside && k <= sm::in_open_outside;
+                const bool ball_column = (k >= sm::tested_outside && k <= sm::in_open_outside) || k >= sm::rounds;
                 data[std::size_t(i) * sm::count + k] = static_cast<int>((ball_column ? balls : plain)(i, k));
             }
         write_npy(dump, data, n, sm::count);

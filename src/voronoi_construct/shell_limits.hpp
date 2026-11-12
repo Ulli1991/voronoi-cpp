@@ -43,6 +43,15 @@ enum : int {
     warp_status,      // status before the thread kernel took overflow cells
     cycles,           // clock64 cycles of the warp, lane 0
     batches,          // batches of 32 stencil entries
+    rounds,           // particle rounds of the walk (one particle per lane each)
+    open_p1,          // opened grid cells meeting a vertex ball (P1, with the skip's margin)
+    in_open_p1,       // particles in those cells
+    rounds_p1,        // rounds if only those cells were read
+    open_r8,          // opened grid cells meeting the bounding box of the vertex balls (R8)
+    in_open_r8,       // particles in those cells
+    rounds_r8,        // rounds if only those cells were read
+    clips_p1,         // clips whose particle lies in a vertex ball of the cell at its turn
+    clips_r8,         // clips the bounding box of the cell at their turn does not rule out
     count
 };
 }  // namespace measure
