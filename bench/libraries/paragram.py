@@ -97,7 +97,7 @@ std::vector<torch::Tensor> cell_faces(torch::Tensor points, torch::Tensor adj, t
         auto nb = torch::empty({cap}, lopt), area = torch::empty({cap, 3}, dopt), used = torch::zeros({1}, lopt);
         const int block = 64;
         cells_kernel<<<(n + block - 1) / block, block>>>(
-            points.data_ptr<double>(), adj.data_ptr<int>(), off.data_ptr<int>(), label.data_ptr<int64_t>(), (int)n,
+            points.data_ptr<double>(), adj.data_ptr<int>(), off.data_ptr<int>(), (const long long*)label.data_ptr<int64_t>(), (int)n,
             vol.data_ptr<double>(), cen.data_ptr<double>(), rmax.data_ptr<double>(), count.data_ptr<int>(),
             (long long*)start.data_ptr<int64_t>(), (long long*)nb.data_ptr<int64_t>(), area.data_ptr<double>(),
             (unsigned long long*)used.data_ptr<int64_t>(), cap);
