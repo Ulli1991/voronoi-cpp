@@ -117,6 +117,32 @@ int main(int argc, char** argv) {
         std::sort(owned_faces.begin(), owned_faces.end());
         check.expect(represented == owned_faces, "one edge representative per face");
 
+        // Canonical rings: faces by increasing neighbour, each ring from its least particle; the exact thread kernel
+        // writes the same entries, so the numbering of the tetrahedra depends on neither the kernel nor its slots.
+        {
+            bool canonical = true;
+            for (int i = 0; i < n; ++i) {
+                int previous = -1;
+                for (long long f = 0, at = start[i]; f < owned(i); ++f, at += 2 + rings(at + 1)) {
+                    const int* ring = &rings(at + 2);
+                    canonical &= rings(at) > previous && *std::min_element(ring, ring + rings(at + 1)) == ring[0];
+                    previous = rings(at);
+                }
+            }
+            check.expect(canonical, "rings in increasing neighbour id, each from its least particle");
+            auto exact = shell_voronoi::Cells<Memory>::with_rings(n, 64LL * n);
+            shell_voronoi::construct(exec, shell_voronoi::make_grid(cell_list(x)), exact, {}, true);
+            std::vector<long long> exact_start;
+            const auto exact_rings = ring_entries(exact, exact_start);
+            int differ = 0;
+            for (int i = 0; i < n; ++i)
+                differ += exact_start[i + 1] - exact_start[i] != start[i + 1] - start[i] ||
+                          !std::equal(rings.data() + start[i], rings.data() + start[i + 1],
+                                      exact_rings.data() + exact_start[i]);
+            check.expect(differ == 0,
+                         "the exact kernel writes the same rings (" + std::to_string(differ) + " cells differ)");
+        }
+
         // Geometry on the stored rings, then on rings walked around the edges.
         tet_mesh::Points4<Memory> padded("padded", n);
         voronoi::detail::snap_positions(exec, x, 1.0, padded);

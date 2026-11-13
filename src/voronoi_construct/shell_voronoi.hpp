@@ -174,6 +174,34 @@ namespace detail {
 
 namespace ep = exact_predicates;
 
+// The id of the particle of the plane after `plane` at vertex v, as unsigned (a box plane's last).
+// Used by: construct_pass (the vertex a canonical ring starts at).
+template <class C>
+KOKKOS_INLINE_FUNCTION unsigned next_id(const C& cell, int v, int plane) {
+    const int at = cell.corner[v][0] == plane ? 0 : cell.corner[v][1] == plane ? 1 : 2;
+    return static_cast<unsigned>(cell.id[cell.corner[v][(at + 2) % 3]]);
+}
+
+// Sorts the `count` plane indices at `planes` by increasing particle id (as unsigned): a heap sort, as a huge cell has
+// thousands of planes. Used by: construct_pass (canonical face order of rings).
+template <class C>
+KOKKOS_INLINE_FUNCTION void sort_by_id(const C& cell, std::int16_t* planes, int count) {
+    auto key = [&](int i) { return static_cast<unsigned>(cell.id[planes[i]]); };
+    auto sift = [&](int root, int end) {
+        while (2 * root + 1 < end) {
+            int child = 2 * root + 1;
+            if (child + 1 < end && key(child + 1) > key(child)) ++child;
+            if (key(root) >= key(child)) return;
+            Kokkos::kokkos_swap(planes[root], planes[child]);
+            root = child;
+        }
+    };
+    for (int root = count / 2 - 1; root >= 0; --root) sift(root, count);
+    for (int end = count - 1; end > 0; --end) {
+        Kokkos::kokkos_swap(planes[0], planes[end]);
+        sift(0, end);
+    }
+}
 
 // A particle that may cut the cell, sorted by distance.
 // Used by: construct_pass.
@@ -363,14 +391,26 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             double volume = 0, area_magnitude = 0;
             Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
             const double sliver = 64 * Kokkos::Experimental::epsilon_v<double> * cell.radius2_in_box(unit);
-            std::int16_t first_vertex[Cell::planes_capacity];
+            // With rings, each face is walked from the vertex whose next neighbour has the least id, and the faces go
+            // in increasing neighbour id (the warp kernel's canonical rings); without, as before.
+            std::int16_t first_vertex[Cell::planes_capacity], face_order[Cell::planes_capacity];
             if (status == ok) {
-                for (int plane = 0; plane < cell.planes; ++plane) first_vertex[plane] = -1;
+                for (int plane = 0; plane < cell.planes; ++plane) {
+                    first_vertex[plane] = -1;
+                    face_order[plane] = static_cast<std::int16_t>(plane);
+                }
                 for (int v = 0; v < cell.vertices; ++v)
                     if (live(cell, v))
-                        for (int k = 0; k < 3; ++k) first_vertex[cell.corner[v][k]] = static_cast<std::int16_t>(v);
+                        for (int k = 0; k < 3; ++k) {
+                            const int plane = cell.corner[v][k], best = first_vertex[plane];
+                            if (with_rings && best >= 0 && next_id(cell, best, plane) < next_id(cell, v, plane))
+                                continue;
+                            first_vertex[plane] = static_cast<std::int16_t>(v);
+                        }
+                if (with_rings) sort_by_id(cell, face_order + box_planes, cell.planes - box_planes);
             }
-            for (int plane = box_planes; plane < cell.planes && status == ok; ++plane) {
+            for (int f = box_planes; f < cell.planes && status == ok; ++f) {
+                const int plane = face_order[f];
                 const int start = first_vertex[plane];
                 if (start < 0) continue;
 

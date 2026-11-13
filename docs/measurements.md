@@ -10,7 +10,7 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates are mill
 |---|---|---|
 | Moving-mesh update, update plus `update_cells()`, 128³ and 256³ | 32269165, 32237516 (interleaved with main 9e9ec03; [fewer bytes per step](#fewer-bytes-per-step-incremental-face-numbers-e-and-the-ring-re-walk-k2-2026-11-12)) | `step-bytes` (the ring re-walk commit) |
 | `update_cells()` alone | 32231679 ([step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
-| Full rebuilds at 2.1M | 31952136 (interleaved runs of main and this tree) | main 16e7769 |
+| Full rebuilds at 2.1M and 16.8M, exact start at 2.1M | 32269868, 32269874, 32269869 ([lean cut](#canonical-rings-and-a-lean-cut-2026-11-13)) | `clip-canonical` |
 | Exact start, the sum row, at 2.1M | 31701509 | 2311937 |
 | The 256³ column, except the moving-mesh rows | 31694457 | f32c909 (older than the current code, which is faster there) |
 | Moving-mesh rows (also in research_notes/mesh_speed_2026-11-04.md) | 31886231, 31886232 | |
@@ -121,6 +121,42 @@ P1 leaves only the clips that cut (it is the clip's own test) and halves the par
 With the R8 box in use the work falls as counted (job 32222999: particles read 76 to 31 jittered, 103 to 75 uniform; clips 48 to 39 uniform; no cell sent to the thread kernel), yet the time rises. Nsight Compute (job 32224827, uniform): 4.6 % more instructions, but stalls for instruction fetch (`no_instruction`) rise from 28 % to 43 % of samples, and local loads from 175M to 258M (stack frames of 176 to 208 bytes become 192 to 256, registers capped at 96). The warp kernel is limited by its instruction cache and registers, so any test added to the walk costs more than the work it removes; even the variant with the bounds compiled out is 2 to 5 % slower. Lattice input, where no grid cell is skipped, shows the fixed cost: 10 to 22 %.
 
 Rigour of the variants: a bound skipped a grid cell or particle only with a margin above rounding (the cell widened by 64 ε of the longest side; the ball box widened by 2^-14 R, above the rounding of 64 later cuts, which stay in the hull of the current vertices); a cut whose new vertex lies past its kept end (that end within the tolerance outside) would send a cell that skipped anything to the thread kernel. None of this is in the library: the branch keeps the counters only, and the plain build's kernel is the same SASS as main's.
+
+### Canonical rings and a lean cut (2026-11-13)
+
+Branch `clip-canonical` against main (9e9ec03, and after the rebase 6ead543; with the bench's checksums only, `ref`), one A100, every comparison in one job. Script `scripts/clip_canonical_a100.sh`, tables by `scripts/clip_canonical_tables.py` and `scripts/clip_canonical_ncu.py`; logs in `build-jobs/` of the `voronoi-cpp-canon` worktree on Raven. `canon` is commit a53ed48 (canonical rings only), `final` the branch head.
+
+**Canonical rings.** Each cell writes its owned rings in increasing neighbour id, each from its least particle, in both kernels; the warp kernel also starts each face's fan there. `mesh_test` checks the form and that the exact thread kernel writes the same entries as the warp kernel (0 of 4096 cells differ, jittered and uniform). Cost: 0 to 1 % on the rebuild (job 32237666, 1305 MHz) and 0.3 % more instructions per cell (9611 to 9642 jittered, job 32269328).
+
+**The lean cut.** A new vertex goes into the lowest slot free before the cut, built by the lane that owns it: no stack of free slots, no pushes and no 64-bit shifts for the slots made. The starting cube's adjacency is a formula (the search took 4 % of the kernel), the radius uses a select instead of `Kokkos::max` (which branched), the candidate sort and the side test have no branches, a face walk finds its corner with one load, and the reach of a candidate is recomputed only after a cut. The cut's decisions and vertex bits are main's.
+
+Rate of the warp clipping (`rebuild`, median of 2 × 5, M cells/s and change against main; job 32238284 at 1305 MHz for 128³, the head's source but for formatting; job 32269162 at 1305 MHz for 256³, one round; job 32269153 repeats 128³ at 1095 MHz with the same changes):
+
+| | jittered | uniform | clustered | halo | lattice | wave |
+|---|---|---|---|---|---|---|
+| main, 128³ | 38.7 | 19.2 | 15.0 | 13.8 | 48.6 | 37.2 |
+| canonical rings, 128³ (job 32237666) | 38.4 (−1 %) | 19.0 (−1 %) | 15.0 (0 %) | 13.7 (0 %) | 48.7 (0 %) | 36.9 (−1 %) |
+| lean cut, 128³ | 42.6 (+10 %) | 21.9 (+14 %) | 17.1 (+14 %) | 15.5 (+12 %) | 55.1 (+13 %) | 40.8 (+10 %) |
+| main, 256³ | 38.8 | 19.5 | 16.3 | 15.8 | 50.9 | 37.3 |
+| lean cut, 256³ | 42.8 (+10 %) | 22.4 (+15 %) | 18.5 (+14 %) | 17.9 (+13 %) | 57.6 (+13 %) | 41.0 (+10 %) |
+
+Exact start (`start_ms`, median of 2, job 32269154, 1305 MHz), M cells/s: main 17.5, 8.3, 7.2, 9.9, 6.6, 4.0 against 18.5, 8.9, 7.3, 10.3, 7.6, 4.3 (jittered, uniform, clustered, halo, lattice, wave); the start's own kernels and host waits vary by 5 to 8 % between runs.
+
+Nsight Compute of the warp kernel (job 32269328, 1095 MHz), warp instructions per cell, kernel time per clip over the whole GPU (21.9 clips a cell jittered, 48.0 uniform), and stall shares; no spills, 96 registers in all three:
+
+| | jittered: instructions, ns per clip | stalls: fixed latency, shared memory, instruction fetch, issue | uniform: instructions, ns per clip | stalls |
+|---|---|---|---|---|
+| main | 9611, 1.40 | 35, 14, 13, 24 % | 15128, 1.26 | 29, 10, 35, 16 % |
+| canonical rings | 9642, 1.41 | 35, 14, 14, 23 % | 15159, 1.27 | 29, 10, 36, 16 % |
+| lean cut | 8802, 1.27 | 36, 16, 11, 24 % | 14020, 1.10 | 31, 12, 29, 18 % |
+
+**Mesh.** After the build and two steps at 0.1 spacings, `tets_checksum` (the start's tetrahedra as particle sets), `geometry_checksum`, `faces_checksum` and `lists_checksum` equal main's on all six inputs at 128³ (job 32269155) and 256³ (jobs 32269156 to 32269160; wave at 256³ runs out of the A100's 40 GB in this bench's step on main too, so for it the start alone, job 32269402: the same tetrahedra). The bad tetrahedra and patched cells of the start are main's. What changed once: `rings_checksum` and the build's `cells_checksum` (the tetrahedra and faces are numbered from canonical rings now); the step's `cells_checksum` differs between runs of main as well. Canonical rings and the lean cut give the same rings and the same face geometry of a plain rebuild (`clip_checksum`) bit for bit on all six inputs, so the cut's slots no longer reach any output. luna-cpp (a82092c) builds against the branch; `hydro_sedov` 128³ jittered, moving mesh, 50 steps, gives the same bits of U, x and volume as against main (job 32238689).
+
+**After the rebase on 6ead543** (E and K2 in the repair): rebuild 42.6, 22.0, 17.0, 15.5, 55.1, 40.9 against main's 38.7, 19.2, 15.0, 13.7, 48.7, 37.2 at 128³ (+10 to +15 %, job 32269868, 1305 MHz) and 42.8, 22.4, 18.5, 17.9, 57.7, 41.0 against 38.9, 19.5, 16.3, 15.8, 50.9, 37.3 at 256³ (job 32269874); exact start 18.6, 8.8, 7.9, 10.3, 7.4, 4.4 against 17.6, 8.2, 7.2, 9.6, 7.1, 4.0 (job 32269869); the same checksums against main as above at 128³ and 256³ (jobs 32269867, 32269870 to 32269873); `hydro_sedov` the same bits (job 32269941).
+
+**A fuzz crash, fixed.** A 1e6 A100 fuzz batch (profile huge, seed 4000000000091: 1.3M particles, 38 of them coincident, an update after the refused build) hit an illegal address: a rounded cell with two faces toward one neighbour (#48) gave both rings the same place in the canonical order, the end of the block stayed unwritten, and `assemble` read a garbage length. Equal neighbours now go in lane order. Main refuses that case cleanly.
+
+**What it says.** The bookkeeping that slots and cut order forced was worth 10 to 15 %, not several times: the cut that is left is mostly the work of finding and building the new vertices, and the kernel still waits on that chain's latency and, on uniform and clustered input, on instruction fetch. A rebuild several times faster needs fewer clips (B, the rounds of `clip-split`) or no clipping (D).
 
 ### Step kernels at today's bytes (2026-11-12)
 
