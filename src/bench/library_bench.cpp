@@ -1,7 +1,7 @@
 // voronoi-cpp in the library benchmark (docs/library_benchmark.md), and the writer of its shared inputs.
 //   library_bench points <n> <distribution> <file>                         the generator's points, in its order
 //   library_bench trajectory <n> <distribution> <spacings> <steps> <file>  slot-ordered points and `steps` moves
-//   library_bench build <points file> [--path=warp|warp-host|exact] [--repeats=3] [--volumes=file]
+//   library_bench build <points file> [--path=warp|warp-host|warp-host-vc|exact] [--repeats=3] [--volumes=file]
 //   library_bench step <trajectory file> [--volumes=file]
 //   library_bench lloyd <points file> <iterations> <file>                  blue noise: Lloyd-relaxed points
 // File formats and the record of each timed run: bench/libraries/libbench.hpp.
@@ -99,12 +99,18 @@ int build(int argc, char** argv) {
             const auto v = to_host(cells.volume);
             for (std::uint64_t i = 0; i < n; ++i) volume[i] = v(i);
         };
-    } else if (path == "warp-host") {
-        s = setup("warp clipping rebuild, host to host (copy in, cell list + construct_warp, copy out)",
-                  "volumes faces areas centroids",
-                  "points in host memory to cells in host memory: points copied to the device, cell list, grid, cell "
-                  "arrays, clipping, then volumes, centroids, per-cell face starts and counts and the whole face pool "
-                  "(neighbours, area vectors, face centroids) copied back");
+    } else if (path == "warp-host" || path == "warp-host-vc") {
+        if (path == "warp-host")
+            s = setup("warp clipping rebuild, host to host (copy in, cell list + construct_warp, copy out)",
+                      "volumes faces areas centroids",
+                      "points in host memory to cells in host memory: points copied to the device, cell list, grid, "
+                      "cell arrays, clipping, then volumes, centroids, per-cell face starts and counts and the whole "
+                      "face pool (neighbours, area vectors, face centroids) copied back");
+        else
+            s = setup("warp clipping rebuild, host to host, volumes and centroids copied out",
+                      "volumes centroids (faces built on the device, not copied back)",
+                      "points in host memory to volumes and centroids in host memory: points copied to the device, "
+                      "cell list, grid, cell arrays, clipping (faces included), volumes and centroids copied back");
         body = [&](bool copy) {
             const Positions xd = to_device(host);
             neighbor_search::CellList<Exec> list;
@@ -114,6 +120,11 @@ int build(int argc, char** argv) {
             shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(list), cells);
             const auto v = to_host(cells.volume);
             const auto c = to_host(cells.centroid);
+            if (path == "warp-host-vc") {  // the outputs of the volumes-only codes: volumes and centroids
+                if (copy)
+                    for (std::uint64_t i = 0; i < n; ++i) volume[i] = v(i);
+                return;
+            }
             const auto start = to_host(cells.face_start);
             const auto count = to_host(cells.owned_count);
             const auto nb = to_host(cells.neighbour);
@@ -282,7 +293,7 @@ int main(int argc, char** argv) {
     if (mode == "step" && argc >= 3) return step(argc, argv);
     std::cerr << "usage: library_bench points <n> <distribution> <file>\n"
                  "       library_bench trajectory <n> <distribution> <spacings> <steps> <file>\n"
-                 "       library_bench build <points file> [--path=warp|warp-host|exact] [--repeats=3] [--volumes=file]\n"
+                 "       library_bench build <points file> [--path=warp|warp-host|warp-host-vc|exact] [--repeats=3] [--volumes=file]\n"
                  "       library_bench step <trajectory file> [--volumes=file]\n"
                  "       library_bench lloyd <points file> <iterations> <file>\n";
     return 2;
