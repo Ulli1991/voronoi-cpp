@@ -161,16 +161,16 @@ Four points exactly on one circle: rounded arithmetic gives opposite answers in 
 
 ## Measured performance
 
-One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The 128³ rebuild rows are current (with the fixes of #29, #30, #35, #36 and #45, 1305 MHz); the step rows, at 128³ and 256³, are the incremental face numbering and ring re-walk of 2026-11-12 (`step-bytes`, 1305 MHz). The other 256³ entries are the code just before those fixes, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
+One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The rebuild rows and the 128³ exact start are the lean cut of 2026-11-13 (1305 MHz, 128³ and 256³); the step rows, at 128³ and 256³, are the incremental face numbering and ring re-walk of 2026-11-12 (`step-bytes`, 1305 MHz). The 256³ exact start is the code just before the fixes of #29, #30, #35, #36 and #45, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
 
 | M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
-| Full rebuild (warp clipping), jittered | 39.4 | 33.7 |
-| Full rebuild, uniform random | 19.7 | 17.0 |
-| Full rebuild, clustered (Gaussian blobs, ~1:500) | 15.4 | 14.1 |
-| Full rebuild, halo (1:10⁴ core to edge) | 14.1 | |
-| Full rebuild, lattice / wave | 49.2 / 37.9 | |
-| Exact start (warp with rings + `tet_start::build`), jittered | 17.7 | 11.7 |
+| Full rebuild (warp clipping), jittered | 42.6 | 42.8 |
+| Full rebuild, uniform random | 21.9 | 22.4 |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | 17.1 | 18.5 |
+| Full rebuild, halo (1:10⁴ core to edge) | 15.5 | 17.9 |
+| Full rebuild, lattice / wave | 55.1 / 40.8 | 57.6 / 41.0 |
+| Exact start (warp with rings + `tet_start::build`), jittered | 18.5 | 11.7 |
 | Moving-mesh update, 0.03 spacings per step | 223 | 318 (215 with `update_cells()`) |
 | Moving-mesh update, 0.1 spacings per step | 130 | 209 (151 with `update_cells()`) |
 | Moving-mesh update, 0.3 spacings per step | 65.9 | 110 (85.6 with `update_cells()`) |
@@ -183,7 +183,9 @@ The step kernels of 2026-11-12 (register limits on `faces` and `screen`, warp-ag
 
 GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); a step with face lists peaks at 1979 B/cell (2010 at 0.3 spacings; 128³): about 1930 for the mesh's arrays, the rest the bench's positions. The arrays and pools are in the figures above.
 
-A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilds at the cube's rate, 39.9 M cells/s for jittered input.
+A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilt at the cube's rate before the lean cut, 39.9 M cells/s for jittered input.
+
+The lean cut (2026-11-13) made the rebuild 10 to 15 % faster than main 9e9ec03 on all six inputs at 128³ and 256³, and the exact start 6 % on jittered input, with the same tetrahedra, volumes, centroids and per-cell lists. It needed canonical face rings, which cost under 1 %: a new vertex goes into the lowest free slot, built by the lane that owns it, without a stack of free slots; the starting cube is set by formula; the candidate sort and the side test have no branches. That is 7 to 8 % fewer warp instructions per cell (9611 to 8802 on jittered input, 15128 to 14020 on uniform). The kernel still waits on the latency of each cut and on instruction fetch, so a several times faster rebuild needs fewer clips or no clipping, not a leaner cut ([measurements.md](docs/measurements.md#canonical-rings-and-a-lean-cut-2026-11-13)).
 
 ### Long runs
 

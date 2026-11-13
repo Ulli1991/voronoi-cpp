@@ -29,8 +29,8 @@ static_assert(max_vertices * sizeof(double) >= 2 * max_planes * sizeof(std::uint
               "Polyhedron::side is the ring order's scratch");
 
 // One warp's polyhedron. Corners and adjacency hold three 8-bit indices each: corner k is a plane,
-// adjacency k the vertex across the edge from corner k to k + 1. A cut reuses free slots; a 64-bit
-// register mask marks the slots in use.
+// adjacency k the vertex across the edge from corner k to k + 1. A 64-bit register mask marks the slots
+// in use; a cut puts its new vertices in the lowest free ones.
 // Used by: Kernel::build, start_cube, clip.
 struct alignas(16) Polyhedron {
     // Plane normals only weight the face centroids, so float is enough.
@@ -40,7 +40,6 @@ struct alignas(16) Polyhedron {
     double side[max_vertices];  // signed distance to the cutting plane
     std::uint32_t corner[max_vertices];
     std::uint32_t adjacent[max_vertices];
-    std::uint8_t free_slots[max_vertices];  // stack of the slots not in use
     // Edges a cut crosses (removed, kept vertex, planes a, b); after the cuts, scratch for `first` (Kernel::build).
     std::uint32_t crossing[max_vertices];
     std::uint8_t starts[max_planes];  // new vertex whose hole edge starts at a plane
@@ -60,10 +59,20 @@ KOKKOS_INLINE_FUNCTION int byte(std::uint32_t packed, int k) { return (packed >>
 KOKKOS_INLINE_FUNCTION std::uint32_t pack(int a, int b, int c) {
     return std::uint32_t(a) | std::uint32_t(b) << 8 | std::uint32_t(c) << 16;
 }
-// Returns packed with byte k replaced by value.
-// Used by: build (adjacent words).
-KOKKOS_INLINE_FUNCTION std::uint32_t with_byte(std::uint32_t packed, int k, int value) {
-    return (packed & ~(std::uint32_t(255) << (8 * k))) | std::uint32_t(value) << (8 * k);
+// The larger of a and b, as a select (Kokkos::max of a double branches on the device).
+// Used by: clip (radii).
+KOKKOS_INLINE_FUNCTION double larger(double a, double b) { return a > b ? a : b; }
+// Which of the three bytes of `packed` is `value` (3 if none). Used by: the face walks of Kernel::build.
+KOKKOS_INLINE_FUNCTION int find_byte(std::uint32_t packed, int value) {
+    return byte(packed, 0) == value ? 0 : byte(packed, 1) == value ? 1 : byte(packed, 2) == value ? 2 : 3;
+}
+// Bits 32 k to 32 k + 31 of a vertex mask: those of lane l's k-th vertex. Used by: clip.
+KOKKOS_INLINE_FUNCTION std::uint32_t half(std::uint64_t mask, int k) {
+    return static_cast<std::uint32_t>(mask >> (32 * k));
+}
+// Bit v of a vertex mask, from its halves. Used by: clip (whether a neighbour is removed).
+KOKKOS_INLINE_FUNCTION bool bit(std::uint32_t low, std::uint32_t high, int v) {
+    return ((v < 32 ? low : high) >> (v & 31)) & 1;
 }
 
 #if defined(__CUDA_ARCH__)
@@ -136,40 +145,26 @@ __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uin
         c.nz[l] = axis == 2 ? sign : 0.0f;
         c.neighbour[l] = -1;
     }
-    for (int k = 0; k < per_lane; ++k) {
-        const int slot = l + k * lanes;
-        if (slot < max_vertices - 8) c.free_slots[slot] = max_vertices - 1 - slot;
-    }
+    const int sx = l & 1, sy = (l >> 1) & 1, sz = (l >> 2) & 1;
     if (l < 8) {
-        const int sx = l & 1, sy = (l >> 1) & 1, sz = (l >> 2) & 1;
         const bool odd = (sx + sy + sz) % 2 == 1;
         const int px = sx, py = 2 + sy, pz = 4 + sz;
         c.corner[l] = odd ? pack(px, pz, py) : pack(px, py, pz);
-        c.x[l] = sx ? -h : h;
-        c.y[l] = sy ? -h : h;
-        c.z[l] = sz ? -h : h;
+        // Across the edge from corner k to k + 1 lies the corner that differs along the axis of corner k + 2.
+        c.adjacent[l] = odd ? pack(l ^ 2, l ^ 1, l ^ 4) : pack(l ^ 4, l ^ 1, l ^ 2);
     }
-    __syncwarp(all_lanes);
-    if (l < 8) {
-        // Across edge (a, b) lies the corner that has the edge (b, a).
-        std::uint32_t adjacent = 0;
-        for (int e = 0; e < 3; ++e) {
-            const int a = byte(c.corner[l], e), b = byte(c.corner[l], (e + 1) % 3);
-            for (int w = 0; w < 8; ++w)
-                for (int k = 0; k < 3; ++k)
-                    if (byte(c.corner[w], k) == b && byte(c.corner[w], (k + 1) % 3) == a)
-                        adjacent = with_byte(adjacent, e, w);
-        }
-        c.adjacent[l] = adjacent;
-    }
+    // Free slots hold finite values: the side test reads them (clip).
+    c.x[l] = l >= 8 ? 0.0 : sx ? -h : h;
+    c.y[l] = l >= 8 ? 0.0 : sy ? -h : h;
+    c.z[l] = l >= 8 ? 0.0 : sz ? -h : h;
+    c.x[l + lanes] = c.y[l + lanes] = c.z[l + lanes] = 0.0;
     __syncwarp(all_lanes);
     planes = box_planes;
     live = 0xff;
 }
 
-// Clip by the bisector with a particle at offset d (all lanes pass the same
-// d). Returns ok when the plane does not cut or after the cut is applied.
-// `unit` scales the float normal (Kernel::unit). Used by: Kernel, once per candidate particle.
+// Clip by the bisector with a particle at offset d (all lanes pass the same d). Returns ok when the plane does not
+// cut or after the cut is applied. `unit` scales the float normal (Kernel::unit). Used by: Kernel, once per candidate.
 __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, double& radius2, Vec3 d, int neighbour,
                            double unit) {
     const int l = lane();
@@ -179,26 +174,29 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     const double tolerance2 = scale * scale * dot(d, d) * radius2;
     bool out[per_lane] = {};
     double radius = 0;  // largest squared distance of a kept vertex, then of any
+    // Without branches inside a half: a free slot's side is written but not read, its bit masks the rest.
     for (int k = 0; k < per_lane; ++k) {
+        if (half(live, k) == 0) continue;
         const int w = l + k * lanes;
-        if (!(live >> w & 1)) continue;
+        const bool in_use = half(live, k) >> l & 1;
         const double x = c.x[w], y = c.y[w], z = c.z[w];
         const double side = d.x * x + d.y * y + d.z * z - offset;
         c.side[w] = side;
-        out[k] = side > 0 && side * side > tolerance2;
-        if (!out[k]) radius = Kokkos::max(radius, x * x + y * y + z * z);
+        out[k] = in_use && side > 0 && side * side > tolerance2;
+        const double r2 = in_use && !out[k] ? x * x + y * y + z * z : 0.0;
+        radius = larger(radius, r2);
     }
     const std::uint64_t removed = vertex_ballot(out);
     if (removed == 0) return ok;
     if (planes == max_planes) return plane_overflow;
     __syncwarp(all_lanes);
 
-    // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers them, and lane j
-    // builds new vertices j and j + 32.
+    // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers them.
     const unsigned below = (1u << l) - 1;
+    const std::uint32_t removed_low = half(removed, 0), removed_high = half(removed, 1);
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
-        if (!(removed >> (k * lanes))) continue;
+        if (half(removed, k) == 0) continue;
         const int w = l + k * lanes;
         std::uint32_t corner = 0, adjacent = 0;
         if (out[k]) {
@@ -207,7 +205,7 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         }
         for (int e = 0; e < 3; ++e) {
             const int u = byte(adjacent, e);
-            const bool crossing = out[k] && !(removed >> u & 1);
+            const bool crossing = out[k] && !bit(removed_low, removed_high, u);
             const unsigned crossings = __ballot_sync(all_lanes, crossing);
             const int number = created + __popc(crossings & below);
             if (crossing && number < max_vertices)
@@ -221,25 +219,28 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     if (in_use + created > max_vertices) return vertex_overflow;
     if (kept + created < 4) return degenerate;
     const int plane = planes;
-    const int free = max_vertices - in_use;
     __syncwarp(all_lanes);
 
-    // New vertex j lies on the edge from removed w to kept u, between planes a and b.
-    int slot[per_lane], kept_end[per_lane], a[per_lane], b[per_lane];
-    std::uint64_t made = 0;  // slots this lane filled
+    // New vertex j lies on the edge from removed w to kept u, between planes a and b; the lane owning the j-th free slot
+    // builds it there.
+    const int low_free = lanes - __popc(half(live, 0));
+    bool made[per_lane] = {};
+    int kept_end[per_lane], a[per_lane], b[per_lane];
     for (int k = 0; k < per_lane; ++k) {
-        const int j = l + k * lanes;
-        if (j >= created) continue;
+        if (k > 0 && low_free >= created) break;
+        const std::uint32_t free = ~half(live, k);
+        const int s = l + k * lanes, j = (k > 0 ? low_free : 0) + __popc(free & below);
+        if (!(free >> l & 1) || j >= created) continue;
+        made[k] = true;
         const std::uint32_t edge = c.crossing[j];
         const int w = byte(edge, 0), u = byte(edge, 1);
-        const int s = c.free_slots[free - 1 - j];
         const double t = c.side[w] / (c.side[w] - c.side[u]);
         const double px = c.x[w] + (c.x[u] - c.x[w]) * t, py = c.y[w] + (c.y[u] - c.y[w]) * t,
-                   pz = c.z[w] + (c.z[u] - c.z[w]) * t;
+                     pz = c.z[w] + (c.z[u] - c.z[w]) * t;
         c.x[s] = px;
         c.y[s] = py;
         c.z[s] = pz;
-        radius = Kokkos::max(radius, px * px + py * py + pz * pz);
+        radius = larger(radius, px * px + py * py + pz * pz);
         a[k] = byte(edge, 2);
         b[k] = byte(edge, 3);
         c.corner[s] = pack(a[k], b[k], plane);
@@ -249,23 +250,15 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         store_byte(c.adjacent[u], byte(corner_u, 0) == b[k] ? 0 : byte(corner_u, 1) == b[k] ? 1 : 2, s);
         c.starts[a[k]] = s;
         c.ends[b[k]] = s;
-        slot[k] = s;
         kept_end[k] = u;
-        made |= std::uint64_t(1) << s;
     }
-    const unsigned made_low = __reduce_or_sync(all_lanes, static_cast<unsigned>(made));
-    const unsigned made_high = __reduce_or_sync(all_lanes, static_cast<unsigned>(made >> 32));
+    const std::uint64_t made_slots = vertex_ballot(made);
     __syncwarp(all_lanes);
     // Across (a, b) is u, across (b, plane) the new vertex whose hole edge starts at b, across (plane, a) the one whose
     // hole edge ends at a.
     for (int k = 0; k < per_lane; ++k)
-        if (l + k * lanes < created) c.adjacent[slot[k]] = pack(kept_end[k], c.starts[b[k]], c.ends[a[k]]);
-    // Removed slots go back on the stack.
-    for (int k = 0; k < per_lane; ++k) {
-        const int w = l + k * lanes;
-        if (out[k]) c.free_slots[free - created + __popcll(removed & ((std::uint64_t(1) << w) - 1))] = w;
-    }
-    live = (live & ~removed) | made_low | std::uint64_t(made_high) << 32;
+        if (made[k]) c.adjacent[l + k * lanes] = pack(kept_end[k], c.starts[b[k]], c.ends[a[k]]);
+    live = (live & ~removed) | made_slots;
     if (l == 0) {
         c.nx[plane] = static_cast<float>(d.x * unit);
         c.ny[plane] = static_cast<float>(d.y * unit);
@@ -291,11 +284,9 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
             const bool lower = (l & stride) == 0;
             const bool other_smaller = other_key < key || (other_key == key && other_slot < slot);
             const bool take = lower == ascending ? other_smaller : !other_smaller && (other_key != key || other_slot != slot);
-            if (take) {
-                key = other_key;
-                slot = other_slot;
-                packed_image = other_image;
-            }
+            key = take ? other_key : key;
+            slot = take ? other_slot : slot;
+            packed_image = take ? other_image : packed_image;
         }
     }
 }
@@ -446,9 +437,10 @@ struct Kernel {
                 recorded += buffered;
             }
 #endif
+            float reach = 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f;
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
-                if (k >= 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f) break;
+                if (k >= reach) break;
                 const int q = __shfl_sync(all_lanes, slot, i);
                 const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
                              __shfl_sync(all_lanes, mine.z, i)};
@@ -467,6 +459,7 @@ struct Kernel {
                 status = clip(c, planes, live, radius2, d, q, unit);
                 ++clipped;
                 cuts += planes > before;
+                if (planes > before) reach = 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f;
 #if defined(VORONOI_MEASURE)
                 m[measure::vertices_peak] =
                     Kokkos::max(m[measure::vertices_peak], static_cast<long long>(__popcll(live)));
@@ -652,8 +645,7 @@ struct Kernel {
             double weight = 0;
             int vertex = start, steps = 0;
             do {
-                int at = 0;
-                while (at < 3 && byte(c.corner[vertex], at) != plane) ++at;
+                const int at = find_byte(c.corner[vertex], plane);
                 if (at == 3 || ++steps > max_vertices) {
                     broken = true;
                     break;
@@ -756,9 +748,9 @@ struct Kernel {
                     at += 2;
                     // Walk the face again; the plane shared with the next vertex bounds it.
                     for (int vertex = c.first[plane], k = 0; k < owned_length[m]; ++k) {
-                        int corner = 0;
-                        while (byte(c.corner[vertex], corner) != plane) ++corner;
-                        out.rings(at++) = c.neighbour[byte(c.corner[vertex], (corner + 2) % 3)];
+                        const std::uint32_t corners = c.corner[vertex];
+                        const int corner = find_byte(corners, plane);
+                        out.rings(at++) = c.neighbour[byte(corners, (corner + 2) % 3)];
                         vertex = byte(c.adjacent[vertex], (corner + 2) % 3);
                     }
                 } else {
