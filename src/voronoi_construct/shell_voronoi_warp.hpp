@@ -702,7 +702,8 @@ struct Kernel {
             for (int m = 0; m < owned_here; ++m) need += 2 + owned_length[m];
             int total = 0;
             exclusive_scan(need, total);
-            // A face's ring follows those of the owned faces with smaller neighbours.
+            // A face's ring follows those of the owned faces with smaller neighbours; a rounded cell can have two
+            // faces toward one neighbour (#48), which go in lane order.
             auto* const face_neighbour = reinterpret_cast<std::uint32_t*>(c.side);
             auto* const face_need = face_neighbour + max_planes;
             for (int m = 0; m < per_lane; ++m)
@@ -715,7 +716,8 @@ struct Kernel {
                 if (m < owned_here) {
                     const std::uint32_t mine = std::uint32_t(c.neighbour[owned_plane[m]]);
                     for (int g = 0; g < owned; ++g)
-                        if (face_neighbour[g] < mine) ring_offset[m] += face_need[g];
+                        if (face_neighbour[g] < mine || (face_neighbour[g] == mine && g < offset + m))
+                            ring_offset[m] += face_need[g];
                 }
             if (l == 0 && status == ok) {
                 fits = claim_rings(out, id, total);

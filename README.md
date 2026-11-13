@@ -166,11 +166,11 @@ One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: millio
 | M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
 | Full rebuild (warp clipping), jittered | 42.6 | 42.8 |
-| Full rebuild, uniform random | 21.9 | 22.4 |
-| Full rebuild, clustered (Gaussian blobs, ~1:500) | 17.1 | 18.5 |
+| Full rebuild, uniform random | 22.0 | 22.4 |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | 17.0 | 18.5 |
 | Full rebuild, halo (1:10⁴ core to edge) | 15.5 | 17.9 |
-| Full rebuild, lattice / wave | 55.1 / 40.8 | 57.6 / 41.0 |
-| Exact start (warp with rings + `tet_start::build`), jittered | 18.5 | 11.7 |
+| Full rebuild, lattice / wave | 55.1 / 40.9 | 57.7 / 41.0 |
+| Exact start (warp with rings + `tet_start::build`), jittered | 18.6 | 11.7 |
 | Moving-mesh update, 0.03 spacings per step | 223 | 318 (215 with `update_cells()`) |
 | Moving-mesh update, 0.1 spacings per step | 130 | 209 (151 with `update_cells()`) |
 | Moving-mesh update, 0.3 spacings per step | 65.9 | 110 (85.6 with `update_cells()`) |
@@ -185,7 +185,7 @@ GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild t
 
 A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilt at the cube's rate before the lean cut, 39.9 M cells/s for jittered input.
 
-The lean cut (2026-11-13) made the rebuild 10 to 15 % faster than main 9e9ec03 on all six inputs at 128³ and 256³, and the exact start 6 % on jittered input, with the same tetrahedra, volumes, centroids and per-cell lists. It needed canonical face rings, which cost under 1 %: a new vertex goes into the lowest free slot, built by the lane that owns it, without a stack of free slots; the starting cube is set by formula; the candidate sort and the side test have no branches. That is 7 to 8 % fewer warp instructions per cell (9611 to 8802 on jittered input, 15128 to 14020 on uniform). The kernel still waits on the latency of each cut and on instruction fetch, so a several times faster rebuild needs fewer clips or no clipping, not a leaner cut ([measurements.md](docs/measurements.md#canonical-rings-and-a-lean-cut-2026-11-13)).
+The lean cut (2026-11-13) made the rebuild 10 to 15 % faster than main 6ead543 on all six inputs at 128³ and 256³, and the exact start 6 % on jittered input, with the same tetrahedra, volumes, centroids and per-cell lists. It needed canonical face rings, which cost under 1 %: a new vertex goes into the lowest free slot, built by the lane that owns it, without a stack of free slots; the starting cube is set by formula; the candidate sort and the side test have no branches. That is 7 to 8 % fewer warp instructions per cell (9611 to 8802 on jittered input, 15128 to 14020 on uniform). The kernel still waits on the latency of each cut and on instruction fetch, so a several times faster rebuild needs fewer clips or no clipping, not a leaner cut ([measurements.md](docs/measurements.md#canonical-rings-and-a-lean-cut-2026-11-13)).
 
 ### Long runs
 

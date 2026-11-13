@@ -10,7 +10,7 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates are mill
 |---|---|---|
 | Moving-mesh update, update plus `update_cells()`, 128³ and 256³ | 32269165, 32237516 (interleaved with main 9e9ec03; [fewer bytes per step](#fewer-bytes-per-step-incremental-face-numbers-e-and-the-ring-re-walk-k2-2026-11-12)) | `step-bytes` (the ring re-walk commit) |
 | `update_cells()` alone | 32231679 ([step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
-| Full rebuilds at 2.1M and 16.8M, exact start at 2.1M | 32238284, 32269162, 32269154 ([lean cut](#canonical-rings-and-a-lean-cut-2026-11-13)) | `clip-canonical` |
+| Full rebuilds at 2.1M and 16.8M, exact start at 2.1M | 32269868, 32269874, 32269869 ([lean cut](#canonical-rings-and-a-lean-cut-2026-11-13)) | `clip-canonical` |
 | Exact start, the sum row, at 2.1M | 31701509 | 2311937 |
 | The 256³ column, except the moving-mesh rows | 31694457 | f32c909 (older than the current code, which is faster there) |
 | Moving-mesh rows (also in research_notes/mesh_speed_2026-11-04.md) | 31886231, 31886232 | |
@@ -124,7 +124,7 @@ Rigour of the variants: a bound skipped a grid cell or particle only with a marg
 
 ### Canonical rings and a lean cut (2026-11-13)
 
-Branch `clip-canonical` against main 9e9ec03 (with the bench's checksums only, `ref`), one A100, every comparison in one job. Script `scripts/clip_canonical_a100.sh`, tables by `scripts/clip_canonical_tables.py` and `scripts/clip_canonical_ncu.py`; logs in `build-jobs/` of the `voronoi-cpp-canon` worktree on Raven. `canon` is commit a53ed48 (canonical rings only), `final` the branch head.
+Branch `clip-canonical` against main (9e9ec03, and after the rebase 6ead543; with the bench's checksums only, `ref`), one A100, every comparison in one job. Script `scripts/clip_canonical_a100.sh`, tables by `scripts/clip_canonical_tables.py` and `scripts/clip_canonical_ncu.py`; logs in `build-jobs/` of the `voronoi-cpp-canon` worktree on Raven. `canon` is commit a53ed48 (canonical rings only), `final` the branch head.
 
 **Canonical rings.** Each cell writes its owned rings in increasing neighbour id, each from its least particle, in both kernels; the warp kernel also starts each face's fan there. `mesh_test` checks the form and that the exact thread kernel writes the same entries as the warp kernel (0 of 4096 cells differ, jittered and uniform). Cost: 0 to 1 % on the rebuild (job 32237666, 1305 MHz) and 0.3 % more instructions per cell (9611 to 9642 jittered, job 32269328).
 
@@ -151,6 +151,10 @@ Nsight Compute of the warp kernel (job 32269328, 1095 MHz), warp instructions pe
 | lean cut | 8802, 1.27 | 36, 16, 11, 24 % | 14020, 1.10 | 31, 12, 29, 18 % |
 
 **Mesh.** After the build and two steps at 0.1 spacings, `tets_checksum` (the start's tetrahedra as particle sets), `geometry_checksum`, `faces_checksum` and `lists_checksum` equal main's on all six inputs at 128³ (job 32269155) and 256³ (jobs 32269156 to 32269160; wave at 256³ runs out of the A100's 40 GB in this bench's step on main too, so for it the start alone, job 32269402: the same tetrahedra). The bad tetrahedra and patched cells of the start are main's. What changed once: `rings_checksum` and the build's `cells_checksum` (the tetrahedra and faces are numbered from canonical rings now); the step's `cells_checksum` differs between runs of main as well. Canonical rings and the lean cut give the same rings and the same face geometry of a plain rebuild (`clip_checksum`) bit for bit on all six inputs, so the cut's slots no longer reach any output. luna-cpp (a82092c) builds against the branch; `hydro_sedov` 128³ jittered, moving mesh, 50 steps, gives the same bits of U, x and volume as against main (job 32238689).
+
+**After the rebase on 6ead543** (E and K2 in the repair): rebuild 42.6, 22.0, 17.0, 15.5, 55.1, 40.9 against main's 38.7, 19.2, 15.0, 13.7, 48.7, 37.2 at 128³ (+10 to +15 %, job 32269868, 1305 MHz) and 42.8, 22.4, 18.5, 17.9, 57.7, 41.0 against 38.9, 19.5, 16.3, 15.8, 50.9, 37.3 at 256³ (job 32269874); exact start 18.6, 8.8, 7.9, 10.3, 7.4, 4.4 against 17.6, 8.2, 7.2, 9.6, 7.1, 4.0 (job 32269869); the same checksums against main as above at 128³ and 256³ (jobs 32269867, 32269870 to 32269873); `hydro_sedov` the same bits (job 32269941).
+
+**A fuzz crash, fixed.** A 1e6 A100 fuzz batch (profile huge, seed 4000000000091: 1.3M particles, 38 of them coincident, an update after the refused build) hit an illegal address: a rounded cell with two faces toward one neighbour (#48) gave both rings the same place in the canonical order, the end of the block stayed unwritten, and `assemble` read a garbage length. Equal neighbours now go in lane order. Main refuses that case cleanly.
 
 **What it says.** The bookkeeping that slots and cut order forced was worth 10 to 15 %, not several times: the cut that is left is mostly the work of finding and building the new vertices, and the kernel still waits on that chain's latency and, on uniform and clustered input, on instruction fetch. A rebuild several times faster needs fewer clips (B, the rounds of `clip-split`) or no clipping (D).
 
