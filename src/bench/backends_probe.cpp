@@ -1,9 +1,6 @@
-// Phase-1 probe for the CPU / GPU / hybrid modes (docs/ideas.md, "CPU and GPU together"), not a test: one binary built
-// against a Kokkos with both OpenMP and CUDA runs the same input through voronoi::Mesh<3, Kokkos::OpenMP> and
-// voronoi::Mesh<3, Kokkos::Cuda> and compares the bits; it also times the CPU on the cells the warp clipping leaves to
-// its per-thread tail pass.
+// Probe, not a test (needs Kokkos with OpenMP and CUDA; docs/ideas.md, "CPU and GPU together"): Mesh<3, OpenMP>
+// against Mesh<3, Cuda> on one input (bits, times), and the CPU's time on the clipping's tail cells.
 //   backends_probe <n> <distribution> <displacement in spacings> <steps> <tail cells>
-// Needs KOKKOS_ENABLE_OPENMP and KOKKOS_ENABLE_CUDA.
 
 #include "support.hpp"
 
