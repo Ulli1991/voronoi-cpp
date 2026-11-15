@@ -898,38 +898,48 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         const auto order = grid.order;
         detail::until_pool_fits(exec, out, [&] {
             Kokkos::deep_copy(exec, next_cell, 0);
-            if (rings)
+            if (rings && off_base > 0)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp_rings", policy,
-                    warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget});
+                    warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+            else if (rings)
+                Kokkos::parallel_for(
+                    "shell_voronoi::construct_warp_rings", policy,
+                    warp::Kernel<Memory, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else if (off_base > 0 && cube)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
                                      warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell,
-                                                                             unit, unit2, budget});
+                                                                             unit, unit2, budget, {}});
             else if (off_base > 0)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget});
+                    warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else if (cube)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
                                      warp::Kernel<Memory, false, false, true>{grid, out, half_width, stencil, next_cell,
-                                                                              unit, unit2, budget});
+                                                                              unit, unit2, budget, {}});
             else
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget});
-            // Cells past the budget (needles into empty space, #60): the filtered kernel, over a list of their slots.
-            int deferred_count = 0;
+                    warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+            // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
+            // the filtered kernel, over a list of their slots.
+            const bool levels = off_base > 0;
+            auto heavy = KOKKOS_LAMBDA(int t) {
+                const int s = status(order(t));
+                return s == deferred || (!levels && s == uncertified);
+            };
+            int heavy_count = 0;
             Kokkos::parallel_reduce(
-                "shell_voronoi::count_deferred", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-                KOKKOS_LAMBDA(int t, int& sum) { sum += status(order(t)) == deferred; }, deferred_count);
-            if (deferred_count > 0) {
+                "shell_voronoi::count_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+                KOKKOS_LAMBDA(int t, int& sum) { sum += heavy(t); }, heavy_count);
+            if (heavy_count > 0) {
                 Kokkos::View<int*, Memory> list(Kokkos::view_alloc(Kokkos::WithoutInitializing, "shell_warp_heavy"),
-                                                deferred_count);
+                                                heavy_count);
                 Kokkos::parallel_scan(
-                    "shell_voronoi::list_deferred", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+                    "shell_voronoi::list_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
                     KOKKOS_LAMBDA(int t, int& at, bool last) {
-                        if (status(order(t)) != deferred) return;
+                        if (!heavy(t)) return;
                         if (last) list(at) = t;
                         ++at;
                     });
