@@ -12,7 +12,7 @@ source /etc/profile.d/modules.sh
 module purge
 module load gcc/14 cuda/13.0 cmake
 root="$(git -C "${SLURM_SUBMIT_DIR:-.}" rev-parse --show-toplevel)"
-commit="$(git -C "$root" rev-parse --short HEAD)$(git -C "$root" diff --quiet HEAD -- src bench || echo +local)"
+commit="$(git -C "$root" log -1 --format=%h -- src bench CMakeLists.txt)$(git -C "$root" diff --quiet HEAD -- src bench || echo +local)"
 bin="${1:-/ptmp/uli/voronoi-paper/bin}/$commit"
 flags=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper
     -DKokkos_DIR=/u/uli/kokkos-cuda/lib64/cmake/Kokkos -DBUILD_TESTING=OFF)
