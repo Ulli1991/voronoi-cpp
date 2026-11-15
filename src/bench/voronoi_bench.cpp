@@ -383,6 +383,22 @@ void advect(const Flow& flow, Points& points, double distance, const Box& box, i
     for (auto& t : pool) t.join();
 }
 
+// A share `fraction` of the points, drawn anew each step, jumps `distance` in a random direction (particles crossing
+// or teleporting), wrapped and kept on the grid. Used by: step (--jump).
+void jump(Points& points, double fraction, double distance, const Box& box, int seed) {
+    std::mt19937_64 rng(7919 + seed);
+    std::uniform_int_distribution<std::size_t> any(0, points.size() - 1);
+    std::normal_distribution<double> gauss(0.0, 1.0);
+    const auto count = static_cast<std::size_t>(std::llround(fraction * double(points.size())));
+    for (std::size_t j = 0; j < count; ++j) {
+        auto& p = points[any(rng)];
+        const Point g{gauss(rng), gauss(rng), gauss(rng)};
+        const double scale = distance / std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+        for (int a = 0; a < 3; ++a) p[a] = box.side[a] * wrap((p[a] + scale * g[a]) / box.side[a]);
+    }
+    to_grid(points, box);
+}
+
 // The q-quantile of v (reordered). Used by: report_order.
 template <class T>
 T quantile(std::vector<T>& v, double q) {
@@ -570,7 +586,8 @@ std::uint64_t lists_checksum(const Mesh& mesh) {
 // phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
 // Used by: main.
 int step(const std::vector<std::string>& args, const Box& box, bool verify, bool checksum, bool measure,
-         int order_every, const voronoi::Layout& layout, const std::string& dump) {
+         int order_every, const voronoi::Layout& layout, const std::string& dump, double jump_share = 0,
+         double jump_spacings = 0, const std::string& fallback = "cheapest") {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -622,6 +639,11 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);
     Mesh mesh(exec, box);
     mesh.set_layout(layout);
+    mesh.set_fallback(fallback == "host"      ? voronoi::Fallback::host
+                      : fallback == "rebuild" ? voronoi::Fallback::rebuild
+                                              : voronoi::Fallback::cheapest);
+    std::cout << "motion: jump_share=" << jump_share << " jump_spacings=" << jump_spacings << " fallback=" << fallback
+              << "\n";
     // label[i]: the particle cell i was first; the points follow every re-sort.
     std::vector<int> label(n);
     std::iota(label.begin(), label.end(), 0);
@@ -666,16 +688,21 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         Kokkos::Timer moving;
         advect(flow, points, displacement * spacing, box,
                static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 16u)));
+        if (jump_share > 0) jump(points, jump_share, jump_spacings * spacing, box, s);
         const double advect_ms = moving.seconds() * 1e3;
         x = to_device(points);
         exec.fence();
         const double copy_ms = moving.seconds() * 1e3 - advect_ms;
         if (s == 2) KernelTimes::total.clear();
         voronoi::Timings t;
-        const voronoi::Report r = [&] {
+        voronoi::Report r;
+        try {
             const Phase phase("s" + std::to_string(s) + "_update");
-            return mesh.update(x, &t);
-        }();
+            r = mesh.update(x, &t);
+        } catch (const std::exception& e) {  // a refusal: the input has no exact mesh
+            std::cout << "refused: step=" << s << " " << e.what() << "\n";
+            return failures + 1;
+        }
         follow(r);
         {
             const Phase phase("s" + std::to_string(s) + "_cells");
@@ -686,7 +713,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         const double step_ms = t.repair + t.geometry;
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
                   << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
-                  << " host_rebuilt=" << r.host_rebuilds << " rebuilt=" << r.rebuilt << " rebuild_ms=" << t.build
+                  << " host_rebuilt=" << r.host_rebuilds << " rebuilt=" << r.rebuilt << " overlapped=" << r.overlapped
+                  << " miscounted=" << r.miscounted << " rebuild_ms=" << t.build
                   << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
                   << " cells_ms=" << t.cells << " resorted=" << r.resorted << " resort_ms=" << t.resort
                   << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3
@@ -734,13 +762,16 @@ int main(int argc, char** argv) {
     if (args.size() >= 4 && args[0] == "step")
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--measure"), static_cast<int>(flag_value(argc, argv, "--order", 0)),
-                    layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", "")) != 0;
+                    layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", ""),
+                    flag_value(argc, argv, "--jump-share", 0), flag_value(argc, argv, "--jump-spacings", 4),
+                    text_flag(argc, argv, "--fallback", "cheapest")) != 0;
     std::cerr << "usage: voronoi_bench rebuild <n> <distribution|file.pts> [repeats] [--no-check] [--kernels]\n"
                  "                          [--memory] [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
                  "                          [--owner-faces] [--owner-bit] [--dump-cells=path]\n"
+                 "                          [--jump-share=f --jump-spacings=d] [--fallback=cheapest|host|rebuild]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
