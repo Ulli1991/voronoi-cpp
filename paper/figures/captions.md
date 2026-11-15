@@ -85,7 +85,11 @@ fill one A100 40 GB. Besides memory, the face-ring pool's 32-bit offsets overflo
 
 **oracle_errors.** Against the exact reference `src/test/oracle.hpp`: 128-bit integer predicates and long-double
 clipping over all periodic images, brute force per sampled cell; it includes only the C++ standard library and shares
-no code with the mesh (its driver shares the point-file reader). 1000 sampled cells per input.
+no code with the mesh (its driver shares the point-file reader). 1000 sampled cells per input. All at 128³ (2,097,152 cells). (a) voronoi-cpp's
+warp rebuild and (b) its exact start, one A100 at 1305 MHz (55cd6b1, job 32366449), per input; (c) every code on halo
+input, voronoi-cpp's warp rebuild included. Left of the axis break: cells whose volume equals the exact reference's
+(error 0). Cells without a volume are not in the histograms; on halo: peclet-voro 33,819, Basselin et al. 2,023 and
+Ray et al. (VoroGPU, float, K = 190) 21,471 of 2,097,152 cells; the other codes none.
 
 **throughput_vs_n, step_vs_displacement, resort, stages.** One A100 40 GB at 1305 MHz SM clock (every job's log), main
 55cd6b1, double precision, periodic unit box. Rates are cells over wall time of the timed region, median of 5 runs
