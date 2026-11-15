@@ -57,6 +57,91 @@ KOKKOS_INLINE_FUNCTION double volume(const Points& point, const int* v, double u
     return Kokkos::abs(double(ep::det3(o[1], o[2], o[3]))) * unit3 / 6;
 }
 
+// The sign of ep::orient(a, b, c) where its double filter decides it, else 0.
+KOKKOS_INLINE_FUNCTION int orient_filter(const ep::Offset& a, const ep::Offset& b, const ep::Offset& c) {
+    double permanent;
+    const double d = ep::det3_float(a, b, c, permanent), bound = 8 * ep::epsilon * permanent;
+    return d > bound ? 1 : d < -bound ? -1 : 0;
+}
+
+// ep::in_sphere(point, v, o, e) where the double filters decide it: 1 inside, -1 not, 0 undecided.
+template <class Points>
+KOKKOS_INLINE_FUNCTION int in_sphere_filter(const Points& point, const int* v, const ep::Offset* o, int e) {
+    const ep::Offset x = ep::offset(point, v[0], e);
+    const int orientation = orient_filter(o[1], o[2], o[3]);
+    auto lift = [](const ep::Offset& y) {
+        return double(y[0]) * double(y[0]) + double(y[1]) * double(y[1]) + double(y[2]) * double(y[2]);
+    };
+    double pa, pb, pc, pe;
+    const double ta = ep::det3_float(o[2], o[3], x, pa), tb = ep::det3_float(o[1], o[3], x, pb),
+                 tc = ep::det3_float(o[1], o[2], x, pc), te = ep::det3_float(o[1], o[2], o[3], pe);
+    const double la = lift(o[1]), lb = lift(o[2]), lc = lift(o[3]), le = lift(x);
+    const double value = -la * ta + lb * tb - lc * tc + le * te;
+    const double bound = 20 * ep::epsilon * (la * pa + lb * pb + lc * pc + le * pe);
+    const int d = value > bound ? 1 : value < -bound ? -1 : 0;
+    if (orientation == 0 || d == 0) return 0;
+    return d * orientation < 0 ? 1 : -1;
+}
+
+// The check of tetrahedron t (see check), corners v (offsets o from v[0]) and neighbours adj: 1 fine; 0 bad, marking its
+// particles and a failing far vertex; -1 undecided by the double filters (Filtered only; nothing marked).
+template <bool Filtered, class Quads, class Points, class Marked>
+KOKKOS_INLINE_FUNCTION int check_one(const Quads& vertex, const Quads& adjacent, const Points& point,
+                                     const Marked& marked, int t, int* v, int* adj, const ep::Offset* o) {
+    const int orientation = Filtered ? orient_filter(o[1], o[2], o[3]) : ep::orient(o[1], o[2], o[3]);
+    if (Filtered && orientation == 0) return -1;
+    bool fine = orientation != 0;
+    if (orientation < 0) {
+        Kokkos::kokkos_swap(v[2], v[3]);
+        Kokkos::kokkos_swap(adj[2], adj[3]);
+    }
+    for (int k = 0; k < 4 && fine; ++k) {
+        const int u = adj[k];
+        if (u < 0) {
+            fine = false;
+            break;
+        }
+        int far = -1, shared = 0;
+        for (int c = 0; c < 4; ++c) {
+            const int p = vertex(u, c);
+            int at = -1;
+            for (int d = 0; d < 4; ++d)
+                if (v[d] == p) at = d;
+            if (at < 0) {
+                far = c;
+            } else {
+                shared += at != k;
+            }
+        }
+        if (far < 0 || shared != 3 || adjacent(u, far) != t) {
+            fine = false;
+            break;
+        }
+        // The geometric tests are symmetric: once per triangle.
+        if (u < t) continue;
+        int s[4] = {v[0], v[1], v[2], v[3]};
+        s[k] = vertex(u, far);
+        if constexpr (Filtered) {
+            const int side = orient_filter(ep::offset(point, s[0], s[1]), ep::offset(point, s[0], s[2]),
+                                           ep::offset(point, s[0], s[3]));
+            if (side == 0) return -1;
+            if (side < 0) {
+                const int inside = in_sphere_filter(point, v, o, s[k]);
+                if (inside == 0) return -1;
+                fine = inside < 0;
+            } else {
+                fine = false;
+            }
+        } else {
+            fine = ep::orient(point, s) < 0 && !ep::in_sphere(point, v, o, s[k]);
+        }
+        if (!fine) marked(s[k]) = 1;
+    }
+    if (!fine)
+        for (int k = 0; k < 4; ++k) marked(v[k]) = 1;
+    return fine;
+}
+
 }  // namespace detail
 
 // A check after an incremental assemble: only tetrahedra redone or next to one are tested, as the others passed the
@@ -89,6 +174,10 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     const bool some = partial.redone.extent(0) > 0;
     const auto redone = partial.redone;
     const auto changed = partial.changed;
+    // Most tetrahedra are decided by the double filters; the rest go to `undecided` and the exact predicates.
+    Kokkos::View<int*, Memory> undecided(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_start_undecided")),
+                                         count);
+    Kokkos::View<int, Memory> undecided_count("tet_start_undecided_count");
     Report report;
     Kokkos::parallel_reduce(
         "tet_start::check", Range(exec, 0, count),
@@ -104,47 +193,29 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
             ep::Offset o[4];
             const double size = detail::volume(point, v, unit3, o);
             if (!some || changed(v[0])) volume += size;
-            const int orientation = ep::orient(o[1], o[2], o[3]);
-            bool fine = orientation != 0;
-            if (orientation < 0) {
-                Kokkos::kokkos_swap(v[2], v[3]);
-                Kokkos::kokkos_swap(adj[2], adj[3]);
-            }
-            for (int k = 0; k < 4 && fine; ++k) {
-                const int u = adj[k];
-                if (u < 0) {
-                    fine = false;
-                    break;
-                }
-                int far = -1, shared = 0;
-                for (int c = 0; c < 4; ++c) {
-                    const int p = vertex(u, c);
-                    int at = -1;
-                    for (int d = 0; d < 4; ++d)
-                        if (v[d] == p) at = d;
-                    if (at < 0) {
-                        far = c;
-                    } else {
-                        shared += at != k;
-                    }
-                }
-                if (far < 0 || shared != 3 || adjacent(u, far) != t) {
-                    fine = false;
-                    break;
-                }
-                // The geometric tests are symmetric: once per triangle.
-                if (u < t) continue;
-                int s[4] = {v[0], v[1], v[2], v[3]};
-                s[k] = vertex(u, far);
-                fine = ep::orient(point, s) < 0 && !ep::in_sphere(point, v, o, s[k]);
-                if (!fine) marked(s[k]) = 1;
-            }
-            if (!fine) {
-                ++bad;
-                for (int k = 0; k < 4; ++k) marked(v[k]) = 1;
-            }
+            const int state = detail::check_one<true>(vertex, adjacent, point, marked, t, v, adj, o);
+            if (state < 0) undecided(Kokkos::atomic_fetch_add(&undecided_count(), 1)) = t;
+            bad += state == 0;
         },
         report.bad_tets, report.volume);
+    int hard = 0;
+    Kokkos::deep_copy(exec, hard, undecided_count);
+    exec.fence();
+    if (hard > 0) {
+        long long bad = 0;
+        Kokkos::parallel_reduce(
+            "tet_start::check_exact", Range(exec, 0, hard),
+            KOKKOS_LAMBDA(int i, long long& sum) {
+                const int t = undecided(i);
+                int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+                int adj[4] = {adjacent(t, 0), adjacent(t, 1), adjacent(t, 2), adjacent(t, 3)};
+                ep::Offset o[4];
+                detail::volume(point, v, unit3, o);
+                sum += detail::check_one<false>(vertex, adjacent, point, marked, t, v, adj, o) == 0;
+            },
+            bad);
+        report.bad_tets += bad;
+    }
     report.volume += partial.volume;
     Kokkos::parallel_reduce(
         "tet_start::unused", Range(exec, 0, n),

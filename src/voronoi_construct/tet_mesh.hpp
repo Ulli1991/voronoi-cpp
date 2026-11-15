@@ -491,22 +491,28 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     a.slot_face = Ints(uninitialized("assemble_slot_face"), slots);
     const auto first_tet = a.first_tet, slot_face = a.slot_face;
     const auto face_ring = a.face_ring;
+    // A thread per face, so the writes are coalesced: its owner by bisection, then the walk of the owner's block.
     Kokkos::parallel_for(
-        "tet_mesh::faces_of_cells", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
+        "tet_mesh::faces_of_cells", Range(exec, 0, faces), KOKKOS_LAMBDA(int g) {
+            int t = 0;
+            for (int high = n; high - t > 1;) {
+                const int middle = (t + high) / 2;
+                (face_start(middle) <= g ? t : high) = middle;
+            }
             long long at = cell_ring(t);
             int slot = slot_start(t), tet = tet_start(t);
-            for (int f = 0, g = face_start(t); f < owned(t); ++f, ++g) {
+            for (int f = face_start(t); f < g; ++f) {
                 const int j = rings(at), k = rings(at + 1);
-                owner(g) = t;
-                neighbour(g) = j;
-                length(g) = k;
-                ring_start(g) = slot;
-                first_tet(g) = tet;
-                face_ring(g) = at + 2;
                 for (int m = 0; m < k; ++m) tet += emits(j, rings(at + 2 + m), rings(at + 2 + detail::after(m, k)));
                 slot += k;
                 at += 2 + k;
             }
+            owner(g) = t;
+            neighbour(g) = rings(at);
+            length(g) = rings(at + 1);
+            ring_start(g) = slot;
+            first_tet(g) = tet;
+            face_ring(g) = at + 2;
         });
     Kokkos::parallel_for(
         "tet_mesh::slot_faces", Range(exec, 0, faces), KOKKOS_LAMBDA(int g) {
