@@ -11,10 +11,15 @@ captions state the A100's SM clock. Figures draw measured rows only (every code 
 
 ## Part 1: the library (6–7 figures)
 
+**Owner's 7-figure plan (2026-11-15).** 1 `walkthrough` (done, one full page); 2 `inputs`; 3 speed against the
+libraries (today's Figs. 4 `library_headline` + 5 `library_more`); 4 where the time goes (`library_stages` + the step's
+`stages`); 5 quality (Fig. 7 `quality` + `oracle_errors` + `application`, today's 3b); 6 throughput against problem size,
+step against displacement, re-sort; 7 memory. Only the walkthrough merge is done now; the rest is combined at the
+post-merge rerun. The table below keeps today's figure files.
+
 | Fig. | file | message | data | status |
 |---|---|---|---|---|
-| 1 | `walkthrough_build` (panels 1–6) | A periodic point set goes through quantisation to integer coordinates on a 2³⁰ grid, the Morton cell list, clipping one cell, all cells with their face rings, the exact start, and the first move. | the library's own 2D arrays (`scripts/overview_mesh2d.cpp`, `Mesh<2>`) | **done**, 190 × 139 mm (`fig_walkthrough.py`): titles and drawings only; panel texts and code names in `walkthrough_captions.md` for the caption |
-| 2 | `walkthrough_step` (panels 7–12) | A step screens the old triangles, flips the failing ones in rounds, writes the dual's faces, sums the cells in a fixed order, falls back to the host or a rebuild when stuck, and re-sorts. | same | **done**, 190 × 139 mm |
+| 1 | `walkthrough` (panels 1–12, full page) | Rows 1–2, Build: a periodic point set goes through quantisation to integer coordinates on a 2³⁰ grid, the Morton cell list, clipping one cell, all cells with their face rings, the exact start, and the first move. Rows 3–4, Step: screening the old triangles, flips in rounds, the dual's faces, the cells summed in a fixed order, fallbacks to the host or a rebuild, the re-sort. | the library's own 2D arrays (`scripts/overview_mesh2d.cpp`, `Mesh<2>`) | **done**, 190 × 260 mm (`fig_walkthrough.py`): titles and drawings only; panel texts in the caption, code names in `walkthrough_captions.md` |
 | 3 | `inputs` (before the benchmark figures) | The five benchmark inputs and the three application inputs (cosmic web, fcc solid, surface), one panel each (a 16-spacing zoom for the even inputs and the fcc solid, the whole box for clustered, halo, cosmic web and surface), with their measured density contrast and nearest-neighbour distances on one log axis; lattice and wave named in the caption as degenerate test cases. | `paper/data/inputs.npz` (`extract_inputs.py` on the 64³ point files of `library_bench points` / `lloyd`, same generators and seed; fcc solid 2¹⁷ atoms, l = 32) | **done**, 190 × 136 mm, two rows of four (`fig_inputs.py`) |
 | 3b | `application` (panel set or own figure, next to `quality`) | Completeness against build rate per code on cosmic web, fcc solid and surface: of the codes shown only voronoi-cpp's exact start, CGAL, geogram and voro++ (the last three on 72 CPU cores) are complete and right on all three; the kNN codes lose cells on cosmic web and almost all on the surface; crashes and wrong volumes marked, not dropped; our surface rows marked "#60 open". | `bench/libraries/results` (the "Application inputs" tables of `scripts/library_benchmark.py`; ours 631af46), `accuracy-inputs-*.jsonl`, `paper/data/oracle_errors_application.csv` | **done, surface preliminary**, 190 × 80 mm (`fig_application.py`); redraw the surface after the fix of #60 (rerun `run_voronoi_cpp_a100.sh` on the surface, its oracle check, then `extract_oracle.py` with `ORACLE_ONLY`) |
 | 4 | `library_headline` | Full cells on one A100, like for like: voronoi-cpp's rebuild is several times faster than the fastest other GPU code with full cells, more so the less even the input; measured rows only (published rates in a table in captions.md). | `bench/libraries/results/*.jsonl`, `published.csv`; our rows from the paper's rerun `paper/data/raw/libbench-vcpp-32366449.jsonl` (55cd6b1, 1305 MHz, ravg1034) | **done**, 90 × 84 mm (`fig_library.py`); the other codes' GPU rows are at 1095 MHz (ravg1002), as the caption says |
@@ -31,7 +36,7 @@ Long runs with and without re-sort (jobs 32362455, and 32362456 cancelled mid-wa
 
 Design choices and what was tried (`docs/tried.md`) are for the team; the paper describes the design choices in the text, with no figure or table from that list.
 
-**Captions of Figs. 1–2, 2D stand-ins.** Every panel is computed by the library's 2D mesh (`Mesh<2>`), which shares the
+**Caption of the walkthrough, 2D stand-ins.** Every panel is computed by the library's 2D mesh (`Mesh<2>`), which shares the
 3D mesh's structure; the code line under each panel names the 3D counterpart. The same in 3D: panel 1 (quantisation, per
 coordinate), 6 (the caller moves the points), 10 (update_cells is the same code in 2D and 3D; triangles over edges
 stand for pyramids over faces). 2D stand-ins for 3D: 2 (a quadtree cell list for the octree), 3 (a polygon cut by
