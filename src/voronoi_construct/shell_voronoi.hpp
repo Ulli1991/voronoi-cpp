@@ -638,6 +638,27 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
         if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
 }
 
+// Cells a rounded build left neither ok nor out of pool room, built again exactly: a rounded cut can see a face's own
+// vertices beyond its plane, as when a coarser level re-reads a particle it clipped (#60). Exact cells decide by sign.
+// Used by: construct, construct_warp.
+template <class ExecSpace>
+void exact_where_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                        const Stencil<typename ExecSpace::memory_space>& stencil,
+                        const Cells<typename ExecSpace::memory_space>& out,
+                        const Selection<typename ExecSpace::memory_space>& selection = {}) {
+    const auto status = out.status;
+    const auto order = grid.order;
+    int failed = 0;
+    Kokkos::parallel_reduce(
+        "shell_voronoi::count_failed", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
+        KOKKOS_LAMBDA(int i, int& sum) {
+            const int s = status(order(selection.slot(i)));
+            sum += s != ok && s != face_overflow;
+        },
+        failed);
+    if (failed > 0) construct_cells<ExactCell>(exec, grid, stencil, out, Pass::failed, selection);
+}
+
 // Run build() on an empty pool; if the pool turned out too small (cells
 // face_overflow), again on one that fits.
 // Used by: construct, construct_warp.
@@ -655,8 +676,8 @@ void until_pool_fits(const ExecSpace& exec, Cells<MemorySpace>& out, const Build
 }  // namespace detail
 
 // Build the selected cells (default: all) with one thread per cell: the portable kernel (rounded cells, as the warp
-// kernel), or exactly (detail::ExactCell) if `exact`. Rounded cells are guesses: near-equal bisectors can break one with
-// status ok (#30), so use them only under an exact check, as tet_start does.
+// kernel; those it cannot finish exactly), or all exactly (detail::ExactCell) if `exact`. Rounded cells are guesses:
+// near-equal bisectors can break one with status ok (#30), so use them only under an exact check, as tet_start does.
 // Used by: construct_warp (non-CUDA), tests.
 template <class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
@@ -666,8 +687,10 @@ void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_spac
     detail::until_pool_fits(exec, out, [&] {
         if (exact)
             detail::construct_cells<detail::ExactCell>(exec, grid, stencil, out, detail::Pass::all, selection);
-        else
+        else {
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::all, selection);
+            detail::exact_where_failed(exec, grid, stencil, out, selection);
+        }
     });
 }
 

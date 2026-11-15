@@ -803,8 +803,8 @@ struct Kernel {
 
 }  // namespace warp
 
-// Build every cell with one warp per cell, then rebuild the ones that overflowed with the per-thread kernel;
-// with face rings if `out` records them. Other backends use that kernel throughout.
+// Build every cell with one warp per cell, then rebuild the ones that overflowed with the per-thread kernel, and those
+// still failing exactly; with face rings if `out` records them. Other backends use that kernel throughout.
 // Used by: Mesh<3>::rebuild.
 template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
@@ -856,6 +856,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     "shell_voronoi::construct_warp", policy,
                     warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2});
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
+            detail::exact_where_failed(exec, grid, stencil, out);
         });
         return;
     }
