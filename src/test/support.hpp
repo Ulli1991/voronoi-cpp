@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <stdexcept>
@@ -218,10 +220,23 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
     return points;
 }
 
+// The first frame of a library-benchmark point file (bench/libraries: n, frames, then x y z doubles); n is the file's.
+// Used by: make_points_off_grid (kinds ending in .pts, e.g. blue noise).
+inline Points read_points(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::uint64_t head[2] = {};
+    if (!in.read(reinterpret_cast<char*>(head), sizeof head)) throw std::invalid_argument("cannot read " + path);
+    Points points(head[0]);
+    if (!in.read(reinterpret_cast<char*>(points.data()), static_cast<std::streamsize>(head[0] * sizeof(Point))))
+        throw std::invalid_argument("short point file " + path);
+    return points;
+}
+
 // Points in the unit box of the given `kind`: uniform, jittered, lattice, wave, clustered, halo or a degenerate layout.
 // Used by: make_points, scaled; directly by voronoi_mesh_test (off-grid, snapped by the mesh).
 // Lattices round n to a cube, or with `shape` to equal spacings once scaled to that box.
 inline Points make_points_off_grid(const std::string& kind, int n, const Shape& shape = {1, 1, 1}) {
+    if (kind.size() > 4 && kind.substr(kind.size() - 4) == ".pts") return read_points(kind);
     if (const auto at = kind.find('@'); at != std::string::npos)
         return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n, shape);
     std::mt19937_64 rng(20261029);
