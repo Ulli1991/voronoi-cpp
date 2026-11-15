@@ -44,6 +44,7 @@ KOKKOS_INLINE_FUNCTION void face_of(const Geometry<Memory, D>& g, int f, VecN<D>
     A = row<D>(g.area, f);
     c = row<D>(g.centroid, f);
 }
+// The same from the face's ring (Layout::faces_on_read). Used by: pyramid.
 template <class Memory, class X>
 KOKKOS_INLINE_FUNCTION void face_of(const FaceGeometry<Memory, X>& g, int f, Vec3& A, Vec3& c) {
     g.face(f, A, c);
