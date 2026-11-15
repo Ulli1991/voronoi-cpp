@@ -33,6 +33,9 @@ All in the periodic unit box, generated in `src/test/support.hpp`.
 | halo | 4 halos with ρ ∝ 1/(r² + c²) to r = 0.2, c = 0.002, 90 % of the points, 10 % background | density contrast about 1:10⁴ (core to edge) |
 | lattice | perfect cubic lattice | fully degenerate: 8 points on every circumsphere |
 | wave (moved lattice) | the lattice with every point moved by up to 1e-5 spacing | nearly degenerate: ties broken only by tiny offsets |
+| cosmic web | Zel'dovich approximation x = q + D ψ(q) from a cubic lattice: Gaussian random field with the BBKS CDM spectrum (Bardeen et al. 1986; Γ = 0.21, n_s = 0.96), σ₈ = 0.8 at D = 1, 100 Mpc/h box, all modes below the Nyquist number of the lattice; growth factor D = 0.5 (rms displacement 4.3 spacings at 128³) | filaments, walls and voids: density contrast about 1:40 on a 2-spacing grid, 4 % of that grid empty; weakly deformed lattice in the voids |
+| fcc solid | fcc lattice of l³ unit cells (4 l³ atoms; l = 64, 128: 2²⁰, 2²³), each atom moved by an independent Gaussian of rms 0.0499 lattice constants per axis: the measured rms of the LAMMPS Lennard-Jones solid at ρ* = 1.05, T* = 1.0 near melting (MSD 0.018 σ², Lindemann ratio 0.12; research_notes/lammps_voronoi_2026-11-12.md on branch lammps-scout) | an MD crystal: near-ties of the rhombic dodecahedra broken by thermal noise |
+| surface | 16 spherical shells of radius 0.2 on a bcc lattice of side 0.5 (8 cross the box faces), each around a torus of radii 0.1 and 0.05; uniform in area, moved along the normal by a Gaussian of rms 0.1 surface spacings √(area / n) | points on closed surfaces: thin needle cells reaching about 0.1 box into empty space, the graphics-benchmark case |
 
 ### Non-cubic box
 
