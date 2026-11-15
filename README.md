@@ -321,12 +321,12 @@ sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A
 `voronoi_bench` (`src/bench/`) times and checks the pipeline:
 
 ```text
-voronoi_bench rebuild <n> <distribution> [repeats=5] [--no-check] [--memory] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
+voronoi_bench rebuild <n> <distribution> [repeats=5] [--no-check] [--memory] [--kernels] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
 voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--memory] [--kernels] [--checksum] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
                     [--order=every] [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share] [--owner-faces] [--owner-bit] [--dump-cells=path]
 ```
 
-`rebuild` times the warp clipping. `--order=k` prints the memory order every k steps; `--curve`, `--every`, `--far`, `--owner-faces` and `--owner-bit` set the `Layout`, and the bench's points follow each re-sort; `--dump-cells` writes each particle's cell for `scripts/resort_bits.py`. `--box` (default 1,1,1) sets the periodic box; `--box=2,2,0.0625` with 4194304 jittered points is a 512 x 512 x 16 slab. Distributions: uniform, jittered, lattice, wave, clustered, halo, or `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`.
+`rebuild` times the warp clipping. `--order=k` prints the memory order every k steps; `--curve`, `--every`, `--far`, `--owner-faces` and `--owner-bit` set the `Layout`, and the bench's points follow each re-sort; `--dump-cells` writes each particle's cell for `scripts/resort_bits.py`. `--box` (default 1,1,1) sets the periodic box; `--box=2,2,0.0625` with 4194304 jittered points is a 512 x 512 x 16 slab. Distributions: uniform, jittered, lattice, wave, clustered, halo, `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`, or a library-benchmark point file (`*.pts`, e.g. blue noise; n is the file's). `--kernels` prints the time of each kernel label, of the rebuild's clipping and of `step`'s start and steps.
 
 ## Limitations and open items
 

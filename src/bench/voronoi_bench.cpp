@@ -693,8 +693,8 @@ int main(int argc, char** argv) {
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--measure"), static_cast<int>(flag_value(argc, argv, "--order", 0)),
                     layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", "")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [repeats] [--no-check] [--memory]\n"
-                 "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
+    std::cerr << "usage: voronoi_bench rebuild <n> <distribution|file.pts> [repeats] [--no-check] [--kernels]\n"
+                 "                          [--memory] [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
