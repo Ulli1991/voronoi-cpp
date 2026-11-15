@@ -170,9 +170,9 @@ struct Layout {
     double far = 0;
     bool owner_faces = false;  // faces numbered by owner (Mesh::owned_start), then by their slot
     bool owner_bit = false;    // cell_face entries of faces the cell does not own have bit 31 set (Mesh::list_face)
-    // update() stores every face's area and centroid (area(), face_centroid()); off: computed where read (R14), see
-    // Mesh::face_geometry, and stored only when a caller asks for area(), face_centroid() or volume() first.
-    bool stored_faces = false;
+    // update() does not store face areas and centroids (R14, opt-in): computed where read (Mesh::face_geometry), stored
+    // only when a caller asks for area(), face_centroid() or volume(). Off: update() stores them.
+    bool faces_on_read = false;
     bool resorts() const { return every > 0 || far > 0; }
 };
 
@@ -241,7 +241,6 @@ public:
             } catch (const std::exception&) {
                 host.stuck = 1;
             }
-            tet_repair::forget_quiet(exec_, state_);
             report.host_flips = host.flips23 + host.flips32;
             report.host_rebuilds = host.rebuilt;
             stuck = host.stuck > 0;
@@ -308,7 +307,6 @@ public:
         const int entries = static_cast<int>(tets_.ring.extent(0));
         tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
-        state_.quiet_screen = quiet_screen_;
         rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
         using Areas = typename tet_mesh::Geometry<Memory>::Areas;
         const int stored = stores_faces() ? faces : 0;
@@ -429,8 +427,6 @@ public:
 
     bool cells_current() const { return cells_current_; }
     void set_fallback(Fallback f) { fallback_ = f; }
-    // Whether the screen skips the neighbour tests of certified quiet tetrahedra (V1, on by default).
-    void set_quiet_screen(bool on) { state_.quiet_screen = quiet_screen_ = on; }
     // The most rounds of the device repair in one update; for tests.
     void set_repair_rounds(int rounds) { repair_rounds_ = rounds; }
 
@@ -458,7 +454,7 @@ public:
                                        View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current],
                                                                         std::make_pair(0, faces()))));
     }
-    // Stored by update() with Layout::stored_faces, else here on the first call after an update.
+    // Stored by update(), or with Layout::faces_on_read here on the first call after an update.
     Rows area() const {
         store_faces();
         return geometry_.area;
@@ -494,7 +490,7 @@ public:
 
 private:
     bool built() const { return state_.alive.extent(0) > 0; }
-    bool stores_faces() const { return layout_.stored_faces || float_rows; }
+    bool stores_faces() const { return !layout_.faces_on_read || float_rows; }
 
     // The face areas and centroids of the last update (tet_mesh::faces), and the cell volumes by atomics unless
     // update_cells() summed them; nothing if stored. Used by: geometry, area, face_centroid, volume.
@@ -627,7 +623,6 @@ private:
         positions_ = moved;
         state_.point.view = points;
         mesh_order::order_tetrahedra(exec_, View<const int*>(rank), tets_, state_);
-        tet_repair::forget_quiet(exec_, state_);
         rings_.faces = -1;
         rings_.used = rings_.tets = rings_.dirty_count = 0;
         rings_.renumber_valid = false;
@@ -646,7 +641,6 @@ private:
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
     int repair_rounds_ = 1000;
-    bool quiet_screen_ = true;
     double total_volume_ = 0;  // of the cells, from the last geometry()
     int live_tets_ = 0;        // tetrahedra, from the last geometry()
     bool cells_current_ = false;

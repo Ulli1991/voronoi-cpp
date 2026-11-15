@@ -177,7 +177,7 @@ voronoi::Layout layout_flags(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         layout.owner_faces |= std::string(argv[i]) == "--owner-faces";
         layout.owner_bit |= std::string(argv[i]) == "--owner-bit";
-        layout.stored_faces |= std::string(argv[i]) == "--stored-faces";
+        layout.faces_on_read |= std::string(argv[i]) == "--faces-on-read";
     }
     return layout;
 }
@@ -534,7 +534,7 @@ std::uint64_t lists_checksum(const Mesh& mesh) {
 // phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
 // Used by: main.
 int step(const std::vector<std::string>& args, const Box& box, bool verify, bool checksum, bool measure,
-         int order_every, const voronoi::Layout& layout, const std::string& dump, bool quiet) {
+         int order_every, const voronoi::Layout& layout, const std::string& dump) {
     const Exec exec;
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
@@ -576,7 +576,6 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);
     Mesh mesh(exec, box);
     mesh.set_layout(layout);
-    mesh.set_quiet_screen(quiet);
     // label[i]: the particle cell i was first; the points follow every re-sort.
     std::vector<int> label(n);
     std::iota(label.begin(), label.end(), 0);
@@ -640,8 +639,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         // top, and all_ms adds everything (fallback, rebuild, re-sort).
         const double step_ms = t.repair + t.geometry;
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
-                  << " stuck=" << r.stuck << " quiet=" << mesh.repair_state().skipped
-                  << " motion=" << mesh.repair_state().motion << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
+                  << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
                   << " host_rebuilt=" << r.host_rebuilds << " rebuilt=" << r.rebuilt << " rebuild_ms=" << t.build
                   << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
                   << " cells_ms=" << t.cells << " resorted=" << r.resorted << " resort_ms=" << t.resort
@@ -690,14 +688,13 @@ int main(int argc, char** argv) {
     if (args.size() >= 4 && args[0] == "step")
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--measure"), static_cast<int>(flag_value(argc, argv, "--order", 0)),
-                    layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", ""),
-                    !has_flag(argc, argv, "--no-quiet")) != 0;
+                    layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", "")) != 0;
     std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [repeats] [--no-check] [--memory]\n"
                  "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-                 "                          [--owner-faces] [--owner-bit] [--stored-faces] [--no-quiet] [--dump-cells=path]\n"
+                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--dump-cells=path]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;

@@ -234,6 +234,57 @@ int main(int argc, char** argv) {
                              ", rebuilt " + std::to_string(r.rebuilt) + ") is exact");
         }
     }
+    {  // Layout::faces_on_read (R14): faces computed where read hold the stored bits; so do the cell sums
+        voronoi::Layout layout;
+        layout.faces_on_read = true;
+        Mesh stored(Exec{}, box), on_read(Exec{}, box);
+        on_read.set_layout(layout);
+        Points moving = make_points_off_grid("jittered", 4096);
+        const Flow flow;
+        long long differ = 0, faces = 0;
+        for (int step = 0; step <= 3; ++step) {
+            if (step > 0) flow.advect(moving, 0.3 * spacing / box);
+            const Positions xm = to_device(scaled(moving, box));
+            stored.update(xm);
+            on_read.update(xm);
+            stored.update_cells();
+            on_read.update_cells();
+            const int count = on_read.faces();
+            Kokkos::View<double* [6], Kokkos::LayoutRight, Memory> rows("rows", count);
+            const auto geometry = on_read.face_geometry();
+            Kokkos::parallel_for(
+                "test::face_geometry", Kokkos::RangePolicy<Exec>(0, count), KOKKOS_LAMBDA(int f) {
+                    tet_mesh::Vec3 a, c;
+                    geometry.face(f, a, c);
+                    rows(f, 0) = a.x, rows(f, 1) = a.y, rows(f, 2) = a.z;
+                    rows(f, 3) = c.x, rows(f, 4) = c.y, rows(f, 5) = c.z;
+                });
+            const auto computed = to_host(rows);
+            const auto o1 = to_host(on_read.owner(), count), n1 = to_host(on_read.neighbour(), count);
+            const auto o2 = to_host(stored.owner(), stored.faces()), n2 = to_host(stored.neighbour(), stored.faces());
+            const auto area = face_areas(stored);
+            const auto centroid = to_host(stored.face_centroid());
+            std::map<Face, std::array<double, 6>> by_pair;
+            for (int f = 0; f < stored.faces(); ++f)
+                by_pair[{o2(f), n2(f)}] = {area(f, 0),     area(f, 1),     area(f, 2),
+                                           centroid(f, 0), centroid(f, 1), centroid(f, 2)};
+            differ += count != stored.faces();
+            for (int f = 0; f < count; ++f) {
+                const auto it = by_pair.find({o1(f), n1(f)});
+                bool same = it != by_pair.end();
+                for (int k = 0; k < 6 && same; ++k) same = it->second[k] == computed(f, k);
+                differ += !same;
+            }
+            faces += count;
+            const auto v1 = to_host(stored.volume()), v2 = to_host(on_read.volume());
+            const auto c1 = to_host(stored.centroid()), c2 = to_host(on_read.centroid());
+            for (int i = 0; i < n; ++i)
+                differ += v1(i) != v2(i) || c1(i, 0) != c2(i, 0) || c1(i, 1) != c2(i, 1) || c1(i, 2) != c2(i, 2);
+        }
+        check.expect(differ == 0, "Layout::faces_on_read: faces and cell sums hold the stored bits (" +
+                                      std::to_string(faces) + " faces over 4 updates, " + std::to_string(differ) +
+                                      " differ)");
+    }
     {  // a box of three sides; a slab too thin for its particles
         const Box slab(2, 2, 0.25);
         const Box box123(1, 2, 3);
