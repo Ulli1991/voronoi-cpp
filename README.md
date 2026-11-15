@@ -228,13 +228,13 @@ every setting and the provenance: [docs/library_benchmark.md](docs/library_bench
 | CGAL periodic, rebuild per step / `move_point` per point | 1 core | 0.029 / 0.008 | | | | | | | |
 
 With full cells on one A100 the warp rebuild is 4 to 55 times faster than peclet-voro, the fastest other GPU code that
-returns faces, the gap growing with the density contrast; the codes that need our faces step are 20 to 70 times
+returns faces, the gap growing with the density contrast; the codes that need our faces step are 14 to 85 times
 slower. The closest competitor is Basselin et al. on blue noise, which returns volumes and barycentres only: in its
 blue-noise setting it builds 9.0 M cells/s host to host (17.5 device-only by its own timers; the paper gives 34.5 on a
 V100 for 10M blue-noise seeds), against 29.6 device-only and 16.3 host to host with the same outputs for the warp
 rebuild in the same jobs. On blue noise the float codes of Liu et al. (18.7) and Ray et al. (15.7) match or beat our
 host-to-host volumes path, with errors of 3e-5 and in float; on every other input they are 2.6 to 10 times slower
-and lose cells. On a CPU node the same code built for OpenMP is level with multithreaded voro++ on regular input and 4
+and lose cells. On a CPU node the same code built for OpenMP is within 20 % of multithreaded voro++ on regular input and 3.7
 to 15 times faster on clustered and halo input. The moving step is 21 times peclet-voro's. Every voronoi-cpp volume
 agrees with the oracle to 1.6e-13 or better; geogram's own cells (double constructions) are off by up to 3.6e-9.
 

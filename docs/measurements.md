@@ -47,6 +47,16 @@ Job 31702953 (research_notes/box3_2026-10-31.md). Kelvin-Helmholtz-like slab, Lx
 
 The bench flow, stretched with the box, shears across the 16-cell thickness: 4x the flips per cell of the cube. Peak 2192 B/cell at 16.8M. The cubic case is bit-identical to the cubic-only code and within 0.3 to 0.7 % of its rebuild speed.
 
+### Against other libraries (2026-11-12 to 2026-11-14)
+
+The README's library table: methods, every setting, 256³ and the per-code versions, compilers and jobs in
+[library_benchmark.md](library_benchmark.md); raw records in `bench/libraries/results/` and the tables generated from
+them by `scripts/library_benchmark.py` (`summary.md`). voronoi-cpp rows: ad62997 (main b2faee8 plus the benchmark),
+A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under load), CPU job 32272650 (Kokkos OpenMP,
+72 cores and 1). Every other GPU code ran on the same node in chained jobs (`bench/libraries/run_chain_a100.sh`), each
+with our warp rebuild as a same-GPU reference. Inputs: jobs 32225761 (generators) and 32234292 (blue noise, 100 Lloyd
+iterations). Oracle checks: jobs 32269164 and 32360840.
+
 ### Long runs
 
 Job 31953232 (128³, 0.1 spacings per step): the step falls from 118 M cells/s at step 100 to 59 at step 500. Issue: https://github.com/Ulli1991/voronoi-cpp/issues/34. On Sedov the loss is at most 4.5 % over a run.
