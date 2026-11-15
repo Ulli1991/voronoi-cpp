@@ -170,6 +170,7 @@ One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: millio
 | Full rebuild, clustered (Gaussian blobs, ~1:500) | 17.0 | 18.5 |
 | Full rebuild, halo (1:10⁴ core to edge) | 15.5 | 17.9 |
 | Full rebuild, lattice / wave | 55.1 / 40.9 | 57.7 / 41.0 |
+| Full rebuild, surface (shells and tori, 2026-11-15, [#60](https://github.com/Ulli1991/voronoi-cpp/issues/60)) | 0.100 | 0.041 |
 | Exact start (warp with rings + `tet_start::build`), jittered | 18.6 | 11.7 |
 | Moving-mesh update, 0.03 spacings per step | 223 | 318 (215 with `update_cells()`) |
 | Moving-mesh update, 0.1 spacings per step | 130 | 209 (151 with `update_cells()`) |
@@ -335,7 +336,7 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 - OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
 - The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, and 920 on the A100, 604 of them from 3e4 to 1.6e7 particles (113 above a million). Of those 604, 85 ran out of time (120 s, or 280 s from a million up): builds with large cells, a void or nearly coplanar points take minutes ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49)).
 
-- Points on closed surfaces (the `surface` input: shells and tori with thin normal noise): the clipping refuses some cells (69 at 64³, 476 at 128³, status degenerate) and runs about 300 times slower than on jittered points, 0.036 M cells/s at 128³ on one A100, since its needle cells reach far into empty space; the exact start inherits the cost. The mesh is right on it (volumes within 2.3e-13 of the oracle) and moving steps run at 139 M cells/s ([#60](https://github.com/Ulli1991/voronoi-cpp/issues/60)).
+- Points on closed surfaces (the `surface` input: shells and tori with thin normal noise, [#60](https://github.com/Ulli1991/voronoi-cpp/issues/60)): fixed, the clipping refuses no cell (it refused 69 at 64³ and 476 at 128³: a rounded cut that cannot close is now built again exactly), but it is still slow. Its needle cells reach far into empty space, so the 2R ball holds thousands of points that cut nothing: the warp rebuild runs at 0.41 / 0.100 / 0.041 M cells/s at 64³ / 128³ / 256³ on one A100 (before: 0.13 / 0.036 / below 0.020) and the exact start at 0.095 at 128³ (before: 0.026), against 42.6 on jittered points. A filtered warp kernel now skips what a cylinder around the cell rules out; what is left is the 2.5 % of cells that grow past the warp's 64 vertices and are built one thread per cell. The other inputs keep their bits. The mesh is right on it (volumes within 2.3e-13 of the oracle) and moving steps run at 139 M cells/s.
 
 Other limits:
 

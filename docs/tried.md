@@ -26,6 +26,20 @@ Reason gives the structural cause, not "method X is worse".
 | Delaunay-first: lattice plus motion through `update()` | jittered 3.5 against 17.4 (start); stuck on uniform, clustered, halo | dropped | lattice ties force a full re-triangulation; large shifts stall the repair | branch `delaunay-first`, research_notes/delaunay_first_2026-11-12.md |
 | Delaunay-first: batched insertion with exact flips | 0.38 when it finishes; falls back on most inputs | dropped | floored by flips: about 13.5 flips per cell at 17–21 M flips/s | same |
 
+## Surface input, issue #60 (2026-11-15)
+
+Branch `fix-60` against `new-inputs` `c4e6249`, one A100 at 1305 MHz, the same gpu1 job each; `scripts/issue60_a100.sh`, logs in `build-jobs/logs/` of the worktree. Surface rates are of `voronoi_bench rebuild` (warp rebuild) or the library bench's exact start, M cells/s.
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| Cells a rounded build leaves neither ok nor out of pool room built again exactly (`exact_where_failed`) | surface refused cells 476 → 0 (128³), 69 → 0 (64³), 1 → 0 (32³ OpenMP; the 953-point case); other inputs: no such cells, same bits | kept | every refusal was a rounded cut: a coarser level re-reads a grid cell the finer walk did not cover and clips a particle a second time; in a needle cell the vertices of its face, made by nearly parallel planes, round past 64 ε \|d\| R, so the twin plane "cuts" and meets its twin nowhere (thread kernel: det 0). The exact cell decides by sign | how_it_works.md §3; clipping_test |
+| Base-level warp walk's uncertified cells to a warp kernel over a list, not the thread kernel; rings kernel without levels on base-level input | surface 64³ 0.129 → 0.35 | kept | 74 % of surface cells (64³) left the base-level kernel uncertified and went to one thread per cell: the cell list puts surface points at the base level (64 of them fill a node of mean density), so the shortcut for uniform input took them | measure job 32371403 |
+| Clip budget (4096) with a filtered warp kernel: cylinder bound on grid cells and particles, vertex-ball test per particle | surface 64³ 0.35 → 0.59 with a budget of 256, 0.34 with 4096; ball test alone: no change | kept, budget 4096 | the filter removes 85 to 95 % of the clips, but the time went to the thread kernel's overflow cells (phase timers: 0.5 of 0.8 s at 64³, 10.7 of 14.5 s at 128³) | jobs 32371732, 32372787 |
+| Plane compaction in the filtered warp kernel; its overflows stay deferred and go filtered to the thread kernel's big capacity, skipping the small one | surface 64³ 0.33 → 0.45, 128³ 0.10 → 0.12 | kept | the warp kernel never dropped planes that stopped being faces; needle cells collect them. Vertex overflow (more than 64 live vertices, 2.5 % of 128³ cells) still goes to one thread per cell | jobs 32372958, 32373139 |
+| Budget checked every batch in the warp and thread kernels | other inputs: rebuild −0.5 to −1.5 %, exact start of lattice and wave −9 to −10 % | dropped | a compare per batch in the hot loops changes their code; the exact thread kernel rebuilds every lattice cell in the start | job 32373656 |
+| Budget at level changes in the warp kernel and in exact thread cells, every batch in rounded thread cells; filtered thread pass as its own template | other inputs: rebuild −0.1 to −0.5 %, exact start −1 to +3 % (noise ±3 %), lattice 128³ +0.8 %, same bits; surface 128³ 0.12 → 0.10 | kept | a needle in the adaptive warp kernel now stops only after its first level; a check every batch in exact cells cost the lattice start 10 % (job 32374842) | jobs 32374842 to 32374852, 32375358 |
+| Budget 256 instead of 4096 | surface 128³ 0.10 → 0.16; halo and cosmic web rebuild −5 to −6 %, exact start −4 to −11 %, bits differ on halo and cosmic web | not adopted (owner's call) | their tail cells (p99 210 to 268 clips) pass 256 and restart filtered | jobs 32374384, 32374385 |
+
 ## Moving step
 
 | Change | Effect | Kept? | Reason | Where |
