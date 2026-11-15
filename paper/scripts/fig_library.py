@@ -1,93 +1,143 @@
 #!/usr/bin/env python3
-"""Figure: the like-for-like library benchmark (docs/library_benchmark.md) at 128³, from its raw records
-(bench/libraries/results/*.jsonl, published.csv) through scripts/library_benchmark.py's readers; rows as its figure."""
+"""Library benchmark (docs/library_benchmark.md) at 128³ from its raw records (bench/libraries/results/*.jsonl,
+published.csv) through scripts/library_benchmark.py's readers. library_headline: full cells on one A100, one marker per
+library, ours highlighted, published apart; library_more: volumes only, one CPU node, the moving step."""
 import os
 import sys
 
 import numpy as np
 
-from paperfig import DOUBLE, LW, REPO, figstyle, figure, save
+from paperfig import DOUBLE, LW, REPO, SINGLE, figstyle, figure, save
 
 sys.path.insert(0, os.path.join(REPO, "scripts"))
 import library_benchmark as lb  # noqa: E402
 
 LABELS = ["jittered", "blue\nnoise", "uniform", "clus-\ntered", "halo"]
-COLOURS = ["#000000", "#555555", "#999999", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#1f77b4",
-           "#17becf", "#e377c2"]
-MARKERS = "osD^vP*Xh<>p"
+OURS = "#000000"
+OTHERS = ["#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#1f77b4", "#17becf", "#e377c2", "#7f7f7f", "#bcbd22"]
+MARKERS = "^vPXsDh<>p*"
+HEADLINE = [  # (library, variant prefix, device, threads, label)
+    ("voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "ours, rebuild"),
+    ("voronoi-cpp", "exact start", "A100", 1, "ours, exact start"),
+    ("peclet-voro", "cold build", "A100", 1, "peclet-voro"),
+    ("gDel3D", "Delaunay + faces", "A100", 1, "gDel3D + faces"),
+    ("Paragram", "voronoi_diagram + faces", "A100", 1, "Paragram + faces"),
+    ("votess", "tesellate + faces", "A100", 1, "votess + faces"),
+]
 SHORT = {"voronoi-cpp, warp rebuild, host to host": "voronoi-cpp, host to host",
          "voronoi-cpp, host to host, volumes + centroids out": "voronoi-cpp, host to host",
-         "Paragram (float) + faces (ours)": "Paragram (float) + faces",
-         "gDel3D + faces (ours)": "gDel3D + faces", "votess + faces (ours)": "votess + faces",
          "CGAL parallel + faces (ours)": "CGAL par. + faces", "geogram PDEL + faces (ours)": "geogram PDEL + faces",
          "geogram periodic + cells": "geogram periodic", "CGAL periodic + faces, 1 core": "CGAL, 1 core",
          "TetGen + faces, 1 core": "TetGen, 1 core", "Qhull + faces, 1 core": "Qhull, 1 core",
-         "voronoi-cpp, warp rebuild": "voronoi-cpp, warp", "voro++ multithreaded": "voro++ mt",
-         "peclet-voro (no centroids)": "peclet-voro"}
+         "voronoi-cpp, warp rebuild": "voronoi-cpp", "voro++ multithreaded": "voro++ mt",
+         "votess + faces (ours)": "votess + faces", "peclet-voro (no centroids)": "peclet-voro",
+         "Basselin et al. 2021": "Basselin et al.", "Liu et al. 2022 (float)": "Liu et al. (float)",
+         "Ray et al. 2018 (float)": "Ray et al. (float)",
+         "voronoi-cpp, host to host, volumes + centroids out": "ours, host to host"}
+SHORT["voronoi-cpp, warp rebuild"] = "ours"
+SHORT["voronoi-cpp, host to host, volumes + centroids out"] = "ours, host to host"
 
 
-def panel(ax, summary, pub, rows, tag, text):
+def load():
+    records, _ = lb.load_records()
+    return lb.summarise([r for r in records if r["library"] != "voronoi-cpp" or r["version"] == lb.OURS]), lb.published()
+
+
+def curves(ax, summary, rows, big=False):
     xs = np.arange(len(lb.INPUTS))
-    for j, (lib, variant, device, threads, label) in enumerate(rows):
+    k = 0
+    for lib, variant, device, threads, label in rows:
         got = lb.curve(summary, lib, variant, device, threads, lb.SIZES[0])
-        pts = [(x, got[i]) for x, i in zip(xs, lb.INPUTS) if i in got]
-        if pts:
-            style = "-" if device == "A100" else ("--" if threads > 1 else ":")
-            ax.plot([x for x, _ in pts], [s["median"] for _, s in pts], color=COLOURS[j], marker=MARKERS[j], lw=LW,
-                    ls=style, ms=7, label=SHORT.get(label, label))
+        pts = [(x, got[i]["median"]) for x, i in zip(xs, lb.INPUTS) if i in got]
+        if not pts:
+            continue
+        ours = lib == "voronoi-cpp"
+        colour = OURS if ours else OTHERS[k % len(OTHERS)]
+        marker = ("o" if "start" not in label else "s") if ours else MARKERS[k % len(MARKERS)]
+        k += 0 if ours else 1
+        ls = "-" if device == "A100" else ("--" if threads > 1 else ":")
+        ax.plot(*zip(*pts), color=colour, marker=marker, ms=9 if ours and big else 7, lw=LW * (1.4 if ours else 1),
+                ls=ls if not ours or "start" not in label else "--", label=SHORT.get(label, label), zorder=4 if ours else 3)
+
+
+def published(ax, pub, tag, x0):
     k = 0
     for code, n, dist, where in lb.FIGURE_PUBLISHED:
         for p in pub if where == tag else []:
             if p["code"].startswith(code) and p["n"] == n and p["distribution"].startswith(dist):
-                name = p["code"].split(" (")[0].replace(" 2021", "").replace(" 2018", "").replace(" et al.", "")
-                dist = p["distribution"].split(" (")[0].replace("white noise", "white").replace("blue noise", "blue")
-                hw = lb.short_hardware(p["hardware"]).replace("2x Xeon E5-2650L v4", "2x Xeon")
-                ax.plot([len(xs) + 0.25 * k], [float(p["rate_Mcells_s"])], marker="o^sDv"[k], mfc="none", mec="0.2",
-                        mew=1.6, ms=9, ls="none", label=f"{name}{', ' + dist if 'Basselin' in name else ''} (publ.)")
+                name = p["code"].split(" (")[0].replace(" 2021", "").replace(" 2018", "")
+                dist_s = p["distribution"].split(" (")[0].replace(" noise", "")
+                ax.plot([x0 + 0.3 * k], [float(p["rate_Mcells_s"])], marker="o^sDv"[k], mfc="white", mec="0.25",
+                        mew=1.6, ms=8, ls="none", zorder=5,
+                        label=f"{name}{', ' + dist_s if 'Basselin' in name else ''} (publ.)")
                 k += 1
                 break
-    ax.set_xticks(list(xs) + ([len(xs) + 0.25 * (k - 1) / 2] if k else []))
-    ax.set_xticklabels(LABELS + (["pub-\nlished"] if k else []))
-    ax.set_xlim(-0.4, len(xs) + (0.25 * k if k else -0.6))
+    return k
+
+
+def axes_inputs(ax, k, x0, short=False):
+    ax.axvspan(x0 - 0.45, x0 + 0.3 * max(k - 1, 0) + 0.45, color="0.93", zorder=0)
+    ax.set_xticks(list(range(len(lb.INPUTS))) + ([x0 + 0.15 * (k - 1)] if k else []),
+                  (["jit.", "blue", "unif.", "clus.", "halo"] if short else LABELS) + ((["publ."] if short else ["pub-\nlished"]) if k else []))
+    ax.set_xlim(-0.4, x0 + 0.3 * max(k - 1, 0) + 0.5 if k else len(lb.INPUTS) - 0.6)
     ax.set_yscale("log")
-    ax.text(0.03, 0.97, text, transform=ax.transAxes, va="top")
     figstyle.decorate(ax)
     ax.minorticks_off()
+    ax.tick_params(axis="x", which="both", top=False, bottom=False)
+
+
+def headline(summary, pub):
+    fig, ax = figure(SINGLE, 85)
+    curves(ax, summary, HEADLINE, big=True)
+    x0 = len(lb.INPUTS) + 0.3
+    k = published(ax, pub, "gpu_full", x0)
+    axes_inputs(ax, k, x0)
+    ax.set_ylim(0.1, 4000)
+    ax.set_ylabel("full cells, M cells/s")
+    ax.legend(loc="upper right", fontsize=11, ncol=2, columnspacing=0.6, handlelength=1.5)
+    fig.tight_layout()
+    save(fig, "library_headline", SINGLE)
+
+
+def more(summary, pub):
+    fig, axes = figure(DOUBLE, 80, ncols=3, gridspec_kw=dict(width_ratios=[1, 1, 0.8]))
+    a, b, c = axes
+    x0 = len(lb.INPUTS) + 0.3
+    curves(a, summary, lb.FIGURE_GPU_VOLUMES)
+    axes_inputs(a, published(a, pub, "gpu_volumes", x0), x0, short=True)
+    a.set_ylim(0.3, 1e5)
+    a.set_ylabel("M cells/s")
+    a.text(0.03, 0.03, "(a) A100, volumes", transform=a.transAxes, va="bottom")
+    a.legend(loc="upper right", fontsize=11, handlelength=1.4)
+    curves(b, summary, lb.FIGURE_CPU_FULL[:7])
+    axes_inputs(b, published(b, pub, "cpu", x0), x0, short=True)
+    b.set_ylim(0.03, 2e3)
+    b.text(0.03, 0.03, "(b) 72 cores, full cells", transform=b.transAxes, va="bottom")
+    b.legend(loc="upper right", fontsize=11, handlelength=1.4)
+    names = ["ours\nGPU", "peclet\nGPU", "ours\nCPU", "peclet\nCPU", "CGAL\n1 core"]
+    for k, row in enumerate(lb.FIGURE_STEP[:5]):
+        got = lb.curve(summary, *row[:4], lb.SIZES[0], phase="step").get("jittered")
+        if got:
+            c.bar(k, got["median"], color=OURS if row[0] == "voronoi-cpp" else "#ff7f0e" if k < 4 else "#2ca02c",
+                  alpha=1 if row[2] == "A100" else 0.55, width=0.7)
+            c.text(k, got["median"] * 1.3, f"{got['median']:.3g}", ha="center", va="bottom", fontsize=11)
+    c.set_yscale("log")
+    c.set_ylim(0.01, 3e3)
+    c.set_xlim(-0.6, 4.6)
+    c.set_xticks(range(5), names)
+    c.set_ylabel("moving step, M cells/s")
+    c.text(0.96, 0.97, "(c)", transform=c.transAxes, ha="right", va="top")
+    figstyle.decorate(c)
+    c.minorticks_off()
+    c.tick_params(axis="x", which="both", top=False, bottom=False)
+    fig.tight_layout()
+    save(fig, "library_more", DOUBLE)
 
 
 def main():
-    records, _ = lb.load_records()
-    summary = lb.summarise([r for r in records if r["library"] != "voronoi-cpp" or r["version"] == lb.OURS])
-    pub = lb.published()
-    fig, axes = figure(DOUBLE, 150, nrows=2, ncols=2)
-    (a, b), (c, d) = axes
-    panel(a, summary, pub, lb.FIGURE_GPU_FULL, "gpu_full", "(a) one A100, full cells")
-    panel(b, summary, pub, lb.FIGURE_GPU_VOLUMES, "gpu_volumes", "(b) one A100, volumes and barycentres")
-    panel(c, summary, pub, lb.FIGURE_CPU_FULL, "cpu", "(c) one CPU node, full cells")
-    for ax in (a, b):
-        ax.set_ylim(0.1, 3e4 if ax is a else 2e5)
-        ax.legend(loc="upper right", fontsize=11, bbox_to_anchor=(1.0, 0.91), handlelength=1.6)
-    c.set_ylim(0.008, 3e3)
-    c.legend(loc="upper right", fontsize=11, ncol=2, columnspacing=0.6, handlelength=1.6, bbox_to_anchor=(1.0, 0.91))
-    for ax in (a, c):
-        ax.set_ylabel("build, M cells/s")
-    for k, (lib, variant, device, threads, label) in enumerate(lb.FIGURE_STEP):
-        got = lb.curve(summary, lib, variant, device, threads, lb.SIZES[0], phase="step").get("jittered")
-        if got:
-            d.bar(k, got["median"], color=COLOURS[[0, 3, 0, 3, 5, 5][k]], hatch="" if k < 2 else "//",
-                  alpha=1 if device == "A100" else 0.55, width=0.7)
-            d.text(k, got["median"] * 1.3, f"{got['median']:.3g}", ha="center", va="bottom", fontsize=11)
-    d.set_yscale("log")
-    d.set_ylim(0.003, 3e3)
-    d.set_xticks(range(len(lb.FIGURE_STEP)))
-    d.set_xticklabels(["ours\nA100", "peclet\nA100", "ours\n72 c.", "peclet\n72 c.", "CGAL\nrebuild", "CGAL\nmove"])
-    d.set_ylabel("moving step, M cells/s")
-    d.text(0.03, 0.97, "(d) moving mesh, 0.03 spacings per step,\njittered, full cells", transform=d.transAxes,
-           va="top")
-    figstyle.decorate(d)
-    d.minorticks_off()
-    fig.tight_layout()
-    save(fig, "library_comparison", DOUBLE)
+    summary, pub = load()
+    headline(summary, pub)
+    more(summary, pub)
 
 
 if __name__ == "__main__":
