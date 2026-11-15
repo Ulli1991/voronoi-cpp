@@ -1,0 +1,35 @@
+{"volumes":"/raven/u/uli/libbench-data/volumes/cgal-dt3-par-cpu_clustered_2097152.f64","points":"/raven/u/uli/libbench-data/points/clustered_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-4.944e-17,"median_rel_err":1.348e-16,"max_rel_err":6.111e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/cgal-dt3-par-cpu_halo_2097152.f64","points":"/raven/u/uli/libbench-data/points/halo_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-2.223e-17,"median_rel_err":1.351e-16,"max_rel_err":6.757e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/cgal-dt3-par-cpu_jittered_2097152.f64","points":"/raven/u/uli/libbench-data/points/jittered_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-2.976e-17,"median_rel_err":1.152e-16,"max_rel_err":4.715e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/cgal-dt3-par-cpu_uniform_2097152.f64","points":"/raven/u/uli/libbench-data/points/uniform_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-1.626e-19,"median_rel_err":1.300e-16,"max_rel_err":6.488e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/cgal-p3dt-cpu_clustered_2097152.f64","points":"/raven/u/uli/libbench-data/points/clustered_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-8.180e-17,"median_rel_err":1.393e-16,"max_rel_err":5.688e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/cgal-p3dt-cpu_halo_2097152.f64","points":"/raven/u/uli/libbench-data/points/halo_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-5.697e-17,"median_rel_err":1.371e-16,"max_rel_err":6.381e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/cgal-p3dt-cpu_jittered_2097152.f64","points":"/raven/u/uli/libbench-data/points/jittered_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-7.627e-17,"median_rel_err":1.169e-16,"max_rel_err":6.509e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  libbench_oracle
+Node list: ravc4026
+Job start: Thu Nov 12 07:33:46 CET 2026
+Job end:   Thu Nov 12 07:33:50 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-libbench
+Command:   /raven/u/uli/voronoi-cpp-libbench/bench/libraries/oracle_cpu.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32232657      libbench_o      1           144                             00:00:04    134:0
+  
+Maximum memory per node: 0.121311 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 0.0 %
+CO2 footprint: 0.3250 g (estimate based on total cluster power and electricity mix)
+  

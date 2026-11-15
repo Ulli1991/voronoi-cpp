@@ -1,0 +1,31 @@
+{"library":"votess","variant":"tesellate (dnn)","version":"f0f805f (main 2025-07-15), icpx 2025.3 -fsycl, CPU path","device":"2x Xeon Platinum 8360Y","threads":1,"outputs":"Voronoi neighbour lists","periodic":"images: shell of width 0.015625 (4 mean spacings), 1622528 extra points; 2 max R <= w: yes","precision":"double (Tf = double)","timed":"points in host memory to padded set and neighbour lists in host memory","note":"k 64, knn grid 132^3, use_recompute on, use_chunking with chunksize 4194304 (int index overflow otherwise)","points":"/raven/u/uli/libbench-data/points/jittered_16777216.pts","input":"jittered","n":16777216,"phase":"build","repeat":1,"seconds":676.739981,"Mcells_s":0.0247912292,"peak_bytes":9.6878633e+09,"bytes_per_cell":577.44165,"job":"32231822","host":"ravc4133","images":1622528,"nan_volumes":0}
+{"library":"votess","variant":"tesellate (dnn)","version":"f0f805f (main 2025-07-15), icpx 2025.3 -fsycl, CPU path","device":"2x Xeon Platinum 8360Y","threads":1,"outputs":"Voronoi neighbour lists","periodic":"images: shell of width 0.015625 (4 mean spacings), 1622528 extra points; 2 max R <= w: yes","precision":"double (Tf = double)","timed":"points in host memory to padded set and neighbour lists in host memory","note":"k 64, knn grid 132^3, use_recompute on, use_chunking with chunksize 4194304 (int index overflow otherwise)","points":"/raven/u/uli/libbench-data/points/jittered_16777216.pts","input":"jittered","n":16777216,"phase":"build","repeat":2,"seconds":674.173468,"Mcells_s":0.024885607,"peak_bytes":9.6878633e+09,"bytes_per_cell":577.44165,"job":"32231822","host":"ravc4133","images":1622528,"nan_volumes":0}
+{"library":"votess","variant":"tesellate (dnn)","version":"f0f805f (main 2025-07-15), icpx 2025.3 -fsycl, CPU path","device":"2x Xeon Platinum 8360Y","threads":1,"outputs":"Voronoi neighbour lists","periodic":"images: shell of width 0.015625 (4 mean spacings), 1622528 extra points; 2 max R <= w: yes","precision":"double (Tf = double)","timed":"points in host memory to padded set and neighbour lists in host memory","note":"k 64, knn grid 132^3, use_recompute on, use_chunking with chunksize 4194304 (int index overflow otherwise)","points":"/raven/u/uli/libbench-data/points/jittered_16777216.pts","input":"jittered","n":16777216,"phase":"build","repeat":3,"seconds":672.350705,"Mcells_s":0.0249530727,"peak_bytes":9.6878633e+09,"bytes_per_cell":577.44165,"job":"32231822","host":"ravc4133","images":1622528,"nan_volumes":0}
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  libbench_votess
+Node list: ravc4133
+Job start: Thu Nov 12 07:07:08 CET 2026
+Job end:   Thu Nov 12 08:31:08 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-libbench
+Command:   /raven/u/uli/voronoi-cpp-libbench/bench/libraries/run_votess_cpu.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32231822      libbench_v      1           144                             01:24:00      0:0
+  
+Maximum memory per node: 13.927137 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 1.4 %
+CO2 footprint: 409.4496 g (estimate based on total cluster power and electricity mix)
+  

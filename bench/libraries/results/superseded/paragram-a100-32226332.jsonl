@@ -1,0 +1,28 @@
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  libbench_paragram
+Node list: ravg1197
+Job start: Thu Nov 12 04:31:16 CET 2026
+Job end:   Thu Nov 12 04:32:27 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-libbench
+Command:   /raven/u/uli/voronoi-cpp-libbench/bench/libraries/run_paragram_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32226332      libbench_p      1            36                             00:01:11      0:0
+  
+Maximum memory per node: 1.390698 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 2.0 %
+CO2 footprint: 1.4420 g (estimate based on total cluster power and electricity mix)
+  
