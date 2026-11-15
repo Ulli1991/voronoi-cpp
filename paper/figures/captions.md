@@ -151,3 +151,19 @@ Basselin et al.'s 34.5 matches their cell kernel alone (docs/library_benchmark.m
 
 **memory (b), legend.** Dark bars: voronoi-cpp, grey: the other codes; the darker part is the lowest of the five inputs,
 the lighter part up to the highest.
+
+**where_time (Fig. 4, "where the time goes").** (a) The control flow of `Mesh::update()`: a built mesh with the same n
+is checked, flipped, reconnected, measured and summed; few stuck flips are finished on the host, more, or a failed
+volume check, go to a rebuild (dashed: quantise, cell list, clip, exact start), which refuses with a clear error when
+the start is not exact. Box colours are the stages of (b) and (c). (b) Wall time per cell of one moving step
+(`update` + `update_cells`, median of steps 2 to 10) in six stages, per input at 0.03, 0.1 and 0.3 mean spacings per
+step; the number is the rate in M cells/s (152 M cells/s = 6.6 ns per cell). (c) Jittered input across displacements;
+the rows at 1.0 spacings and clustered 0.3, where the host finish and the rebuild occur, come with the post-merge rerun.
+One A100 at 1305 MHz, 128³, main 55cd6b1, job 32362452. Stages:
+*check*: quantise the new positions and screen every tetrahedron in double for those that may fail;
+*flip*: exact in-sphere tests on the listed tetrahedra, then plan, vote and apply 2-3 and 3-2 flips, in rounds;
+*reconnect*: number the faces of created tetrahedra and walk their rings again;
+*geometry*: circumcentres of created tetrahedra, face areas and centroids, cell volumes and the volume check;
+*per-cell results*: `update_cells()`, the per-cell face lists sorted by neighbour and the volume and centroid sums;
+*host and other*: wall time no kernel accounts for (host waits, copies, launches), and the host finish and rebuild when
+they occur.

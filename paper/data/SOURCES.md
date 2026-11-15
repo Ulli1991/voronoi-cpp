@@ -35,3 +35,14 @@ Kokkos 5.0.99 AMPERE80, Release).
 | `oracle_errors_application.csv` | per-cell errors of the 1000 sampled cells of every volumes file of cosmic web 128³, surface 128³ and fcc solid 2²⁰, against the exact reference | `ORACLE_ONLY='_(cosmicweb\|surface)_2097152\.f64\|_fccsolid_1048576\.f64' ORACLE_OUT=oracle_errors_application.csv extract_oracle.py` on `/raven/u/uli/libbench-data` | oracle caches of jobs 32369335, 32370726; medians equal the records; voronoi-cpp 631af46 |
 | `raw/libstages-a100-32368965.jsonl`, `raw/libstages-cpu-32368966.jsonl` | staged runs of the library benchmark (ns per stage) | copies of `bench/libraries/results/stages-*.jsonl` on branch library-stages (16393a3) | A100 job 32368965 (ravg1013, 1305 MHz), CPU job 32368966 (ravl1045, 72 threads) |
 | `raw/gaps-chain-a100-32368078.jsonl`, `raw/gaps-cpu-pair-32367276.jsonl` | our volumes-only path with Basselin, VoroGPU, Liu on blue noise (one A100 job); our CPU path with voro++ (one node) | copies of `bench/libraries/results/{chain-a100-32368078,cpu-pair-32367276}.jsonl` on branch close-gaps (2be7448), voronoi-cpp 77055a4 | jobs 32368078 (ravg1004), 32367276 (ravc4079) |
+
+**Stage mapping of `where_time`** (`paper/scripts/fig_time.py`, from `kernels.csv` and the wall totals of `stages.csv`;
+the bench's position copy `Kokkos::View::initialization`, `deep_copy` left out):
+check = voronoi::snap, exact_predicates::snap, tet_repair::screen;
+flip = tet_repair::find, plan, apply, unlist, release, retry_stuck;
+reconnect = tet_mesh::face_touched, face_release, face_offsets, face_assign, face_move, face_low, face_numbered,
+face_numbers, face_ids, dirty_faces, append_rings, compact_rings, ring_entries;
+geometry = tet_mesh::circumcentres, tet_mesh::faces, voronoi::total_volume;
+per-cell results = tet_mesh::cell_face_counts, cell_face_fill, cell_face_start, cell_sort, cell_sums, fresh_counts,
+fresh_fill, mark_cells, marked_counts, marked_fill;
+host and other = the step's wall time minus the kernels above (any other label, e.g. Kokkos::ViewCopy-1D, falls here).
