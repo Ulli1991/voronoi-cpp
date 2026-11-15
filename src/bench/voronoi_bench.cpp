@@ -705,6 +705,108 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     return failures;
 }
 
+// The `chunks` mode: a two-pass generic functor (pass 1 per cell: s_i = sum of |A| over its list in list order; pass 2
+// per face: |A| (s_owner - s_neighbour)) over the whole mesh, and chunk by chunk (cells [c C, (c + 1) C) along the
+// Hilbert curve, pass 1 also on their first halo layer). Times, halo sizes, launches; outputs compared bit for bit.
+int chunks(const std::vector<std::string>& args, const Box& box) {
+    const Exec exec;
+    const int requested = std::stoi(args.at(1));
+    const int repeats = args.size() > 3 ? std::stoi(args[3]) : 5;
+    const Points points = in_slot_order(make_points(args.at(2), requested, box), box);
+    const int n = static_cast<int>(points.size());
+    voronoi::Layout layout;
+    layout.owner_faces = layout.owner_bit = true;
+    layout.curve = voronoi::Curve::hilbert;
+    layout.every = 1 << 30;  // sorted at the build only
+    Mesh mesh(exec, box);
+    mesh.set_layout(layout);
+    mesh.update(to_device(points));
+    mesh.update_cells();
+    const int faces = mesh.faces();
+    const auto start = mesh.cell_face_start();
+    const auto list = mesh.cell_face();
+    const auto owned = mesh.owned_start();
+    const auto owner = mesh.owner(), neighbour = mesh.neighbour();
+    const auto area = mesh.area();
+    Kokkos::View<double*, Memory> sum("chunks_sum", n), out("chunks_out", faces), sum_c("chunks_sum_c", n),
+        out_c("chunks_out_c", faces);
+    auto pass1 = KOKKOS_LAMBDA(int i, const Kokkos::View<double*, Memory>& s) {
+        double total = 0;
+        for (int k = start(i); k < start(i + 1); ++k) {
+            const int f = Mesh::list_face(list(k));
+            total += Kokkos::sqrt(area(f, 0) * area(f, 0) + area(f, 1) * area(f, 1) + area(f, 2) * area(f, 2));
+        }
+        s(i) = total;
+    };
+    auto pass2 = KOKKOS_LAMBDA(int f, const Kokkos::View<double*, Memory>& s, const Kokkos::View<double*, Memory>& o) {
+        const double m = Kokkos::sqrt(area(f, 0) * area(f, 0) + area(f, 1) * area(f, 1) + area(f, 2) * area(f, 2));
+        o(f) = m * (s(owner(f)) - s(neighbour(f)));
+    };
+    auto whole = [&] {
+        const Phase phase("whole");
+        Kokkos::parallel_for("chunks::pass1", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int i) { pass1(i, sum); });
+        Kokkos::parallel_for("chunks::pass2", Kokkos::RangePolicy<Exec>(exec, 0, faces), KOKKOS_LAMBDA(int f) { pass2(f, sum, out); });
+        exec.fence();
+    };
+    const double whole_ms = median_ms(repeats, whole);
+    std::cout << "chunks: n=" << n << " faces=" << faces << " whole_ms=" << whole_ms << " launches=2\n";
+    // The halo layers of each chunk on the host, from the cell lists.
+    const auto h_start = to_host(start);
+    const auto h_list = to_host(list, 2 * faces);
+    const auto h_owner = to_host(owner, faces), h_neighbour = to_host(neighbour, faces);
+    const auto h_owned = to_host(owned, n + 1);
+    auto other = [&](int i, int k) {
+        const int f = Mesh::list_face(h_list(k));
+        return h_owner(f) ^ h_neighbour(f) ^ i;
+    };
+    for (const int C : {16384, 32768, 65536, 131072}) {
+        const int count = (n + C - 1) / C;
+        std::vector<int> cells, cell_start{0};  // per chunk: its cells, then its first halo layer
+        long long halo1 = 0, halo2 = 0;
+        std::vector<int> mark(n, -1);
+        for (int c = 0; c < count; ++c) {
+            const int c0 = c * C, c1 = std::min(n, c0 + C);
+            for (int i = c0; i < c1; ++i) cells.push_back(i);
+            std::vector<int> layer;
+            for (int i = c0; i < c1; ++i)
+                for (int k = h_start(i); k < h_start(i + 1); ++k) {
+                    const int j = other(i, k);
+                    if ((j < c0 || j >= c1) && mark[j] != 2 * c) mark[j] = 2 * c, layer.push_back(j);
+                }
+            halo1 += static_cast<long long>(layer.size());
+            for (int j : layer) cells.push_back(j);
+            for (int j : layer)
+                for (int k = h_start(j); k < h_start(j + 1); ++k) {
+                    const int l = other(j, k);
+                    if ((l < c0 || l >= c1) && mark[l] != 2 * c && mark[l] != 2 * c + 1) mark[l] = 2 * c + 1, ++halo2;
+                }
+            cell_start.push_back(static_cast<int>(cells.size()));
+        }
+        Kokkos::View<int*, Memory> chunk_cells("chunk_cells", cells.size());
+        Kokkos::deep_copy(chunk_cells, Kokkos::View<int*, Kokkos::HostSpace>(cells.data(), cells.size()));
+        auto chunked = [&] {
+            const Phase phase("chunk_" + std::to_string(C));
+            for (int c = 0; c < count; ++c) {
+                const int f0 = h_owned(c * C), f1 = h_owned(std::min(n, (c + 1) * C));
+                Kokkos::parallel_for("chunks::chunk_pass1", Kokkos::RangePolicy<Exec>(exec, cell_start[c], cell_start[c + 1]),
+                                     KOKKOS_LAMBDA(int k) { pass1(chunk_cells(k), sum_c); });
+                Kokkos::parallel_for("chunks::chunk_pass2", Kokkos::RangePolicy<Exec>(exec, f0, f1),
+                                     KOKKOS_LAMBDA(int f) { pass2(f, sum_c, out_c); });
+            }
+            exec.fence();
+        };
+        const double chunk_ms = median_ms(repeats, chunked);
+        long long differ = 0;
+        Kokkos::parallel_reduce(
+            "chunks::compare", Kokkos::RangePolicy<Exec>(exec, 0, faces),
+            KOKKOS_LAMBDA(int f, long long& d) { d += out(f) != out_c(f) || (f < n && sum(f) != sum_c(f)); }, differ);
+        std::cout << "chunks: C=" << C << " chunks=" << count << " launches=" << 2 * count << " halo1_per_cell="
+                  << double(halo1) / n << " halo2_per_cell=" << double(halo2) / n << " chunk_ms=" << chunk_ms
+                  << " whole_ms=" << whole_ms << " differ=" << differ << "\n";
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -715,6 +817,7 @@ int main(int argc, char** argv) {
     if (has_flag(argc, argv, "--nvtx") || has_flag(argc, argv, "--nvtx=phases"))
         Nvtx::start(has_flag(argc, argv, "--nvtx"));
     const auto args = positional(argc, argv);
+    if (args.size() >= 3 && args[0] == "chunks") return chunks(args, box_flag(argc, argv));
     if (args.size() >= 3 && args[0] == "rebuild")
         return rebuild(args, box_flag(argc, argv), !has_flag(argc, argv, "--no-check"),
                        static_cast<int>(flag_value(argc, argv, "--measure", 0)), dump_flag(argc, argv)) != 0;
@@ -724,6 +827,7 @@ int main(int argc, char** argv) {
                     layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", "")) != 0;
     std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [repeats] [--no-check] [--memory]\n"
                  "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
+                 "       voronoi_bench chunks <n> <distribution> [repeats]\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
