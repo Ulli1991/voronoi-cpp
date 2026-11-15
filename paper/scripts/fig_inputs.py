@@ -1,63 +1,74 @@
 #!/usr/bin/env python3
-"""Figure inputs: the benchmark's point distributions at 64³ (262,144 points; the same generators and seed as the
-benchmarks), a slab one mean spacing thick projected to x-y per input, and the nearest-neighbour distances in mean
-spacings. Lattice and wave (secondary) in the bottom row. Data: paper/data/inputs.npz (extract_inputs.py)."""
+"""Figure inputs: the five benchmark inputs at 64³ (the generators and seed of the benchmarks), one square panel each,
+points of a slab one mean spacing thick in one ink: a 16 x 16-spacing zoom for the even inputs, the whole box for
+clustered and halo (shifted periodically so the densest blob or halo is centred); below, nearest-neighbour distances."""
 import os
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from paperfig import COLOR, DATA, DOUBLE, LABEL, LW, MM, SCALE, figstyle, save
+from paperfig import DATA, DOUBLE, LABEL, MM, SCALE, figstyle, save
 
 MAIN = ["jittered", "bluenoise", "uniform", "clustered", "halo"]
-SECONDARY = ["lattice", "wave"]
+INK = "#222222"
+ZOOM = 16 / 64  # 16 mean spacings of the 64³ set
+SIZE = 3.0  # marker area, design pt²
 
 
-def slab(ax, d, kind, tag, size=0.6):
-    xy = d[f"{kind}_slab"]
-    ax.scatter(xy[:, 0], xy[:, 1], s=size, c=COLOR[kind], linewidths=0, rasterized=True)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_aspect("equal")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.minorticks_off()
-    ax.grid(False)
-    ax.set_title(f"{tag} {LABEL[kind]}", fontsize=13, loc="left", pad=4)
+def contrast(c):
+    return f"1 : {c:.0f}" if c < 100 else f"1 : {c / 10 ** np.floor(np.log10(c)):.0f}·10$^{{{int(np.log10(c))}}}$"
 
 
 def main():
     d = np.load(os.path.join(DATA, "inputs.npz"))
     figstyle.apply_style()
-    fig = plt.figure(figsize=(DOUBLE * MM / SCALE, 100 * MM / SCALE))
-    grid = fig.add_gridspec(2, 5, height_ratios=[1, 1], hspace=0.32, wspace=0.08)
-    for i, kind in enumerate(MAIN):
-        slab(fig.add_subplot(grid[0, i]), d, kind, f"({'abcde'[i]})")
-    ax = fig.add_subplot(grid[1, :3])
+    fig = plt.figure(figsize=(DOUBLE * MM / SCALE, 62 * MM / SCALE))
+    grid = fig.add_gridspec(2, 5, height_ratios=[1, 0.3], hspace=0.36, wspace=0.14,
+                            left=0.015, right=0.985, top=0.985, bottom=0.13)
     bins = d["bins"]
     centres = np.sqrt(bins[1:] * bins[:-1])
-    for kind in MAIN + SECONDARY:
+    for i, kind in enumerate(MAIN):
+        ax = fig.add_subplot(grid[0, i])
+        xy = d[f"{kind}_slab"]
+        whole = kind in ("clustered", "halo")
+        lo, hi = (0.0, 1.0) if whole else (0.5 - ZOOM / 2, 0.5 + ZOOM / 2)
+        keep = (xy[:, 0] >= lo) & (xy[:, 0] < hi) & (xy[:, 1] >= lo) & (xy[:, 1] < hi)
+        ax.scatter(xy[keep, 0], xy[keep, 1], s=SIZE, c=INK, linewidths=0, rasterized=True)
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(lo, hi)
+        ax.set_aspect("equal")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.minorticks_off()
+        ax.grid(False)
+        for spine in ax.spines.values():
+            spine.set_linewidth(0.6)
+            spine.set_color("0.5")
+        span = hi - lo
+        bar = 1 / 64 if not whole else 8 / 64
+        x0, y0 = lo + 0.06 * span, lo + 0.05 * span
+        ax.plot([x0, x0 + bar], [y0, y0], color="#d62728", lw=2.2, solid_capstyle="butt")
+        ax.text(x0 + bar / 2, y0 + 0.025 * span, "1 spacing" if not whole else "8 spacings", color="#d62728",
+                ha="center" if whole else "left", va="bottom", fontsize=11,
+                bbox=dict(fc="white", ec="none", pad=0.6, alpha=0.9))
+        ax.set_xlabel(f"{LABEL[kind]} · {contrast(float(d[kind + '_contrast']))}", fontsize=12, labelpad=4)
         h = d[f"{kind}_nn_hist"].astype(float)
-        h /= h.sum() * np.diff(np.log10(bins))
-        if kind in SECONDARY:
-            ax.axvline(1.0, color=COLOR[kind], lw=1.4, ls=":", label=None)
-            continue
-        c = float(d[kind + "_contrast"])
-        ratio = f"{c:.0f}" if c < 100 else f"{c / 10 ** np.floor(np.log10(c)):.0f}·10$^{{{int(np.log10(c))}}}$"
-        ax.plot(centres, h, color=COLOR[kind], lw=LW, label=f"{LABEL[kind]}, 1 : {ratio}")
-    ax.set_xscale("log")
-    ax.set_xlim(1e-2, 3)
-    ax.set_ylim(0, None)
-    ax.set_xlabel("nearest-neighbour distance, mean spacings")
-    ax.set_ylabel("density per decade")
-    ax.text(0.02, 0.96, "(f)", transform=ax.transAxes, va="top")
-    ax.legend(loc="upper left", fontsize=11, bbox_to_anchor=(0.06, 1.0), handlelength=1.5,
-              title="density contrast", title_fontsize=11)
-    figstyle.decorate(ax)
-    for j, kind in enumerate(SECONDARY):
-        slab(fig.add_subplot(grid[1, 3 + j]), d, kind, f"({'gh'[j]})", size=1.2)
-        fig.axes[-1].set_title(f"({'gh'[j]}) {LABEL[kind]} (secondary)", fontsize=13, loc="left", pad=4)
-    fig.subplots_adjust(left=0.06, right=0.995, top=0.94, bottom=0.11)
+        h /= h.max()
+        sx = fig.add_subplot(grid[1, i])
+        sx.fill_between(centres, h, color=INK, alpha=0.85, lw=0, step="mid")
+        sx.set_xscale("log")
+        sx.set_xlim(1e-2, 3)
+        sx.set_ylim(0, 1.05)
+        sx.set_yticks([])
+        sx.grid(False)
+        sx.tick_params(axis="x", which="both", top=False, labelsize=11)
+        sx.tick_params(axis="y", which="both", left=False, right=False)
+        sx.set_xticks([0.01, 0.1, 1], ["0.01", "0.1", "1"])
+        for side in ("top", "right", "left"):
+            sx.spines[side].set_visible(False)
+        sx.spines["bottom"].set_linewidth(0.6)
+        sx.axvline(1.0, color="0.6", lw=0.8, ls=":")
+    fig.text(0.5, 0.02, "nearest-neighbour distance, mean spacings", ha="center", va="bottom", fontsize=12)
     save(fig, "inputs", DOUBLE)
 
 

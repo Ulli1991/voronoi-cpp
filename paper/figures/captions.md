@@ -3,15 +3,19 @@
 **Figs. 1–2, walk-through.** Panel texts: `walkthrough_captions.md`. Every panel is computed by the library's 2D mesh
 (`Mesh<2>`); 2D stand-ins for 3D as listed in `PLAN.md`.
 
-**inputs.** The benchmark inputs at 64³ (262,144 points; the benchmark runs at 128³ and 256³ with the same generators
-and seed 20261029, `src/test/support.hpp`, snapped to the 2⁻³⁰ grid; blue noise by 100 Lloyd iterations of the uniform
-points, `library_bench lloyd`). (a–e, g, h) Points in a slab one mean spacing thick, projected to x–y; for clustered
-and halo the slab through the densest layer. Jittered: lattice plus uniform shifts up to ±0.1 spacing per axis.
-Clustered: 8 Gaussian blobs, σ = 0.04, 80 % of the points, over 20 % uniform; nominal peak-to-background 1:500. Halo:
-4 profiles ∝ 1/(r² + c²), c = 0.002, out to r = 0.2, 90 % of the points, over 10 % uniform; 1:10⁴ from core to edge
-within a halo. Lattice: exact; wave: shifts of 10⁻⁵ spacing. (f) Nearest-neighbour distance per decade; density
-contrast measured as the 99.9th over the 0.1th percentile of 1/r₃₂³ (r₃₂: distance to the 32nd neighbour), which also
-counts the background and Poisson scatter (uniform 1:3).
+**inputs.** The five benchmark inputs at 64³ (262,144 points; the benchmarks run at 128³ and 256³ with the same
+generators and seed 20261029, `src/test/support.hpp`, snapped to the 2⁻³⁰ grid). Top: the points of a slab one mean
+spacing thick, projected to x–y; jittered, blue noise and uniform as a zoom of 16 × 16 mean spacings, clustered and halo
+as the whole box, shifted periodically so that the densest blob or halo sits in the middle, with the slab through its
+centre. Jittered: a cubic lattice with uniform shifts up to ±0.1 spacing per axis. Blue noise: the uniform points after
+100 Lloyd iterations (`library_bench lloyd`). Uniform: independent uniform points. Clustered: 8 Gaussian blobs,
+σ = 0.04 of the box, holding 80 % of the points, over 20 % uniform; nominal peak-to-background 1:500. Halo: 4 profiles
+∝ 1/(r² + c²), c = 0.002, out to r = 0.2, holding 90 % of the points, over 10 % uniform; 1:10⁴ from core to edge within
+a halo. The ratio under each panel is the measured density contrast: the 99.9th over the 0.1th percentile of 1/r₃₂³
+(r₃₂ the distance to the 32nd neighbour), which also counts the background and Poisson scatter. Bottom: nearest-neighbour
+distances in mean spacings (each strip scaled to its peak; dotted: one spacing). Two degenerate test cases are not
+shown: an exact cubic lattice (every point cospherical with its neighbours) and the lattice shifted by 10⁻⁵ spacing
+("wave").
 
 **Library headline (full cells) and library_more.** One A100 40 GB (node ravg1002, SM clock 1095 MHz under load in
 every job of these rows; voronoi-cpp rows are commit ad62997 = main b2faee8 + the benchmark, which runs 10–15 % slower
@@ -27,9 +31,6 @@ at 128³ to 0.1 B but for the rebuild's face pool), so the bars show 128³ only.
 every 200 µs (library benchmark, voronoi-cpp ad62997), except the moving step (Kokkos arrays, 55cd6b1); dark part:
 the lowest input, light part: up to the highest of the five inputs. Dashed: the B/cell at which 256³, 384³ and 512³
 fill one A100 40 GB. Besides memory, the face-ring pool's 32-bit offsets overflow between 256³ and 384³.
-
-**tried_key.** Rate change against the code just before the change, in the same job, one A100 at 1305 MHz unless the
-row's source says otherwise, 128³ unless stated; from `docs/tried.md` (full list: appendix table `tried.md`).
 
 **oracle_errors.** Against the exact reference `src/test/oracle.hpp`: 128-bit integer predicates and long-double
 clipping over all periodic images, brute force per sampled cell; it includes only the C++ standard library and shares
