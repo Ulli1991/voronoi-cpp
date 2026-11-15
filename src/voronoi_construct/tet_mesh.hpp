@@ -373,6 +373,12 @@ KOKKOS_INLINE_FUNCTION int find_face(const Pool& rings, long long at, int faces,
     return -1;
 }
 
+// What a lookup reads of a cell, in one memory sector: its ring block, faces, and first face, slot and tetrahedron.
+struct alignas(32) CellBlock {
+    long long ring;
+    int faces, face, slot, tet;
+};
+
 // Faces, ring slots and tetrahedra of an assembly.
 struct AssemblyCounts {
     int faces = 0, slots = 0, tets = 0;
@@ -393,6 +399,7 @@ template <class MemorySpace>
 struct Assembly {
     Kokkos::View<int*, MemorySpace> face_start, slot_start, tet_start, first_tet, slot_face, tet_slot;
     Kokkos::View<long long*, MemorySpace> face_ring;
+    Kokkos::View<detail::CellBlock*, MemorySpace> block;
     Kokkos::View<char*, MemorySpace> redone;    // incremental: per tetrahedron, adjacency looked up again
     Kokkos::View<int, MemorySpace> unresolved;  // ring slots and adjacencies not resolved
     detail::AssemblyCounts counts;
@@ -441,7 +448,9 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     a.face_start = Ints(uninitialized("face_start"), n + 1);
     a.slot_start = Ints(uninitialized("assemble_slot_start"), n + 1);
     a.tet_start = Ints(uninitialized("assemble_tet_start"), n + 1);
+    a.block = Kokkos::View<detail::CellBlock*, Memory>(uninitialized("assemble_block"), n);
     const auto face_start = a.face_start, slot_start = a.slot_start, tet_start = a.tet_start;
+    const auto block = a.block;
     Kokkos::parallel_for(
         "tet_mesh::cell_counts", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
             long long at = cell_ring(t);
@@ -471,6 +480,7 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
                 face_start(t) = sum.faces;
                 slot_start(t) = sum.slots;
                 tet_start(t) = sum.tets;
+                block(t) = {cell_ring(t), here.faces, sum.faces, sum.slots, sum.tets};
             }
             sum += here;
             if (last && t == n - 1) {
@@ -563,9 +573,10 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
             } else {
                 long long at;
                 int kh, before_slots;
-                const int f = detail::find_face(rings, cell_ring(v[0]), owned(v[0]), v[1], at, kh, before_slots);
+                const detail::CellBlock c = block(v[0]);
+                const int f = detail::find_face(rings, c.ring, c.faces, v[1], at, kh, before_slots);
                 if (f >= 0) {
-                    id = first_tet(face_start(v[0]) + f);
+                    id = first_tet(c.face + f);
                     for (int r = 0;; ++r) {
                         if (r == kh) {
                             id = -1;
@@ -610,11 +621,12 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
                     sorted_face(v, drop, tri);
                     long long at;
                     int kh, before_slots;
-                    if (detail::find_face(rings, cell_ring(tri[0]), owned(tri[0]), tri[1], at, kh, before_slots) >= 0)
+                    const detail::CellBlock c = block(tri[0]);
+                    if (detail::find_face(rings, c.ring, c.faces, tri[1], at, kh, before_slots) >= 0)
                         for (int r = 0; r < kh; ++r)
                             if (rings(at + r) == tri[2]) {
                                 // Tetrahedra at slots r - 1 and r share this triangle.
-                                const int first = slot_start(tri[0]) + before_slots;
+                                const int first = c.slot + before_slots;
                                 const int before = ring(first + (r == 0 ? kh : r) - 1), after = ring(first + r);
                                 other = before == e ? after : before;
                                 break;

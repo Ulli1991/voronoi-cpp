@@ -126,9 +126,53 @@ def log_table(paths):
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "ncu":
+    if sys.argv[1] == "compare":
+        pass
+    elif sys.argv[1] == "ncu":
         for p in sys.argv[3:]:
             print("\n" + p)
             ncu_table(int(sys.argv[2]), p)
     else:
         log_table(sys.argv[2:])
+
+
+def compare(paths):
+    """Checksums of each design against ref, per input (the step's cells_checksum hashes face numbers, which follow
+    the repair's atomics, so it is left out)."""
+    keys = ("tets_checksum", "rings_checksum", "rings_topology", "assembly_checksum", "start_arrays_checksum")
+    runs = OrderedDict()
+    for path in paths:
+        key = None
+        for line in open(path):
+            m = re.match(r"== \w+ (\S+) (\S+) (\S+)", line)
+            if m:
+                design, kind, n = m.groups()
+                key = (kind, n)
+                cur = runs.setdefault(key, OrderedDict()).setdefault(design, {})
+                continue
+            if key is None:
+                continue
+            if line.startswith("start:"):
+                for k in keys:
+                    m = re.search(k + r"=(\d+)", line)
+                    if m:
+                        cur[k] = m.group(1)
+            if line.startswith("mesh:"):
+                cur["build cells_checksum"] = re.search(r"cells_checksum=(\d+)", line).group(1)
+            m = re.match(r"geometry_checksum: step=(\d+) (\d+) cells_checksum=\d+ faces_checksum=(\d+) lists_checksum=(\d+)",
+                         line)
+            if m:
+                s = m.group(1)
+                cur["geometry " + s], cur["faces " + s], cur["lists " + s] = m.group(2), m.group(3), m.group(4)
+    for (kind, n), designs in runs.items():
+        ref = designs.get("ref", {})
+        for design, values in designs.items():
+            if design == "ref":
+                continue
+            differ = [k for k in ref if values.get(k) != ref[k]]
+            print("%s %s %s: %d checksums, %s" % (kind, n, design, len(ref), "identical" if not differ else
+                                                  "DIFFER: " + ", ".join(differ)))
+
+
+if __name__ == "__main__" and sys.argv[1] == "compare":
+    compare(sys.argv[2:])
