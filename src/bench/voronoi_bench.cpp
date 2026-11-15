@@ -645,9 +645,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);
     Mesh mesh(exec, box);
     mesh.set_layout(layout);
-    mesh.set_fallback(fallback == "host"      ? voronoi::Fallback::host
-                      : fallback == "rebuild" ? voronoi::Fallback::rebuild
-                                              : voronoi::Fallback::cheapest);
+    if (fallback == "host") mesh.set_fallback(voronoi::Fallback::host);
+    if (fallback == "rebuild") mesh.set_fallback(voronoi::Fallback::rebuild);
     std::cout << "motion: jump_share=" << jump_share << " jump_spacings=" << jump_spacings << " fallback=" << fallback
               << "\n";
     // label[i]: the particle cell i was first; the points follow every re-sort.

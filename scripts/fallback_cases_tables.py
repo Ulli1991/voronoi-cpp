@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """docs/data/fallback_cases.csv from fallback_cases_a100.sh logs: per case the mean ms per step of each stage over steps
 2 to the last (means, not medians, so rare fallbacks count), the steps that used it, and the rate. Columns as
-paper/data/stages.csv (job, input, n, what, stage, ms) plus steps, steps_used, cells_hit, Mcells_s.
+paper/data/stages.csv (job, input, n, what, stage, ms) plus steps, steps_used, stuck_entries, Mcells_s; and
+docs/data/fallback_cases_steps.jsonl, one line per step with the gpuflips fields and the case.
 Usage: fallback_cases_tables.py <log> ..."""
 import csv
+import json
 import os
 import re
 import sys
@@ -40,7 +42,7 @@ def flush(rows, job, case, steps, refused):
 
 
 def main(paths):
-    rows = []
+    rows, per_step = [], []
     for path in paths:
         job = re.findall(r"(\d+)", os.path.basename(path))[-1]
         case, steps, refused = None, [], False
@@ -51,6 +53,9 @@ def main(paths):
                 case, steps, refused = line.split()[2:], [], False
             elif line.startswith("gpuflips:"):
                 steps.append(fields(line))
+                per_step.append({"job": job, "what": " ".join([case[0]] + case[4:]), "input": case[1],
+                                 "n": int(case[2]), "spacings": float(case[3]),
+                                 **{k: float(v) for k, v in steps[-1].items()}})
             elif line.startswith("refused:"):
                 refused = True
         if case:
@@ -60,6 +65,8 @@ def main(paths):
         w = csv.writer(f)
         w.writerow(["job", "input", "n", "what", "stage", "ms", "steps", "steps_used", "stuck_entries", "Mcells_s"])
         w.writerows(rows)
+    with open(OUT.replace(".csv", "_steps.jsonl"), "w") as f:
+        f.writelines(json.dumps(r) + "\n" for r in per_step)
     print(f"{len(rows)} rows -> {os.path.normpath(OUT)}")
 
 

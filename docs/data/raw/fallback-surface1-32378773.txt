@@ -1,0 +1,40 @@
+# bin=/ptmp/uli/voronoi-fallback/4326174 host=ravg1057 job=32378773
+# NVIDIA A100-SXM4-40GB, 1410 MHz, 1305 MHz
+== case flow-1 surface 2097152 1 --no-start
+# backend=Cuda n=2097152 distribution=surface box=1,1,1 displacement=1 steps=6
+motion: jump_share=0 jump_spacings=4 fallback=cheapest
+gpuflips: step=1 gpu_ms=104.345 rounds=124 flips=1906120 stuck=1498 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=79103.4 tets=13299334 faces=15396486 centres_faces_ms=12.3489 cells_ms=5.94171 resorted=0 resort_ms=0 step_ms=116.693 step_Mcells_s=17.9715 all_ms=79226 advect_ms=31.9069 copy_ms=30.6231
+gpuflips: step=2 gpu_ms=83.6247 rounds=89 flips=1826463 stuck=49 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=81427.5 tets=13302471 faces=15399623 centres_faces_ms=12.2969 cells_ms=5.97037 resorted=0 resort_ms=0 step_ms=95.9215 step_Mcells_s=21.8632 all_ms=81529.4 advect_ms=31.6389 copy_ms=34.5617
+gpuflips: step=3 gpu_ms=82.9563 rounds=93 flips=1811868 stuck=10 host_ms=881.657 host_flips=0 host_rebuilt=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=80938.3 tets=13307724 faces=15404876 centres_faces_ms=12.3677 cells_ms=5.89278 resorted=0 resort_ms=0 step_ms=95.324 step_Mcells_s=22.0003 all_ms=81921.1 advect_ms=29.453 copy_ms=35.91
+gpuflips: step=4 gpu_ms=82.125 rounds=83 flips=1813207 stuck=23 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=86516.9 tets=13314852 faces=15412004 centres_faces_ms=12.3752 cells_ms=5.89104 resorted=0 resort_ms=0 step_ms=94.5002 step_Mcells_s=22.192 all_ms=86617.3 advect_ms=32.4144 copy_ms=33.7722
+gpuflips: step=5 gpu_ms=80.1691 rounds=73 flips=1818932 stuck=17 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=88747.5 tets=13324260 faces=15421412 centres_faces_ms=12.4068 cells_ms=5.92333 resorted=0 resort_ms=0 step_ms=92.576 step_Mcells_s=22.6533 all_ms=88846 advect_ms=30.5654 copy_ms=34.9278
+gpuflips: step=6 gpu_ms=83.3466 rounds=94 flips=1823551 stuck=21 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=90180.7 tets=13335001 faces=15432153 centres_faces_ms=12.4033 cells_ms=5.91446 resorted=0 resort_ms=0 step_ms=95.7498 step_Mcells_s=21.9024 all_ms=90282.4 advect_ms=28.1599 copy_ms=37.2962
+final_rebuild: build_ms=91175.4 resort_ms=0 geometry_ms=12.416 cells_ms=5.83711 total_ms=91193.6 Mcells_s=0.0229967
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  fallback_cases
+Node list: ravg1057
+Job start: Sun Nov 15 16:21:09 CET 2026
+Job end:   Sun Nov 15 16:32:33 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-fallback
+Command:   /raven/u/uli/voronoi-cpp-fallback/scripts/fallback_cases_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32378773      fallback_c      1            36                             00:11:24      0:0
+  
+Maximum memory per node: 0.452555 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 5.5 %
+CO2 footprint: 13.8922 g (estimate based on total cluster power and electricity mix)
+  

@@ -146,6 +146,82 @@ all three (oracle jobs 32369335 and 32370726). Fastest full cells besides ours, 
 and voro++ (72 cores) 0.83 M cells/s; surface 128³: geogram (72 cores) 0.69, gDel3D 0.68 (too thin padding); fcc solid
 2²⁰: peclet-voro 3.7 (A100).
 
+### When the step falls back: host finish and rebuild (2026-11-15)
+
+No run of the stage figure reached the host finish or the rebuild. These runs look for motions that do.
+
+**Triggers** (main 8d7ac1f):
+- `Mesh::update` rebuilds from scratch on the first call or when the particle count changes (`voronoi_mesh.hpp:219`).
+- The device repair (`tet_repair::repair`, at most 1000 rounds, `voronoi_mesh.hpp:591`) lists a triangle as stuck
+  when its tetrahedron is inverted after the move (`tet_repair.hpp:509`) or no flip repairs it (`:574`). Out of rounds
+  with triangles left is `unfinished` (`:730`).
+- **Host finish** (`tet_flips::finish`) runs if some entries are stuck, the repair finished, and the policy is `host`,
+  or the default `cheapest` with stuck × 200000 ≤ n (`voronoi_mesh.hpp:232`). At 128³ that is at most 10 entries;
+  below 200000 cells it never runs. It repairs a region of 8, then 16 hops around the entries on the host
+  (`tet_flips.hpp:403`). It gives up after 2²⁰ tetrahedra of local Delaunay builds (`host_budget`,
+  `voronoi_mesh.hpp:161`; `tet_flips.hpp:461`) or on an exception (`voronoi_mesh.hpp:237`).
+- **Rebuild** runs if entries are still stuck (more than the policy allows, or the host gave up), the repair ran out
+  of rounds, the volumes do not sum to the box within 1e-6 (`overlapped`, `:252`), or the face count fails Euler's
+  formula (`miscounted`, `:253`). A rebuild whose exact start fails is a refusal (`runtime_error`, `:297`).
+
+**Motions** (`voronoi_bench step`, branch `fallback-cases`; new options are in the bench only):
+- the smooth flow at 0.5, 1 and 2 spacings per step;
+- a share of the points jumping a fixed distance each step in a random direction (`--jump-share`,
+  `--jump-spacings`), on top of the flow at 0.1 spacing. Two particles (share 1e-6) to 2 % of them, 1 to 4 spacings;
+- clustered, halo, cosmic web, lattice, wave and surface inputs under the flow;
+- `--fallback=host|rebuild` to set the policy; `--no-start` skips the bench's own start timing.
+
+`scripts/fallback_cases_a100.sh`, one A100 40 GB (gpu1) at 1305 MHz (nvidia-smi, every job), 128³ (2,097,152
+cells), 12 steps (30 for the frequency runs, 6 on the surface). Jobs 32378332 to 32378334, 32378770 to 32378773 and
+32378981. Means over steps 2 to the last, not medians, so that rare fallbacks count. The rate is cells over the mean
+of the whole step (repair, host, rebuild, geometry, cells). Data: [docs/data/fallback_cases.csv](data/fallback_cases.csv)
+(columns of the paper's stages.csv, plus steps, steps used, stuck entries and the rate) and
+[fallback_cases_steps.jsonl](data/fallback_cases_steps.jsonl) (every step).
+
+ns per cell per step (mean of steps 2 on; ms per step = ns per cell × 2.097):
+
+| case (128³, policy `cheapest` unless noted) | repair | host | rebuild | geometry | cells | steps host / rebuild | M cells/s |
+|---|---|---|---|---|---|---|---|
+| jittered, flow 1 spacing | 13.9 | 0 | 0 | 8.34 | 2.39 | 0 / 0 of 11 | 40.6 |
+| jittered, flow 2 spacings | 29 | 0 | 0 | 14 | 2.86 | 0 / 0 of 11 | 21.8 |
+| clustered, flow 0.5 spacings | 7.06 | 0.346 | 0 | 5.53 | 2.42 | 1 / 0 of 11 | 65 |
+| cosmicweb, flow 1 spacing | 15.4 | 0.228 | 0 | 10.2 | 3.09 | 3 / 0 of 29 | 34.6 |
+| jittered, jumps, share 1e-6, 1 spacing | 4.62 | 0.811 | 37.3 | 5.01 | 2.33 | 3 / 7 of 11 | 20 |
+| jittered, jumps, share 1e-6, 1 spacing, `host` | 5.05 | 50.1 | 0 | 3.62 | 2.37 | 10 / 0 of 11 | 16.3 |
+| jittered, jumps, share 1e-6, 4 spacings | 5.44 | 0 | 59.6 | 5.96 | 2.37 | 0 / 11 of 11 | 13.6 |
+| jittered, jumps, share 1e-3, 4 spacings | 15.7 | 0 | 60.6 | 6.01 | 2.37 | 0 / 11 of 11 | 11.8 |
+| jittered, jumps, share 1e-2, 4 spacings | 47.3 | 0 | 68.2 | 6.29 | 2.41 | 0 / 11 of 11 | 8.05 |
+| jittered, jumps, share 1e-3, 4 spacings, `host` | 15.5 | 2.12 µs | 61 | 6.06 | 2.38 | 11 / 11 of 11 | 0.453 |
+| surface, flow 0.3 spacings | 12.3 | 0 | 8.39 µs | 5.91 | 2.75 | 0 / 1 of 5 | 0.119 |
+| surface, flow 1 spacing | 39.3 | 83.9 | 40.8 µs | 5.91 | 2.82 | 1 / 5 of 5 | 0.0244 |
+
+What the runs show:
+- **The smooth flow rarely sticks.** Jittered at 0.5, 1 and 2 spacings, uniform at 1, halo at 0.3, lattice and
+  wave at 0.5 and 1: no stuck entry in any step; the repair alone grows (29 ms at 1 spacing, 61 ms at 2).
+  (An older build stuck in most steps at 1 spacing, docs/figures/flow_step.png; main 8d7ac1f does not.)
+  Clustered at 0.5 stuck in 1 of 11 steps (6 entries, host 8 ms) in one run and in none of 29 in another (the
+  flip order follows atomics). Cosmic web at 1 spacing: 3 of 29 steps, 5 or 6 entries each, host 4 to 8 ms.
+- **A few particles jumping go to a rebuild.** Two particles jumping 2 or 4 spacings leave 20 to 50 stuck entries,
+  more than the 10 the default allows at 128³, so every step is a rebuild (118 to 125 ms against 11 ms of repair).
+  At 1 spacing two jumpers leave 5 to 21 entries: 3 of 11 steps go to the host (4 to 8 ms), 7 to a rebuild.
+- **The host is not cheaper there.** With `--fallback=host` the same two jumpers at 1 spacing take 4 to 572 ms of
+  host time per step (a second, 16-hop round costs 66 to 572 ms), 105 ms on average against 78 ms of rebuild with
+  `cheapest`. At 2 and 4 spacings the host takes 0.4 to 1.1 s per step and still gives up in half the steps or more,
+  then rebuilds. At 1e-5 and more jumpers it always gives up (1.1 to 1.3 s, then the rebuild).
+- **On the surface a rebuild costs minutes.** At 0.3 spacings the first two steps stick (65 and 14 entries) and
+  rebuild in 82 and 88 s; at 1 spacing every step sticks (10 to 1498 entries) and rebuilds in 79 to 90 s, the
+  clipping's needle cells (#60). One step went to the host with 10 entries (882 ms), which gave up.
+- **No step overlapped, miscounted, ran out of rounds or was refused.** `--verify` (each step against a fresh
+  rebuild; job 32378981) passes all 48 steps of cosmic web at 1 spacing (2 host finishes), clustered at 0.5 (1),
+  two jumpers at 1 spacing (3 host finishes, 8 rebuilds) and two jumpers at 2 spacings with `host` (12 host
+  finishes, 4 of them then rebuilt). No wrong mesh, crash or hang, so no issue filed.
+
+For the stage figure: host finish shows in the stage bars only for a few particles jumping about one spacing
+(two jumpers at 1 spacing: 0.81 ns per cell on average, 4 to 8 ms in the steps that use it) or with `host` forced;
+in the smooth flow it shows in single steps (cosmic web at 1 spacing, clustered at 0.5) and is under 1 % of the mean.
+Rebuild shows whenever a few particles jump 2 spacings or more (60 ns per cell; the rate falls from about 96 M cells/s at 0.1 spacings, paper stages.csv, to 14),
+and on the surface at large steps, where it is the whole cost (8 to 41 µs per cell).
+
 ### Long runs
 
 Job 31953232 (128³, 0.1 spacings per step): the step falls from 118 M cells/s at step 100 to 59 at step 500. Issue: https://github.com/Ulli1991/voronoi-cpp/issues/34. On Sedov the loss is at most 4.5 % over a run.
