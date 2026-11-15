@@ -16,6 +16,7 @@ module load gcc/14 cuda/13.0
 bin="$1" data="$2"
 export LIBBENCH_COMMIT="$(basename "$bin")"
 mkdir -p "$data/points" "$data/clocks" "$data/tmp"
+checks="$SLURM_SUBMIT_DIR/paper/data/raw/check-$SLURM_JOB_ID.txt"
 nvidia-smi -L >&2
 nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.applications.graphics,utilization.gpu,temperature.gpu,power.draw \
     --format=csv,noheader -l 1 >"$data/clocks/clock-$SLURM_JOB_ID.csv" &
@@ -36,6 +37,10 @@ points() {  # points <kind> <n>: the point file, made once (blue noise: 100 Lloy
 for n in ${SIZES:-32768 262144 2097152}; do
     for kind in ${KINDS:-jittered bluenoise uniform clustered halo lattice wave}; do
         f=$(points "$kind" "$n")
+        if [[ "$kind" != bluenoise && -z "${NOCHECK:-}" ]]; then  # cell checks and faces per cell of a rebuild
+            echo "== check $kind $n" >>"$checks"
+            "$bin/voronoi_bench" rebuild "$n" "$kind" 3 >>"$checks" 2>&1 || echo "# failed: check $kind $n" >&2
+        fi
         for path in ${PATHS:-warp exact}; do
             [[ "$path" == none ]] && continue
             "$bin/library_bench" build "$f" --path=$path --repeats=${REPEATS:-5} || echo "# failed: build $path $f" >&2
