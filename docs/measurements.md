@@ -427,6 +427,70 @@ luna-cpp (branch `resort` a82092c, the first that builds against main's API with
 
 **Left to the 5× budget.** The step now moves 2392 B/cell at 0.03 spacings and 4133 at 0.1 (step 3, 128³; main 69de1d3 moved 2866 and 4795, main 9e9ec03 2717 and 4292). The 5× budgets are 1269 and 2182 B/cell: 1123 and 1951 B/cell still to go, with every kernel at 80 % of peak besides. By kernel at 0.03: `faces` 1005 and `cell_sums` 737 (R14 and float centres, R6), `screen` 528 (K4), the repair and ring re-walk 617 (the repair's rounds and the `dirty_faces` walks, K2), the numbering now 63.
 
+### The exact start: assembly from the ring blocks and an incremental patch round (2026-11-15)
+
+Branch `start-fast` against main c42c230, both in the same `gpu1` job (one A100 at the 1305 MHz application clock; `scripts/start_fast_a100.sh proof`, tables by `scripts/start_fast_tables.py`). The start is the bench's `start_ms`: the warp clipping with rings and `tet_start::build`, median of 3 after a warm-up. "Exact" is `tet_start::build` alone: assembly, check, exact re-clips and further rounds.
+
+What changed, all in `tet_mesh::assemble` and `tet_start.hpp`:
+
+- **Lookups read the clipping's ring blocks** in place. Main copied every ring into a face-ordered array (`face_particles`) and looked a tetrahedron up through three face arrays and that copy; now a lookup reads one 32-byte record of the owner cell, then the cell's block. No `face_particles`, `face_lengths`, `first_tet` scan or `ring_start` scan.
+- **One thread per ring slot** for emitting and naming (main: one per face, 9 threads busy per warp instruction), **one per tetrahedron** for the adjacency (main: one per face, 4.9), **one per face** for the face arrays (coalesced writes; a thread per cell wrote six arrays at 74 % of DRAM peak but 8× the bytes needed). Ring wraps without integer division.
+- **The check by the double filters** (91 registers, 168 before); tetrahedra a filter cannot decide go to a second kernel with the exact predicates, so the outcome is the exact one.
+- **#59: the round after a partial re-clip is incremental.** Cells whose ring block names a re-clipped particle look up again; every other lookup and adjacency is the last round's, shifted by the change in its cell's first tetrahedron. The check tests only the tetrahedra looked up again and their neighbours. The arrays are those of a full round, entry for entry (`start_arrays_checksum`).
+- **Storage kept between rounds.** Freeing gigabytes and allocating again right after made single `cudaMalloc` calls take 76 to 103 ms at 256³ (Nsight Systems); the assembly and the check now keep their arrays, with a second set of tetrahedra and slots for the incremental round.
+
+**Rates.** `start_ms`, median of 3 unfenced runs, job 32373387 (ravg1082, 1305 MHz); M cells/s and ns per cell, main → start-fast:
+
+| input | 128³ M cells/s | 128³ ns/cell | 256³ M cells/s | 256³ ns/cell | rounds, bad tetrahedra, re-clipped cells at 256³ |
+|---|---|---|---|---|---|
+| jittered | 18.6 → 25.3 | 53.8 → 39.5 | 12.7 → 22.2 | 78.5 → 45.1 | 2, 44, 830 |
+| blue noise | 18.6 → 23.1 | 53.7 → 43.3 | 13.6 → 20.6 | 73.3 → 48.5 | 2, 10, 127 |
+| uniform | 8.6 → 12.3 | 116.5 → 81.3 | 9.4 → 12.6 | 106.1 → 79.3 | 2, 18, 277 |
+| clustered | 8.0 → 10.3 | 125.0 → 97.0 | 8.9 → 12.5 | 112.5 → 79.9 | 2, 10, 203 |
+| halo | 9.8 → 11.9 | 102.0 → 83.9 | 8.6 → 12.1 | 116.5 → 82.4 | 2, 24, 393 |
+| lattice | 7.5 → 8.0 | 133.4 → 124.5 | 7.8 → 8.4 | 128.0 → 119.3 | 2, all, all |
+| wave | 4.4 → 5.0 | 229.7 → 198.3 | 4.3 → 5.1 | 231.0 → 196.4 | 2, 481311, all |
+
+At 128³ jittered, uniform and clustered need 1, 2 and 2 rounds (as on main). Lattice and wave re-clip every cell exactly in the second round (more than n/8 marked), which is unchanged and is most of their time.
+
+**Kernels by group**, ms per start, fenced per kernel (`--kernels`, same job), main → start-fast. Clipping: the warp kernel with rings; re-clip: the exact re-clips; assembly: `assemble` (main: face_start, face_lengths, ring_start, face_particles, first_tet, emit, adjacency; branch: cell_counts, cell_starts, faces_of_cells, emit, adjacency); check: check, its exact pass, the incremental list, unused, the carried volume.
+
+| input, 128³ | clipping | re-clip | assembly | check | represent |
+|---|---|---|---|---|---|
+| jittered | 56.6 → 56.7 | 0.1 → 0.1 | 41.7 → 13.9 | 5.1 → 3.3 | 3.3 → 3.3 |
+| blue noise | 68.3 → 68.3 | 0.1 → 0.1 | 31.1 → 11.4 | 4.5 → 2.9 | 2.5 → 2.4 |
+| uniform | 114.8 → 114.8 | 15.8 → 15.8 | 80.2 → 24.4 | 10.1 → 4.5 | 3.2 → 3.2 |
+| clustered | 131.3 → 132.1 | 23.9 → 23.7 | 81.8 → 24.3 | 10.0 → 4.5 | 3.2 → 3.2 |
+| halo | 133.8 → 133.9 | 16.6 → 16.5 | 39.6 → 13.6 | 5.1 → 3.2 | 3.2 → 3.2 |
+| lattice | 39.7 → 39.7 | 182.0 → 182.0 | 33.7 → 15.2 | 8.2 → 10.4 | 2.3 → 2.3 |
+| wave | 58.6 → 58.6 | 313.4 → 313.0 | 86.1 → 28.0 | 10.3 → 6.6 | 3.3 → 3.4 |
+
+| input, 256³ | clipping | re-clip | assembly | check | represent |
+|---|---|---|---|---|---|
+| jittered | 453 → 453 | 4 → 4 | 681 → 197 | 79 → 35 | 26 → 26 |
+| blue noise | 546 → 546 | 6 → 5 | 529 → 164 | 69 → 31 | 19 → 19 |
+| uniform | 918 → 918 | 17 → 17 | 687 → 192 | 77 → 34 | 25 → 25 |
+| clustered | 1008 → 1015 | 23 → 23 | 653 → 192 | 77 → 34 | 25 → 25 |
+| halo | 1009 → 1010 | 69 → 69 | 684 → 192 | 77 → 35 | 25 → 25 |
+| lattice | 303 → 304 | 1438 → 1437 | 281 → 118 | 63 → 80 | 18 → 18 |
+| wave | 468 → 468 | 2494 → 2496 | 731 → 222 | 80 → 51 | 27 → 27 |
+
+256³ jittered by kernel, both rounds: main emit 265.6, adjacency 218.3, face_particles 116.4, check 78.3, first_tet 38.2, face_lengths 33.2, represent 25.8, ring_start 7.7 ms; branch emit 92.7, faces_of_cells 41.0, adjacency 34.6, represent 25.9, cell_counts 25.5, check 25.4, near_redone 7.5, cell_starts 3.7 ms. On lattice the check is slower (63 → 80 ms at 256³): every tetrahedron has a cospherical tie, so all go through the exact pass after the filters. One 128³ jittered start under Nsight Compute (job 32370306, before the incremental round and the per-face face arrays): main's assembly kernels ran at 4.9 to 9.8 of 32 lanes per instruction and 13 to 44 % of DRAM peak; the branch's emit 14.2 lanes, 52 % issue active, 668 + 304 B/cell; the adjacency 14.7 lanes, 874 + 158 B/cell at 48 % of DRAM peak; the filtered check 91 registers (main 168, 12 % occupancy).
+
+**Host side.** One 256³ jittered `tet_start::build` (the bench's last start, Nsight Systems): main 840 ms wall, 791 of kernels; the branch at v7 366 ms wall, 240 of kernels, the rest `cudaMalloc` and `cudaFree` (jobs 32371594, 32372190). Syncs and launches per start: 92 and 32 on main, 72 to 74 and 29 on the branch.
+
+**Memory.** Peak device memory through the first `Mesh::update` (`--memory`, job 32373385): 1955.2 B/cell at 256³ jittered and 1719.5 blue noise, both main's to 0.01 B/cell; the peak is in `prepare` and the geometry, not the start. The bench's own start block, which keeps the previous run's mesh alive while the next start builds, peaks at 1973 against 1696 B/cell (jittered 256³). A per-slot face map instead of bisection on `ring_start` makes emit 1.6 ms faster at 128³ (5.0 against 6.6 ms) for 167 B/cell more at the start's peak; not taken.
+
+**Bits.** `tets_checksum`, `rings_checksum`, `rings_topology`, `assembly_checksum` (one assembly of the first clipping, entry for entry, also where the check rejects it), `start_arrays_checksum` (the final start's vertex, adjacency, edge bits, faces and ring slots, entry for entry), the build's `cells_checksum`, and after two steps at 0.1 spacings `geometry_checksum`, `faces_checksum` and `lists_checksum`: identical to main on all seven inputs at 128³ and 256³ (job 32373387; the final binary, with the round-3 volume fix below, again in job 32374526). Wave at 256³ runs out of memory in the bench's step on main and the branch alike, so for it the start's checksums only. The step's `cells_checksum` hashes face numbers that follow the repair's atomics and differs between runs of main, so it is not compared. The patched cells and bad tetrahedra per round are main's.
+
+**Found by the tests.** The first full build of the branch failed `mesh_cases.valence` (`valence.ring.step.128` and `.129`): after an incremental second round failed, the third, full round still added the second round's carried volume (1.94 instead of 1) and refused the mesh. None of the seven bench inputs reach a third round. Fixed before the proof's final binary; A100 ctest 22 of 22 (job 32373935).
+
+**Tests.** A100 ctest 22 of 22, the fuzz smoke included (job 32373935). CI's host steps (gcc 15, host Kokkos 5.0.99 OpenMP at 2 threads; CI builds a Serial Kokkos 5.0.2): comment and format checks pass, ctest 22 of 22 with sanitizers off and on, clang-tidy 18 clean on `voronoi_bench.cpp`, `start_test.cpp` and `mesh_test.cpp` with the library headers (job 32374568). A100 fuzz batch, profiles large, huge and giant on four A100 for 10 minutes (job 32373936): 52 cases, 26 exact, 17 refused for causes the input has, 9 out of time and no WRONG or CRASH; main's campaign of 2026-11-10 had 85 of 604 out of time (#49), and seed 4000000000005 rerun alone times out at 900 s on main and on the branch alike (job 32374773).
+
+**Face output (about 17.5 ns per cell of the start).** It cannot come out of the check's pass: faces are numbered by the edge representatives, which `represent` sets only once the check has passed, and most inputs need a second round at 256³. Where its time goes (main, 128³ jittered, Nsight Systems job 32369633, one build): about 22 ms of kernels, of which the two walks around every edge in `number_faces` and `update_face_rings` are 9.0 ms (40 %), `tet_repair::prepare`'s resize copies of the start's arrays 5.0 ms, `faces` 2.2, the cell sums and sort 3.0, circumcentres 1.1. The assembly already holds every face's ring of tetrahedra (`mesh.ring`, in owner order); numbering the build's faces from it (a face's representative is its lowest tetrahedron; its ring rotated to the canonical start) would replace both walks, and sizing the start's arrays with `prepare`'s room would drop the copies. Both change `update_face_rings`, `number_faces` and `Mesh::rebuild` (voronoi_mesh.hpp), so they are left for the owner of those files; #48 (a rounded cell naming a face twice) needs the walk kept for cells with repeated neighbours.
+
+**Allocation.** The first `Mesh::update` at 256³ spends 528 ms of its 1992 in `cudaMalloc` on main (Nsight Systems job 32372190): mapping fresh device memory costs about as much as the start's kernels. A pool for the mesh's arrays would remove it for every caller; not done here.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).

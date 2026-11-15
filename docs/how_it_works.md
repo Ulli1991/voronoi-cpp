@@ -100,7 +100,7 @@ The control flow of one `update()`, with its decisions:
 
 **In and out.** In: the face rings of all cells. Out: tetrahedra with their adjacency, exactly the Delaunay tetrahedralization of the snapped positions, ties broken by id.
 
-**Rings to tetrahedra.** The face of particles i < j has a ring q₁ … qₖ: the particles whose bisectors bound it, in order around the edge i-j. Each consecutive pair gives a tetrahedron (i, j, qₘ, qₘ₊₁). A tetrahedron has six edges, so six faces could name it; it is written only by the face of its two smallest particles. Adjacency comes from the rings too, without hashing.
+**Rings to tetrahedra.** The face of particles i < j has a ring q₁ … qₖ: the particles whose bisectors bound it, in order around the edge i-j. Each consecutive pair gives a tetrahedron (i, j, qₘ, qₘ₊₁). A tetrahedron has six edges, so six faces could name it; it is written only by the face of its two smallest particles. Adjacency comes from the rings too, without hashing. `assemble` reads the clipping's ring blocks in place: one thread per cell counts its faces, ring slots and tetrahedra, one per face writes the face arrays, one per ring slot emits or looks up its tetrahedron (in the block of its two smallest particles' owner, found through a 32-byte record per cell), and one per tetrahedron finds its neighbours.
 
 ![Rings to simplices](figures/construction_rings.png)
 
@@ -108,7 +108,9 @@ The control flow of one `update()`, with its decisions:
 
 **Why a check.** Clipping in double decides near-ties by rounding, so two neighbouring cells can disagree about a face. Then the tetrahedra have holes or overlaps: on lattices and other near-degenerate input, and now and then on random input. The check (`tet_start::check`, one thread per tetrahedron) asks: is it flat; does the tetrahedron across each face point back; does its far vertex lie on the other side and outside this circumsphere (exact, perturbed); is every particle used; do the volumes add up to the box. These hold for the Delaunay tetrahedralization and for nothing else.
 
-**Repair of the start.** The particles of failing tetrahedra are marked, the mark grows to every particle sharing a tetrahedron with a marked one, and those cells are clipped again as exact cells. Exact cells agree with each other by construction. If more than n/8 cells are marked, or on the second try, every cell is rebuilt exactly. There are three rounds at most.
+**Repair of the start.** The particles of failing tetrahedra are marked, the mark grows to every particle sharing a tetrahedron with a marked one, and those cells are clipped again as exact cells. Exact cells agree with each other by construction. If more than n/8 cells are marked, or on the second try, every cell is rebuilt exactly. There are three rounds at most. After a partial re-clip the next round is incremental ([#59](https://github.com/Ulli1991/voronoi-cpp/issues/59)): only cells whose ring block names a re-clipped particle look their slots and neighbours up again; every other lookup is the last round's, shifted by the change in its cell's first tetrahedron, so the arrays are those of a full round, entry for entry. The check then tests only the tetrahedra looked up again and their neighbours: the rest passed with the same neighbours, and a failing one would have marked its own cell.
+
+**The check's arithmetic.** The check decides orientation and in-sphere by the double filters of `exact_predicates` (91 registers instead of 168); the few tetrahedra a filter cannot decide are checked again by the exact predicates in a second kernel, so the result is the exact one.
 
 **What can go wrong.** If the result is still not exact, `update()` throws. The message says why: particles on one grid point (named), uncertified cells, cells too large for the exact clipping, or else the counts of each status.
 

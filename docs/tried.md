@@ -63,6 +63,26 @@ Reason gives the structural cause, not "method X is worse".
 | Re-sort by row-major, reverse Cuthill–McKee | 10–12 % worse than the curves | dropped | worse locality | same |
 | Faces by owner + owner bit | hydro +16 %, whole step about +1 % | kept, opt-in | numbering cost eats the hydro gain until it is incremental (#53) | same |
 
+## Exact start (`tet_start::build`)
+
+Kernel times fenced per kernel (`--kernels`), 128³ jittered unless stated, against main c42c230 in the same job; job ids in [measurements.md](measurements.md#the-exact-start-assembly-from-the-ring-blocks-and-an-incremental-patch-round-2026-11-15).
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| Lookups read the clipping's ring blocks; no face-ordered copy of the rings | `face_particles`, `face_lengths`, `first_tet` and the scans (12.7 ms) gone | kept | the copy moved 2353 B/cell for 167 B of rings; the blocks hold the same data in place | `tet_mesh::assemble` |
+| One thread per ring slot for emit and lookups, first try (per-slot face map, modulo wraps, counting earlier faces) | emit 15.7 → 20.1 ms | changed | integer division and re-counting the owner's earlier faces per lookup cost more than the divergence saved | job 32370011 |
+| The same with `after()` wraps and the face's first tetrahedron read, not counted | emit 15.7 → 5.0 ms | kept | one lookup per thread, 14 of 32 lanes busy against 9.8 | job 32370305 |
+| One thread per tetrahedron for the adjacency | 13.0 → 3.0 ms | kept | main ran one thread per face, 4.9 lanes busy | same |
+| Face arrays by one thread per cell | 6.6 ms, 2210 + 1392 B/cell at 74 % of DRAM peak | changed | uncoalesced writes of six arrays: partial sectors read back from DRAM | ncu job 32370306 |
+| Face arrays by one thread per face (owner by bisection) | 6.6 → 2.6 ms | kept | coalesced writes | job 32370596 |
+| Check by the double filters, undecided tetrahedra by the exact predicates in a second kernel | 5.1 → 3.2 ms; lattice: 8.2 → 2.8 + 7.5 (all ties go exact) | kept | 91 registers instead of 168: 12 → about 25 % occupancy | same |
+| A lookup reads one 32-byte cell record (block, faces, first face, slot, tetrahedron) | not measured on its own | kept | one memory sector per lookup instead of three | |
+| Per-slot face map against bisection on `ring_start` | map: emit 5.0 ms; bisection 6.6 ms | bisection kept | the map costs 167 B/cell at the start's peak; owner's call | job 32373386 |
+| #59: incremental round after a partial re-clip | 256³ jittered: second round 407 → 108 ms of kernels (main → branch), the first 381 → 129 | kept | only cells naming a re-clipped particle look up again; the passes over all cells, faces, slots and tetrahedra that shift the rest (about 70 ms at 256³) remain | nsys job 32372190 |
+| Freeing the old mesh and temporaries before allocating | `cudaMalloc` 534 → 297 ms in one 256³ start | changed | a large `cudaMalloc` right after large frees stalls (76 to 103 ms each) | nsys jobs 32371022, 32371295 |
+| Storage kept from round to round (two sets for the incremental round) | host gap of one 256³ start 559 → 126 ms | kept | no frees between rounds | nsys job 32371594 |
+| Slack of 1/16 on kept storage, check lists of their own | start peak through `Mesh::update` 1955 → 2059 B/cell (256³) | changed to 1/64 and lists in idle assembly storage | the peak equals main's again (1955.2) | memory job 32373385 |
+
 ## Precision
 
 | Change | Effect | Kept? | Reason | Where |
