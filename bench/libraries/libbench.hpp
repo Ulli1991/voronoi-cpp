@@ -167,7 +167,7 @@ inline void record(const Setup& s, const std::string& points_file, const std::st
       << ",\"Mcells_s\":" << n / seconds / 1e6 << ",\"peak_bytes\":" << peak_bytes
       << ",\"bytes_per_cell\":" << peak_bytes / double(n) << ",\"job\":\"" << env("SLURM_JOB_ID") << "\",\"host\":\""
       << host << "\"" << extra << "}";
-    std::cout << o.str() << std::endl;
+    std::cout << o.str() << '\n' << std::flush;
 }
 
 // The input's name from a point file's name: ".../jittered_2097152.pts" -> "jittered".

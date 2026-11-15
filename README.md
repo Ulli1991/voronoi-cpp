@@ -163,7 +163,7 @@ Four points exactly on one circle: rounded arithmetic gives opposite answers in 
 
 ## Measured performance
 
-One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). The rebuild rows and the 128³ exact start are the lean cut of 2026-11-13 (1305 MHz, 128³ and 256³); the step rows, at 128³ and 256³, are the incremental face numbering and ring re-walk of 2026-11-12 (`step-bytes`, 1305 MHz). The 256³ exact start is the code just before the fixes of #29, #30, #35, #36 and #45, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
+One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). Every change tried since 2026-11-12, with its measured effect and why it was kept or dropped, is in [docs/tried.md](docs/tried.md). The rebuild rows and the 128³ exact start are the lean cut of 2026-11-13 (1305 MHz, 128³ and 256³); the step rows, at 128³ and 256³, are the incremental face numbering and ring re-walk of 2026-11-12 (`step-bytes`, 1305 MHz). The 256³ exact start is the code just before the fixes of #29, #30, #35, #36 and #45, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
 
 | M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
