@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -248,6 +249,16 @@ struct Held<Cell, true> {
     Held& operator=(const Held&) = delete;
 };
 
+// Cells per thread: dynamic chunks of 16 on host backends (cell costs vary; 7 to 17 % faster on 72 cores than
+// static), the default policy elsewhere. Used by: construct_pass.
+template <class ExecSpace>
+auto cell_policy(const ExecSpace& exec, int count) {
+    if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, typename ExecSpace::memory_space>::accessible)
+        return Kokkos::RangePolicy<ExecSpace, Kokkos::Schedule<Kokkos::Dynamic>>(exec, 0, count, Kokkos::ChunkSize(16));
+    else
+        return Kokkos::RangePolicy<ExecSpace>(exec, 0, count);
+}
+
 // The per-thread kernel, with cells of type Cell (RoundedCell or
 // ExactCell): the walk (see Stencil), then the face walk that writes the
 // owned faces or rings and integrates the geometry.
@@ -267,7 +278,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
     const bool with_rings = out.with_rings(), with_faces = !out.without_faces();
 
     Kokkos::parallel_for(
-        "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(n)),
+        "shell_voronoi::construct", cell_policy(exec, selection.count(n)),
         KOKKOS_LAMBDA(int i) {
             const int t = selection.slot(i);
             const int id = grid.order(t);
