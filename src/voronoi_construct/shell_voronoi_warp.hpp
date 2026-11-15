@@ -358,7 +358,7 @@ __device__ inline bool box_meets_a_ball(const Polyhedron& c, std::uint64_t live,
 // uncertified cells to the thread kernel. with_rings: record face rings instead of face geometry.
 // cubic: the grid is one cube (Grid::cube()).
 // Used by: construct_warp.
-template <class MemorySpace, bool adaptive, bool with_rings, bool cubic = false>
+template <class MemorySpace, bool adaptive, bool with_rings, bool cubic = false, bool scheduled = false>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -385,13 +385,17 @@ struct Kernel {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
             const int t = __shfl_sync(all_lanes, taken, 0);
-            if (listed > 0) {
-                if (t >= listed) return;
-                build(c, hard(t));
-                continue;
+            if constexpr (scheduled) {
+                if (listed > 0) {
+                    if (t >= listed) return;
+                    build(c, hard(t));
+                    continue;
+                }
+                if (t >= grid.n) return;
+                if (int(grid.level(t)) < hard_below) continue;
+            } else if (t >= grid.n) {
+                return;
             }
-            if (t >= grid.n) return;
-            if (adaptive && int(grid.level(t)) < hard_below) continue;
             build(c, t);
         }
 #else
@@ -855,7 +859,19 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                                Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
                 p(on, Kokkos::max(b, 1), warp::cells_per_block, warp::lanes);
             p.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron)));
-            if (rings)
+            if (hard_below > 0 && rings)
+                Kokkos::parallel_for("shell_voronoi::construct_warp_rings", p,
+                                     warp::Kernel<Memory, true, true, false, true>{
+                                         grid, out, half_width, stencil, counter, unit, unit2, hard, hard_below});
+            else if (hard_below > 0 && cube)
+                Kokkos::parallel_for("shell_voronoi::construct_warp", p,
+                                     warp::Kernel<Memory, true, false, true, true>{
+                                         grid, out, half_width, stencil, counter, unit, unit2, hard, hard_below});
+            else if (hard_below > 0)
+                Kokkos::parallel_for("shell_voronoi::construct_warp", p,
+                                     warp::Kernel<Memory, true, false, false, true>{
+                                         grid, out, half_width, stencil, counter, unit, unit2, hard, hard_below});
+            else if (rings)
                 Kokkos::parallel_for("shell_voronoi::construct_warp_rings", p,
                                      warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, counter, unit,
                                                                       unit2, hard, hard_below});
@@ -876,38 +892,33 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                                      warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, counter, unit,
                                                                         unit2, hard, hard_below});
         };
-        // Hard cells: slots below level base - depth, in slot order (adaptive grids only).
+        // Hard cells: slots below level base - depth (mode 3: at most base + depth), adaptive grids only; the list's
+        // order does not matter, each cell is built alone.
         Kokkos::View<int*, Memory> hard;
-        const int hard_below = base - depth;
-        if (mode >= 2 && off_base > 0) {
-            int count = 0;
-            Kokkos::parallel_reduce(
-                "shell_voronoi::count_hard", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-                KOKKOS_LAMBDA(int t, int& sum) { sum += int(level(t)) < hard_below; }, count);
-            if (count > 0) {
-                hard = Kokkos::View<int*, Memory>(
-                    Kokkos::view_alloc(std::string("shell_warp_hard"), Kokkos::WithoutInitializing), count);
-                const auto list = hard;
-                Kokkos::parallel_scan(
-                    "shell_voronoi::list_hard", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-                    KOKKOS_LAMBDA(int t, int& at, bool final) {
-                        const bool is = int(level(t)) < hard_below;
-                        if (final && is) list(at) = t;
-                        at += is;
-                    });
-            }
+        const int hard_below = mode == 3 ? base + 1 + depth : base - depth;
+        if (mode >= 2 && mode <= 3 && off_base > 0) {
+            Kokkos::View<int, Memory> count("shell_warp_hard_count");
+            Kokkos::View<int*, Memory> list(Kokkos::view_alloc(std::string("shell_warp_hard"), Kokkos::WithoutInitializing),
+                                            grid.n);
+            Kokkos::parallel_for(
+                "shell_voronoi::list_hard", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n), KOKKOS_LAMBDA(int t) {
+                    if (int(level(t)) < hard_below) list(Kokkos::atomic_fetch_add(&count(), 1)) = t;
+                });
+            int listed = 0;
+            Kokkos::deep_copy(listed, count);
+            if (listed > 0) hard = Kokkos::subview(list, std::make_pair(0, listed));
         }
         detail::until_pool_fits(exec, out, [&] {
             Kokkos::deep_copy(exec, next_cell, 0);
             if (hard.extent(0) == 0) {
-                launch(exec, next_cell, {}, 0, grid.n);
+                detail::traced(exec, "warp", grid.n, [&] { launch(exec, next_cell, {}, 0, grid.n); });
             } else {
                 // The hard cells first; the rest on a second stream fills the SMs they free, and the hard cells
                 // that overflow go to big thread cells on a third while the rest is built.
                 const auto streams = Kokkos::Experimental::partition_space(exec, 1, 1, 1);
                 Kokkos::View<int, Memory> rest_cell("shell_warp_rest_cell");
                 exec.fence();
-                launch(streams[0], next_cell, hard, 0, static_cast<int>(hard.extent(0)));
+                launch(streams[0], next_cell, hard, hard_below, static_cast<int>(hard.extent(0)));
                 launch(streams[1], rest_cell, {}, hard_below, grid.n);
                 streams[0].fence();
                 using Big = detail::RoundedCell<big_planes, big_vertices>;
@@ -916,7 +927,9 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 streams[1].fence();
                 streams[2].fence();
             }
-            if (mode == 0)
+            if (mode == 8)
+                detail::finish_failed(exec, grid, stencil, out, true);
+            else if (mode == 0)
                 detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
             else
                 detail::finish_failed(exec, grid, stencil, out);

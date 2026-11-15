@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -546,20 +548,36 @@ void copy_back_added(const From& from, const To& to, const Used& before, const U
     }
 }
 
+// Measurement while #49 is studied: with VORONOI_TRACE set, the passes' cell counts and times go to stderr.
+// Used by: construct_cells, construct_huge, finish_failed, construct_warp.
+inline bool tracing() {
+    static const bool on = std::getenv("VORONOI_TRACE") != nullptr;
+    return on;
+}
+template <class ExecSpace, class F>
+void traced(const ExecSpace& exec, const char* what, long long cells, const F& f) {
+    if (!tracing()) return f();
+    exec.fence();
+    Kokkos::Timer timer;
+    f();
+    exec.fence();
+    std::fprintf(stderr, "trace: %s cells=%lld ms=%.1f\n", what, cells, timer.seconds() * 1e3);
+}
+
 // The cells that overflowed big exact cells: exact cells of huge capacity, on
 // the host, with the grid and the results copied there and back unless they
 // are there already. A rare path: its cost per cell grows as faces x vertices.
 // Used by: construct_cells.
-template <class ExecSpace>
+template <class ExecSpace, class Huge = ExactCell<huge_planes, huge_vertices>>
 void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
                     const Cells<typename ExecSpace::memory_space>& out,
                     const Selection<typename ExecSpace::memory_space>& selection) {
     using Memory = typename ExecSpace::memory_space;
     using Host = Kokkos::DefaultHostExecutionSpace;
     using HostMemory = typename Host::memory_space;
-    using Huge = ExactCell<huge_planes, huge_vertices>;
     if constexpr (std::is_same_v<Memory, HostMemory>) {
-        construct_pass<Huge>(Host{}, grid, make_stencil(Host{}), out, Pass::overflowed, selection);
+        traced(Host{}, "huge_on_host", -1,
+               [&] { construct_pass<Huge>(Host{}, grid, make_stencil(Host{}), out, Pass::overflowed, selection); });
     } else {
         Grid<HostMemory> g;
         g.positions = host_copy<decltype(g.positions)>(grid.positions);
@@ -594,7 +612,8 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
         const auto ring_before = host_copy<decltype(c.ring_used)>(out.ring_used);
         const Selection<HostMemory> s{host_copy<Kokkos::View<int*, HostMemory>>(selection.slots),
                                       host_copy<Kokkos::View<char*, HostMemory>>(selection.listed)};
-        construct_pass<Huge>(Host{}, g, make_stencil(Host{}), c, Pass::overflowed, s);
+        traced(Host{}, "huge_on_host", -1,
+               [&] { construct_pass<Huge>(Host{}, g, make_stencil(Host{}), c, Pass::overflowed, s); });
         copy_back(c.status, out.status);
         copy_back(c.face_count, out.face_count);
         copy_back(c.owned_count, out.owned_count);
@@ -620,24 +639,33 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
                      const Stencil<typename ExecSpace::memory_space>& stencil,
                      const Cells<typename ExecSpace::memory_space>& out, Pass pass,
                      const Selection<typename ExecSpace::memory_space>& selection = {}) {
-    construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection);
     const auto status = out.status;
     const auto order = grid.order;
-    auto overflowed = [&] {
+    auto counted = [&](bool overflow) {
         int count = 0;
         Kokkos::parallel_reduce(
             "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
             KOKKOS_LAMBDA(int i, int& sum) {
                 const int s = status(order(selection.slot(i)));
-                sum += s == vertex_overflow || s == plane_overflow;
+                sum += overflow ? s == vertex_overflow || s == plane_overflow : s != ok && s != face_overflow;
             },
             count);
-        return count > 0;
+        return count;
     };
+    auto overflowed = [&] { return counted(true) > 0; };
+    const bool exact = Cell<big_planes, big_vertices>::exact;
+    traced(exec, exact ? "exact_small" : "rounded_small", tracing() ? counted(false) : -1, [&] {
+        construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection);
+    });
     if (!overflowed()) return;
-    construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
+    traced(exec, exact ? "exact_big" : "rounded_big", tracing() ? counted(true) : -1, [&] {
+        construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
+    });
     if constexpr (Cell<big_planes, big_vertices>::exact)
-        if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
+        if (overflowed()) {
+            if (tracing()) std::fprintf(stderr, "trace: huge cells=%d\n", counted(true));
+            construct_huge<ExecSpace>(grid, out, selection);
+        }
 }
 
 // The warp kernel's failures with rounded cells: uncertain cells with the usual capacities, then every overflowed
@@ -646,15 +674,30 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
 template <class ExecSpace>
 void finish_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                    const Stencil<typename ExecSpace::memory_space>& stencil,
-                   const Cells<typename ExecSpace::memory_space>& out) {
-    construct_pass<RoundedCell<max_planes, max_vertices>>(exec, grid, stencil, out, Pass::uncertain, {});
+                   const Cells<typename ExecSpace::memory_space>& out, bool on_host = false) {
     const auto status = out.status;
-    int count = 0;
-    Kokkos::parallel_reduce(
-        "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-        KOKKOS_LAMBDA(int i, int& sum) { sum += status(i) == vertex_overflow || status(i) == plane_overflow; }, count);
-    if (count > 0)
-        construct_pass<RoundedCell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, {});
+    auto counted = [&](bool overflow) {
+        int count = 0;
+        Kokkos::parallel_reduce(
+            "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+            KOKKOS_LAMBDA(int i, int& sum) {
+                const int s = status(i);
+                const bool over = s == vertex_overflow || s == plane_overflow;
+                sum += overflow ? over : s != ok && s != face_overflow && !over;
+            },
+            count);
+        return count;
+    };
+    traced(exec, "rounded_uncertain", tracing() ? counted(false) : -1, [&] {
+        construct_pass<RoundedCell<max_planes, max_vertices>>(exec, grid, stencil, out, Pass::uncertain, {});
+    });
+    const int count = counted(true);
+    if (count > 0 && on_host)
+        construct_huge<ExecSpace, RoundedCell<big_planes, big_vertices>>(grid, out, {});
+    else if (count > 0)
+        traced(exec, "rounded_big", count, [&] {
+            construct_pass<RoundedCell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, {});
+        });
 }
 
 // Run build() on an empty pool; if the pool turned out too small (cells
