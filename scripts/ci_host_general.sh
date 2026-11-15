@@ -16,7 +16,7 @@ base="$1"
 shift
 export OMP_NUM_THREADS=2 OMP_PROC_BIND=false UBSAN_OPTIONS=halt_on_error=1 ASAN_OPTIONS=detect_leaks=1
 python3 scripts/check_comments.py && echo "comments: ok"
-PATH=/mpcdf/soft/SLE_15/packages/x86_64/clang/18.1.8/bin:$PATH python3 scripts/check_format.py "$base" && echo "format: ok"
+PATH=/mpcdf/soft/SLE_15/packages/x86_64/clang/18.1.8/bin:$PATH python3.11 scripts/check_format.py "$base" && echo "format: ok"
 for san in OFF ON; do
     dir=build-jobs/ci-$san
     cmake -S . -B $dir -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DVORONOI_SANITIZERS=$san \
