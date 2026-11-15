@@ -26,7 +26,8 @@ under [Measured performance](#measured-performance); B/cell is the peak GPU memo
 | 1D: `voronoi::Mesh<1>` | sorted cells: lengths, centroids, the two faces per cell | yes | 18,905 per moving step (2²⁰ cells, 1095 MHz, older code) | 1D tests and particle methods; periodic ends or walls (`voronoi::Ends`) |
 
 Faces cost most of the memory: a 3D cell has about 16 faces (15.9 measured; each stored once, 8 per cell), so when faces are not
-needed, `volumes_and_centroids` takes 101 B/cell against 701 for the clipping rebuild.
+needed, `volumes_and_centroids` takes 101 B/cell against 671 for the clipping rebuild with faces, both measured
+with the cell list in the library benchmark.
 
 Not available yet: weighted (power, Laguerre) diagrams; non-periodic boxes in 2D and 3D (only periodic; 1D has walls);
 face velocities (the caller computes them from the motion); cells larger than the certification rule allows (about 6
