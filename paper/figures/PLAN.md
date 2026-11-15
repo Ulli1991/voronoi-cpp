@@ -45,19 +45,22 @@ and 256³ where the code runs), against the brute-force oracle of `src/test/orac
 6. face agreement: each face seen from both cells, with equal and opposite area vectors and the same centroid.
 Speed on the other axis from the same jobs (M cells/s, the output group stated).
 
-## Part 2: luna-cpp on the library (3–4 figures, owner to pick)
+## Part 2: luna-cpp on the library (4 figures, all five showcases)
 
-From the existing luna-cpp figures (`/raven/u/uli/luna-cpp/docs/figures`):
-- **A. Sedov–Taylor blast in 3D** (`sedov_3d`, `sedov3d_mesh`, `sedov3d_radial`): the mesh follows the shock; radial
-  profile against the exact solution. 3D, large deformation, the step's robustness.
-- **B. Kelvin–Helmholtz in 2D** (`kh_2d_evolution`, `kh_2d_mesh`): the mesh moving with the shear against a fixed grid
-  at the same N; the moving-mesh advantage.
-- **C. 3D vortex** (`vortex_3d`): a long run with many flips per cell, mesh quality kept.
-- **D. 1D ladder** (`ladder_1d`, `time_to_target_1d`): GPU time to a target error against a fixed grid (accuracy per
-  cost).
-- **E. Super-hard tube** (`super_tube_t01_luna`, `super_tube_t2_luna`): extreme compression without failure.
-Suggested three: A, B, D (3D robustness, the moving-mesh advantage, accuracy per cost); C or E as a fourth. Each needs
-a 90 or 190 mm version from its stored npz (luna-reference-solutions).
+Layout drafts (raster tiles of luna-cpp's own figures at 190 mm, `paper/scripts/draft_luna.py`, luna-cpp read only):
+`paper/figures/draft_luna_{sedov,kh,vortex,1d}.png`. Final versions are to be redrawn from luna-cpp's stored npz with
+`paperfig.py` (the tiles keep luna-cpp's design sizes, so some text prints under 7 pt).
+
+| Fig. | content | luna-cpp source | status |
+|---|---|---|---|
+| 8 | **Sedov–Taylor in 3D**: (a) density slice with the moving mesh, zoom on the shock moving vs static (b, c); (d) radial n, v, P, T against Sedov–Taylor; (e) shock radius against t | `sedov3d_mesh`, `sedov3d_radial`, `sedov3d_shock` (`make_figures.py`: fig_sedov_shock, fig_sedov_radial) | draft; redraw at 190 mm, radial panels need larger text |
+| 9 | **Kelvin–Helmholtz in 2D**: density at t = 0, 1, 2.5, 4, 5, moving vs LUNA MC at N = 2048; the moving mesh zoomed to single cells | `kh_2d_evolution`, `kh_2d_mesh` (fig_kh, fig_kh_density) | draft; redraw |
+| 10 | **3D vortex (Yee)**: L1(ρ), L1(v) against n_x, moving one and two passes, static, LUNA MC | `vortex_3d` (fig_vortex; `yee_vortex_convergence.npz`) | draft; redraw at 90 mm per panel |
+| 11 | **1D**: (a) ladder summary, L1 against GPU time for Sod, Shu–Osher, Woodward–Colella; (b) the super-hard tube | `time_to_target_1d` (fig_time), `super_tube_t2_luna` | draft for (a); **(b) pending**: the existing tube figures show LUNA MC against a 2²⁰ reference only, no moving-mesh run; it needs a luna-cpp moving-mesh run of the tube |
+
+Seen in the drafts, for the owner: in 1D the moving mesh needs 3 to 10× more GPU time than LUNA MC and the static
+mesh for the same L1 on Sod and Shu–Osher (it catches up only on Woodward–Colella at the finest levels); the vortex
+with one pass stalls at first order (two passes converge at second order).
 
 ## Data and refresh
 
