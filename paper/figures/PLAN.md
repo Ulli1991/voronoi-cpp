@@ -62,6 +62,11 @@ jittered 12.7 → 22.2 M cells/s on start-fast), Fig. 10 `stages` and `ceiling` 
 (our rows de57e65/d06ddc4), and the surface points of Fig. 3b `application` (after the fix of #60). Figs. 1–3 do not
 depend on speed.
 
+To do at that redraw: `library_headline` breaks each line at a missing point and marks the gap ("crashed": votess on
+blue noise, illegal address), and its exact-start rows are pre-start-fast (main now has 25.0 M cells/s jittered at
+128³, so they will rise); `library_more` (a) and (b) trim the y axes to the data (all below about 40 M cells/s, the
+legend placed to fit).
+
 ## Inputs and tests, in plain words (draft for the results section)
 
 | input | what the points look like | why it is in |
