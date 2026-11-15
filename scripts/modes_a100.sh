@@ -45,14 +45,17 @@ cuda
 configure "$out/main" /u/uli/kokkos-cuda
 configure "$out/both" /u/uli/kokkos-cuda-omp
 timed "$out/main" voronoi_bench &
+p1=$!
 timed "$out/both" voronoi_bench &
-wait
+wait $p1 $!  # not a bare wait: the clock logger runs in the background too
 timed "$out/main" mesh_test &
+p1=$!
 timed "$out/both" mesh_test &
-wait
+wait $p1 $!
 cmake --build "$out/main" -j8 >"$out/main.all.log" 2>&1 &
+p1=$!
 cmake --build "$out/both" -j8 >"$out/both.all.log" 2>&1 &
-wait
+wait $p1 $!
 echo "build all: main exit $(grep -c 'error' "$out/main.all.log") errors, both $(grep -c 'error' "$out/both.all.log") errors"
 grep -m5 error "$out/both.all.log"
 
@@ -88,12 +91,14 @@ echo "speed lines: $(wc -l <"$out/speed.log")"
 echo "== 4. CI host steps"
 module purge
 module load gcc/15 cmake
+builds=()
 for san in OFF ON; do
     cmake -S "$repo" -B "$out/host-$san" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/u/uli/kokkos-gcc15 \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DVORONOI_SANITIZERS=$san >/dev/null 2>&1
     cmake --build "$out/host-$san" -j9 >"$out/host-$san.build.log" 2>&1 &
+    builds+=($!)
 done
-wait
+wait "${builds[@]}"
 for san in OFF ON; do
     OMP_NUM_THREADS=2 OMP_PROC_BIND=false UBSAN_OPTIONS=halt_on_error=1 ASAN_OPTIONS=detect_leaks=1 \
         ctest --test-dir "$out/host-$san" --output-on-failure --parallel 2 >"$out/ctest_host_$san.log" 2>&1
