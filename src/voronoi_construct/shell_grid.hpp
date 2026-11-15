@@ -61,8 +61,8 @@ struct Cylinder {
     KOKKOS_INLINE_FUNCTION bool admits(const double (&lo)[3], const double (&width)[3], double gap2) const {
         const double e[3] = {0.5 * width[0], 0.5 * width[1], 0.5 * width[2]};
         const Vec3 centre{lo[0] + e[0], lo[1] + e[1], lo[2] + e[2]};
-        const double along = dot(centre, u), spread = e[0] * Kokkos::abs(u.x) + e[1] * Kokkos::abs(u.y) +
-                                                      e[2] * Kokkos::abs(u.z);
+        const double along = dot(centre, u),
+                     spread = e[0] * Kokkos::abs(u.x) + e[1] * Kokkos::abs(u.y) + e[2] * Kokkos::abs(u.z);
         const Vec3 across = centre - u * along;
         const double half = Kokkos::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
         const double most = Kokkos::max(bound(along + spread, 0, 0), bound(along - spread, 0, 0));

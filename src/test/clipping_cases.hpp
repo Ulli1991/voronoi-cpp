@@ -7,6 +7,7 @@
 // is the refused one. Used by: clipping_test.
 namespace clipping_cases {
 
+// clang-format off: one point per line
 inline constexpr std::array<std::array<int, 3>, 953> surface_953 = {{
     {58085510, 229313161, 255493571},
     {71194034, 345430802, 296122218},
@@ -962,5 +963,6 @@ inline constexpr std::array<std::array<int, 3>, 953> surface_953 = {{
     {979789414, 1020054732, 865704345},
     {979789414, 1020054732, 999922073},
 }};
+// clang-format on
 
 }  // namespace clipping_cases

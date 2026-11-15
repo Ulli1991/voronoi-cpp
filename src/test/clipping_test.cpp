@@ -83,8 +83,9 @@ int main(int argc, char** argv) {
             details.pop_back();
             const Difference d = compare(reference, by_particle(cells));
             check.expect(valid && d.neighbours == 0 && d.volume < 1e-12,
-                         std::string("#60 surface case: ") + name + " kernel certifies every cell and agrees with the exact (" +
-                             std::to_string(d.neighbours) + " neighbour sets, volumes " + sci(d.volume) + ")\n" + details);
+                         std::string("#60 surface case: ") + name +
+                             " kernel certifies every cell and agrees with the exact (" + std::to_string(d.neighbours) +
+                             " neighbour sets, volumes " + sci(d.volume) + ")\n" + details);
         }
     }
 

@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <type_traits>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -328,7 +327,8 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
             const bool ascending = (l & size) == 0;
             const bool lower = (l & stride) == 0;
             const bool other_smaller = other_key < key || (other_key == key && other_slot < slot);
-            const bool take = lower == ascending ? other_smaller : !other_smaller && (other_key != key || other_slot != slot);
+            const bool take =
+                lower == ascending ? other_smaller : !other_smaller && (other_key != key || other_slot != slot);
             key = take ? other_key : key;
             slot = take ? other_slot : slot;
             packed_image = take ? other_image : packed_image;
@@ -469,8 +469,7 @@ struct Kernel {
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
-        auto* base = static_cast<Polyhedron*>(
-            member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron)));
+        auto* base = static_cast<Polyhedron*>(member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron)));
         Polyhedron& c = base[member.team_rank()];
         if (lane() == 0) c.face_at = c.face_end = 0;
         while (true) {
@@ -956,37 +955,35 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         Kokkos::parallel_reduce(
             "shell_voronoi::off_base_levels", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
             KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
-        const int budget = detail::heavy_budget();
+        constexpr int budget = heavy_clips;
         const auto status = out.status;
         const auto order = grid.order;
         detail::until_pool_fits(exec, out, [&] {
             Kokkos::deep_copy(exec, next_cell, 0);
-            std::optional<detail::TempPhase> tp0; tp0.emplace("warp");
             if (rings && off_base > 0)
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp_rings", policy,
-                    warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+                Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
+                                     warp::Kernel<Memory, true, true>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else if (rings)
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp_rings", policy,
-                    warp::Kernel<Memory, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+                Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
+                                     warp::Kernel<Memory, false, true>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else if (off_base > 0 && cube)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell,
-                                                                             unit, unit2, budget, {}});
+                                     warp::Kernel<Memory, true, false, true>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else if (off_base > 0)
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Memory, true, false>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else if (cube)
                 Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, false, false, true>{grid, out, half_width, stencil, next_cell,
-                                                                              unit, unit2, budget, {}});
+                                     warp::Kernel<Memory, false, false, true>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
-            tp0.reset();
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Memory, false, false>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
             // the filtered kernel, over a list of their slots.
             const bool levels = off_base > 0;
@@ -1009,8 +1006,6 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         ++at;
                     });
                 Kokkos::deep_copy(exec, next_cell, 0);
-                if (std::getenv("VORONOI_PHASES")) std::printf("heavy %d\n", heavy_count);
-                detail::TempPhase tp1("filtered");
                 if (rings)
                     Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
                                          warp::Kernel<Memory, true, true, false, true>{
@@ -1024,19 +1019,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                                          warp::Kernel<Memory, true, false, false, true>{
                                              grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
             }
-            if (std::getenv("VORONOI_PHASES")) {
-                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, out.status);
-                int cnt[8] = {};
-                for (std::size_t i = 0; i < h.extent(0); ++i) ++cnt[h(i)];
-                std::printf("after_warp statuses %d %d %d %d %d %d %d\n", cnt[0], cnt[1], cnt[2], cnt[3], cnt[4], cnt[5], cnt[6]);
-            }
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
-            if (std::getenv("VORONOI_PHASES")) {
-                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, out.status);
-                int cnt[8] = {};
-                for (std::size_t i = 0; i < h.extent(0); ++i) ++cnt[h(i)];
-                std::printf("after_thread statuses %d %d %d %d %d %d %d\n", cnt[0], cnt[1], cnt[2], cnt[3], cnt[4], cnt[5], cnt[6]);
-            }
             detail::exact_where_failed(exec, grid, stencil, out);
         });
         return;

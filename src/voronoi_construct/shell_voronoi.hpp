@@ -11,8 +11,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -92,9 +90,7 @@ struct Cells {
         for (std::size_t c = 0; c < used.extent(0); ++c) most = Kokkos::max(most, used(c));
         return static_cast<long long>(most) * static_cast<long long>(used.extent(0));
     }
-    long long capacity() const {
-        return static_cast<long long>(with_rings() ? rings.extent(0) : neighbour.extent(0));
-    }
+    long long capacity() const { return static_cast<long long>(with_rings() ? rings.extent(0) : neighbour.extent(0)); }
 
     // A pool of `entries`; the contents are dropped.
     void reallocate(long long entries) {
@@ -144,7 +140,8 @@ struct Selection {
 // The pool chunk of cell t: a multiplicative hash, as slot order is spatial
 // and t % chunks can pick, say, only the cells at one box face.
 KOKKOS_INLINE_FUNCTION unsigned pool_chunk(int t, unsigned chunks) {
-    return static_cast<unsigned>((static_cast<unsigned long long>(static_cast<unsigned>(t) * 2654435761u) * chunks) >> 32);
+    return static_cast<unsigned>((static_cast<unsigned long long>(static_cast<unsigned>(t) * 2654435761u) * chunks) >>
+                                 32);
 }
 
 // Claim `need` entries of a pool of `capacity` for cell t: sets start,
@@ -205,17 +202,6 @@ KOKKOS_INLINE_FUNCTION void sort_by_id(const C& cell, std::int16_t* planes, int 
     }
 }
 
-// The walks' clip budget: heavy_clips, or VORONOI_HEAVY_CLIPS for measurements.
-inline int heavy_budget() {
-    const char* v = std::getenv("VORONOI_HEAVY_CLIPS");
-    return v != nullptr ? std::atoi(v) : heavy_clips;
-}
-
-// TEMP phase timer
-struct TempPhase { const char* name; Kokkos::Timer t; bool on = std::getenv("VORONOI_PHASES") != nullptr;
-  explicit TempPhase(const char* n) : name(n) { if (on) Kokkos::fence(); t.reset(); }
-  ~TempPhase() { if (on) { Kokkos::fence(); std::printf("phase %s %.3f ms\n", name, t.seconds() * 1e3); } } };
-
 // A particle that may cut the cell, sorted by distance.
 // Used by: construct_pass.
 struct Candidate {
@@ -270,17 +256,17 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
     const auto positions = grid.positions;
     const bool with_closure = out.closure.extent(0) > 0;
     const bool with_rings = out.with_rings();
-    const int budget = heavy_budget();
+    constexpr int budget = heavy_clips;
 
     Kokkos::parallel_for(
-        "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(n)),
-        KOKKOS_LAMBDA(int i) {
+        "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(n)), KOKKOS_LAMBDA(int i) {
             const int t = selection.slot(i);
             const int id = grid.order(t);
             const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
             if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
-                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow && before != deferred))
+                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow &&
+                 before != deferred))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
             ep::i64 self[3] = {0, 0, 0};
@@ -297,6 +283,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             int buffered = 0, batches = 0, clipped = 0, cuts = 0;
             // Past the clip budget the walk skips what the cell's Cylinder rules out (#60).
             const bool heavy = before == deferred;
+            // Heavy cells overflow the usual capacities (#60): they wait for the big pass.
+            if (heavy && Cell::planes_capacity == max_planes) return;
             bool filtering = heavy;
             Cylinder bound{};
 
@@ -453,7 +441,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         break;
                     }
                     // The plane shared with the next vertex bounds the face there.
-                    if (record) out.rings(ring_at + ring_used + 2 + length) = cell.id[cell.corner[current][(at + 2) % 3]];
+                    if (record)
+                        out.rings(ring_at + ring_used + 2 + length) = cell.id[cell.corner[current][(at + 2) % 3]];
                     ++length;
                     const int next = cell.adjacent[current][(at + 2) % 3];
                     const Vec3 x = cell.position(next, unit);
@@ -645,8 +634,7 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
                      const Stencil<typename ExecSpace::memory_space>& stencil,
                      const Cells<typename ExecSpace::memory_space>& out, Pass pass,
                      const Selection<typename ExecSpace::memory_space>& selection = {}) {
-    { TempPhase tp(Cell<max_planes, max_vertices>::exact ? "thread_exact_small" : "thread_rounded_small");
-    construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection); }
+    construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection);
     const auto status = out.status;
     const auto order = grid.order;
     auto overflowed = [&] {
@@ -661,10 +649,9 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
         return count > 0;
     };
     if (!overflowed()) return;
-    { TempPhase tp(Cell<max_planes, max_vertices>::exact ? "thread_exact_big" : "thread_rounded_big");
-    construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection); }
+    construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
     if constexpr (Cell<big_planes, big_vertices>::exact)
-        if (overflowed()) { TempPhase tp("huge"); construct_huge<ExecSpace>(grid, out, selection); }
+        if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
 }
 
 // Cells a rounded build left neither ok nor out of pool room, built again exactly: a rounded cut can see a face's own
