@@ -18,9 +18,9 @@ ROLES = [  # (role, array prefixes), stacking order
     ("positions", ("positions", "slot_positions", "tet_repair_point")),
     ("cell list", ("cell_offsets", "particle_order", "slot_fine_keys", "slot_levels")),
     ("tetrahedra", ("tet_vertex", "tet_adjacent", "tet_centre", "tet_edges")),
-    ("faces: area, centroid, neighbour", ("face_area", "face_centroid", "face_neighbour", "face_rows")),
+    ("faces", ("face_area", "face_centroid", "face_neighbour", "face_rows")),
     ("face rings", ("face_rings_",)),
-    ("per-cell outputs and lists", ("cell_",)),
+    ("per-cell lists", ("cell_",)),
     ("repair scratch", ("tet_repair_",)),
 ]
 COLOURS = ["#7f7f7f", "#bcbd22", "#2ca02c", "#1f77b4", "#9467bd", "#ff7f0e", "#d62728"]
@@ -54,7 +54,7 @@ def by_role():
 
 def main():
     data = by_role()
-    fig, (a, b) = figure(DOUBLE, 82, ncols=2, gridspec_kw=dict(width_ratios=[0.8, 1.35]))
+    fig, (a, b) = figure(DOUBLE, 82, ncols=2, gridspec_kw=dict(width_ratios=[1.0, 1.25]))
     phases = ("rebuild", "exact start", "moving step")
     for i, p in enumerate(phases):
         left = 0.0
@@ -63,12 +63,12 @@ def main():
             a.bar(i, v, bottom=left, color=c, width=0.7, label=name if i == 0 else None)
             left += v
         big = sum(data[16777216, p].values())
-        a.text(i, left + 30, f"{left:.0f}\n({big:.0f})", ha="center", va="bottom", fontsize=11)
+        a.text(i, left + 25, f"{left:.0f}", ha="center", va="bottom", fontsize=11)
     a.set_xticks(range(3), ["rebuild", "exact\nstart", "moving\nstep"])
-    a.set_xlim(-0.6, 2.6)
-    a.set_ylim(0, 4300)
-    a.set_ylabel("device B/cell at the peak, 128³ (256³)")
-    a.legend(loc="upper left", fontsize=11, handlelength=1.2)
+    a.set_xlim(-0.6, 5.0)
+    a.set_ylim(0, 2200)
+    a.set_ylabel("device B/cell at the peak, 128³")
+    a.legend(loc="center right", fontsize=11, handlelength=1.2, bbox_to_anchor=(1.0, 0.45))
     a.text(0.98, 0.98, "(a)", transform=a.transAxes, ha="right", va="top")
     figstyle.decorate(a)
     a.xaxis.set_minor_locator(plt.NullLocator())

@@ -112,13 +112,13 @@ def more(summary, pub):
     axes_inputs(a, published(a, pub, "gpu_volumes", x0, annotate=True), x0, short=True, width=2.7)
     a.set_ylim(0.5, 1000)
     a.set_ylabel("M cells/s")
-    a.text(0.03, 0.03, "(a) A100, volumes", transform=a.transAxes, va="bottom")
-    a.legend(loc="upper right", fontsize=11, handlelength=1.4)
+    a.text(0.03, 0.97, "(a) A100, volumes", transform=a.transAxes, va="top")
+    a.legend(loc="upper right", fontsize=11, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
     curves(b, summary, lb.FIGURE_CPU_FULL[:7])
     axes_inputs(b, published(b, pub, "cpu", x0), x0, short=True)
-    b.set_ylim(0.05, 300)
-    b.text(0.03, 0.03, "(b) 72 cores, full cells", transform=b.transAxes, va="bottom")
-    b.legend(loc="upper right", fontsize=11, handlelength=1.4)
+    b.set_ylim(0.05, 1000)
+    b.text(0.03, 0.97, "(b) 72 cores, full cells", transform=b.transAxes, va="top")
+    b.legend(loc="upper right", fontsize=11, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
     names = ["ours\nGPU", "peclet\nGPU", "ours\nCPU", "peclet\nCPU", "CGAL\n1 core"]
     for k, row in enumerate(lb.FIGURE_STEP[:5]):
         got = lb.curve(summary, *row[:4], lb.SIZES[0], phase="step").get("jittered")

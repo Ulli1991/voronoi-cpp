@@ -12,8 +12,8 @@ timed in. Open markers: published rates on other hardware and points (peclet-vor
 our rerun at 1305 MHz exist.
 
 **Memory.** (a) Kokkos device arrays at the peak of each phase, jittered input, main 55cd6b1, job 32362454; the 256³
-values (brackets) were measured in the same job: 655.8, 1955.2 and 1979.2 B/cell (the arrays scale with n, so B/cell
-is the same as at 128³ to 0.1 B but for the rebuild's cell list and face pool). (b) Process-wide device use sampled
+values, measured in the same job, are 655.8, 1955.2 and 1979.2 B/cell (the arrays scale with n: the same B/cell as
+at 128³ to 0.1 B but for the rebuild's face pool), so the bars show 128³ only. (b) Process-wide device use sampled
 every 200 µs (library benchmark, voronoi-cpp ad62997), except the moving step (Kokkos arrays, 55cd6b1); dark part:
 the lowest input, light part: up to the highest of the five inputs. Dashed: the B/cell at which 256³, 384³ and 512³
 fill one A100 40 GB. Besides memory, the face-ring pool's 32-bit offsets overflow between 256³ and 384³.
