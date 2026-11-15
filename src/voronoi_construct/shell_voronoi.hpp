@@ -244,7 +244,7 @@ struct Held<Cell, true> {
 // ExactCell): the walk (see Stencil), then the face walk that writes the
 // owned faces or rings and integrates the geometry.
 // filtered: the deferred cells, whose walk skips what the cell's Cylinder rules out (#60); otherwise a walk that passes
-// the clip budget stops at its next level as deferred. Used by: construct_cells, construct_huge.
+// the clip budget stops as deferred. Used by: construct_cells, construct_huge.
 template <class Cell, bool filtered = false, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     const Stencil<typename ExecSpace::memory_space>& stencil,
@@ -326,6 +326,11 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 const int reach = level_reach(level, grid.fewest), entries = stencil.ends(reach);
                 for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
                     ++batches;
+                    if constexpr (!filtered)
+                        if (clipped > heavy_clips) {
+                            status = deferred;
+                            break;
+                        }
                     // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
                     if constexpr (filtered) bound = cylinder(cell, unit);
                     for (int e = first; e < Kokkos::min(first + ring_buffer, entries) && status == ok; ++e) {
@@ -362,11 +367,6 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     break;
                 }
                 if (level == 2) break;
-                if constexpr (!filtered)
-                    if (clipped > heavy_clips) {
-                        status = deferred;
-                        break;
-                    }
                 finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
                 for (int k = 0; k < 3; ++k) home[k] >>= 1;
                 --level;
