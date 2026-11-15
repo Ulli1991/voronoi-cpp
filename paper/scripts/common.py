@@ -12,7 +12,7 @@ def oracle_errors():
     """{volumes file name: (n, missing cells of all n, errors of the 1000 sampled cells; inf = no volume)}; the paper's
     rerun of voronoi-cpp (oracle_errors_vcpp_rerun.csv) replaces the benchmark's own rows of the same name."""
     out = {}
-    for name in ("oracle_errors.csv", "oracle_errors_vcpp_rerun.csv"):
+    for name in ("oracle_errors.csv", "oracle_errors_application.csv", "oracle_errors_vcpp_rerun.csv"):
         path = os.path.join(DATA, name)
         if not os.path.exists(path):
             continue

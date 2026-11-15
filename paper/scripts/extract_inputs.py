@@ -2,7 +2,10 @@
 """paper/data/inputs.npz from the 64³ point files of the benchmark inputs (library_bench points / lloyd: the generators
 and seed of src/test/support.hpp): per input a slab one mean spacing thick projected to x-y (for clustered and halo
 through the most isolated dense blob or halo, shifted periodically so it sits in the middle), the nearest-neighbour distance histogram in
-mean spacings, and the density contrast (99.9 / 0.1 percentile of 1/r_32³). Usage: extract_inputs.py [points dir]."""
+mean spacings, and the density contrast (99.9 / 0.1 percentile of 1/r_32³). The application inputs: cosmic web and
+surface at 64³, the fcc solid at l = 32 unit cells (2^17 atoms; the generator rounds n to 4 l³, and 2^18 would need
+l = 40.3), its slab centred on an atomic (001) plane; files from `library_bench points <n> <kind> <file>`.
+Usage: extract_inputs.py [points dir]."""
 import os
 import sys
 
@@ -11,8 +14,9 @@ from scipy.spatial import cKDTree
 
 from paperfig import DATA
 
-KINDS = ["jittered", "bluenoise", "uniform", "clustered", "halo", "lattice", "wave"]
+KINDS = ["jittered", "bluenoise", "uniform", "clustered", "halo", "lattice", "wave", "cosmicweb", "fccsolid", "surface"]
 N = 262144
+SIZE = {"fccsolid": 131072}  # 4 * 32³ atoms
 BINS = np.logspace(-3, 1, 161)  # nearest-neighbour distance in mean spacings
 
 
@@ -22,14 +26,18 @@ def read(path):
 
 
 def main(src):
-    out, side = {"bins": BINS}, round(N ** (1 / 3))
+    out = {"bins": BINS}
     for kind in KINDS:
-        x = read(os.path.join(src, f"{kind}_{N}.pts"))
+        n = SIZE.get(kind, N)
+        x = read(os.path.join(src, f"{kind}_{n}.pts"))
+        side = len(x) ** (1 / 3)  # mean spacings per box side
         d = cKDTree(x, boxsize=1.0).query(x, k=33)[0] * side
         rho = 1 / d[:, 32] ** 3
         out[f"{kind}_contrast"] = np.percentile(rho, 99.9) / np.percentile(rho, 0.1)
         out[f"{kind}_nn_hist"] = np.histogram(d[:, 1], bins=BINS)[0]
         centre = np.array([0.5, 0.5, 0.5 + 0.5 / side])
+        if kind in ("fccsolid", "surface"):  # an atomic plane (z = 16 lattice constants); the plane of 4 shell centres
+            centre[2] = 0.5
         if kind in ("clustered", "halo"):  # the most isolated of the densest blobs or halos, moved to the middle
             h, _ = np.histogramdd(x, bins=16, range=[(0, 1)] * 3)
             peaks = []

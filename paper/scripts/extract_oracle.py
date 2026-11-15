@@ -1,13 +1,16 @@
 """Oracle errors per cell of every library-benchmark volumes file into paper/data/oracle_errors.csv.
 
 Needs oracle_errors (g++ -O2 -std=c++17 oracle_errors.cpp); checks each file's median and max against the jsonl records.
+ORACLE_ONLY (a regular expression on the volumes file name) restricts the files, e.g. for the application inputs:
+    ORACLE_ONLY='_(cosmicweb|surface)_2097152|_fccsolid_1048576' ORACLE_OUT=oracle_errors_application.csv extract_oracle.py
 """
-import glob, json, os, subprocess, sys
+import glob, json, os, re, subprocess, sys
 
 DATA = os.environ.get("LIBBENCH_DATA", "/raven/u/uli/libbench-data")
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 OUT = os.path.join(REPO, "paper", "data", os.environ.get("ORACLE_OUT", "oracle_errors.csv"))
+ONLY = re.compile(os.environ.get("ORACLE_ONLY", ""))
 
 
 def points_of(volumes):
@@ -22,7 +25,7 @@ def main(exe):
     groups = {}
     for v in sorted(glob.glob(f"{DATA}/volumes/*.f64")):
         p = points_of(v)
-        if os.path.exists(p + ".oracle1000"):
+        if ONLY.search(os.path.basename(v)) and os.path.exists(p + ".oracle1000"):
             groups.setdefault(p, []).append(v)
     records = {}
     for f in glob.glob(os.path.join(REPO, "bench/libraries/results/accuracy-*.jsonl")):

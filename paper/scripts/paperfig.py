@@ -25,11 +25,13 @@ LW = 2.2  # curves, design pt
 # one colour and marker per input, the same in every figure
 INPUTS = ["jittered", "bluenoise", "uniform", "clustered", "halo", "lattice", "wave"]
 LABEL = {"jittered": "jittered", "bluenoise": "blue noise", "uniform": "white noise", "clustered": "clustered",
-         "halo": "halo", "lattice": "lattice", "wave": "wave", "slab": "slab"}
+         "halo": "halo", "lattice": "lattice", "wave": "wave", "slab": "slab", "cosmicweb": "cosmic web",
+         "fccsolid": "fcc solid", "surface": "surface"}
 COLOR = {"jittered": "#1f77b4", "bluenoise": "#17becf", "uniform": "#2ca02c", "clustered": "#ff7f0e",
-         "halo": "#d62728", "lattice": "#9467bd", "wave": "#8c564b", "slab": "#7f7f7f"}
+         "halo": "#d62728", "lattice": "#9467bd", "wave": "#8c564b", "slab": "#7f7f7f", "cosmicweb": "#e377c2",
+         "fccsolid": "#bcbd22", "surface": "#000080"}
 MARKER = {"jittered": "o", "bluenoise": "D", "uniform": "s", "clustered": "^", "halo": "v", "lattice": "P",
-          "wave": "X", "slab": "h"}
+          "wave": "X", "slab": "h", "cosmicweb": "*", "fccsolid": "p", "surface": "d"}
 
 
 def figure(width_mm, height_mm, **kw):

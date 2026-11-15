@@ -12,6 +12,11 @@
 | `raw/long128-<job>.txt`, `raw/long256-<job>.txt` | 500 steps at 0.1 spacings with and without re-sort | `stages_a100.sh long128`, `long256` | |
 | `clocks/clock-<job>.csv` | nvidia-smi every second: SM clock, application clock, utilisation, temperature, power | every A100 job above | |
 
+Application-input rates (`application`) are read in place from the same results files (our rows 631af46, jobs 32367524,
+32367883, 32367884 at 1305 MHz; the other A100 codes chains 32367907–32367911 and 32370411; CPU jobs 32367538–32367544),
+completeness from `bench/libraries/results/accuracy-inputs-{32369335,32370726}.jsonl`; crashes (votess) as recorded in
+`docs/measurements.md`, "Application inputs".
+
 Library-benchmark rates (`library_comparison`) are read in place from `bench/libraries/results/*.jsonl` and
 `bench/libraries/published.csv` through `scripts/library_benchmark.py` (voronoi-cpp rows ad62997, node ravg1002 at
 1095 MHz; provenance table in `docs/library_benchmark.md`).
@@ -26,4 +31,5 @@ Kokkos 5.0.99 AMPERE80, Release).
 | `raw/libbench-vcpp-32366449.jsonl` | voronoi-cpp rows of the library benchmark rerun at 1305 MHz (ravg1034), 128³, warp / host / host-vc / exact / step | `bench/libraries/run_voronoi_cpp_a100.sh` with binaries 55cd6b1, points of the benchmark; volumes in `/ptmp/uli/voronoi-paper/libbench/volumes` | job 32366449 |
 | `oracle_errors_vcpp_rerun.csv` | per-cell errors of those volumes against the exact reference (same sample and caches) | `ORACLE_OUT=... LIBBENCH_DATA=/ptmp/uli/voronoi-paper/libbench extract_oracle.py` | medians equal the benchmark's records |
 | `memory_by_array.csv` | Kokkos arrays at each phase's peak | `extract_memory.py` on `raw/memory-32362454.txt` | 55cd6b1, 1305 MHz |
-| `inputs.npz` | 64³ slabs, neighbour-distance histograms, density contrast | `extract_inputs.py` on `/ptmp/uli/voronoi-paper/points` | same generators and seed as the benchmark |
+| `inputs.npz` | 64³ slabs, neighbour-distance histograms, density contrast (eight inputs and lattice, wave) | `extract_inputs.py` on `/ptmp/uli/voronoi-paper/points` | same generators and seed as the benchmark; `cosmicweb_262144.pts`, `surface_262144.pts`, `fccsolid_131072.pts` made on the login node with `library_bench points` built with the Kokkos OpenMP backend from c4e6249 (main 04eb9e4; `build-paper-omp`), which reproduces `halo_262144.pts` byte for byte |
+| `oracle_errors_application.csv` | per-cell errors of the 1000 sampled cells of every volumes file of cosmic web 128³, surface 128³ and fcc solid 2²⁰, against the exact reference | `ORACLE_ONLY='_(cosmicweb\|surface)_2097152\.f64\|_fccsolid_1048576\.f64' ORACLE_OUT=oracle_errors_application.csv extract_oracle.py` on `/raven/u/uli/libbench-data` | oracle caches of jobs 32369335, 32370726; medians equal the records; voronoi-cpp 631af46 |
