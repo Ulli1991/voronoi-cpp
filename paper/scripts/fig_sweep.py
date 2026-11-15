@@ -77,14 +77,15 @@ def displacement(commit, table, clocks):
               if 2097152 in table.get((k, "start"), {})]
     if starts:
         ax.axhspan(min(starts), max(starts), color="0.85", zorder=0)
-        ax.text(0.012, max(starts) * 1.08, "exact start, all inputs", fontsize=11, color="0.3")
+        ax.text(0.0105, min(starts) * 1.1, "exact start, all inputs", fontsize=11, color="0.3", va="bottom")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("displacement per step, mean spacings")
     ax.set_ylabel("step + update_cells, M cells/s")
     ax.text(0.97, 0.97, f"128³, one A100, {clock_text(clocks)}", transform=ax.transAxes, ha="right", va="top",
             fontsize=11)
-    ax.legend(loc="lower left", ncol=2, fontsize=11, columnspacing=0.8, handlelength=1.5)
+    ax.set_ylim(min(starts) * 0.8 if starts else None, 450)
+    ax.legend(loc="lower left", ncol=2, fontsize=11, columnspacing=0.8, handlelength=1.5, bbox_to_anchor=(0.0, 0.34))
     figstyle.decorate(ax)
     fig.tight_layout()
     save(fig, "step_vs_displacement", SINGLE)

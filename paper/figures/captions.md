@@ -45,3 +45,9 @@ updates; the legend gives cells × steps over the summed step times, re-sorts in
 **quality.** Build rates at 128³ as in the library figures; error against the exact reference on 1000 sampled cells
 (median to max); completeness over all cells; total sampled volume |Σ V − box| (a tiling check, not accuracy).
 Neighbour-set agreement and closure are not shown: the benchmark runs stored volumes only.
+
+**Note for weak_scaling (b).** The exact start of jittered input slows from 128³ to 256³ (9.5 → 6.6 M cells/s) because
+at 256³ its check finds 44 bad tetrahedra and patches 830 cells in a second round (job 32366447: clipping with rings
+455 ms, from_rings 378 ms, start 1333 ms in all, so about 500 ms, 30 ns a cell, for the second round); at 128³ the start
+has one round, no bad tetrahedra, and costs clipping 57 + from_rings 50 ≈ start 117 ms. Per cell, clipping (27 ns)
+and from_rings (23 ns) are the same at both sizes.

@@ -35,7 +35,7 @@ CODES = [
     ("CGAL + faces (CPU)", "cgal-dt3-par-cpu", "CGAL Delaunay_triangulation_3", "Delaunay + faces", "2x Xeon", 72,
      "#17becf"),
     ("geogram periodic (CPU)", "geogram-pdel-cpu", "geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72,
-     "#7f7f7f"),
+     "#e6ab02"),
 ]
 FLOOR = 1e-17
 
