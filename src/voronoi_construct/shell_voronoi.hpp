@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -210,6 +211,11 @@ inline int heavy_budget() {
     return v != nullptr ? std::atoi(v) : heavy_clips;
 }
 
+// TEMP phase timer
+struct TempPhase { const char* name; Kokkos::Timer t; bool on = std::getenv("VORONOI_PHASES") != nullptr;
+  explicit TempPhase(const char* n) : name(n) { if (on) Kokkos::fence(); t.reset(); }
+  ~TempPhase() { if (on) { Kokkos::fence(); std::printf("phase %s %.3f ms\n", name, t.seconds() * 1e3); } } };
+
 // A particle that may cut the cell, sorted by distance.
 // Used by: construct_pass.
 struct Candidate {
@@ -274,7 +280,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
             if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
-                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow))
+                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow && before != deferred))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
             ep::i64 self[3] = {0, 0, 0};
@@ -290,7 +296,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Candidate buffer[ring_buffer];
             int buffered = 0, batches = 0, clipped = 0, cuts = 0;
             // Past the clip budget the walk skips what the cell's Cylinder rules out (#60).
-            bool filtering = false;
+            const bool heavy = before == deferred;
+            bool filtering = heavy;
             Cylinder bound{};
 
             // Clip with the buffered particles nearest-first, until the rest are too far to cut.
@@ -336,7 +343,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
                     ++batches;
                     // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
-                    filtering = clipped > budget;
+                    filtering = heavy || clipped > budget;
                     if (filtering) bound = cylinder(cell, unit);
                     for (int e = first; e < Kokkos::min(first + ring_buffer, entries) && status == ok; ++e) {
                         if (double(stencil.bound2(e)) * width * width >= reach2) {
@@ -490,6 +497,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             }
             if (status == ok && !(volume > 0)) status = degenerate;
 
+            // A heavy cell that overflowed stays deferred: the bigger passes filter it from the start too.
+            if (heavy && (status == plane_overflow || status == vertex_overflow) && Cell::planes_capacity < huge_planes)
+                status = deferred;
             out.status(id) = status;
             out.face_count(id) = status == ok ? faces : 0;
             out.owned_count(id) = status == ok ? owned : 0;
@@ -635,7 +645,8 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
                      const Stencil<typename ExecSpace::memory_space>& stencil,
                      const Cells<typename ExecSpace::memory_space>& out, Pass pass,
                      const Selection<typename ExecSpace::memory_space>& selection = {}) {
-    construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection);
+    { TempPhase tp(Cell<max_planes, max_vertices>::exact ? "thread_exact_small" : "thread_rounded_small");
+    construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection); }
     const auto status = out.status;
     const auto order = grid.order;
     auto overflowed = [&] {
@@ -644,15 +655,16 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
             "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
             KOKKOS_LAMBDA(int i, int& sum) {
                 const int s = status(order(selection.slot(i)));
-                sum += s == vertex_overflow || s == plane_overflow;
+                sum += s == vertex_overflow || s == plane_overflow || s == deferred;
             },
             count);
         return count > 0;
     };
     if (!overflowed()) return;
-    construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
+    { TempPhase tp(Cell<max_planes, max_vertices>::exact ? "thread_exact_big" : "thread_rounded_big");
+    construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection); }
     if constexpr (Cell<big_planes, big_vertices>::exact)
-        if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
+        if (overflowed()) { TempPhase tp("huge"); construct_huge<ExecSpace>(grid, out, selection); }
 }
 
 // Cells a rounded build left neither ok nor out of pool room, built again exactly: a rounded cut can see a face's own

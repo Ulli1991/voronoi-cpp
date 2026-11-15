@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <type_traits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -163,6 +164,42 @@ __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uin
     live = 0xff;
 }
 
+// Drops the planes no live vertex uses and renumbers the rest (box planes keep theirs); false if none is free.
+// Used by: clip in the filtered kernel, whose needle cells (#60) collect planes that stopped being faces.
+__device__ inline bool compact_planes(Polyhedron& c, int& planes, std::uint64_t live) {
+    const int l = lane();
+    std::uint64_t used = (std::uint64_t(1) << box_planes) - 1;
+    for (int k = 0; k < per_lane; ++k) {
+        const int w = l + k * lanes;
+        if (!(live >> w & 1)) continue;
+        for (int e = 0; e < 3; ++e) used |= std::uint64_t(1) << byte(c.corner[w], e);
+    }
+    used = __reduce_or_sync(all_lanes, static_cast<unsigned>(used)) |
+           std::uint64_t(__reduce_or_sync(all_lanes, static_cast<unsigned>(used >> 32))) << 32;
+    if (__popcll(used) == planes) return false;
+    auto renumber = [&](int p) { return __popcll(used & ((std::uint64_t(1) << p) - 1)); };
+    float x[per_lane], y[per_lane], z[per_lane];
+    int neighbour[per_lane], to[per_lane];
+    for (int k = 0; k < per_lane; ++k) {
+        const int p = l + k * lanes;
+        to[k] = p < planes && used >> p & 1 ? renumber(p) : -1;
+        if (to[k] < 0) continue;
+        x[k] = c.nx[p], y[k] = c.ny[p], z[k] = c.nz[p], neighbour[k] = c.neighbour[p];
+    }
+    __syncwarp(all_lanes);
+    for (int k = 0; k < per_lane; ++k)
+        if (to[k] >= 0) c.nx[to[k]] = x[k], c.ny[to[k]] = y[k], c.nz[to[k]] = z[k], c.neighbour[to[k]] = neighbour[k];
+    for (int k = 0; k < per_lane; ++k) {
+        const int w = l + k * lanes;
+        if (!(live >> w & 1)) continue;
+        const std::uint32_t corner = c.corner[w];
+        c.corner[w] = pack(renumber(byte(corner, 0)), renumber(byte(corner, 1)), renumber(byte(corner, 2)));
+    }
+    __syncwarp(all_lanes);
+    planes = __popcll(used);
+    return true;
+}
+
 // Clip by the bisector with a particle at offset d (all lanes pass the same d). Returns ok when the plane does not
 // cut or after the cut is applied. `unit` scales the float normal (Kernel::unit). Used by: Kernel, once per candidate.
 template <bool checked = false>
@@ -189,7 +226,10 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     }
     const std::uint64_t removed = vertex_ballot(out);
     if (removed == 0) return ok;
-    if (planes == max_planes) return plane_overflow;
+    if (planes == max_planes) {
+        if constexpr (!checked) return plane_overflow;
+        if (!compact_planes(c, planes, live)) return plane_overflow;
+    }
     __syncwarp(all_lanes);
 
     // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers them.
@@ -294,6 +334,18 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
             packed_image = take ? other_image : packed_image;
         }
     }
+}
+
+// Whether a particle at offset d (d2 = d.d) lies in the ball of a live vertex, short of `margin` |d| (the vertex ball
+// test of #60): one particle per lane, every lane through every live vertex.
+__device__ inline bool in_vertex_ball(const Polyhedron& c, std::uint64_t live, Vec3 d, double d2, double margin) {
+    const double half = 0.5 * d2 - margin * Kokkos::sqrt(d2);
+    bool in = false;
+    for (std::uint64_t m = live; m != 0; m &= m - 1) {
+        const int w = __ffsll(static_cast<long long>(m)) - 1;
+        in |= d.x * c.x[w] + d.y * c.y[w] + d.z * c.z[w] > half;
+    }
+    return in;
 }
 
 // The Cylinder of the live vertices of c, with all lanes.
@@ -590,6 +642,7 @@ struct Kernel {
                     const int q = begin + k;
                     double d2 = 0;
                     bool take = false;
+                    [[maybe_unused]] Vec3 offset{0, 0, 0};
 #if defined(VORONOI_MEASURE)
                     bool outside = false;
 #endif
@@ -599,11 +652,18 @@ struct Kernel {
                         const double ddz = positions(q, 2) + image(packed, 2) * side[2] - p.z;
                         d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                         take = d2 < 4.0 * radius2;
-                        if constexpr (filtered) take = take && bound.admits(Vec3{ddx, ddy, ddz}, d2);
+                        if constexpr (filtered) {
+                            offset = {ddx, ddy, ddz};
+                            take = take && bound.admits(offset, d2);
+                        }
 #if defined(VORONOI_MEASURE)
                         outside = balls && !in_a_ball(c, live, ddx, ddy, ddz);
 #endif
                     }
+                    // The ball test loops over the live vertices with every lane, so it runs once all lanes are here.
+                    if constexpr (filtered)
+                        if (__any_sync(all_lanes, take))
+                            take = in_vertex_ball(c, live, offset, d2, bound.margin) && take;
                     const unsigned taking = __ballot_sync(all_lanes, take);
 #if defined(VORONOI_MEASURE)
                     if (measuring) {
@@ -751,6 +811,9 @@ struct Kernel {
         int owned = 0;
         int offset = exclusive_scan(owned_here, owned);
         if (status == ok && !(volume > 0)) status = degenerate;
+        // Its overflows stay heavy: the thread kernel filters them from the start too.
+        if constexpr (filtered)
+            if (status == plane_overflow || status == vertex_overflow) status = deferred;
 
         // The owned faces go to one block per cell that lane 0 claims: with rings, each face as neighbour, ring length
         // and ring (Cells::rings) in increasing neighbour id, otherwise neighbour, area and centroid in plane order.
@@ -898,6 +961,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         const auto order = grid.order;
         detail::until_pool_fits(exec, out, [&] {
             Kokkos::deep_copy(exec, next_cell, 0);
+            std::optional<detail::TempPhase> tp0; tp0.emplace("warp");
             if (rings && off_base > 0)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp_rings", policy,
@@ -922,6 +986,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
                     warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+            tp0.reset();
             // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
             // the filtered kernel, over a list of their slots.
             const bool levels = off_base > 0;
@@ -944,6 +1009,8 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         ++at;
                     });
                 Kokkos::deep_copy(exec, next_cell, 0);
+                if (std::getenv("VORONOI_PHASES")) std::printf("heavy %d\n", heavy_count);
+                detail::TempPhase tp1("filtered");
                 if (rings)
                     Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
                                          warp::Kernel<Memory, true, true, false, true>{
@@ -957,7 +1024,19 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                                          warp::Kernel<Memory, true, false, false, true>{
                                              grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
             }
+            if (std::getenv("VORONOI_PHASES")) {
+                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, out.status);
+                int cnt[8] = {};
+                for (std::size_t i = 0; i < h.extent(0); ++i) ++cnt[h(i)];
+                std::printf("after_warp statuses %d %d %d %d %d %d %d\n", cnt[0], cnt[1], cnt[2], cnt[3], cnt[4], cnt[5], cnt[6]);
+            }
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
+            if (std::getenv("VORONOI_PHASES")) {
+                auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, out.status);
+                int cnt[8] = {};
+                for (std::size_t i = 0; i < h.extent(0); ++i) ++cnt[h(i)];
+                std::printf("after_thread statuses %d %d %d %d %d %d %d\n", cnt[0], cnt[1], cnt[2], cnt[3], cnt[4], cnt[5], cnt[6]);
+            }
             detail::exact_where_failed(exec, grid, stencil, out);
         });
         return;
