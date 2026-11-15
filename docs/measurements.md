@@ -341,6 +341,31 @@ DRAM of step 3 (128³): 3300 → 3096 B/cell at 0.03 spacings and 5247 → 5036 
 
 Geometry: `voronoi_mesh_test` (4096 cells) finds cell centroids within 7e-9 spacings of double and of clipping (double and clipping agree to 6e-16), volumes and areas bit for bit. At 128³ after 3 steps (`--dump-cells`), at 0.03 and 0.1 spacings: the same neighbours for every cell, volumes bit for bit, centroids within 8.1e-9 spacings (mean 1.8e-9). `lists_checksum` equals main's at all 30 checks; `geometry_checksum` and `faces_checksum` differ (centroids).
 
+### Face visitor and chunked passes (`Mesh::for_each_face`, `voronoi_bench chunks`, job 32375192)
+
+`for_each_face(visit)` runs one kernel over the faces and calls `visit(f, owner, neighbour, area, centroid)` with the geometry in registers: read from the stored rows, or, with `Layout::faces_on_read` and no rows stored, computed once from the face's ring (unlike R14's `update_cells()`, which computes each face twice). The values are the stored rows' bits (`voronoi_mesh_test`, four updates). The generic functor here is the closure check: each face adds its area vector to its owner and subtracts it from its neighbour (six atomics); the largest |sum| was the same, 1.6e-14 to 3.8e-14 spacings², either way. One A100 40 GB at 1305 MHz, jittered, 10 steps twice, M cells/s of `update()` + the visitor (with `update_cells()` too in brackets):
+
+| | stored rows | visitor, no rows |
+|---|---|---|
+| 128³, 0.03 | 182.4 (139.9) | 201.4 (108.2) |
+| 128³, 0.1 | 113.5 (89.9) | 120.1 (76.3) |
+| 256³, 0.03 | 244.2 (180.2) | 278.7 (131.6) |
+| 256³, 0.1 | 174.0 (133.0) | 192.4 (103.8) |
+
+DRAM of step 3 (128³), `update()` + visitor: 2697 → 2199 B/cell at 0.03 spacings, 4445 → 3950 at 0.1 (the visitor reads 663 and 764 B/cell from the rings against 311 and 324 from the rows, but `faces`' 1005 and 1106 go). Peak memory of the steps 1979 → 1585 B/cell at 128³ and 256³. A caller that also needs `update_cells()` loses: its sums still compute each face from the ring, twice (9.0 against 3.5 ms at 128³, 0.03).
+
+Chunked passes, a two-pass functor on a static 128³ and 256³ mesh sorted along the Hilbert curve, faces by owner: pass 1 per cell sums |A| over its list in list order, pass 2 per face uses both cells' sums. Whole mesh: two launches. Chunked: cells [c C, (c + 1) C), pass 1 on the chunk and its first halo layer, then pass 2 on the faces the chunk owns, two launches per chunk. Outputs equal bit for bit in every case (the sums run in list order whatever the chunk). Halo cells per cell, one layer (two layers): C = 16384: 0.26 (0.57); 32768: 0.20 (0.42); 65536: 0.16 (0.34); 131072: 0.13 (0.27).
+
+| C | launches 128³ / 256³ | ms 128³ / 256³ | DRAM B/cell 128³ / 256³ |
+|---|---|---|---|
+| whole | 2 / 2 | 1.73 / 11.5 | 943 / 831 |
+| 16384 | 256 / 2048 | 4.51 / 36.0 | 643 / 643 |
+| 32768 | 128 / 1024 | 2.66 / 21.3 | 612 / 612 |
+| 65536 | 64 / 512 | 1.77 / 14.1 | 598 / 598 |
+| 131072 | 32 / 256 | 2.01 / 16.1 | 974 / 977 |
+
+Chunks of 32768 to 65536 cells keep pass 1's output and the rows in L2 for pass 2: 28 to 37 % fewer DRAM bytes. They are still 2 % (128³) to 23 % (256³) slower: the summed kernel time is above the whole mesh's too (1.79 against 1.60 ms at 128³, 14.3 against 11.5 at 256³), so a CUDA graph would remove the launch gaps but not the small grids' tails; 131072 cells overflow the 40 MB L2.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
