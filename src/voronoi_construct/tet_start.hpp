@@ -154,6 +154,12 @@ struct Partial {
     double volume = 0;
 };
 
+// Storage of check kept from round to round (see tet_mesh::Assembly::Store). Used by: check, build.
+template <class MemorySpace>
+struct CheckStore {
+    Kokkos::View<int*, MemorySpace> used, listed, undecided;
+};
+
 // Exact check of a tetrahedralization of all n particles, one thread per tetrahedron: it is not flat; across each face
 // lies a tetrahedron sharing it and pointing back, its far vertex on the other side and outside this circumsphere
 // (local Delaunay, perturbed); every particle is used; the volumes sum to the box. Marks the particles of bad
@@ -163,11 +169,16 @@ template <class ExecSpace>
 Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& mesh,
              const ep::Points<typename ExecSpace::memory_space>& point, int count,
              const Kokkos::View<int*, typename ExecSpace::memory_space>& marked,
-             const Partial<typename ExecSpace::memory_space>& partial = {}) {
+             const Partial<typename ExecSpace::memory_space>& partial = {},
+             CheckStore<typename ExecSpace::memory_space>* kept = nullptr) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(point.extent(0));
-    Kokkos::View<int*, Memory> used("tet_start_used", n);
+    using tet_mesh::detail::take;
+    CheckStore<Memory> local;
+    auto& store = kept ? *kept : local;
+    const Kokkos::View<int*, Memory> used = take(store.used, n, "tet_start_used");
+    Kokkos::deep_copy(exec, used, 0);
     const auto vertex = mesh.vertex;
     const auto adjacent = mesh.adjacent;
     const double unit3 = 1.0 / (double(point.period[0]) * double(point.period[1]) * double(point.period[2]));
@@ -175,8 +186,7 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     const auto redone = partial.redone;
     const auto changed = partial.changed;
     // Incremental: every tetrahedron marks its particles used, and those redone or next to one are listed.
-    Kokkos::View<int*, Memory> listed(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_start_listed")),
-                                      some ? count : 0);
+    const Kokkos::View<int*, Memory> listed = take(store.listed, some ? count : 0, "tet_start_listed");
     int checked = count;
     if (some) {
         Kokkos::parallel_scan(
@@ -195,8 +205,7 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
             checked);
     }
     // Most tetrahedra are decided by the double filters; the rest go to `undecided` and the exact predicates.
-    Kokkos::View<int*, Memory> undecided(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_start_undecided")),
-                                         checked);
+    const Kokkos::View<int*, Memory> undecided = take(store.undecided, checked, "tet_start_undecided");
     Kokkos::View<int, Memory> undecided_count("tet_start_undecided_count");
     Report report;
     Kokkos::parallel_reduce(
@@ -277,13 +286,14 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
     bool all = false;
     tet_mesh::Assembly<Memory> assembly;
     tet_mesh::Previous<Memory> previous;
+    CheckStore<Memory> check_store;
     double carried = 0;  // volume of the last round's tetrahedra of unchanged owners
     for (int round = 0; round < 3; ++round) {
         tet_mesh::assemble(exec, cells, mesh, assembly, previous);
         const Partial<Memory> partial{assembly.redone, previous.changed, carried};
         previous = {};
         const int count = assembly.counts.tets;
-        const Report report = check(exec, mesh, point, count, marked, partial);
+        const Report report = check(exec, mesh, point, count, marked, partial, &check_store);
         ++stats.rounds;
         if (round == 0) stats.bad_tets = report.bad_tets;
         stats.tets = count;
@@ -327,8 +337,6 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
             carried = report.volume - removed;
             previous = {mesh.vertex, mesh.adjacent, mesh.ring, assembly.slot_start, assembly.tet_start, grown};
         }
-        mesh = {};
-        assembly = {};
         namespace sv = shell_voronoi::detail;
         sv::construct_cells<sv::ExactCell>(exec, grid, stencil, cells, sv::Pass::all,
                                            {Kokkos::subview(todo, std::make_pair(0, listed)), {}});

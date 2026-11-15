@@ -379,6 +379,19 @@ struct alignas(32) CellBlock {
     int faces, face, slot, tet;
 };
 
+// The first `size` entries of `store`, grown by 1/16 when too small (contents dropped). Used by: assemble.
+template <class V>
+auto take(V& store, std::size_t size, const char* label) {
+    if (store.extent(0) < size) {
+        store = V();
+        store = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), size + size / 16);
+    }
+    if constexpr (V::rank() == 1)
+        return Kokkos::subview(store, std::make_pair(std::size_t(0), size));
+    else
+        return Kokkos::subview(store, std::make_pair(std::size_t(0), size), Kokkos::ALL);
+}
+
 // Faces, ring slots and tetrahedra of an assembly.
 struct AssemblyCounts {
     int faces = 0, slots = 0, tets = 0;
@@ -403,6 +416,15 @@ struct Assembly {
     Kokkos::View<char*, MemorySpace> redone;    // incremental: per tetrahedron, adjacency looked up again
     Kokkos::View<int, MemorySpace> unresolved;  // ring slots and adjacencies not resolved
     detail::AssemblyCounts counts;
+    // Storage kept from round to round (the views above and the mesh's are its first entries): freeing and
+    // allocating gigabytes between rounds stalls cudaMalloc. Two sets of tetrahedra and slots for incremental rounds.
+    struct Store {
+        Kokkos::View<int*, MemorySpace> owner, neighbour, length, ring_start, first_tet, slot_face, tet_slot, ring[2];
+        Kokkos::View<long long*, MemorySpace> face_ring;
+        Kokkos::View<char*, MemorySpace> redone;
+        Quads<MemorySpace> vertex[2], adjacent[2];
+        int side = 0;  // the set the mesh views
+    } store;
 };
 
 // The round before an incremental assemble: its tetrahedra, ring slots and per-cell starts, and the cells re-clipped
@@ -437,8 +459,6 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     const auto rings = cells.rings;
     const auto cell_ring = cells.ring_start;
     const auto owned = cells.owned_count;
-    mesh = {};  // its arrays are rebuilt; the previous round keeps what it needs
-    a = {};
     const bool incremental = previous.changed.extent(0) > 0;
     const auto changed = previous.changed;
     const auto old_vertex = previous.vertex, old_adjacent = previous.adjacent;
@@ -447,10 +467,12 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     const Kokkos::View<char*, Memory> dirty(uninitialized("assemble_dirty"), incremental ? n : 0);
 
     // Per cell: faces, slots and emitted tetrahedra, then their running sums.
+    // Per-cell starts: new each round (an incremental round reads the last ones).
     a.face_start = Ints(uninitialized("face_start"), n + 1);
     a.slot_start = Ints(uninitialized("assemble_slot_start"), n + 1);
     a.tet_start = Ints(uninitialized("assemble_tet_start"), n + 1);
-    a.block = Kokkos::View<detail::CellBlock*, Memory>(uninitialized("assemble_block"), n);
+    if (static_cast<int>(a.block.extent(0)) != n)
+        a.block = Kokkos::View<detail::CellBlock*, Memory>(uninitialized("assemble_block"), n);
     const auto face_start = a.face_start, slot_start = a.slot_start, tet_start = a.tet_start;
     const auto block = a.block;
     Kokkos::parallel_for(
@@ -496,11 +518,14 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     const int faces = total.faces, slots = total.slots, tets = total.tets;
 
     // Per face its pair, ring and first tetrahedron; per slot its face.
-    Ints owner(uninitialized("face_owner"), faces), neighbour(uninitialized("face_neighbour"), faces),
-        length(uninitialized("face_length"), faces), ring_start(uninitialized("face_ring_start"), faces);
-    a.first_tet = Ints(uninitialized("assemble_first_tet"), faces);
-    a.face_ring = Kokkos::View<long long*, Memory>(uninitialized("assemble_face_ring"), faces);
-    a.slot_face = Ints(uninitialized("assemble_slot_face"), slots);
+    auto& store = a.store;
+    const Ints owner = detail::take(store.owner, faces, "face_owner"),
+               neighbour = detail::take(store.neighbour, faces, "face_neighbour"),
+               length = detail::take(store.length, faces, "face_length"),
+               ring_start = detail::take(store.ring_start, faces, "face_ring_start");
+    a.first_tet = detail::take(store.first_tet, faces, "assemble_first_tet");
+    a.face_ring = detail::take(store.face_ring, faces, "assemble_face_ring");
+    a.slot_face = detail::take(store.slot_face, slots, "assemble_slot_face");
     const auto first_tet = a.first_tet, slot_face = a.slot_face;
     const auto face_ring = a.face_ring;
     // A thread per face, so the writes are coalesced: its owner by bisection, then the walk of the owner's block.
@@ -531,16 +556,18 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
             for (int s = ring_start(g), end = s + length(g); s < end; ++s) slot_face(s) = g;
         });
 
-    mesh.vertex = Quads<Memory>(uninitialized("tet_vertex"), tets);
-    mesh.adjacent = Quads<Memory>(uninitialized("tet_adjacent"), tets);
+    // An incremental round writes the other set; the previous round's mesh views this one.
+    if (incremental) store.side = 1 - store.side;
+    mesh.vertex = detail::take(store.vertex[store.side], tets, "tet_vertex");
+    mesh.adjacent = detail::take(store.adjacent[store.side], tets, "tet_adjacent");
     mesh.owner = owner;
     mesh.neighbour = neighbour;
     mesh.ring_start = ring_start;
     mesh.ring_length = length;
-    mesh.ring = Ints(uninitialized("face_ring"), slots);
-    a.tet_slot = Ints(uninitialized("assemble_tet_slot"), tets);
+    mesh.ring = detail::take(store.ring[store.side], slots, "face_ring");
+    a.tet_slot = detail::take(store.tet_slot, tets, "assemble_tet_slot");
     a.unresolved = Kokkos::View<int, Memory>("assemble_unresolved");
-    a.redone = Kokkos::View<char*, Memory>(uninitialized("assemble_redone"), incremental ? tets : 0);
+    a.redone = detail::take(store.redone, incremental ? tets : 0, "assemble_redone");
     const auto vertex = mesh.vertex;
     const auto adjacent = mesh.adjacent;
     const auto ring = mesh.ring;
@@ -639,9 +666,6 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
             }
             if (missing) Kokkos::atomic_add(&unresolved(), missing);
         });
-    a.first_tet = a.slot_face = a.tet_slot = {};  // freed once the kernels are done
-    a.face_ring = {};
-    a.block = {};
 }
 
 // Zeroed circumcentres and edge bits for the tetrahedra of an assemble. Used by: assemble, tet_start::build.
