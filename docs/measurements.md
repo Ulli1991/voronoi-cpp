@@ -93,7 +93,11 @@ Basselin et al. (white-noise setting) 673 cells; on the surface they lose almost
 code is complete, the float codes with relative errors up to 4e-5. peclet-voro returns wrong volumes on the surface
 (sum − 1 = +31 to +62) and runs out of memory at 256³; votess fails on cosmic web and surface (A100: CUDA error 700;
 CPU: `std::length_error`); gDel3D's 8-spacing padding is too thin for the surface (82627 certificate violations, one
-sampled cell off by 1.3 %). The exact Delaunay codes (CGAL, geogram, Qhull, TetGen) and voro++ are right on all three.
+sampled cell off by 1.3 %); Paragram leaves 647 surface cells without a volume (22 of 1000 sampled cells off by more
+than 1 %) and 5 at cosmic web 256³. The exact Delaunay codes (CGAL, geogram, Qhull, TetGen) and voro++ are right on
+all three (oracle jobs 32369335 and 32370726). Fastest full cells besides ours, cosmic web 128³: gDel3D + our faces 0.87
+and voro++ (72 cores) 0.83 M cells/s; surface 128³: geogram (72 cores) 0.69, gDel3D 0.68 (too thin padding); fcc solid
+2²⁰: peclet-voro 3.7 (A100).
 
 ### Long runs
 

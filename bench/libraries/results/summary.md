@@ -106,6 +106,7 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 
 | library | variant | device | threads | cosmicweb 128³ | cosmicweb 256³ | surface 128³ | surface 256³ | fccsolid 2²⁰ | fccsolid 2²³ | B/cell (128³ max) | breaks |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| Paragram | voronoi_diagram + faces from its adjacency (ours) | A100-SXM4-40GB | 1 | 0.778 (0.778–0.780) | 1.27 (1.27–1.28) | 0.064 (0.064–0.064) | – | 0.713 (0.708–0.718) | 1.44 (1.44–1.44) | 9131 | images; float; no exact predicates |
 | gDel3D | Delaunay + faces (ours) | A100-SXM4-40GB | 1 | 0.874 (0.871–0.877) | – | 0.681 (0.657–0.691) | – | 0.973 (0.967–0.982) | – | 2088 | images; host↔device copies timed |
 | peclet-voro | cold build (buildTessellation) | A100-SXM4-40GB | 1 | 0.840 (0.838–0.841) | – | 0.093 (0.093–0.094) | – | 3.67 (3.64–3.70) | 3.80 (3.79–3.80) | 2604 | no exact predicates; no centroids |
 | peclet-voro | resident build (MovingTessellation alloc + rebuild = Tessellation.build) | A100-SXM4-40GB | 1 | 0.437 (0.437–0.438) | – | 0.091 (0.090–0.091) | – | 2.35 (2.30–2.35) | 2.17 (2.11–2.17) | 4010 | no exact predicates; no centroids |
@@ -117,20 +118,20 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | CGAL Delaunay_triangulation_3 (Parallel_tag, TBB) | Delaunay + faces (ours) | 2x Xeon Platinum 8360Y | 72 | 0.609 (0.604–0.615) | 0.680 (0.606–0.690) | 0.461 (0.423–0.475) | 0.497 (0.492–0.503) | 0.711 (0.689–0.718) | 0.739 (0.687–0.791) | 1910 | images |
 | geogram | ParallelDelaunay3d PDEL on padded points + faces (ours) | 2x Xeon Platinum 8360Y | 72 | 0.746 (0.710–0.751) | 0.913 (0.896–0.923) | 0.705 (0.670–0.718) | 0.872 (0.872–0.895) | 0.856 (0.823–0.856) | 0.984 (0.928–0.987) | 2260 | images |
 | geogram | PeriodicDelaunay3d + Voronoi cells (copy_Laguerre_cell_from_Delaunay, ConvexCell) | 2x Xeon Platinum 8360Y | 72 | 0.652 (0.645–0.661) | 1.29 (1.27–1.30) | 0.691 (0.666–0.707) | 1.27 (1.26–1.27) | 0.771 (0.767–0.852) | 1.16 (1.08–1.18) | 522 |  |
-| peclet-voro | cold build (buildTessellation) | 2x Xeon Platinum 8360Y | 72 | 0.813 (0.794–0.822) | 0.797 (0.796–0.799) | 0.319 (0.309–0.325) | 0.223 (0.221–0.227) | – | – | 2383 | no exact predicates; no centroids |
-| peclet-voro | resident build (MovingTessellation alloc + rebuild = Tessellation.build) | 2x Xeon Platinum 8360Y | 72 | 0.609 (0.606–0.615) | 0.549 (0.543–0.550) | 0.292 (0.287–0.292) | 0.200 (0.193–0.204) | – | – | 3253 | no exact predicates; no centroids |
-| voro++ | multithreaded (Lu, Lazar, Rycroft 2023): container_3d periodic xyz, add_parallel, omp for + compute_cell(voronoicell_neighbor_3d) | 2x Xeon Platinum 8360Y | 72 | 0.830 (0.827–0.851) | – | 0.197 (0.195–0.198) | – | – | – | 1667 | no exact predicates |
-| votess | tesellate + faces from its neighbour lists (ours) | 2x Xeon Platinum 8360Y | 72 | 0.161 (0.160–0.161) | – | – | – | – | – | 3169 | images; no exact predicates |
+| peclet-voro | cold build (buildTessellation) | 2x Xeon Platinum 8360Y | 72 | 0.813 (0.794–0.822) | 0.797 (0.796–0.799) | 0.319 (0.309–0.325) | 0.223 (0.221–0.227) | 1.24 (1.22–1.25) | 1.26 (1.24–1.27) | 2383 | no exact predicates; no centroids |
+| peclet-voro | resident build (MovingTessellation alloc + rebuild = Tessellation.build) | 2x Xeon Platinum 8360Y | 72 | 0.609 (0.606–0.615) | 0.549 (0.543–0.550) | 0.292 (0.287–0.292) | 0.200 (0.193–0.204) | 0.992 (0.945–1.010) | 0.945 (0.924–0.967) | 3253 | no exact predicates; no centroids |
+| voro++ | multithreaded (Lu, Lazar, Rycroft 2023): container_3d periodic xyz, add_parallel, omp for + compute_cell(voronoicell_neighbor_3d) | 2x Xeon Platinum 8360Y | 72 | 0.830 (0.827–0.851) | 0.741 (0.736–0.779) | 0.197 (0.195–0.198) | 0.119 (0.117–0.119) | 2.12 (2.06–2.26) | 2.17 (2.17–2.20) | 1667 | no exact predicates |
+| votess | tesellate + faces from its neighbour lists (ours) | 2x Xeon Platinum 8360Y | 72 | 0.161 (0.160–0.161) | – | – | – | 0.355 (0.345–0.367) | 0.436 (0.429–0.447) | 3169 | images; no exact predicates |
 | CGAL Delaunay_triangulation_3 (Parallel_tag, TBB) | Delaunay + faces (ours) | 2x Xeon Platinum 8360Y | 1 | 0.050 (0.050–0.052) | – | 0.036 (0.036–0.038) | – | – | – | 1475 | images |
 | CGAL Periodic_3_Delaunay_triangulation_3 | Delaunay + faces (ours) | 2x Xeon Platinum 8360Y | 1 | 0.028 (0.028–0.029) | – | 0.030 (0.030–0.031) | – | – | – | 2814 |  |
-| Qhull | qh_new_qhull(d Qbb Qz Qt) of the padded points; Delaunay + faces (ours) | 2x Xeon Platinum 8360Y | 1 | 0.017 (0.017–0.017) | – | 0.007 | – | – | – | 7905 | images; no exact predicates |
+| Qhull | qh_new_qhull(d Qbb Qz Qt) of the padded points; Delaunay + faces (ours) | 2x Xeon Platinum 8360Y | 1 | 0.017 (0.017–0.017) | – | 0.007 (0.007–0.007) | – | 0.022 (0.021–0.022) | – | 7905 | images; no exact predicates |
 | TetGen | tetrahedralize(Qz) of the padded points; Delaunay + faces (ours) | 2x Xeon Platinum 8360Y | 1 | 0.063 (0.063–0.063) | – | 0.030 (0.030–0.031) | – | 0.079 (0.079–0.079) | – | 2730 | images |
 | geogram | ParallelDelaunay3d PDEL on padded points + faces (ours) | 2x Xeon Platinum 8360Y | 1 | 0.073 (0.067–0.075) | – | 0.062 (0.061–0.063) | – | – | – | 1825 | images |
 | geogram | PeriodicDelaunay3d + Voronoi cells (copy_Laguerre_cell_from_Delaunay, ConvexCell) | 2x Xeon Platinum 8360Y | 1 | 0.050 (0.050–0.052) | – | 0.044 (0.043–0.045) | – | – | – | 543 |  |
-| peclet-voro | cold build (buildTessellation) | 2x Xeon Platinum 8360Y | 1 | 0.018 (0.018–0.018) | – | – | – | – | – | 2382 | no exact predicates; no centroids |
+| peclet-voro | cold build (buildTessellation) | 2x Xeon Platinum 8360Y | 1 | 0.018 (0.018–0.018) | – | 0.006 (0.006–0.006) | – | – | – | 2382 | no exact predicates; no centroids |
 | voro++ | container_periodic, c_loop_all_periodic + compute_cell(voronoicell_neighbor) | 2x Xeon Platinum 8360Y | 1 | 0.027 (0.025–0.027) | – | 0.004 (0.004–0.004) | – | – | – | 1005 | no exact predicates |
-| voro++ | multithreaded (Lu, Lazar, Rycroft 2023): container_3d periodic xyz, add_parallel, omp for + compute_cell(voronoicell_neighbor_3d) | 2x Xeon Platinum 8360Y | 1 | 0.027 (0.027–0.027) | – | – | – | – | – | 697 | no exact predicates |
-| votess | tesellate + faces from its neighbour lists (ours) | 2x Xeon Platinum 8360Y | 1 | 0.006 | – | – | – | – | – | 3162 | images; no exact predicates |
+| voro++ | multithreaded (Lu, Lazar, Rycroft 2023): container_3d periodic xyz, add_parallel, omp for + compute_cell(voronoicell_neighbor_3d) | 2x Xeon Platinum 8360Y | 1 | 0.027 (0.027–0.027) | – | 0.004 (0.004–0.004) | – | – | – | 961 | no exact predicates |
+| votess | tesellate + faces from its neighbour lists (ours) | 2x Xeon Platinum 8360Y | 1 | 0.006 (0.006–0.006) | – | – | – | – | – | 3162 | images; no exact predicates |
 
 | library | variant | device | threads | cosmicweb 128³ | cosmicweb 256³ | surface 128³ | surface 256³ | fccsolid 2²⁰ | fccsolid 2²³ | B/cell (128³ max) | breaks |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -149,15 +150,16 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 
 | library | variant | device | threads | cosmicweb 128³ | cosmicweb 256³ | surface 128³ | surface 256³ | fccsolid 2²⁰ | fccsolid 2²³ | B/cell (128³ max) | breaks |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| Paragram | voronoi_diagram (adjacency) | A100-SXM4-40GB | 1 | 0.904 (0.897–0.905) | 1.64 (1.64–1.64) | 0.065 (0.065–0.065) | – | 0.764 (0.734–0.778) | 1.66 (1.66–1.66) | 9131 | images; float; no exact predicates |
 | gDel3D | Delaunay | A100-SXM4-40GB | 1 | 3.30 (3.28–3.41) | – | 2.17 (1.99–2.20) | – | 3.01 (2.48–3.27) | – | 2088 | images; host↔device copies timed |
 | votess | tesellate (dnn) | A100-SXM4-40GB | 1 | – | – | – | – | 0.909 (0.890–0.933) | – | 2754 | images; no exact predicates; host↔device copies timed |
 | CGAL Delaunay_triangulation_3 (Parallel_tag, TBB) | Delaunay | 2x Xeon Platinum 8360Y | 72 | 1.76 (1.17–1.84) | 2.14 (1.96–2.23) | 0.965 (0.907–0.985) | 1.15 (1.06–1.27) | 1.69 (1.66–1.72) | 2.55 (2.48–2.56) | 570 | images |
 | geogram | ParallelDelaunay3d PDEL on padded points (Delaunay) | 2x Xeon Platinum 8360Y | 72 | 1.41 (1.33–1.41) | 2.29 (2.27–2.32) | 1.46 (1.45–1.46) | 2.34 (2.31–2.36) | 1.82 (1.78–1.87) | 2.11 (1.85–2.17) | 525 | images |
 | geogram | PeriodicDelaunay3d (Delaunay) | 2x Xeon Platinum 8360Y | 72 | 0.994 (0.988–1.007) | 1.72 (1.51–1.76) | 0.936 (0.934–0.987) | 1.68 (1.65–1.74) | 0.979 (0.976–1.002) | 1.27 (1.27–1.35) | 464 |  |
-| votess | tesellate (dnn) | 2x Xeon Platinum 8360Y | 72 | 0.170 (0.169–0.171) | – | – | – | – | – | 3169 | images; no exact predicates |
+| votess | tesellate (dnn) | 2x Xeon Platinum 8360Y | 72 | 0.170 (0.169–0.171) | – | – | – | 0.453 (0.448–0.474) | 0.507 (0.507–0.514) | 3169 | images; no exact predicates |
 | CGAL Delaunay_triangulation_3 (Parallel_tag, TBB) | Delaunay | 2x Xeon Platinum 8360Y | 1 | 0.076 (0.072–0.078) | – | 0.058 (0.056–0.061) | – | – | – | 191 | images |
 | CGAL Periodic_3_Delaunay_triangulation_3 | Delaunay | 2x Xeon Platinum 8360Y | 1 | 0.036 (0.035–0.036) | – | 0.038 (0.037–0.038) | – | – | – | 591 |  |
-| Qhull | qh_new_qhull(d Qbb Qz Qt) of the padded points; Delaunay | 2x Xeon Platinum 8360Y | 1 | 0.019 (0.019–0.019) | – | 0.008 (0.008–0.008) | – | – | – | 6361 | images; no exact predicates |
+| Qhull | qh_new_qhull(d Qbb Qz Qt) of the padded points; Delaunay | 2x Xeon Platinum 8360Y | 1 | 0.019 (0.019–0.019) | – | 0.008 (0.008–0.008) | – | 0.024 (0.023–0.025) | – | 6361 | images; no exact predicates |
 | TetGen | tetrahedralize(Qz) of the padded points; Delaunay | 2x Xeon Platinum 8360Y | 1 | 0.100 (0.093–0.100) | – | 0.040 (0.040–0.041) | – | 0.129 (0.129–0.129) | – | 2729 | images |
 | geogram | ParallelDelaunay3d PDEL on padded points (Delaunay) | 2x Xeon Platinum 8360Y | 1 | 0.158 (0.153–0.162) | – | 0.162 (0.161–0.164) | – | – | – | 377 | images |
 | geogram | PeriodicDelaunay3d (Delaunay) | 2x Xeon Platinum 8360Y | 1 | 0.084 (0.081–0.089) | – | 0.084 (0.080–0.086) | – | – | – | 331 |  |
@@ -378,6 +380,10 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | chain-a100-32367911.jsonl | peclet-voro | resident build (MovingTessellation alloc + rebuild = Tessellation.build) | cosmicweb | 2097152 | 0.437 | 12.4 (631af46) | 28.4 |
 | chain-a100-32367911.jsonl | peclet-voro | resident build (MovingTessellation alloc + rebuild = Tessellation.build) | fccsolid | 1048576 | 2.35 | 17.3 (631af46) | 7.4 |
 | chain-a100-32367911.jsonl | peclet-voro | resident build (MovingTessellation alloc + rebuild = Tessellation.build) | fccsolid | 8388608 | 2.17 | 32 (631af46) | 14.8 |
+| chain-a100-32370411.jsonl | Paragram | voronoi_diagram + faces from its adjacency (ours) | cosmicweb | 2097152 | 0.778 | 12.7 (4c57701+local) | 16.4 |
+| chain-a100-32370411.jsonl | Paragram | voronoi_diagram + faces from its adjacency (ours) | cosmicweb | 16777216 | 1.27 | 12.8 (4c57701+local) | 10.1 |
+| chain-a100-32370411.jsonl | Paragram | voronoi_diagram + faces from its adjacency (ours) | fccsolid | 1048576 | 0.713 | 30.6 (4c57701+local) | 42.9 |
+| chain-a100-32370411.jsonl | Paragram | voronoi_diagram + faces from its adjacency (ours) | fccsolid | 8388608 | 1.44 | 32.9 (4c57701+local) | 22.9 |
 
 ## Setup per row
 
@@ -400,8 +406,8 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | Liu et al. 3D-Voronoi-GPU | tet-centric: tetrahedra clipped by the cells, K 35 (PRESET 2) | A100-SXM4-40GB | 1 | b2c64f5 + voronoi-gpu-liu.patch | volumes (and barycentres) | images: shell of width 3 mean spacings (0.0234375) around the unit box; clipping mesh: one tetrahedron enclosing it | float (points scaled to [0, 1000]^3), certified by the security radius; no exact predicates | points in host memory (double) to volumes in host memory: padding, float conversion, kn_prepare (H2D, grid sort), kn_solve, clipped_voro_cell_test_GPU_param_tet, gather by the permutation, D2H | K 35; failed cells NaN; candidate list of the one tetrahedron = all sites (replaces the brute-force tet-site kNN of compute_clipped_voro_diagram_GPU); padding on 18 OpenMP threads | 32236003, 32236007, 32367909 | ravg1002, ravg1162 |
 | Liu et al. 3D-Voronoi-GPU | tet-centric: tetrahedra clipped by the cells, K 90 (PRESET 0) | A100-SXM4-40GB | 1 | b2c64f5 + voronoi-gpu-liu.patch | volumes (and barycentres) | images: shell of width 3 mean spacings (0.0234375) around the unit box; clipping mesh: one tetrahedron enclosing it | float (points scaled to [0, 1000]^3), certified by the security radius; no exact predicates | points in host memory (double) to volumes in host memory: padding, float conversion, kn_prepare (H2D, grid sort), kn_solve, clipped_voro_cell_test_GPU_param_tet, gather by the permutation, D2H | K 90; failed cells NaN; candidate list of the one tetrahedron = all sites (replaces the brute-force tet-site kNN of compute_clipped_voro_diagram_GPU); padding on 18 OpenMP threads | 32236003, 32236007, 32367909 | ravg1002, ravg1162 |
 | Liu et al. 3D-Voronoi-GPU | tet-centric: tetrahedra clipped by the cells, K 90 (PRESET 1) | A100-SXM4-40GB | 1 | b2c64f5 + voronoi-gpu-liu.patch | volumes (and barycentres) | images: shell of width 3 mean spacings (0.0234375) around the unit box; clipping mesh: one tetrahedron enclosing it | float (points scaled to [0, 1000]^3), certified by the security radius; no exact predicates | points in host memory (double) to volumes in host memory: padding, float conversion, kn_prepare (H2D, grid sort), kn_solve, clipped_voro_cell_test_GPU_param_tet, gather by the permutation, D2H | K 90; failed cells NaN; candidate list of the one tetrahedron = all sites (replaces the brute-force tet-site kNN of compute_clipped_voro_diagram_GPU); padding on 18 OpenMP threads | 32236003, 32236007, 32367909 | ravg1002, ravg1162 |
-| Paragram | voronoi_diagram (adjacency) | A100-SXM4-40GB | 1 | 4f36b1f (0.1.0, main 2026-09-01) | Voronoi adjacency (neighbour lists) | images: shell of width 0.03125 (4 mean spacings), 418304 extra points (0.199462891 n); 2 max R <= w: yes over all closed cells, yes over the cells of status 0 | float32 (the library takes float32 only; -use_fast_math, its default build) | double points on the device to padded float32 set and adjacency CSR on the device | torch.cuda.synchronize around the Python call; chunking automatic (none at these sizes) | 32237857, 32237858, 32237859 | ravg1002 |
-| Paragram | voronoi_diagram + faces from its adjacency (ours) | A100-SXM4-40GB | 1 | 4f36b1f (0.1.0, main 2026-09-01) | Voronoi adjacency; cells (ours): volumes centroids faces areas neighbours | images: shell of width 0.03125 (4 mean spacings), 418304 extra points (0.199462891 n); 2 max R <= w: yes over all closed cells, yes over the cells of status 0 | float32 adjacency (library), cells in double from the double points (ours) | double points on the device to padded set, adjacency and the full cells of the n originals on the device | our cell kernel: clip a cube by the bisectors of the listed neighbours (clip_cells.hpp) | 32237857, 32237858, 32237859 | ravg1002 |
+| Paragram | voronoi_diagram (adjacency) | A100-SXM4-40GB | 1 | 4f36b1f (0.1.0, main 2026-09-01) | Voronoi adjacency (neighbour lists) | images: shell of width 0.03125 (4 mean spacings), 418304 extra points (0.199462891 n); 2 max R <= w: yes over all closed cells, yes over the cells of status 0 | float32 (the library takes float32 only; -use_fast_math, its default build) | double points on the device to padded float32 set and adjacency CSR on the device | torch.cuda.synchronize around the Python call; chunking automatic (none at these sizes) | 32237857, 32237858, 32237859, 32370411 | ravg1002, ravg1166 |
+| Paragram | voronoi_diagram + faces from its adjacency (ours) | A100-SXM4-40GB | 1 | 4f36b1f (0.1.0, main 2026-09-01) | Voronoi adjacency; cells (ours): volumes centroids faces areas neighbours | images: shell of width 0.03125 (4 mean spacings), 418304 extra points (0.199462891 n); 2 max R <= w: yes over all closed cells, yes over the cells of status 0 | float32 adjacency (library), cells in double from the double points (ours) | double points on the device to padded set, adjacency and the full cells of the n originals on the device | our cell kernel: clip a cube by the bisectors of the listed neighbours (clip_cells.hpp) | 32237857, 32237858, 32237859, 32370411 | ravg1002, ravg1166 |
 | Qhull | qh_new_qhull(d Qbb Qz Qt) of the padded points; Delaunay | 2x Xeon Platinum 8360Y | 1 | 2020.2 (8.0.2, github.com/qhull/qhull tag v8.0.2, 613debe) | tetrahedra | images: every periodic image within w of the box | double floating point, facet merging (Qt triangulates merged facets); our cells (dual_cells.hpp) double | points in host memory to padded set and tetrahedra in the library's host memory | w = 3 mean spacings = 0.0234375, 308952 images (0.147 n); certificate: circumspheres of tetrahedra at originals reach 1.083 mean spacings beyond the box (exact); 16690096 tetrahedra; flat skipped 0; sum of volumes - 1 = nan; nonpositive volumes 0; faces per cell 0.000; worst closure 0 | 32236471, 32367541 | ravc3719, ravc4031 |
 | Qhull | qh_new_qhull(d Qbb Qz Qt) of the padded points; Delaunay + faces (ours) | 2x Xeon Platinum 8360Y | 1 | 2020.2 (8.0.2, github.com/qhull/qhull tag v8.0.2, 613debe) | tetrahedra; cells (ours): volumes centroids faces areas neighbours | images: every periodic image within w of the box | double floating point, facet merging (Qt triangulates merged facets); our cells (dual_cells.hpp) double | points in host memory to padded set, tetrahedra and the full cells of the n originals in host memory (ours: dual_cells.hpp, OpenMP) | w = 3 mean spacings = 0.0234375, 308952 images (0.147 n); certificate: circumspheres of tetrahedra at originals reach 1.083 mean spacings beyond the box (exact); 16690096 tetrahedra; flat skipped 0; sum of volumes - 1 = -1.9e-14; nonpositive volumes 0; faces per cell 15.908; worst closure 2e-16 | 32236471, 32367541 | ravc3719, ravc4031 |
 | TetGen | tetrahedralize(Qz) of the padded points; Delaunay | 2x Xeon Platinum 8360Y | 1 | 1.6.0 (github.com/TetGen/TetGen tag v1.6.0, 535f9c4) | tetrahedra | images: every periodic image within w of the box | double, exact predicates (Shewchuk); our cells (dual_cells.hpp) double floating point | points in host memory to padded set and tetrahedra in the library's host memory | w = 3 mean spacings = 0.0234375, 308952 images (0.147 n); certificate: circumspheres of tetrahedra at originals reach 1.083 mean spacings beyond the box (exact); 16690096 tetrahedra; flat skipped 0; sum of volumes - 1 = nan; nonpositive volumes 0; faces per cell 0.000; worst closure 0 | 32236470, 32367542 | ravc3232, ravc3356 |
@@ -455,143 +461,223 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | basselin-blue-a100_bluenoise_2097152 | 1000 | 0 | -1.0e-16 | 1.0e-14 | 7.7e-14 | 0 | 0 | 0 |
 | basselin-blue-a100_clustered_16777216 | 1000 | 369 | -4.1e-05 | 5.2e-14 | 9.4e-13 | 0 | 0 | 0 |
 | basselin-blue-a100_clustered_2097152 | 1000 | 889 | -8.6e-04 | 3.0e-14 | inf | 1 | 1 | 1 |
+| basselin-blue-a100_cosmicweb_16777216 | 1000 | 1062168 | -1.2e-01 | 4.0e-14 | inf | 59 | 59 | 59 |
+| basselin-blue-a100_cosmicweb_2097152 | 1000 | 105069 | -7.7e-02 | 1.7e-14 | inf | 48 | 48 | 48 |
+| basselin-blue-a100_fccsolid_1048576 | 1000 | 0 | 3.1e-16 | 8.6e-15 | 5.2e-14 | 0 | 0 | 0 |
+| basselin-blue-a100_fccsolid_8388608 | 1000 | 0 | -1.9e-16 | 1.6e-14 | 8.9e-14 | 0 | 0 | 0 |
 | basselin-blue-a100_halo_16777216 | 1000 | 108073 | -2.1e-02 | 5.0e-14 | inf | 14 | 9 | 9 |
 | basselin-blue-a100_halo_2097152 | 1000 | 28055 | -4.2e-02 | 2.8e-14 | inf | 19 | 19 | 19 |
 | basselin-blue-a100_jittered_16777216 | 1000 | 0 | 2.9e-18 | 2.3e-14 | 1.7e-13 | 0 | 0 | 0 |
 | basselin-blue-a100_jittered_2097152 | 1000 | 0 | -1.0e-16 | 1.3e-14 | 7.2e-14 | 0 | 0 | 0 |
+| basselin-blue-a100_surface_16777216 | 1000 | 16248784 | -1.0e+00 | inf | inf | 974 | 971 | 971 |
+| basselin-blue-a100_surface_2097152 | 1000 | 2030525 | -1.0e+00 | inf | inf | 970 | 970 | 970 |
 | basselin-blue-a100_uniform_16777216 | 1000 | 75 | -8.6e-06 | 2.6e-14 | 2.5e-13 | 0 | 0 | 0 |
 | basselin-blue-a100_uniform_2097152 | 1000 | 19 | -1.9e-05 | 1.4e-14 | 1.3e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_bluenoise_16777216 | 1000 | 0 | -2.0e-17 | 1.8e-14 | 1.3e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_bluenoise_2097152 | 1000 | 0 | -1.0e-16 | 1.0e-14 | 7.7e-14 | 0 | 0 | 0 |
 | basselin-grid-a100_clustered_16777216 | 1000 | 0 | 8.0e-17 | 5.2e-14 | 9.4e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_clustered_2097152 | 1000 | 0 | 9.4e-17 | 3.0e-14 | 4.5e-13 | 0 | 0 | 0 |
+| basselin-grid-a100_cosmicweb_16777216 | 1000 | 74943 | -1.1e-02 | 3.5e-14 | inf | 1 | 1 | 1 |
+| basselin-grid-a100_cosmicweb_2097152 | 1000 | 3327 | -3.1e-03 | 1.6e-14 | inf | 1 | 1 | 1 |
+| basselin-grid-a100_fccsolid_1048576 | 1000 | 0 | 3.1e-16 | 8.6e-15 | 5.2e-14 | 0 | 0 | 0 |
+| basselin-grid-a100_fccsolid_8388608 | 1000 | 0 | -1.9e-16 | 1.6e-14 | 8.9e-14 | 0 | 0 | 0 |
 | basselin-grid-a100_halo_16777216 | 1000 | 21101 | -4.6e-03 | 5.0e-14 | inf | 7 | 2 | 2 |
 | basselin-grid-a100_halo_2097152 | 1000 | 5871 | -9.8e-03 | 2.8e-14 | inf | 8 | 8 | 8 |
 | basselin-grid-a100_jittered_16777216 | 1000 | 0 | 2.9e-18 | 2.3e-14 | 1.7e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_jittered_2097152 | 1000 | 0 | -1.0e-16 | 1.3e-14 | 7.2e-14 | 0 | 0 | 0 |
+| basselin-grid-a100_surface_16777216 | 1000 | 15158923 | -1.0e+00 | inf | inf | 915 | 906 | 906 |
+| basselin-grid-a100_surface_2097152 | 1000 | 1892739 | -9.9e-01 | inf | inf | 916 | 916 | 916 |
 | basselin-grid-a100_uniform_16777216 | 1000 | 0 | -6.5e-17 | 2.6e-14 | 2.5e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_uniform_2097152 | 1000 | 0 | 4.4e-17 | 1.4e-14 | 1.3e-13 | 0 | 0 | 0 |
 | basselin-white-a100_bluenoise_16777216 | 1000 | 0 | -2.0e-17 | 1.8e-14 | 1.3e-13 | 0 | 0 | 0 |
 | basselin-white-a100_bluenoise_2097152 | 1000 | 0 | -1.0e-16 | 1.0e-14 | 7.7e-14 | 0 | 0 | 0 |
 | basselin-white-a100_clustered_16777216 | 1000 | 0 | 8.0e-17 | 5.2e-14 | 9.4e-13 | 0 | 0 | 0 |
 | basselin-white-a100_clustered_2097152 | 1000 | 0 | 9.4e-17 | 3.0e-14 | 4.5e-13 | 0 | 0 | 0 |
+| basselin-white-a100_cosmicweb_16777216 | 1000 | 22316 | -3.5e-03 | 3.5e-14 | 4.2e-13 | 0 | 0 | 0 |
+| basselin-white-a100_cosmicweb_2097152 | 1000 | 673 | -6.6e-04 | 1.6e-14 | 2.9e-13 | 0 | 0 | 0 |
+| basselin-white-a100_fccsolid_1048576 | 1000 | 0 | 3.1e-16 | 8.6e-15 | 5.2e-14 | 0 | 0 | 0 |
+| basselin-white-a100_fccsolid_8388608 | 1000 | 0 | -1.9e-16 | 1.6e-14 | 8.9e-14 | 0 | 0 | 0 |
 | basselin-white-a100_halo_16777216 | 1000 | 6637 | -1.5e-03 | 4.9e-14 | 1.3e-12 | 5 | 0 | 0 |
 | basselin-white-a100_halo_2097152 | 1000 | 2023 | -3.6e-03 | 2.7e-14 | inf | 2 | 2 | 2 |
 | basselin-white-a100_jittered_16777216 | 1000 | 0 | 2.9e-18 | 2.3e-14 | 1.7e-13 | 0 | 0 | 0 |
 | basselin-white-a100_jittered_2097152 | 1000 | 0 | -1.0e-16 | 1.3e-14 | 7.2e-14 | 0 | 0 | 0 |
+| basselin-white-a100_surface_2097152 | 1000 | 1809943 | -9.9e-01 | inf | inf | 886 | 886 | 886 |
 | basselin-white-a100_uniform_16777216 | 1000 | 0 | -6.5e-17 | 2.6e-14 | 2.5e-13 | 0 | 0 | 0 |
 | basselin-white-a100_uniform_2097152 | 1000 | 0 | 4.4e-17 | 1.4e-14 | 1.3e-13 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_bluenoise_16777216 | 1000 | 0 | -5.5e-17 | 2.2e-16 | 1.0e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_bluenoise_2097152 | 1000 | 0 | -7.7e-18 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_clustered_16777216 | 1000 | 0 | 3.5e-17 | 2.2e-16 | 1.4e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_clustered_2097152 | 1000 | 0 | -1.3e-17 | 2.2e-16 | 1.2e-15 | 0 | 0 | 0 |
+| cgal-dt3-par-cpu_cosmicweb_16777216 | 1000 | 0 | -3.4e-17 | 2.1e-16 | 1.2e-15 | 0 | 0 | 0 |
+| cgal-dt3-par-cpu_cosmicweb_2097152 | 1000 | 0 | 4.0e-18 | 2.2e-16 | 1.3e-15 | 0 | 0 | 0 |
+| cgal-dt3-par-cpu_fccsolid_1048576 | 1000 | 0 | -1.9e-18 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
+| cgal-dt3-par-cpu_fccsolid_8388608 | 1000 | 0 | 1.4e-17 | 2.2e-16 | 1.0e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_halo_16777216 | 1000 | 0 | -3.1e-17 | 2.1e-16 | 1.3e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_halo_2097152 | 1000 | 0 | 1.9e-17 | 2.2e-16 | 1.3e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_jittered_16777216 | 1000 | 0 | 2.4e-17 | 2.2e-16 | 1.2e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_jittered_2097152 | 1000 | 0 | -4.2e-18 | 2.2e-16 | 1.6e-15 | 0 | 0 | 0 |
+| cgal-dt3-par-cpu_surface_16777216 | 1000 | 0 | 1.1e-16 | 5.6e-16 | 2.3e-12 | 2 | 0 | 0 |
+| cgal-dt3-par-cpu_surface_2097152 | 1000 | 0 | -1.3e-17 | 7.0e-16 | 2.4e-13 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_uniform_16777216 | 1000 | 0 | 1.3e-17 | 2.1e-16 | 1.2e-15 | 0 | 0 | 0 |
 | cgal-dt3-par-cpu_uniform_2097152 | 1000 | 0 | 3.4e-17 | 2.2e-16 | 1.7e-15 | 0 | 0 | 0 |
 | cgal-p3dt-cpu_bluenoise_2097152 | 1000 | 0 | -8.7e-18 | 2.2e-16 | 1.0e-15 | 0 | 0 | 0 |
 | cgal-p3dt-cpu_clustered_2097152 | 1000 | 0 | -1.3e-17 | 2.1e-16 | 1.1e-15 | 0 | 0 | 0 |
+| cgal-p3dt-cpu_cosmicweb_2097152 | 1000 | 0 | 4.6e-18 | 2.1e-16 | 1.3e-15 | 0 | 0 | 0 |
 | cgal-p3dt-cpu_halo_2097152 | 1000 | 0 | 1.6e-17 | 2.2e-16 | 1.5e-15 | 0 | 0 | 0 |
 | cgal-p3dt-cpu_jittered_2097152 | 1000 | 0 | 1.2e-18 | 2.2e-16 | 1.3e-15 | 0 | 0 | 0 |
 | cgal-p3dt-cpu_jittered_2097152_step2 | 1000 | 0 | -3.5e-17 | 2.2e-16 | 1.3e-15 | 0 | 0 | 0 |
+| cgal-p3dt-cpu_surface_2097152 | 1000 | 0 | -6.0e-18 | 6.6e-16 | 2.5e-13 | 0 | 0 | 0 |
 | cgal-p3dt-cpu_uniform_2097152 | 1000 | 0 | 3.7e-17 | 2.1e-16 | 1.3e-15 | 0 | 0 | 0 |
 | gdel3d-a100_bluenoise_2097152 | 1000 | 0 | -1.1e-17 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
 | gdel3d-a100_clustered_2097152 | 1000 | 0 | -1.2e-17 | 2.3e-16 | 1.2e-15 | 0 | 0 | 0 |
+| gdel3d-a100_cosmicweb_2097152 | 1000 | 0 | 9.8e-19 | 2.2e-16 | 1.4e-15 | 0 | 0 | 0 |
+| gdel3d-a100_fccsolid_1048576 | 1000 | 0 | -7.8e-18 | 2.2e-16 | 9.9e-16 | 0 | 0 | 0 |
 | gdel3d-a100_halo_2097152 | 1000 | 0 | 1.1e-17 | 2.3e-16 | 1.4e-15 | 0 | 0 | 0 |
 | gdel3d-a100_jittered_2097152 | 1000 | 0 | -2.0e-18 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
+| gdel3d-a100_surface_2097152 | 1000 | 0 | 6.6e-05 | 1.0e-15 | 1.3e-02 | 4 | 4 | 1 |
 | gdel3d-a100_uniform_2097152 | 1000 | 0 | 3.3e-17 | 2.3e-16 | 1.7e-15 | 0 | 0 | 0 |
 | geogram-pdel-cpu_bluenoise_16777216 | 1000 | 0 | 3.2e-15 | 6.7e-12 | 6.7e-11 | 882 | 0 | 0 |
 | geogram-pdel-cpu_bluenoise_2097152 | 1000 | 0 | 1.6e-15 | 1.6e-12 | 1.9e-11 | 648 | 0 | 0 |
 | geogram-pdel-cpu_clustered_16777216 | 1000 | 0 | 2.3e-15 | 4.4e-11 | 4.2e-09 | 955 | 0 | 0 |
 | geogram-pdel-cpu_clustered_2097152 | 1000 | 0 | 1.5e-15 | 1.0e-11 | 1.1e-09 | 849 | 0 | 0 |
+| geogram-pdel-cpu_cosmicweb_16777216 | 1000 | 0 | 2.5e-15 | 1.7e-11 | 9.0e-10 | 925 | 0 | 0 |
+| geogram-pdel-cpu_cosmicweb_2097152 | 1000 | 0 | 1.1e-15 | 4.0e-12 | 2.6e-10 | 801 | 0 | 0 |
+| geogram-pdel-cpu_fccsolid_1048576 | 1000 | 0 | 1.0e-15 | 1.1e-12 | 8.9e-12 | 522 | 0 | 0 |
+| geogram-pdel-cpu_fccsolid_8388608 | 1000 | 0 | 2.7e-15 | 4.1e-12 | 4.3e-11 | 848 | 0 | 0 |
 | geogram-pdel-cpu_halo_16777216 | 1000 | 0 | 2.3e-15 | 4.0e-11 | 1.2e-08 | 954 | 0 | 0 |
 | geogram-pdel-cpu_halo_2097152 | 1000 | 0 | 7.6e-16 | 8.1e-12 | 3.6e-09 | 844 | 0 | 0 |
 | geogram-pdel-cpu_jittered_16777216 | 1000 | 0 | 2.3e-15 | 8.7e-12 | 8.9e-11 | 905 | 0 | 0 |
 | geogram-pdel-cpu_jittered_2097152 | 1000 | 0 | 1.1e-15 | 2.0e-12 | 1.7e-11 | 706 | 0 | 0 |
+| geogram-pdel-cpu_surface_16777216 | 1000 | 0 | 3.8e-15 | 1.1e-10 | 7.0e-09 | 987 | 0 | 0 |
+| geogram-pdel-cpu_surface_2097152 | 1000 | 0 | 2.1e-15 | 1.2e-11 | 5.1e-10 | 913 | 0 | 0 |
 | geogram-pdel-cpu_uniform_16777216 | 1000 | 0 | 3.1e-15 | 9.6e-12 | 3.4e-10 | 922 | 0 | 0 |
 | geogram-pdel-cpu_uniform_2097152 | 1000 | 0 | 1.3e-15 | 2.6e-12 | 6.9e-11 | 734 | 0 | 0 |
 | geogram-pdel-nonper-cpu_bluenoise_16777216 | 1000 | 0 | -5.3e-17 | 2.2e-16 | 8.9e-16 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_bluenoise_2097152 | 1000 | 0 | -1.0e-17 | 2.2e-16 | 1.3e-15 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_clustered_16777216 | 1000 | 0 | 4.1e-17 | 2.3e-16 | 1.2e-15 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_clustered_2097152 | 1000 | 0 | -8.9e-18 | 2.3e-16 | 1.4e-15 | 0 | 0 | 0 |
+| geogram-pdel-nonper-cpu_cosmicweb_16777216 | 1000 | 0 | -4.6e-17 | 2.2e-16 | 1.2e-15 | 0 | 0 | 0 |
+| geogram-pdel-nonper-cpu_cosmicweb_2097152 | 1000 | 0 | 3.7e-18 | 2.1e-16 | 1.4e-15 | 0 | 0 | 0 |
+| geogram-pdel-nonper-cpu_fccsolid_1048576 | 1000 | 0 | -7.2e-18 | 2.2e-16 | 1.3e-15 | 0 | 0 | 0 |
+| geogram-pdel-nonper-cpu_fccsolid_8388608 | 1000 | 0 | 1.2e-17 | 2.2e-16 | 9.6e-16 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_halo_16777216 | 1000 | 0 | -3.0e-17 | 2.1e-16 | 1.5e-15 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_halo_2097152 | 1000 | 0 | 1.4e-17 | 2.3e-16 | 1.4e-15 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_jittered_16777216 | 1000 | 0 | 2.9e-17 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_jittered_2097152 | 1000 | 0 | -7.6e-19 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
+| geogram-pdel-nonper-cpu_surface_16777216 | 1000 | 619923 | -1.9e-01 | 7.1e-16 | inf | 38 | 35 | 35 |
+| geogram-pdel-nonper-cpu_surface_2097152 | 1000 | 73860 | -1.2e-01 | 8.3e-16 | inf | 38 | 38 | 38 |
 | geogram-pdel-nonper-cpu_uniform_16777216 | 1000 | 0 | 1.6e-17 | 2.3e-16 | 1.3e-15 | 0 | 0 | 0 |
 | geogram-pdel-nonper-cpu_uniform_2097152 | 1000 | 0 | 3.5e-17 | 2.2e-16 | 1.2e-15 | 0 | 0 | 0 |
 | paragram-a100_bluenoise_16777216 | 1000 | 1 | 2.2e-09 | 2.1e-16 | 8.2e-16 | 0 | 0 | 0 |
 | paragram-a100_bluenoise_2097152 | 1000 | 0 | -1.2e-17 | 2.1e-16 | 8.7e-16 | 0 | 0 | 0 |
 | paragram-a100_clustered_16777216 | 1000 | 13 | 1.1e-07 | 1.8e-16 | 1.4e-15 | 0 | 0 | 0 |
 | paragram-a100_clustered_2097152 | 1000 | 0 | -7.3e-18 | 1.7e-16 | 8.6e-16 | 0 | 0 | 0 |
+| paragram-a100_cosmicweb_16777216 | 1000 | 5 | 1.2e-06 | 1.8e-16 | 1.3e-15 | 0 | 0 | 0 |
+| paragram-a100_cosmicweb_2097152 | 1000 | 0 | 3.5e-07 | 1.7e-16 | 7.8e-15 | 0 | 0 | 0 |
+| paragram-a100_fccsolid_1048576 | 1000 | 0 | -4.6e-18 | 2.1e-16 | 8.6e-16 | 0 | 0 | 0 |
+| paragram-a100_fccsolid_8388608 | 1000 | 0 | 1.1e-17 | 2.1e-16 | 6.7e-16 | 0 | 0 | 0 |
 | paragram-a100_halo_16777216 | 1000 | 38 | 3.5e-09 | 1.8e-16 | 8.9e-16 | 0 | 0 | 0 |
 | paragram-a100_halo_2097152 | 1000 | 2 | 7.0e-11 | 1.8e-16 | 8.6e-16 | 0 | 0 | 0 |
 | paragram-a100_jittered_16777216 | 1000 | 1 | 8.1e-08 | 2.1e-16 | 8.9e-16 | 0 | 0 | 0 |
 | paragram-a100_jittered_2097152 | 1000 | 1 | 4.9e-07 | 2.1e-16 | 1.0e-15 | 0 | 0 | 0 |
+| paragram-a100_surface_2097152 | 1000 | 647 | 3.6e-02 | 3.6e-16 | 7.6e-01 | 71 | 69 | 22 |
 | paragram-a100_uniform_16777216 | 1000 | 2 | 3.6e-08 | 1.8e-16 | 8.2e-16 | 0 | 0 | 0 |
 | paragram-a100_uniform_2097152 | 1000 | 0 | 3.6e-17 | 1.8e-16 | 8.4e-16 | 0 | 0 | 0 |
 | peclet-voro-a100_bluenoise_2097152 | 1000 | 0 | -4.5e-17 | 1.2e-16 | 5.7e-16 | 0 | 0 | 0 |
 | peclet-voro-a100_clustered_2097152 | 1000 | 0 | 3.0e-07 | 1.6e-16 | 6.6e-16 | 0 | 0 | 0 |
+| peclet-voro-a100_cosmicweb_2097152 | 1000 | 0 | 8.6e-09 | 1.4e-16 | 8.2e-16 | 0 | 0 | 0 |
+| peclet-voro-a100_fccsolid_1048576 | 1000 | 0 | -4.2e-17 | 1.2e-16 | 6.4e-16 | 0 | 0 | 0 |
+| peclet-voro-a100_fccsolid_8388608 | 1000 | 0 | -2.5e-17 | 1.2e-16 | 6.0e-16 | 0 | 0 | 0 |
 | peclet-voro-a100_halo_2097152 | 1000 | 33819 | 1.9e-04 | 1.4e-16 | inf | 21 | 21 | 17 |
 | peclet-voro-a100_jittered_2097152 | 1000 | 0 | -3.7e-17 | 1.2e-16 | 6.6e-16 | 0 | 0 | 0 |
 | peclet-voro-a100_jittered_2097152_step10 | 1000 | 0 | -3.6e-15 | 1.2e-16 | 7.6e-12 | 2 | 0 | 0 |
+| peclet-voro-a100_surface_2097152 | 1000 | 707 | 5.4e+01 | 1.3e-15 | inf | 443 | 439 | 369 |
 | peclet-voro-a100_uniform_2097152 | 1000 | 0 | 1.0e-17 | 1.4e-16 | 7.2e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_bluenoise_16777216 | 1000 | 0 | -9.0e-17 | 1.2e-16 | 5.7e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_bluenoise_2097152 | 1000 | 0 | -5.0e-17 | 1.2e-16 | 6.5e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_clustered_16777216 | 1000 | 1 | -4.4e-10 | 1.4e-16 | 7.5e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_clustered_2097152 | 1000 | 49 | -2.6e-07 | 1.5e-16 | 7.6e-16 | 0 | 0 | 0 |
+| peclet-voro-cpu_cosmicweb_16777216 | 1000 | 0 | 7.3e-08 | 1.5e-16 | 7.5e-16 | 0 | 0 | 0 |
+| peclet-voro-cpu_cosmicweb_2097152 | 1000 | 0 | -2.5e-17 | 1.4e-16 | 6.5e-16 | 0 | 0 | 0 |
+| peclet-voro-cpu_fccsolid_1048576 | 1000 | 0 | -4.4e-17 | 1.2e-16 | 6.3e-16 | 0 | 0 | 0 |
+| peclet-voro-cpu_fccsolid_8388608 | 1000 | 0 | -2.7e-17 | 1.2e-16 | 4.7e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_halo_16777216 | 1000 | 506693 | -2.9e-05 | 1.4e-16 | inf | 25 | 25 | 25 |
 | peclet-voro-cpu_halo_2097152 | 1000 | 61887 | -3.7e-05 | 1.5e-16 | inf | 27 | 27 | 27 |
 | peclet-voro-cpu_jittered_16777216 | 1000 | 0 | -9.3e-18 | 1.2e-16 | 6.5e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_jittered_2097152 | 1000 | 0 | -3.5e-17 | 1.2e-16 | 6.6e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_jittered_2097152_step10 | 1000 | 0 | -3.1e-15 | 1.2e-16 | 7.6e-12 | 2 | 0 | 0 |
+| peclet-voro-cpu_surface_16777216 | 1000 | 13976 | 6.3e+01 | 5.9e-16 | inf | 185 | 181 | 165 |
+| peclet-voro-cpu_surface_2097152 | 1000 | 1021 | 3.1e+01 | 9.7e-16 | inf | 360 | 355 | 268 |
 | peclet-voro-cpu_uniform_16777216 | 1000 | 0 | -1.0e-17 | 1.4e-16 | 6.6e-16 | 0 | 0 | 0 |
 | peclet-voro-cpu_uniform_2097152 | 1000 | 0 | 1.1e-17 | 1.4e-16 | 5.7e-16 | 0 | 0 | 0 |
 | qhull-cpu_bluenoise_2097152 | 1000 | 0 | -6.9e-18 | 2.2e-16 | 1.0e-15 | 0 | 0 | 0 |
 | qhull-cpu_clustered_2097152 | 1000 | 0 | -9.1e-18 | 2.2e-16 | 1.4e-15 | 0 | 0 | 0 |
+| qhull-cpu_cosmicweb_2097152 | 1000 | 0 | 1.7e-18 | 2.2e-16 | 1.4e-15 | 0 | 0 | 0 |
+| qhull-cpu_fccsolid_1048576 | 1000 | 0 | -1.1e-18 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
 | qhull-cpu_halo_2097152 | 1000 | 0 | 2.0e-17 | 2.2e-16 | 1.5e-15 | 0 | 0 | 0 |
 | qhull-cpu_jittered_2097152 | 1000 | 0 | 9.8e-19 | 2.2e-16 | 1.3e-15 | 0 | 0 | 0 |
+| qhull-cpu_surface_2097152 | 1000 | 0 | -1.8e-18 | 6.7e-16 | 1.1e-12 | 1 | 0 | 0 |
 | qhull-cpu_uniform_2097152 | 1000 | 0 | 4.1e-17 | 2.3e-16 | 1.3e-15 | 0 | 0 | 0 |
 | tetgen-cpu_bluenoise_2097152 | 1000 | 0 | -6.8e-18 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
 | tetgen-cpu_clustered_2097152 | 1000 | 0 | -8.9e-18 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
+| tetgen-cpu_cosmicweb_2097152 | 1000 | 0 | 2.9e-18 | 2.0e-16 | 1.1e-15 | 0 | 0 | 0 |
+| tetgen-cpu_fccsolid_1048576 | 1000 | 0 | -4.4e-18 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
 | tetgen-cpu_halo_2097152 | 1000 | 0 | 1.5e-17 | 2.2e-16 | 1.2e-15 | 0 | 0 | 0 |
 | tetgen-cpu_jittered_2097152 | 1000 | 0 | -8.7e-19 | 2.2e-16 | 1.2e-15 | 0 | 0 | 0 |
+| tetgen-cpu_surface_2097152 | 1000 | 0 | -8.3e-18 | 6.1e-16 | 2.0e-13 | 0 | 0 | 0 |
 | tetgen-cpu_uniform_2097152 | 1000 | 0 | 3.0e-17 | 2.2e-16 | 1.1e-15 | 0 | 0 | 0 |
 | vorogpu-k190-a100_bluenoise_2097152 | 1000 | 0 | -2.7e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | vorogpu-k190-a100_clustered_2097152 | 1000 | 164 | -1.7e-04 | 1.3e-05 | 2.4e-04 | 1000 | 945 | 0 |
+| vorogpu-k190-a100_cosmicweb_2097152 | 1000 | 49829 | -3.8e-02 | 7.9e-06 | inf | 1000 | 917 | 16 |
 | vorogpu-k190-a100_halo_2097152 | 1000 | 21471 | -3.4e-02 | 1.4e-05 | inf | 1000 | 945 | 16 |
 | vorogpu-k190-a100_jittered_2097152 | 1000 | 3 | -1.4e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| vorogpu-k190-a100_surface_2097152 | 1000 | 2006292 | -1.0e+00 | inf | inf | 1000 | 1000 | 962 |
 | vorogpu-k190-a100_uniform_2097152 | 1000 | 0 | -3.0e-09 | 6.5e-06 | 6.9e-05 | 1000 | 887 | 0 |
 | vorogpu-k35-a100_bluenoise_16777216 | 1000 | 1 | -5.8e-08 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | vorogpu-k35-a100_bluenoise_2097152 | 1000 | 0 | -2.7e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | vorogpu-k35-a100_clustered_16777216 | 1000 | 11833219 | -7.9e-01 | inf | inf | 1000 | 990 | 704 |
 | vorogpu-k35-a100_clustered_2097152 | 1000 | 1494725 | -7.9e-01 | inf | inf | 1000 | 985 | 701 |
+| vorogpu-k35-a100_cosmicweb_16777216 | 1000 | 13399276 | -8.9e-01 | inf | inf | 1000 | 994 | 799 |
+| vorogpu-k35-a100_cosmicweb_2097152 | 1000 | 1684941 | -8.8e-01 | inf | inf | 1000 | 988 | 813 |
+| vorogpu-k35-a100_fccsolid_1048576 | 1000 | 0 | 2.0e-10 | 3.8e-06 | 2.3e-05 | 1000 | 878 | 0 |
+| vorogpu-k35-a100_fccsolid_8388608 | 1000 | 3 | -3.6e-07 | 7.1e-06 | 4.1e-05 | 1000 | 921 | 0 |
 | vorogpu-k35-a100_halo_16777216 | 1000 | 11829919 | -7.9e-01 | inf | inf | 1000 | 994 | 697 |
 | vorogpu-k35-a100_halo_2097152 | 1000 | 1491150 | -8.0e-01 | inf | inf | 1000 | 986 | 701 |
 | vorogpu-k35-a100_jittered_16777216 | 1000 | 70 | -4.2e-06 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | vorogpu-k35-a100_jittered_2097152 | 1000 | 4 | -2.0e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| vorogpu-k35-a100_surface_16777216 | 1000 | 16728797 | -1.0e+00 | inf | inf | 1000 | 1000 | 998 |
+| vorogpu-k35-a100_surface_2097152 | 1000 | 2091084 | -1.0e+00 | inf | inf | 1000 | 1000 | 996 |
 | vorogpu-k35-a100_uniform_16777216 | 1000 | 11777804 | -7.9e-01 | inf | inf | 1000 | 984 | 687 |
 | vorogpu-k35-a100_uniform_2097152 | 1000 | 1473051 | -7.9e-01 | inf | inf | 1000 | 968 | 684 |
 | vorogpu-k90-a100_bluenoise_16777216 | 1000 | 0 | 1.8e-07 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | vorogpu-k90-a100_bluenoise_2097152 | 1000 | 0 | -2.7e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | vorogpu-k90-a100_clustered_16777216 | 1000 | 113331 | -1.0e-02 | 2.4e-05 | inf | 1000 | 969 | 4 |
 | vorogpu-k90-a100_clustered_2097152 | 1000 | 26077 | -1.8e-02 | 1.3e-05 | inf | 1000 | 947 | 15 |
+| vorogpu-k90-a100_cosmicweb_16777216 | 1000 | 3242987 | -3.3e-01 | 2.3e-05 | inf | 1000 | 962 | 187 |
+| vorogpu-k90-a100_cosmicweb_2097152 | 1000 | 397981 | -2.6e-01 | 1.1e-05 | inf | 1000 | 931 | 186 |
+| vorogpu-k90-a100_fccsolid_1048576 | 1000 | 0 | 2.0e-10 | 3.8e-06 | 2.3e-05 | 1000 | 878 | 0 |
+| vorogpu-k90-a100_fccsolid_8388608 | 1000 | 0 | 1.1e-06 | 7.1e-06 | 4.1e-05 | 1000 | 921 | 0 |
 | vorogpu-k90-a100_halo_16777216 | 1000 | 257818 | -3.8e-02 | 2.6e-05 | inf | 1000 | 986 | 23 |
 | vorogpu-k90-a100_halo_2097152 | 1000 | 55778 | -6.8e-02 | 1.4e-05 | inf | 1000 | 945 | 32 |
 | vorogpu-k90-a100_jittered_16777216 | 1000 | 56 | -1.1e-06 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | vorogpu-k90-a100_jittered_2097152 | 1000 | 3 | -1.4e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| vorogpu-k90-a100_surface_16777216 | 1000 | 16524230 | -1.0e+00 | inf | inf | 1000 | 1000 | 983 |
+| vorogpu-k90-a100_surface_2097152 | 1000 | 2065069 | -1.0e+00 | inf | inf | 1000 | 1000 | 986 |
 | vorogpu-k90-a100_uniform_16777216 | 1000 | 90860 | -8.7e-03 | 1.2e-05 | inf | 1000 | 956 | 5 |
 | vorogpu-k90-a100_uniform_2097152 | 1000 | 11213 | -8.6e-03 | 6.6e-06 | inf | 1000 | 887 | 7 |
 | voronoi-cpp-exact-a100_bluenoise_16777216 | 1000 | 0 | -8.2e-17 | 2.2e-15 | 2.2e-14 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_bluenoise_2097152 | 1000 | 0 | -4.9e-17 | 1.1e-15 | 7.8e-15 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_clustered_16777216 | 1000 | 0 | 5.7e-18 | 5.0e-15 | 5.7e-14 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_clustered_2097152 | 1000 | 0 | -4.0e-17 | 2.6e-15 | 2.8e-14 | 0 | 0 | 0 |
+| voronoi-cpp-exact-a100_cosmicweb_16777216 | 1000 | 0 | -6.1e-17 | 3.6e-15 | 3.8e-14 | 0 | 0 | 0 |
+| voronoi-cpp-exact-a100_cosmicweb_2097152 | 1000 | 0 | -3.2e-17 | 1.5e-15 | 1.7e-14 | 0 | 0 | 0 |
+| voronoi-cpp-exact-a100_fccsolid_1048576 | 1000 | 0 | -4.9e-17 | 9.3e-16 | 4.6e-15 | 0 | 0 | 0 |
+| voronoi-cpp-exact-a100_fccsolid_8388608 | 1000 | 0 | -9.1e-18 | 1.9e-15 | 1.0e-14 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_halo_16777216 | 1000 | 0 | -5.0e-17 | 5.2e-15 | 1.2e-13 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_halo_2097152 | 1000 | 0 | -1.4e-17 | 2.3e-15 | 1.5e-13 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_jittered_16777216 | 1000 | 0 | 5.6e-18 | 2.5e-15 | 1.7e-14 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_jittered_2097152 | 1000 | 0 | -3.1e-17 | 1.2e-15 | 8.3e-15 | 0 | 0 | 0 |
+| voronoi-cpp-exact-a100_surface_2097152 | 1000 | 0 | -2.4e-17 | 3.2e-15 | 1.4e-13 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_uniform_16777216 | 1000 | 0 | -2.1e-17 | 2.5e-15 | 2.1e-14 | 0 | 0 | 0 |
 | voronoi-cpp-exact-a100_uniform_2097152 | 1000 | 0 | -1.5e-17 | 1.3e-15 | 1.0e-14 | 0 | 0 | 0 |
 | voronoi-cpp-exact-cpu1_bluenoise_2097152 | 1000 | 0 | -4.9e-17 | 1.1e-15 | 7.8e-15 | 0 | 0 | 0 |
@@ -609,17 +695,25 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | voronoi-cpp-exact-cpu72_jittered_2097152 | 1000 | 0 | -3.1e-17 | 1.2e-15 | 8.3e-15 | 0 | 0 | 0 |
 | voronoi-cpp-exact-cpu72_uniform_16777216 | 1000 | 0 | -2.1e-17 | 2.5e-15 | 2.1e-14 | 0 | 0 | 0 |
 | voronoi-cpp-exact-cpu72_uniform_2097152 | 1000 | 0 | -1.5e-17 | 1.3e-15 | 1.0e-14 | 0 | 0 | 0 |
+| voronoi-cpp-step-a100_cosmicweb_2097152_step10 | 1000 | 0 | -2.4e-17 | 1.5e-15 | 2.8e-14 | 0 | 0 | 0 |
+| voronoi-cpp-step-a100_fccsolid_1048576_step10 | 1000 | 0 | -3.5e-17 | 9.2e-16 | 5.1e-15 | 0 | 0 | 0 |
 | voronoi-cpp-step-a100_jittered_2097152_step10 | 1000 | 0 | -3.4e-17 | 1.2e-15 | 7.5e-15 | 0 | 0 | 0 |
+| voronoi-cpp-step-a100_surface_2097152_step10 | 1000 | 0 | -1.6e-17 | 3.5e-15 | 2.3e-13 | 0 | 0 | 0 |
 | voronoi-cpp-step-cpu1_jittered_2097152_step10 | 1000 | 0 | -3.4e-17 | 1.2e-15 | 7.5e-15 | 0 | 0 | 0 |
 | voronoi-cpp-step-cpu72_jittered_2097152_step10 | 1000 | 0 | -3.4e-17 | 1.2e-15 | 7.5e-15 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_bluenoise_16777216 | 1000 | 0 | -9.7e-17 | 2.4e-15 | 1.5e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_bluenoise_2097152 | 1000 | 0 | -6.2e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_clustered_16777216 | 1000 | 0 | -9.4e-18 | 7.3e-15 | 9.8e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.3e-15 | 5.0e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_cosmicweb_16777216 | 1000 | 0 | -8.9e-17 | 3.5e-15 | 5.9e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_cosmicweb_2097152 | 1000 | 0 | -5.5e-17 | 1.6e-15 | 2.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_fccsolid_1048576 | 1000 | 0 | -6.0e-17 | 1.3e-15 | 8.6e-15 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_fccsolid_8388608 | 1000 | 0 | -2.2e-17 | 2.4e-15 | 1.4e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_halo_16777216 | 1000 | 0 | -8.3e-17 | 6.2e-15 | 1.6e-13 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_halo_2097152 | 1000 | 0 | -8.2e-17 | 3.1e-15 | 7.3e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_jittered_16777216 | 1000 | 0 | -5.6e-17 | 4.9e-15 | 2.6e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_jittered_2097152 | 1000 | 0 | -7.3e-17 | 2.2e-15 | 1.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_surface_2097152 | 1000 | 476 | -1.1e-03 | 2.2e-15 | 1.2e-13 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_uniform_16777216 | 1000 | 0 | -4.5e-17 | 3.6e-15 | 3.5e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_uniform_2097152 | 1000 | 0 | -3.2e-17 | 1.7e-15 | 1.7e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-cpu1_bluenoise_2097152 | 1000 | 0 | -1.2e-17 | 2.1e-16 | 6.8e-16 | 0 | 0 | 0 |
@@ -641,16 +735,25 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | voronoi-cpp-warp-host-a100_bluenoise_2097152 | 1000 | 0 | -6.2e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_clustered_16777216 | 1000 | 0 | -9.4e-18 | 7.3e-15 | 9.8e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.3e-15 | 5.0e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_cosmicweb_16777216 | 1000 | 0 | -8.9e-17 | 3.5e-15 | 5.9e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_cosmicweb_2097152 | 1000 | 0 | -5.5e-17 | 1.6e-15 | 2.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_fccsolid_1048576 | 1000 | 0 | -6.0e-17 | 1.3e-15 | 8.6e-15 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_fccsolid_8388608 | 1000 | 0 | -2.2e-17 | 2.4e-15 | 1.4e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_halo_16777216 | 1000 | 0 | -8.3e-17 | 6.2e-15 | 1.6e-13 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_halo_2097152 | 1000 | 0 | -8.2e-17 | 3.1e-15 | 7.3e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_jittered_16777216 | 1000 | 0 | -5.6e-17 | 4.9e-15 | 2.6e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_jittered_2097152 | 1000 | 0 | -7.3e-17 | 2.2e-15 | 1.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_surface_2097152 | 1000 | 476 | -1.1e-03 | 2.2e-15 | 1.2e-13 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_uniform_16777216 | 1000 | 0 | -4.5e-17 | 3.6e-15 | 3.5e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_uniform_2097152 | 1000 | 0 | -3.2e-17 | 1.7e-15 | 1.7e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-vc-a100_bluenoise_16777216 | 1000 | 0 | -9.7e-17 | 2.4e-15 | 1.5e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-vc-a100_bluenoise_2097152 | 1000 | 0 | -6.2e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-vc-a100_clustered_16777216 | 1000 | 0 | -9.4e-18 | 7.3e-15 | 9.8e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-vc-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.3e-15 | 5.0e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_cosmicweb_16777216 | 1000 | 0 | -8.9e-17 | 3.5e-15 | 5.9e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_cosmicweb_2097152 | 1000 | 0 | -5.5e-17 | 1.6e-15 | 2.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_fccsolid_1048576 | 1000 | 0 | -6.0e-17 | 1.3e-15 | 8.6e-15 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_fccsolid_8388608 | 1000 | 0 | -2.2e-17 | 2.4e-15 | 1.4e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-vc-a100_halo_16777216 | 1000 | 0 | -8.3e-17 | 6.2e-15 | 1.6e-13 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-vc-a100_halo_2097152 | 1000 | 0 | -8.2e-17 | 3.1e-15 | 7.3e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-vc-a100_jittered_16777216 | 1000 | 0 | -5.6e-17 | 4.9e-15 | 2.6e-14 | 0 | 0 | 0 |
@@ -661,76 +764,121 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | voronoi-gpu-liu-p0-a100_bluenoise_2097152 | 1000 | 0 | -2.7e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | voronoi-gpu-liu-p0-a100_clustered_16777216 | 1000 | 180752 | -1.1e-02 | 6.2e-05 | inf | 1000 | 976 | 331 |
 | voronoi-gpu-liu-p0-a100_clustered_2097152 | 1000 | 26088 | -1.8e-02 | 1.4e-05 | inf | 1000 | 948 | 43 |
+| voronoi-gpu-liu-p0-a100_cosmicweb_16777216 | 1000 | 3244044 | -3.3e-01 | 2.6e-05 | inf | 1000 | 964 | 227 |
+| voronoi-gpu-liu-p0-a100_cosmicweb_2097152 | 1000 | 397983 | -2.6e-01 | 1.1e-05 | inf | 1000 | 931 | 188 |
+| voronoi-gpu-liu-p0-a100_fccsolid_1048576 | 1000 | 0 | 2.0e-10 | 3.8e-06 | 2.3e-05 | 1000 | 878 | 0 |
+| voronoi-gpu-liu-p0-a100_fccsolid_8388608 | 1000 | 0 | 1.1e-06 | 7.1e-06 | 4.1e-05 | 1000 | 921 | 0 |
 | voronoi-gpu-liu-p0-a100_halo_16777216 | 1000 | 1586657 | -3.8e-02 | 3.8e-05 | inf | 1000 | 987 | 251 |
 | voronoi-gpu-liu-p0-a100_halo_2097152 | 1000 | 103092 | -6.8e-02 | 1.5e-05 | inf | 1000 | 946 | 113 |
 | voronoi-gpu-liu-p0-a100_jittered_16777216 | 1000 | 51 | 2.9e-07 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | voronoi-gpu-liu-p0-a100_jittered_2097152 | 1000 | 3 | -1.4e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| voronoi-gpu-liu-p0-a100_surface_16777216 | 1000 | 16665847 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
+| voronoi-gpu-liu-p0-a100_surface_2097152 | 1000 | 2065129 | -1.0e+00 | inf | inf | 1000 | 1000 | 994 |
 | voronoi-gpu-liu-p0-a100_uniform_16777216 | 1000 | 90860 | -8.7e-03 | 1.2e-05 | inf | 1000 | 956 | 6 |
 | voronoi-gpu-liu-p0-a100_uniform_2097152 | 1000 | 11213 | -8.6e-03 | 6.6e-06 | inf | 1000 | 887 | 7 |
 | voronoi-gpu-liu-p1-a100_bluenoise_16777216 | 1000 | 0 | 1.8e-07 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | voronoi-gpu-liu-p1-a100_bluenoise_2097152 | 1000 | 0 | -2.7e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | voronoi-gpu-liu-p1-a100_clustered_16777216 | 1000 | 180754 | -1.1e-02 | 6.2e-05 | inf | 1000 | 976 | 331 |
 | voronoi-gpu-liu-p1-a100_clustered_2097152 | 1000 | 26088 | -1.8e-02 | 1.4e-05 | inf | 1000 | 948 | 43 |
+| voronoi-gpu-liu-p1-a100_cosmicweb_16777216 | 1000 | 3244045 | -3.3e-01 | 2.6e-05 | inf | 1000 | 964 | 227 |
+| voronoi-gpu-liu-p1-a100_cosmicweb_2097152 | 1000 | 397983 | -2.6e-01 | 1.1e-05 | inf | 1000 | 931 | 188 |
+| voronoi-gpu-liu-p1-a100_fccsolid_1048576 | 1000 | 0 | 2.0e-10 | 3.8e-06 | 2.3e-05 | 1000 | 878 | 0 |
+| voronoi-gpu-liu-p1-a100_fccsolid_8388608 | 1000 | 0 | 1.1e-06 | 7.1e-06 | 4.1e-05 | 1000 | 921 | 0 |
 | voronoi-gpu-liu-p1-a100_halo_16777216 | 1000 | 1586660 | -3.8e-02 | 3.8e-05 | inf | 1000 | 987 | 251 |
 | voronoi-gpu-liu-p1-a100_halo_2097152 | 1000 | 103092 | -6.8e-02 | 1.5e-05 | inf | 1000 | 946 | 113 |
 | voronoi-gpu-liu-p1-a100_jittered_16777216 | 1000 | 56 | -1.1e-06 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | voronoi-gpu-liu-p1-a100_jittered_2097152 | 1000 | 3 | -1.4e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| voronoi-gpu-liu-p1-a100_surface_16777216 | 1000 | 16665847 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
+| voronoi-gpu-liu-p1-a100_surface_2097152 | 1000 | 2065129 | -1.0e+00 | inf | inf | 1000 | 1000 | 994 |
 | voronoi-gpu-liu-p1-a100_uniform_16777216 | 1000 | 90860 | -8.7e-03 | 1.2e-05 | inf | 1000 | 956 | 6 |
 | voronoi-gpu-liu-p1-a100_uniform_2097152 | 1000 | 11213 | -8.6e-03 | 6.6e-06 | inf | 1000 | 887 | 7 |
 | voronoi-gpu-liu-p2-a100_bluenoise_16777216 | 1000 | 1 | -5.8e-08 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | voronoi-gpu-liu-p2-a100_bluenoise_2097152 | 1000 | 0 | -2.7e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | voronoi-gpu-liu-p2-a100_clustered_16777216 | 1000 | 11892517 | -7.9e-01 | inf | inf | 1000 | 991 | 826 |
 | voronoi-gpu-liu-p2-a100_clustered_2097152 | 1000 | 1494734 | -7.9e-01 | inf | inf | 1000 | 985 | 719 |
+| voronoi-gpu-liu-p2-a100_cosmicweb_16777216 | 1000 | 13400262 | -8.9e-01 | inf | inf | 1000 | 994 | 816 |
+| voronoi-gpu-liu-p2-a100_cosmicweb_2097152 | 1000 | 1684943 | -8.8e-01 | inf | inf | 1000 | 988 | 814 |
+| voronoi-gpu-liu-p2-a100_fccsolid_1048576 | 1000 | 0 | 2.0e-10 | 3.8e-06 | 2.3e-05 | 1000 | 878 | 0 |
+| voronoi-gpu-liu-p2-a100_fccsolid_8388608 | 1000 | 3 | -3.6e-07 | 7.1e-06 | 4.1e-05 | 1000 | 921 | 0 |
 | voronoi-gpu-liu-p2-a100_halo_16777216 | 1000 | 12311616 | -7.9e-01 | inf | inf | 1000 | 994 | 778 |
 | voronoi-gpu-liu-p2-a100_halo_2097152 | 1000 | 1508817 | -8.0e-01 | inf | inf | 1000 | 986 | 732 |
 | voronoi-gpu-liu-p2-a100_jittered_16777216 | 1000 | 70 | -4.2e-06 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | voronoi-gpu-liu-p2-a100_jittered_2097152 | 1000 | 4 | -2.0e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| voronoi-gpu-liu-p2-a100_surface_16777216 | 1000 | 16771262 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
+| voronoi-gpu-liu-p2-a100_surface_2097152 | 1000 | 2091134 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
 | voronoi-gpu-liu-p2-a100_uniform_16777216 | 1000 | 11777804 | -7.9e-01 | inf | inf | 1000 | 984 | 687 |
 | voronoi-gpu-liu-p2-a100_uniform_2097152 | 1000 | 1473051 | -7.9e-01 | inf | inf | 1000 | 968 | 684 |
 | voronoi-gpu-liu-tet-p0-a100_bluenoise_16777216 | 1000 | 0 | 1.8e-07 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | voronoi-gpu-liu-tet-p0-a100_bluenoise_2097152 | 1000 | 0 | -2.6e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | voronoi-gpu-liu-tet-p0-a100_clustered_16777216 | 1000 | 180752 | -1.1e-02 | 6.2e-05 | inf | 1000 | 976 | 331 |
 | voronoi-gpu-liu-tet-p0-a100_clustered_2097152 | 1000 | 26088 | -1.8e-02 | 1.4e-05 | inf | 1000 | 948 | 43 |
+| voronoi-gpu-liu-tet-p0-a100_cosmicweb_16777216 | 1000 | 3244044 | -3.3e-01 | 2.6e-05 | inf | 1000 | 964 | 227 |
+| voronoi-gpu-liu-tet-p0-a100_cosmicweb_2097152 | 1000 | 397983 | -2.6e-01 | 1.1e-05 | inf | 1000 | 930 | 188 |
+| voronoi-gpu-liu-tet-p0-a100_fccsolid_1048576 | 1000 | 0 | 2.2e-10 | 3.8e-06 | 2.3e-05 | 1000 | 880 | 0 |
+| voronoi-gpu-liu-tet-p0-a100_fccsolid_8388608 | 1000 | 0 | 1.1e-06 | 7.1e-06 | 4.1e-05 | 1000 | 923 | 0 |
 | voronoi-gpu-liu-tet-p0-a100_halo_16777216 | 1000 | 1586657 | -3.8e-02 | 3.8e-05 | inf | 1000 | 987 | 251 |
 | voronoi-gpu-liu-tet-p0-a100_halo_2097152 | 1000 | 103092 | -6.8e-02 | 1.5e-05 | inf | 1000 | 945 | 113 |
 | voronoi-gpu-liu-tet-p0-a100_jittered_16777216 | 1000 | 51 | 2.9e-07 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | voronoi-gpu-liu-tet-p0-a100_jittered_2097152 | 1000 | 3 | -1.4e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| voronoi-gpu-liu-tet-p0-a100_surface_16777216 | 1000 | 16665847 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
+| voronoi-gpu-liu-tet-p0-a100_surface_2097152 | 1000 | 2065129 | -1.0e+00 | inf | inf | 1000 | 1000 | 994 |
 | voronoi-gpu-liu-tet-p0-a100_uniform_16777216 | 1000 | 90860 | -8.7e-03 | 1.2e-05 | inf | 1000 | 956 | 6 |
 | voronoi-gpu-liu-tet-p0-a100_uniform_2097152 | 1000 | 11213 | -8.6e-03 | 6.6e-06 | inf | 1000 | 886 | 7 |
 | voronoi-gpu-liu-tet-p1-a100_bluenoise_16777216 | 1000 | 0 | 1.8e-07 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | voronoi-gpu-liu-tet-p1-a100_bluenoise_2097152 | 1000 | 0 | -2.6e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | voronoi-gpu-liu-tet-p1-a100_clustered_16777216 | 1000 | 180753 | -1.1e-02 | 6.2e-05 | inf | 1000 | 976 | 331 |
 | voronoi-gpu-liu-tet-p1-a100_clustered_2097152 | 1000 | 26088 | -1.8e-02 | 1.4e-05 | inf | 1000 | 948 | 43 |
+| voronoi-gpu-liu-tet-p1-a100_cosmicweb_16777216 | 1000 | 3244044 | -3.3e-01 | 2.6e-05 | inf | 1000 | 964 | 227 |
+| voronoi-gpu-liu-tet-p1-a100_cosmicweb_2097152 | 1000 | 397983 | -2.6e-01 | 1.1e-05 | inf | 1000 | 930 | 188 |
+| voronoi-gpu-liu-tet-p1-a100_fccsolid_1048576 | 1000 | 0 | 2.2e-10 | 3.8e-06 | 2.3e-05 | 1000 | 880 | 0 |
+| voronoi-gpu-liu-tet-p1-a100_fccsolid_8388608 | 1000 | 0 | 1.1e-06 | 7.1e-06 | 4.1e-05 | 1000 | 923 | 0 |
 | voronoi-gpu-liu-tet-p1-a100_halo_16777216 | 1000 | 1586659 | -3.8e-02 | 3.8e-05 | inf | 1000 | 987 | 251 |
 | voronoi-gpu-liu-tet-p1-a100_halo_2097152 | 1000 | 103092 | -6.8e-02 | 1.5e-05 | inf | 1000 | 945 | 113 |
 | voronoi-gpu-liu-tet-p1-a100_jittered_16777216 | 1000 | 55 | -8.8e-07 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | voronoi-gpu-liu-tet-p1-a100_jittered_2097152 | 1000 | 3 | -1.4e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| voronoi-gpu-liu-tet-p1-a100_surface_16777216 | 1000 | 16665847 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
+| voronoi-gpu-liu-tet-p1-a100_surface_2097152 | 1000 | 2065129 | -1.0e+00 | inf | inf | 1000 | 1000 | 994 |
 | voronoi-gpu-liu-tet-p1-a100_uniform_16777216 | 1000 | 90860 | -8.7e-03 | 1.2e-05 | inf | 1000 | 956 | 6 |
 | voronoi-gpu-liu-tet-p1-a100_uniform_2097152 | 1000 | 11213 | -8.6e-03 | 6.6e-06 | inf | 1000 | 886 | 7 |
 | voronoi-gpu-liu-tet-p2-a100_bluenoise_16777216 | 1000 | 1 | -5.8e-08 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | voronoi-gpu-liu-tet-p2-a100_bluenoise_2097152 | 1000 | 0 | -2.6e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | voronoi-gpu-liu-tet-p2-a100_clustered_16777216 | 1000 | 11892364 | -7.9e-01 | inf | inf | 1000 | 991 | 826 |
 | voronoi-gpu-liu-tet-p2-a100_clustered_2097152 | 1000 | 1494713 | -7.9e-01 | inf | inf | 1000 | 985 | 719 |
+| voronoi-gpu-liu-tet-p2-a100_cosmicweb_16777216 | 1000 | 13400215 | -8.9e-01 | inf | inf | 1000 | 994 | 816 |
+| voronoi-gpu-liu-tet-p2-a100_cosmicweb_2097152 | 1000 | 1684936 | -8.8e-01 | inf | inf | 1000 | 988 | 814 |
+| voronoi-gpu-liu-tet-p2-a100_fccsolid_1048576 | 1000 | 0 | 2.2e-10 | 3.8e-06 | 2.3e-05 | 1000 | 880 | 0 |
+| voronoi-gpu-liu-tet-p2-a100_fccsolid_8388608 | 1000 | 3 | -3.6e-07 | 7.1e-06 | 4.1e-05 | 1000 | 923 | 0 |
 | voronoi-gpu-liu-tet-p2-a100_halo_16777216 | 1000 | 12311440 | -7.9e-01 | inf | inf | 1000 | 994 | 778 |
 | voronoi-gpu-liu-tet-p2-a100_halo_2097152 | 1000 | 1508800 | -8.0e-01 | inf | inf | 1000 | 985 | 732 |
 | voronoi-gpu-liu-tet-p2-a100_jittered_16777216 | 1000 | 68 | -4.1e-06 | 1.2e-05 | 7.0e-05 | 1000 | 945 | 0 |
 | voronoi-gpu-liu-tet-p2-a100_jittered_2097152 | 1000 | 3 | -1.4e-06 | 5.5e-06 | 4.1e-05 | 1000 | 918 | 0 |
+| voronoi-gpu-liu-tet-p2-a100_surface_16777216 | 1000 | 16771262 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
+| voronoi-gpu-liu-tet-p2-a100_surface_2097152 | 1000 | 2091134 | -1.0e+00 | inf | inf | 1000 | 1000 | 1000 |
 | voronoi-gpu-liu-tet-p2-a100_uniform_16777216 | 1000 | 11777632 | -7.9e-01 | inf | inf | 1000 | 984 | 687 |
 | voronoi-gpu-liu-tet-p2-a100_uniform_2097152 | 1000 | 1473026 | -7.9e-01 | inf | inf | 1000 | 968 | 684 |
 | voropp-cpu_bluenoise_2097152 | 1000 | 0 | -1.3e-16 | 1.9e-15 | 1.5e-14 | 0 | 0 | 0 |
+| voropp-cpu_cosmicweb_2097152 | 1000 | 0 | -3.1e-17 | 2.0e-15 | 6.9e-14 | 0 | 0 | 0 |
 | voropp-cpu_jittered_2097152 | 1000 | 0 | 8.9e-17 | 2.8e-15 | 1.6e-14 | 0 | 0 | 0 |
+| voropp-cpu_surface_2097152 | 1000 | 0 | -1.1e-17 | 1.4e-15 | 6.7e-14 | 0 | 0 | 0 |
 | voropp-cpu_uniform_2097152 | 1000 | 0 | -2.8e-17 | 2.3e-15 | 2.9e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_bluenoise_16777216 | 1000 | 0 | -1.0e-16 | 3.6e-15 | 3.0e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_bluenoise_2097152 | 1000 | 0 | -3.6e-16 | 2.0e-15 | 1.6e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_clustered_16777216 | 1000 | 0 | -1.3e-16 | 6.2e-16 | 6.1e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_clustered_2097152 | 1000 | 0 | -4.0e-16 | 4.4e-16 | 5.4e-14 | 0 | 0 | 0 |
+| voropp-mt-cpu_cosmicweb_16777216 | 1000 | 0 | -1.7e-16 | 2.9e-15 | 5.1e-14 | 0 | 0 | 0 |
+| voropp-mt-cpu_cosmicweb_2097152 | 1000 | 0 | -3.0e-16 | 1.9e-15 | 5.3e-14 | 0 | 0 | 0 |
+| voropp-mt-cpu_fccsolid_1048576 | 1000 | 0 | -3.7e-16 | 1.8e-15 | 1.1e-14 | 0 | 0 | 0 |
+| voropp-mt-cpu_fccsolid_8388608 | 1000 | 0 | -2.0e-16 | 3.5e-15 | 1.7e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_halo_16777216 | 1000 | 0 | -2.6e-16 | 9.4e-16 | 7.8e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_halo_2097152 | 1000 | 0 | -3.5e-16 | 6.8e-16 | 6.1e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_jittered_16777216 | 1000 | 0 | -2.0e-17 | 4.2e-15 | 3.4e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_jittered_2097152 | 1000 | 0 | -5.2e-16 | 2.4e-15 | 2.2e-14 | 0 | 0 | 0 |
+| voropp-mt-cpu_surface_16777216 | 1000 | 0 | 8.3e-17 | 1.7e-15 | 1.3e-13 | 0 | 0 | 0 |
+| voropp-mt-cpu_surface_2097152 | 1000 | 0 | -6.9e-17 | 1.2e-15 | 3.5e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_uniform_16777216 | 1000 | 0 | -5.0e-17 | 4.1e-15 | 5.8e-14 | 0 | 0 | 0 |
 | voropp-mt-cpu_uniform_2097152 | 1000 | 0 | -2.2e-16 | 2.0e-15 | 5.3e-14 | 0 | 0 | 0 |
 | votess-a100_clustered_2097152 | 1000 | 0 | -8.6e-17 | 7.3e-15 | 1.2e-13 | 0 | 0 | 0 |
+| votess-a100_fccsolid_1048576 | 1000 | 0 | -2.8e-16 | 1.6e-15 | 1.4e-14 | 0 | 0 | 0 |
 | votess-a100_halo_2097152 | 1000 | 0 | -6.4e-17 | 6.9e-15 | 3.8e-13 | 0 | 0 | 0 |
 | votess-a100_jittered_2097152 | 1000 | 0 | -3.5e-17 | 2.3e-15 | 1.4e-14 | 0 | 0 | 0 |
 | votess-a100_uniform_2097152 | 1000 | 0 | -6.2e-18 | 3.3e-15 | 1.2e-13 | 0 | 0 | 0 |
@@ -738,6 +886,9 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | votess-cpu_bluenoise_2097152 | 1000 | 0 | -9.1e-17 | 1.7e-15 | 1.0e-14 | 0 | 0 | 0 |
 | votess-cpu_clustered_16777216 | 1000 | 0 | -5.8e-17 | 1.3e-14 | 7.5e-13 | 0 | 0 | 0 |
 | votess-cpu_clustered_2097152 | 1000 | 0 | -1.5e-16 | 7.3e-15 | 1.2e-13 | 0 | 0 | 0 |
+| votess-cpu_cosmicweb_2097152 | 1000 | 0 | -1.3e-16 | 4.9e-15 | 1.4e-13 | 0 | 0 | 0 |
+| votess-cpu_fccsolid_1048576 | 1000 | 0 | -3.3e-16 | 1.6e-15 | 1.4e-14 | 0 | 0 | 0 |
+| votess-cpu_fccsolid_8388608 | 1000 | 0 | -1.0e-16 | 2.7e-15 | 1.8e-14 | 0 | 0 | 0 |
 | votess-cpu_halo_16777216 | 1000 | 0 | -8.3e-17 | 1.3e-14 | 6.2e-13 | 0 | 0 | 0 |
 | votess-cpu_halo_2097152 | 1000 | 0 | -1.3e-16 | 6.9e-15 | 3.8e-13 | 0 | 0 | 0 |
 | votess-cpu_jittered_16777216 | 1000 | 0 | -1.4e-17 | 4.6e-15 | 2.3e-14 | 0 | 0 | 0 |
@@ -990,6 +1141,10 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 - `{"library": "voronoi-cpp", "variant": "warp clipping rebuild (cell list + construct_warp)", "kokkos_arrays_peak_bytes": 10263800000.0, "n": 16777216, "file": "chain-a100-32367911.jsonl"}`
 - `{"library": "voronoi-cpp", "variant": "warp clipping rebuild (cell list + construct_warp)", "kokkos_arrays_peak_bytes": 747928000.0, "n": 1048576, "file": "chain-a100-32367911.jsonl"}`
 - `{"library": "voronoi-cpp", "variant": "warp clipping rebuild (cell list + construct_warp)", "kokkos_arrays_peak_bytes": 5219960000.0, "n": 8388608, "file": "chain-a100-32367911.jsonl"}`
+- `{"library": "voronoi-cpp", "variant": "warp clipping rebuild (cell list + construct_warp)", "kokkos_arrays_peak_bytes": 1378400000.0, "n": 2097152, "file": "chain-a100-32370411.jsonl"}`
+- `{"library": "voronoi-cpp", "variant": "warp clipping rebuild (cell list + construct_warp)", "kokkos_arrays_peak_bytes": 10263800000.0, "n": 16777216, "file": "chain-a100-32370411.jsonl"}`
+- `{"library": "voronoi-cpp", "variant": "warp clipping rebuild (cell list + construct_warp)", "kokkos_arrays_peak_bytes": 747928000.0, "n": 1048576, "file": "chain-a100-32370411.jsonl"}`
+- `{"library": "voronoi-cpp", "variant": "warp clipping rebuild (cell list + construct_warp)", "kokkos_arrays_peak_bytes": 5219960000.0, "n": 8388608, "file": "chain-a100-32370411.jsonl"}`
 - `{"library": "geogram", "variant": "PeriodicDelaunay3d (Delaunay)", "input": "jittered", "n": 2097152, "threads": 72, "tetrahedra": 14908381, "faces": 0, "file": "geogram-cpu-32236473.jsonl"}`
 - `{"library": "geogram", "variant": "PeriodicDelaunay3d + Voronoi cells (copy_Laguerre_cell_from_Delaunay, ConvexCell)", "input": "jittered", "n": 2097152, "threads": 72, "tetrahedra": 14908381, "faces": 33361128, "file": "geogram-cpu-32236473.jsonl"}`
 - `{"library": "geogram", "variant": "ParallelDelaunay3d PDEL on padded points (Delaunay)", "input": "jittered", "n": 2097152, "threads": 72, "padded_points": 2744000, "tetrahedra": 19036278, "cells_not_exact": 0, "file": "geogram-cpu-32236473.jsonl"}`
