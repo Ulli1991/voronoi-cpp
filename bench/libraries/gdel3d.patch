@@ -1,0 +1,26 @@
+diff --git a/GDelFlipping/src/gDel3D/CommonTypes.h b/GDelFlipping/src/gDel3D/CommonTypes.h
+index 010fce0..adda66a 100644
+--- a/GDelFlipping/src/gDel3D/CommonTypes.h
++++ b/GDelFlipping/src/gDel3D/CommonTypes.h
+@@ -59,6 +59,8 @@ DAMAGE.
+ #include "GPU/CudaWrapper.h"
+ 
+ // Thrust
++#include <thrust/device_free.h>
++#include <thrust/device_malloc.h>
+ #include <thrust/device_vector.h>
+ #include <thrust/extrema.h>
+ #include <thrust/gather.h>
+diff --git a/GDelFlipping/src/gDel3D/GPU/KerPredicates.cu b/GDelFlipping/src/gDel3D/GPU/KerPredicates.cu
+index 143457c..daef411 100644
+--- a/GDelFlipping/src/gDel3D/GPU/KerPredicates.cu
++++ b/GDelFlipping/src/gDel3D/GPU/KerPredicates.cu
+@@ -144,7 +144,7 @@ __forceinline__ __device__ float hash( int k )
+     k ^= k >> 31;
+     k ^= k << 31;
+ 
+-    return int_as_float( k ); 
++    return __int_as_float( k ); 
+ }
+ 
+ __global__ void

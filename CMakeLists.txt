@@ -25,6 +25,7 @@ endfunction()
 
 voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
 voronoi_program(mesh2d_bench src/bench/mesh2d_bench.cpp)
+voronoi_program(library_bench src/bench/library_bench.cpp)
 
 include(CTest)
 if(BUILD_TESTING)

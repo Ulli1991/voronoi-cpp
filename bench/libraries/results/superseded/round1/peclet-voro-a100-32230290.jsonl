@@ -1,0 +1,28 @@
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  libbench_peclet
+Node list: ravg1186
+Job start: Thu Nov 12 06:08:32 CET 2026
+Job end:   Thu Nov 12 06:10:47 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-libbench
+Command:   /raven/u/uli/voronoi-cpp-libbench/bench/libraries/run_peclet_voro_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32230290      libbench_p      1            36                             00:02:15      0:0
+  
+Maximum memory per node: 0.586293 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 5.3 %
+CO2 footprint: 2.7419 g (estimate based on total cluster power and electricity mix)
+  

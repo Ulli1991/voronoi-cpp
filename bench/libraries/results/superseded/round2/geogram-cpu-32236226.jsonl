@@ -1,0 +1,28 @@
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  libbench_geogram
+Node list: ravc3107
+Job start: Thu Nov 12 09:32:42 CET 2026
+Job end:   Thu Nov 12 09:32:44 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-libbench
+Command:   /raven/u/uli/voronoi-cpp-libbench/bench/libraries/run_geogram_cpu.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32236226      libbench_g      1           144                             00:00:02      0:0
+  
+Maximum memory per node: 0.007369 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 0.0 %
+CO2 footprint: 0.1625 g (estimate based on total cluster power and electricity mix)
+  

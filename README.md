@@ -187,6 +187,78 @@ A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilt at the cube's rate bef
 
 The lean cut (2026-11-13) made the rebuild 10 to 15 % faster than main 6ead543 on all six inputs at 128³ and 256³, and the exact start 6 % on jittered input, with the same tetrahedra, volumes, centroids and per-cell lists. It needed canonical face rings, which cost under 1 %: a new vertex goes into the lowest free slot, built by the lane that owns it, without a stack of free slots; the starting cube is set by formula; the candidate sort and the side test have no branches. That is 7 to 8 % fewer warp instructions per cell (9611 to 8802 on jittered input, 15128 to 14020 on uniform). The kernel still waits on the latency of each cut and on instruction fetch, so a leaner cut is not enough ([measurements.md](docs/measurements.md#canonical-rings-and-a-lean-cut-2026-11-13)). Fewer clips are not enough either (2026-11-15): vertex balls halve the clips on unstructured input with the same cuts and the same time, and clipping by k-nearest lists (k = 24, 32, 48, and hybrids with the walk) is 4 to 55 % slower than the walk on all six inputs at 128³ and 256³, with the same mesh. The cuts, about one per face, are the cost; a several times faster rebuild needs a cheaper cut or no clipping ([measurements.md](docs/measurements.md#knn-first-clipping-hybrids-and-a-vertex-ball-filter-2026-11-15)).
 
+### Against other libraries
+
+Every public Voronoi and Delaunay code we could build on Raven, on the same point files (our generators, plus blue
+noise made by Lloyd iterations as in Ray et al. 2018 and Basselin et al. 2021), in the periodic unit box (images for
+codes without one), double where the code allows it, each in the setting its own README gives per input. GPU codes all
+ran on one A100 node (1095 MHz under load), CPU codes on one 72-core node. M cells/s at 2,097,152 cells (128³), median
+of 3 timed runs; the clock runs from the points in memory to all outputs in memory. Codes that return only Delaunay
+tetrahedra or neighbour lists get our faces step, timed in ("+ faces (ours)"). Missing: cells without a volume;
+error: largest relative volume error against our brute-force oracle on 1000 sampled cells per input. Methods, 256³,
+every setting and the provenance: [docs/library_benchmark.md](docs/library_benchmark.md).
+
+| M cells/s, 128³ | hardware | jittered | blue noise | uniform | clustered | halo | B/cell | missing; error | differs from the first row |
+|---|---|---|---|---|---|---|---|---|---|
+| **Full cells: volumes, centroids, faces with areas and neighbours** | | | | | | | | | |
+| **voronoi-cpp, warp rebuild** | A100 | **33.7** | **29.6** | **16.5** | **14.0** | **11.8** | 671 | 0; 1.6e-13 | |
+| voronoi-cpp, exact start (Delaunay and cells) | A100 | 8.4 | 9.8 | 5.6 | 5.1 | 6.1 | 1951 | 0; 1.5e-13 | |
+| peclet-voro (Peters 2026) | A100 | 8.2 | 4.6 | 1.5 | 0.47 | 0.21 | 2651 | 33,819 on halo | no exact predicates, no centroids |
+| Paragram (Taveira et al. 2026) + faces (ours) | A100 | 0.71 | 1.1 | 0.85 | 0.90 | 0.83 | 4551 | 0–2 | float adjacency, images |
+| gDel3D (Cao et al. 2014) + faces (ours) | A100 | 0.74 | 0.84 | 0.73 | 0.61 | 0.61 | 1580 | 0; 2e-15 | images, copies timed |
+| votess (Singh et al. 2024) + faces (ours) | A100 | 0.40 | fails | 0.26 | 0.21 | 0.16 | 3343 | 0; 4e-13 | images, copies timed |
+| voronoi-cpp, warp rebuild (OpenMP) | 72 cores | 2.6 | 2.2 | 1.7 | 1.4 | 1.3 | 494 | 0; 2e-15 | |
+| voro++ multithreaded (Lu et al. 2023) | 72 cores | 2.3 | 2.7 | 2.0 | 0.37 | 0.085 | 1700 | 0; 6e-14 | no exact predicates |
+| geogram periodic Delaunay + its cells | 72 cores | 0.65 | 0.88 | 0.79 | 0.70 | 0.76 | 530 | 0; 3.6e-9 | scalar areas |
+| CGAL parallel Delaunay + faces (ours) | 72 cores | 0.67 | 0.63 | 0.62 | 0.44 | 0.35 | 1947 | 0; 2e-15 | images |
+| peclet-voro | 72 cores | 1.06 | 1.26 | 1.01 | 0.34 | 0.15 | 2479 | 61,887 on halo | no exact predicates, no centroids |
+| TetGen (Si 2015) + faces (ours) | 1 core | 0.071 | 0.063 | 0.053 | 0.050 | 0.048 | 2181 | 0; 1e-15 | images |
+| voro++ (Rycroft 2009) | 1 core | 0.039 | 0.046 | 0.036 | exits | exits | 1034 | exits on points closer than 1e-5 | no exact predicates |
+| CGAL periodic Delaunay + faces (ours) | 1 core | 0.027 | 0.029 | 0.030 | 0.029 | 0.030 | 2938 | 0; 2e-15 | |
+| Qhull (Barber et al. 1996) + faces (ours) | 1 core | 0.021 | 0.019 | 0.017 | 0.015 | 0.014 | 5013 | 0; 2e-15 | images, no exact predicates |
+| **Volumes and barycentres only, host to host** | | | | | | | | | |
+| voronoi-cpp, warp rebuild, volumes and centroids copied out | A100 | 17.4 | 16.3 | 11.7 | 10.3 | 9.5 | 696 | 0; 1.6e-13 | |
+| Basselin et al. 2021, README setting per input | A100 | 6.3 | 9.0 | 2.3 | 1.4 | 0.89 | 160 | 2023 on halo | images, no exact predicates |
+| Liu et al. 2022, README setting per input | A100 | 6.8 | 18.7 | 3.6 | 2.6 | 2.2 | 638 | 3 to 103,092; 3e-5 | float, images |
+| VoroGPU (Ray et al. 2018), README setting per input | A100 | 6.5 | 15.7 | 1.9 | 1.2 | 0.96 | 1236 | 0 to 21,471; 2e-4 | float, images |
+| **Moving step, 0.03 spacings, with full cells** | | | | | | | | | |
+| **voronoi-cpp** (update + `update_cells()`) | A100 | **144** | | | | | | 0; 8e-15 | |
+| peclet-voro (`MovingTessellation::step`) | A100 | 7.0 | | | | | | | |
+| voronoi-cpp | 72 cores | 8.5 | | | | | | | |
+| CGAL periodic, rebuild per step / `move_point` per point | 1 core | 0.029 / 0.008 | | | | | | | |
+
+With full cells on one A100 the warp rebuild is 4 to 55 times faster than peclet-voro, the fastest other GPU code that
+returns faces, the gap growing with the density contrast; the codes that need our faces step are 14 to 85 times
+slower. The closest competitor is Basselin et al. on blue noise, which returns volumes and barycentres only: in its
+blue-noise setting it builds 9.0 M cells/s host to host (17.5 device-only by its own timers; the paper gives 34.5 on a
+V100 for 10M blue-noise seeds), against 29.6 device-only and 16.3 host to host with the same outputs for the warp
+rebuild in the same jobs. On blue noise the float codes of Liu et al. (18.7) and Ray et al. (15.7) match or beat our
+host-to-host volumes path, with errors of 3e-5 and in float; on every other input they are 2.6 to 10 times slower
+and lose cells. On a CPU node the same code built for OpenMP is within 20 % of multithreaded voro++ on regular input and 3.7
+to 15 times faster on clustered and halo input. The moving step is 21 times peclet-voro's. Every voronoi-cpp volume
+agrees with the oracle to 1.6e-13 or better; geogram's own cells (double constructions) are off by up to 3.6e-9.
+
+![Build rate per input on one A100 (full cells; volumes only) and one CPU node, and the moving step](docs/figures/library_benchmark.png)
+
+*Build rate at 2,097,152 cells per input: one A100, full cells (left) and volumes and barycentres only (second; the
+first curve is voronoi-cpp host to host with volumes and centroids out); one CPU node, full cells (third; dashed 72
+cores, dotted one core); filled markers measured by us (median and range of 3 runs), open markers published by the
+authors on other hardware and points. Right: moving step at 0.03 mean spacings. Codes: voro++ (Rycroft 2009, Chaos 19,
+041111; multithreaded: Lu, Lazar and Rycroft 2023, CPC 291, 108832), CGAL periodic (Caroli and Teillaud 2009, ESA,
+LNCS 5757) and parallel Delaunay (Batista et al. 2010, CGTA 43), geogram (Lévy, github.com/BrunoLevy/geogram), Qhull
+(Barber, Dobkin and Huhdanpaa 1996, ACM TOMS 22), TetGen (Si 2015, ACM TOMS 41), gDel3D (Cao, Nanjappa, Gao and Tan
+2014, I3D), VoroGPU (Ray, Sokolov, Lefebvre and Lévy 2018, ACM TOG 37), Liu et al. 2022 (IEEE TVCG), Basselin et al.
+2021 (Computer Graphics Forum 40), Paragram (Taveira, Lindström, Fatemi, Hammarstrand and Kahl 2026, SIGGRAPH,
+arXiv:2605.06408), votess (Singh, Byrohl and Nelson 2024, arXiv:2412.04514), peclet-voro (Peters 2026, Zenodo
+10.5281/zenodo.21132443). Full references: bench/libraries/references.bib.*
+
+Not matched: Paragram's adjacency and the cells of Liu et al. and VoroGPU are float; the codes without a periodic box
+get 7 to 53 % extra image points; gDel3D, VoroGPU, Liu et al., Basselin et al. and votess take host points, so their
+times include the copies (our device rows do not; the host-to-host rows do); gDel3D and votess (GPU) fail at 256³ and
+peclet-voro runs out of the A100's memory there; single-core runs only at 128³. These A100 rows ran at 1095 MHz; the
+rows above at 1305 MHz are about 15 % faster. The rebuild rows above time the clipping alone; this table adds the cell
+list and the allocation.
+
 ### Long runs
 
 The rates above are early steps. On a smooth flow where every cell moves, the mesh loses its memory order and the step slows from 124 M cells/s at step 100 to 61 at step 500 (128³, 0.1 spacings, update and `update_cells()`, [#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)). A Hilbert re-sort every 50 updates (`Layout`) keeps it: 121 M cells/s over 500 steps against 81.6 without, re-sorts paid (each about one step's time); at 256³ 166 against 127. Hilbert, Moore and Morton are within 1 %, row-major and reverse Cuthill-McKee 11 to 13 % slower. Flows with little bulk motion do not show the decay: on Sedov the loss is at most 4.5 % over a run. Tables in [docs/measure_resort_2026-11-10.md](docs/measure_resort_2026-11-10.md).

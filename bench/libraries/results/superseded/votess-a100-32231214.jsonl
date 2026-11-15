@@ -1,0 +1,28 @@
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  libbench_votess
+Node list: ravg1002
+Job start: Thu Nov 12 06:45:26 CET 2026
+Job end:   Thu Nov 12 06:53:11 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-libbench
+Command:   /raven/u/uli/voronoi-cpp-libbench/bench/libraries/run_votess_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32231214      libbench_v      1            36                             00:07:45      0:0
+  
+Maximum memory per node: 6.890471 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 5.4 %
+CO2 footprint: 9.4443 g (estimate based on total cluster power and electricity mix)
+  
