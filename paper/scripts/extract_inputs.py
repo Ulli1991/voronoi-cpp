@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """paper/data/inputs.npz from the 64³ point files of the benchmark inputs (library_bench points / lloyd: the generators
 and seed of src/test/support.hpp): per input a slab one mean spacing thick projected to x-y (for clustered and halo
-through the densest cell, shifted periodically so it sits in the middle), the nearest-neighbour distance histogram in
+through the most isolated dense blob or halo, shifted periodically so it sits in the middle), the nearest-neighbour distance histogram in
 mean spacings, and the density contrast (99.9 / 0.1 percentile of 1/r_32³). Usage: extract_inputs.py [points dir]."""
 import os
 import sys
@@ -30,9 +30,17 @@ def main(src):
         out[f"{kind}_contrast"] = np.percentile(rho, 99.9) / np.percentile(rho, 0.1)
         out[f"{kind}_nn_hist"] = np.histogram(d[:, 1], bins=BINS)[0]
         centre = np.array([0.5, 0.5, 0.5 + 0.5 / side])
-        if kind in ("clustered", "halo"):  # the densest of 16³ cells, moved to the middle of the box
+        if kind in ("clustered", "halo"):  # the most isolated of the densest blobs or halos, moved to the middle
             h, _ = np.histogramdd(x, bins=16, range=[(0, 1)] * 3)
-            cell = np.array(np.unravel_index(np.argmax(h), h.shape))
+            peaks = []
+            for cell in np.argsort(h, axis=None)[::-1]:
+                c = (np.array(np.unravel_index(cell, h.shape)) + 0.5) / 16
+                if all(np.linalg.norm((c - q + 0.5) % 1.0 - 0.5) > 0.15 for q in peaks):
+                    peaks.append(c)
+                if len(peaks) == (8 if kind == "clustered" else 4):
+                    break
+            gap = [min(np.linalg.norm((p - q + 0.5) % 1.0 - 0.5) for q in peaks if q is not p) for p in peaks]
+            cell = np.floor(peaks[int(np.argmax(gap))] * 16).astype(int)
             inside = np.all(np.floor(x * 16).astype(int) == cell, axis=1)
             centre = np.median(x[inside], axis=0)  # the core of that blob or halo
         y = (x - centre + 0.5) % 1.0

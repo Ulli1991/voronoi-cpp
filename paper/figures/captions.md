@@ -6,8 +6,8 @@
 **inputs.** The five benchmark inputs at 64³ (262,144 points; the benchmarks run at 128³ and 256³ with the same
 generators and seed 20261029, `src/test/support.hpp`, snapped to the 2⁻³⁰ grid). Top: the points of a slab one mean
 spacing thick, projected to x–y; jittered, blue noise and uniform as a zoom of 16 × 16 mean spacings, clustered and halo
-as the whole box, shifted periodically so that the densest blob or halo sits in the middle, with the slab through its
-centre. Jittered: a cubic lattice with uniform shifts up to ±0.1 spacing per axis. Blue noise: the uniform points after
+as the whole box, shifted periodically so that the most isolated dense blob or halo sits in the middle, with the slab
+through its centre; halo points drawn smaller and half transparent so its core shows. Jittered: a cubic lattice with uniform shifts up to ±0.1 spacing per axis. Blue noise: the uniform points after
 100 Lloyd iterations (`library_bench lloyd`). Uniform: independent uniform points. Clustered: 8 Gaussian blobs,
 σ = 0.04 of the box, holding 80 % of the points, over 20 % uniform; nominal peak-to-background 1:500. Halo: 4 profiles
 ∝ 1/(r² + c²), c = 0.002, out to r = 0.2, holding 90 % of the points, over 10 % uniform; 1:10⁴ from core to edge within

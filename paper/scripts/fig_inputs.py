@@ -33,7 +33,9 @@ def main():
         whole = kind in ("clustered", "halo")
         lo, hi = (0.0, 1.0) if whole else (0.5 - ZOOM / 2, 0.5 + ZOOM / 2)
         keep = (xy[:, 0] >= lo) & (xy[:, 0] < hi) & (xy[:, 1] >= lo) & (xy[:, 1] < hi)
-        ax.scatter(xy[keep, 0], xy[keep, 1], s=SIZE, c=INK, linewidths=0, rasterized=True)
+        dense = kind == "halo"  # its core would be solid ink at the common marker size
+        ax.scatter(xy[keep, 0], xy[keep, 1], s=SIZE / 3 if dense else SIZE, c=INK, alpha=0.5 if dense else 1,
+                   linewidths=0, rasterized=True)
         ax.set_xlim(lo, hi)
         ax.set_ylim(lo, hi)
         ax.set_aspect("equal")
@@ -46,11 +48,13 @@ def main():
             spine.set_color("0.5")
         span = hi - lo
         bar = 1 / 64 if not whole else 8 / 64
-        x0, y0 = lo + 0.06 * span, lo + 0.05 * span
-        ax.plot([x0, x0 + bar], [y0, y0], color="#d62728", lw=2.2, solid_capstyle="butt")
-        ax.text(x0 + bar / 2, y0 + 0.025 * span, "1 spacing" if not whole else "8 spacings", color="#d62728",
-                ha="center" if whole else "left", va="bottom", fontsize=11,
-                bbox=dict(fc="white", ec="none", pad=0.6, alpha=0.9))
+        from matplotlib.patches import Rectangle
+        ax.add_patch(Rectangle((0.015, 0.015), 0.6, 0.13, transform=ax.transAxes, fc="white", ec="0.6", lw=0.5,
+                               zorder=4))
+        x0, y0 = lo + 0.05 * span, lo + 0.05 * span
+        ax.plot([x0, x0 + bar], [y0, y0], color="#d62728", lw=2.2, solid_capstyle="butt", zorder=5)
+        ax.text(x0 + bar + 0.03 * span, y0, "1 spacing" if not whole else "8 spacings", color="#d62728",
+                ha="left", va="center", fontsize=11, zorder=5)
         ax.set_xlabel(f"{LABEL[kind]} · {contrast(float(d[kind + '_contrast']))}", fontsize=12, labelpad=4)
         h = d[f"{kind}_nn_hist"].astype(float)
         h /= h.max()
