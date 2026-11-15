@@ -286,7 +286,9 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
     double carried = 0;  // volume of the last round's tetrahedra of unchanged owners
     for (int round = 0; round < 3; ++round) {
         tet_mesh::assemble(exec, cells, mesh, assembly, previous);
-        const Partial<Memory> partial{assembly.redone, previous.changed, carried};
+        // A full round (the first, or after re-clipping all) carries no volume.
+        const bool incremental = previous.changed.extent(0) > 0;
+        const Partial<Memory> partial{assembly.redone, previous.changed, incremental ? carried : 0.0};
         previous = {};
         const int count = assembly.counts.tets;
         // The check's lists use assembly storage idle until the next round (first_tet: faces > tetrahedra).

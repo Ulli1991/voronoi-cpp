@@ -2,13 +2,16 @@
 """The start_once range of an nsys export (sqlite): wall time, kernel time, launches, and host API time by call.
   python3 scripts/start_fast_nsys.py <file.sqlite>..."""
 import sqlite3
+import os
 import sys
+
+RANGE = os.environ.get("RANGE", "start_once")  # or "start": Mesh::update's first call
 
 for path in sys.argv[1:]:
     db = sqlite3.connect(path)
-    row = db.execute("select start, end from NVTX_EVENTS where text = 'start_once'").fetchone()
+    row = db.execute("select start, end from NVTX_EVENTS where text = ?", (RANGE,)).fetchone()
     if not row:
-        print(path, "no start_once range")
+        print(path, "no range", RANGE)
         continue
     t0, t1 = row
     kernels = db.execute("select count(*), sum(end - start) from CUPTI_ACTIVITY_KIND_KERNEL where start >= ? and end <= ?",

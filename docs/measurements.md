@@ -305,6 +305,20 @@ luna-cpp (branch `resort` a82092c, the first that builds against main's API with
 
 **Left to the 5× budget.** The step now moves 2392 B/cell at 0.03 spacings and 4133 at 0.1 (step 3, 128³; main 69de1d3 moved 2866 and 4795, main 9e9ec03 2717 and 4292). The 5× budgets are 1269 and 2182 B/cell: 1123 and 1951 B/cell still to go, with every kernel at 80 % of peak besides. By kernel at 0.03: `faces` 1005 and `cell_sums` 737 (R14 and float centres, R6), `screen` 528 (K4), the repair and ring re-walk 617 (the repair's rounds and the `dirty_faces` walks, K2), the numbering now 63.
 
+### The exact start: assembly from the ring blocks and an incremental patch round (2026-11-15)
+
+Branch `start-fast` against main c42c230, both in the same `gpu1` job (one A100 at the 1305 MHz application clock; `scripts/start_fast_a100.sh proof`, tables by `scripts/start_fast_tables.py`). The start is the bench's `start_ms`: the warp clipping with rings and `tet_start::build`, median of 3 after a warm-up. "Exact" is `tet_start::build` alone: assembly, check, exact re-clips and further rounds.
+
+What changed, all in `tet_mesh::assemble` and `tet_start.hpp`:
+
+- **Lookups read the clipping's ring blocks** in place. Main copied every ring into a face-ordered array (`face_particles`) and looked a tetrahedron up through three face arrays and that copy; now a lookup reads one 32-byte record of the owner cell, then the cell's block. No `face_particles`, `face_lengths`, `first_tet` scan or `ring_start` scan.
+- **One thread per ring slot** for emitting and naming (main: one per face, 9 threads busy per warp instruction), **one per tetrahedron** for the adjacency (main: one per face, 4.9), **one per face** for the face arrays (coalesced writes; a thread per cell wrote six arrays at 74 % of DRAM peak but 8× the bytes needed). Ring wraps without integer division.
+- **The check by the double filters** (91 registers, 168 before); tetrahedra a filter cannot decide go to a second kernel with the exact predicates, so the outcome is the exact one.
+- **#59: the round after a partial re-clip is incremental.** Cells whose ring block names a re-clipped particle look up again; every other lookup and adjacency is the last round's, shifted by the change in its cell's first tetrahedron. The check tests only the tetrahedra looked up again and their neighbours. The arrays are those of a full round, entry for entry (`start_arrays_checksum`).
+- **Storage kept between rounds.** Freeing gigabytes and allocating again right after made single `cudaMalloc` calls take 76 to 103 ms at 256³ (Nsight Systems); the assembly and the check now keep their arrays, with a second set of tetrahedra and slots for the incremental round.
+
+RESULTS_PLACEHOLDER
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
