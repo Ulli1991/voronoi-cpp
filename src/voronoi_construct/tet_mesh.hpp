@@ -346,171 +346,359 @@ KOKKOS_INLINE_FUNCTION bool sliver(const Vec3* d, double& volume6, double& shape
 }
 }  // namespace detail
 
-// Stage 3: The tetrahedra and their adjacency from the face rings of a clipping build (Cells::with_rings, cells in slot order,
-// every cell ok), without hashing: tetrahedron (i, j, q_m, q_m+1) is emitted only by the face of its two smallest
-// particles, and each triangle's two tetrahedra are adjacent in the ring of its two smallest particles' face.
-// Faces in CSR come back in face_start (cell t owns [face_start(t), face_start(t + 1))). Returns the number of ring
-// slots or adjacencies not resolved (0 for a consistent build); representatives are left to represent.
-// Used by: tet_start::build (every round).
+namespace detail {
+
+// Tetrahedron (i, j, p, q) of face i-j's ring is emitted by that face iff i-j are its two smallest particles (i < j).
+KOKKOS_INLINE_FUNCTION bool emits(int j, int p, int q) { return j < p && j < q; }
+
+// m + 1 around a ring of length k (no division).
+KOKKOS_INLINE_FUNCTION int after(int m, int k) { return m + 1 == k ? 0 : m + 1; }
+
+// The first face to particle b in the ring block of a cell (`faces` faces from pool entry `at`): returns its index in
+// the cell (-1 if none) and sets ring (pool entry of its first ring particle), length and the slots before it.
+template <class Pool>
+KOKKOS_INLINE_FUNCTION int find_face(const Pool& rings, long long at, int faces, int b, long long& ring, int& length,
+                                     int& slots) {
+    slots = 0;
+    for (int f = 0; f < faces; ++f) {
+        const int j = rings(at), k = rings(at + 1);
+        if (j == b) {
+            ring = at + 2;
+            length = k;
+            return f;
+        }
+        slots += k;
+        at += 2 + k;
+    }
+    return -1;
+}
+
+// What a lookup reads of a cell, in one memory sector: its ring block, faces, and first face, slot and tetrahedron.
+struct alignas(32) CellBlock {
+    long long ring;
+    int faces, face, slot, tet;
+};
+
+// The first `size` entries of `store`, grown by 1/64 when too small (contents dropped). Used by: assemble.
+template <class V>
+auto take(V& store, std::size_t size, const char* label) {
+    if (store.extent(0) < size) {
+        store = V();
+        store = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), size + size / 64);
+    }
+    if constexpr (V::rank() == 1)
+        return Kokkos::subview(store, std::make_pair(std::size_t(0), size));
+    else
+        return Kokkos::subview(store, std::make_pair(std::size_t(0), size), Kokkos::ALL);
+}
+
+// The last entry of the sorted `start` (count entries) at or below `value`: the face of a ring slot, the cell of a face.
+template <class Starts>
+KOKKOS_INLINE_FUNCTION int bisect(const Starts& start, int count, int value) {
+    int low = 0;
+    for (int high = count; high - low > 1;) {
+        const int middle = (low + high) / 2;
+        (start(middle) <= value ? low : high) = middle;
+    }
+    return low;
+}
+
+// Faces, ring slots and tetrahedra of an assembly.
+struct AssemblyCounts {
+    int faces = 0, slots = 0, tets = 0;
+    KOKKOS_INLINE_FUNCTION AssemblyCounts& operator+=(const AssemblyCounts& o) {
+        faces += o.faces;
+        slots += o.slots;
+        tets += o.tets;
+        return *this;
+    }
+};
+
+}  // namespace detail
+
+// What assemble keeps besides the mesh: per cell the faces, ring slots and tetrahedra before it (n + 1 each); per face
+// its first tetrahedron and the pool entry of its ring; per tetrahedron its emitting slot.
+// Used by: assemble, tet_start::build.
+template <class MemorySpace>
+struct Assembly {
+    Kokkos::View<int*, MemorySpace> face_start, slot_start, tet_start, first_tet, tet_slot;
+    Kokkos::View<long long*, MemorySpace> face_ring;
+    Kokkos::View<detail::CellBlock*, MemorySpace> block;
+    Kokkos::View<char*, MemorySpace> redone;    // incremental: per tetrahedron, adjacency looked up again
+    Kokkos::View<int, MemorySpace> unresolved;  // ring slots and adjacencies not resolved
+    detail::AssemblyCounts counts;
+    // Storage kept from round to round (the views above and the mesh's are its first entries): freeing and
+    // allocating gigabytes between rounds stalls cudaMalloc. Two sets of tetrahedra and slots for incremental rounds.
+    struct Store {
+        Kokkos::View<int*, MemorySpace> owner, neighbour, length, ring_start, first_tet, tet_slot, ring[2];
+        Kokkos::View<long long*, MemorySpace> face_ring;
+        Kokkos::View<char*, MemorySpace> redone;
+        Quads<MemorySpace> vertex[2], adjacent[2];
+        Points4<MemorySpace> centre;
+        Kokkos::View<std::uint8_t*, MemorySpace> edges;
+        int side = 0;  // the set the mesh views
+    } store;
+};
+
+// The round before an incremental assemble: its tetrahedra, ring slots and per-cell starts, and the cells re-clipped
+// since (changed). Cells whose block names no changed cell keep their lookups, renumbered. Empty: a full assemble.
+// Used by: assemble, tet_start::build.
+template <class MemorySpace>
+struct Previous {
+    Quads<MemorySpace> vertex, adjacent;
+    Kokkos::View<int*, MemorySpace> ring, slot_start, tet_start;
+    Kokkos::View<const int*, MemorySpace> changed;  // by particle
+};
+
+// Stage 3: tetrahedra (i, j, q_m, q_m+1), each emitted by the face of its two smallest particles, and their adjacency,
+// read from the clipping's ring blocks without hashing (how_it_works.md). With `previous`, only cells naming a changed
+// cell look up again; the arrays equal a full round's. Syncs only for the counts. Used by: assemble, tet_start::build.
+template <class ExecSpace>
+void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
+              Mesh<typename ExecSpace::memory_space>& mesh, Assembly<typename ExecSpace::memory_space>& a,
+              const Previous<typename ExecSpace::memory_space>& previous = {}) {
+    using Memory = typename ExecSpace::memory_space;
+    using Range = Kokkos::RangePolicy<ExecSpace>;
+    using detail::emits;
+    using Ints = Kokkos::View<int*, Memory>;
+    auto uninitialized = [](const char* label) {
+        return Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label));
+    };
+    const int n = static_cast<int>(cells.owned_count.extent(0));
+    const auto rings = cells.rings;
+    const auto cell_ring = cells.ring_start;
+    const auto owned = cells.owned_count;
+    const bool incremental = previous.changed.extent(0) > 0;
+    const auto changed = previous.changed;
+    const auto old_vertex = previous.vertex, old_adjacent = previous.adjacent;
+    const auto old_ring = previous.ring, old_slot_start = previous.slot_start, old_tet_start = previous.tet_start;
+    // dirty(t): cell t is changed or its block names a changed particle (incremental only).
+    const Kokkos::View<char*, Memory> dirty(uninitialized("assemble_dirty"), incremental ? n : 0);
+
+    // Per cell: faces, slots and emitted tetrahedra, then their running sums.
+    // Per-cell starts: new each round (an incremental round reads the last ones).
+    a.face_start = Ints(uninitialized("face_start"), n + 1);
+    a.slot_start = Ints(uninitialized("assemble_slot_start"), n + 1);
+    a.tet_start = Ints(uninitialized("assemble_tet_start"), n + 1);
+    if (static_cast<int>(a.block.extent(0)) != n)
+        a.block = Kokkos::View<detail::CellBlock*, Memory>(uninitialized("assemble_block"), n);
+    const auto face_start = a.face_start, slot_start = a.slot_start, tet_start = a.tet_start;
+    const auto block = a.block;
+    Kokkos::parallel_for(
+        "tet_mesh::cell_counts", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
+            long long at = cell_ring(t);
+            int slots = 0, tets = 0;
+            bool names = incremental && changed(t);
+            for (int f = 0; f < owned(t); ++f) {
+                const int j = rings(at), k = rings(at + 1);
+                if (incremental) names |= changed(j) != 0;
+                for (int m = 0; m < k; ++m) {
+                    const int p = rings(at + 2 + m);
+                    tets += emits(j, p, rings(at + 2 + detail::after(m, k)));
+                    if (incremental) names |= changed(p) != 0;
+                }
+                slots += k;
+                at += 2 + k;
+            }
+            slot_start(t) = slots;
+            tet_start(t) = tets;
+            if (incremental) dirty(t) = names;
+        });
+    detail::AssemblyCounts total;
+    Kokkos::parallel_scan(
+        "tet_mesh::cell_starts", Range(exec, 0, n),
+        KOKKOS_LAMBDA(int t, detail::AssemblyCounts& sum, bool last) {
+            const detail::AssemblyCounts here{owned(t), slot_start(t), tet_start(t)};
+            if (last) {
+                face_start(t) = sum.faces;
+                slot_start(t) = sum.slots;
+                tet_start(t) = sum.tets;
+                block(t) = {cell_ring(t), here.faces, sum.faces, sum.slots, sum.tets};
+            }
+            sum += here;
+            if (last && t == n - 1) {
+                face_start(n) = sum.faces;
+                slot_start(n) = sum.slots;
+                tet_start(n) = sum.tets;
+            }
+        },
+        total);
+    a.counts = total;
+    const int faces = total.faces, slots = total.slots, tets = total.tets;
+
+    // Per face its pair, ring and first tetrahedron; per slot its face.
+    auto& store = a.store;
+    const Ints owner = detail::take(store.owner, faces, "face_owner"),
+               neighbour = detail::take(store.neighbour, faces, "face_neighbour"),
+               length = detail::take(store.length, faces, "face_length"),
+               ring_start = detail::take(store.ring_start, faces, "face_ring_start");
+    a.first_tet = detail::take(store.first_tet, faces, "assemble_first_tet");
+    a.face_ring = detail::take(store.face_ring, faces, "assemble_face_ring");
+
+    const auto first_tet = a.first_tet;
+    const auto face_ring = a.face_ring;
+    // A thread per face, so the writes are coalesced: its owner by bisection, then the walk of the owner's block.
+    Kokkos::parallel_for(
+        "tet_mesh::faces_of_cells", Range(exec, 0, faces), KOKKOS_LAMBDA(int g) {
+            const int t = detail::bisect(face_start, n, g);
+            long long at = cell_ring(t);
+            int slot = slot_start(t), tet = tet_start(t);
+            for (int f = face_start(t); f < g; ++f) {
+                const int j = rings(at), k = rings(at + 1);
+                for (int m = 0; m < k; ++m) tet += emits(j, rings(at + 2 + m), rings(at + 2 + detail::after(m, k)));
+                slot += k;
+                at += 2 + k;
+            }
+            owner(g) = t;
+            neighbour(g) = rings(at);
+            length(g) = rings(at + 1);
+            ring_start(g) = slot;
+            first_tet(g) = tet;
+            face_ring(g) = at + 2;
+        });
+
+    // An incremental round writes the other set; the previous round's mesh views this one.
+    if (incremental) store.side = 1 - store.side;
+    mesh.vertex = detail::take(store.vertex[store.side], tets, "tet_vertex");
+    mesh.adjacent = detail::take(store.adjacent[store.side], tets, "tet_adjacent");
+    mesh.owner = owner;
+    mesh.neighbour = neighbour;
+    mesh.ring_start = ring_start;
+    mesh.ring_length = length;
+    mesh.ring = detail::take(store.ring[store.side], slots, "face_ring");
+    a.tet_slot = detail::take(store.tet_slot, tets, "assemble_tet_slot");
+    detail::take(store.centre, tets, "tet_centre");  // for allocate_centres, now while nothing is freed
+    detail::take(store.edges, tets, "tet_edges");
+    a.unresolved = Kokkos::View<int, Memory>("assemble_unresolved");
+    a.redone = detail::take(store.redone, incremental ? tets : 0, "assemble_redone");
+    const auto vertex = mesh.vertex;
+    const auto adjacent = mesh.adjacent;
+    const auto ring = mesh.ring;
+    const auto tet_slot = a.tet_slot;
+    const auto unresolved = a.unresolved;
+
+    // Emit, and name every ring slot by its tetrahedron: the first emitted slot of the same particles in the first face
+    // of its two smallest, read from that owner's ring block. A clean cell's lookups are its last ones, renumbered.
+    Kokkos::parallel_for(
+        "tet_mesh::emit", Range(exec, 0, slots), KOKKOS_LAMBDA(int s) {
+            const int g = detail::bisect(ring_start, faces, s), i = owner(g), j = neighbour(g), k = length(g),
+                      m = s - ring_start(g);
+            const long long base = face_ring(g);
+            const int p = rings(base + m), q = rings(base + detail::after(m, k));
+            if (emits(j, p, q)) {
+                int e = first_tet(g);
+                for (int r = 0; r < m; ++r) e += emits(j, rings(base + r), rings(base + r + 1));
+                vertex(e, 0) = i;
+                vertex(e, 1) = j;
+                vertex(e, 2) = p;
+                vertex(e, 3) = q;
+                ring(s) = e;
+                tet_slot(e) = s;
+                return;
+            }
+            int v[4] = {i, j, p, q};
+            for (int c = 1; c < 4; ++c)
+                for (int b = c; b > 0 && v[b - 1] > v[b]; --b) Kokkos::kokkos_swap(v[b - 1], v[b]);
+            int id = -1;
+            if (incremental && !dirty(i)) {
+                id = old_ring(s - slot_start(i) + old_slot_start(i));
+                if (id >= 0) id += tet_start(v[0]) - old_tet_start(v[0]);
+            } else {
+                long long at;
+                int kh, before_slots;
+                const detail::CellBlock c = block(v[0]);
+                const int f = detail::find_face(rings, c.ring, c.faces, v[1], at, kh, before_slots);
+                if (f >= 0) {
+                    id = first_tet(c.face + f);
+                    for (int r = 0;; ++r) {
+                        if (r == kh) {
+                            id = -1;
+                            break;
+                        }
+                        const int u = rings(at + r), w = rings(at + detail::after(r, kh));
+                        const bool emitted = emits(v[1], u, w);
+                        if (emitted && ((u == v[2] && w == v[3]) || (u == v[3] && w == v[2]))) break;
+                        id += emitted;
+                    }
+                } else {
+                    id = -1;
+                }
+            }
+            ring(s) = id;
+            if (id < 0) Kokkos::atomic_inc(&unresolved());
+        });
+
+    // Neighbours: across a triangle through edge i-j, the next tetrahedron in that ring; across the other two
+    // triangles, look up their own rings. Those are faces of i and j: clean ones keep their tetrahedra, renumbered.
+    const auto redone = a.redone;
+    Kokkos::parallel_for(
+        "tet_mesh::adjacency", Range(exec, 0, tets), KOKKOS_LAMBDA(int e) {
+            const int s = tet_slot(e), g = detail::bisect(ring_start, faces, s), k = length(g), base = ring_start(g),
+                      m = s - base;
+            const int next = ring(base + detail::after(m, k)), prior = ring(base + (m == 0 ? k : m) - 1);
+            adjacent(e, 2) = next;
+            adjacent(e, 3) = prior;
+            int missing = next < 0 || prior < 0;
+            const int v[4] = {vertex(e, 0), vertex(e, 1), vertex(e, 2), vertex(e, 3)};
+            const bool again = !incremental || dirty(v[0]) || dirty(v[1]);
+            if (incremental) redone(e) = again;
+            for (int drop = 0; drop < 2; ++drop) {
+                int other = -1;
+                if (!again) {
+                    other = old_adjacent(e - tet_start(v[0]) + old_tet_start(v[0]), drop);
+                    if (other >= 0) {
+                        const int c = old_vertex(other, 0);
+                        other += tet_start(c) - old_tet_start(c);
+                    }
+                } else {
+                    int tri[3];
+                    sorted_face(v, drop, tri);
+                    long long at;
+                    int kh, before_slots;
+                    const detail::CellBlock c = block(tri[0]);
+                    if (detail::find_face(rings, c.ring, c.faces, tri[1], at, kh, before_slots) >= 0)
+                        for (int r = 0; r < kh; ++r)
+                            if (rings(at + r) == tri[2]) {
+                                // Tetrahedra at slots r - 1 and r share this triangle.
+                                const int first = c.slot + before_slots;
+                                const int before = ring(first + (r == 0 ? kh : r) - 1), after = ring(first + r);
+                                other = before == e ? after : before;
+                                break;
+                            }
+                }
+                adjacent(e, drop) = other;
+                missing += other < 0;
+            }
+            if (missing) Kokkos::atomic_add(&unresolved(), missing);
+        });
+}
+
+// Zeroed circumcentres and edge bits for the tetrahedra of an assemble, from its storage. Used by: assemble,
+// tet_start::build.
+template <class ExecSpace>
+void allocate_centres(const ExecSpace& exec, Mesh<typename ExecSpace::memory_space>& mesh,
+                      Assembly<typename ExecSpace::memory_space>& a) {
+    const auto tets = mesh.vertex.extent(0);
+    mesh.centre = detail::take(a.store.centre, tets, "tet_centre");
+    mesh.edges = detail::take(a.store.edges, tets, "tet_edges");
+    Kokkos::deep_copy(exec, mesh.centre, 0.0);
+    Kokkos::deep_copy(exec, mesh.edges, std::uint8_t(0));
+}
+
+// A full assemble with zeroed centres and edge bits, returning the number of ring slots or adjacencies not resolved
+// (one host synchronisation). Used by: from_rings.
 template <class ExecSpace>
 int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
              Mesh<typename ExecSpace::memory_space>& mesh,
              Kokkos::View<int*, typename ExecSpace::memory_space>& face_start) {
-    using Memory = typename ExecSpace::memory_space;
-    using Range = Kokkos::RangePolicy<ExecSpace>;
-    const int n = static_cast<int>(cells.owned_count.extent(0));
-
-    face_start = Kokkos::View<int*, Memory>("face_start", n + 1);
-    int faces = 0;
-    const auto starts = face_start;
-    Kokkos::parallel_scan(
-        "tet_mesh::face_start", Range(exec, 0, n),
-        KOKKOS_LAMBDA(int t, int& sum, bool last) {
-            if (last) starts(t) = sum;
-            sum += cells.owned_count(t);
-            if (last && t == n - 1) starts(n) = sum;
-        },
-        faces);
-    Kokkos::View<int*, Memory> owner("face_owner", faces), neighbour("face_neighbour", faces),
-        length("face_length", faces);
-    const auto rings = cells.rings;
-    Kokkos::parallel_for(
-        "tet_mesh::face_lengths", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
-            long long at = cells.ring_start(t);
-            for (int f = 0; f < cells.owned_count(t); ++f) {
-                const int g = starts(t) + f, k = rings(at + 1);
-                owner(g) = t;
-                neighbour(g) = rings(at);
-                length(g) = k;
-                at += 2 + k;
-            }
-        });
-    auto face_of = KOKKOS_LAMBDA(int a, int b) {  // a < b
-        for (int g = starts(a); g < starts(a + 1); ++g)
-            if (neighbour(g) == b) return g;
-        return -1;
-    };
-
-    Kokkos::View<int*, Memory> ring_start("face_ring_start", faces + 1), first_tet("face_first_tet", faces + 1);
-    int slots = 0, tets = 0;
-    Kokkos::parallel_scan(
-        "tet_mesh::ring_start", Range(exec, 0, faces),
-        KOKKOS_LAMBDA(int g, int& sum, bool last) {
-            if (last) ring_start(g) = sum;
-            sum += length(g);
-            if (last && g == faces - 1) ring_start(faces) = sum;
-        },
-        slots);
-    // The rings' particles, contiguous per face in face order.
-    Kokkos::View<int*, Memory> particles(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_particles")),
-                                         slots);
-    Kokkos::parallel_for(
-        "tet_mesh::face_particles", Range(exec, 0, n), KOKKOS_LAMBDA(int t) {
-            long long at = cells.ring_start(t);
-            for (int f = 0; f < cells.owned_count(t); ++f) {
-                const int g = starts(t) + f, k = length(g);
-                for (int m = 0; m < k; ++m) particles(ring_start(g) + m) = rings(at + 2 + m);
-                at += 2 + k;
-            }
-        });
-    auto ring_of = KOKKOS_LAMBDA(int g, int m) { return particles(ring_start(g) + m % length(g)); };
-    // A face emits the slots whose tetrahedron has the face's particles as its two smallest.
-    auto emits = KOKKOS_LAMBDA(int g, int m) {
-        const int j = neighbour(g);
-        return j < ring_of(g, m) && j < ring_of(g, m + 1);
-    };
-    Kokkos::parallel_scan(
-        "tet_mesh::first_tet", Range(exec, 0, faces),
-        KOKKOS_LAMBDA(int g, int& sum, bool last) {
-            if (last) first_tet(g) = sum;
-            for (int m = 0; m < length(g); ++m) sum += emits(g, m);
-            if (last && g == faces - 1) first_tet(faces) = sum;
-        },
-        tets);
-    mesh.vertex = Quads<Memory>("tet_vertex", tets);
-    mesh.adjacent = Quads<Memory>("tet_adjacent", tets);
-    mesh.centre = Points4<Memory>("tet_centre", tets);
-    mesh.edges = Kokkos::View<std::uint8_t*, Memory>("tet_edges", tets);
-    mesh.owner = owner;
-    mesh.neighbour = neighbour;
-    mesh.ring_start = Kokkos::subview(ring_start, std::make_pair(0, faces));
-    mesh.ring_length = length;
-    mesh.ring = Kokkos::View<int*, Memory>("face_ring", slots);
-    const auto vertex = mesh.vertex;
-    const auto adjacent = mesh.adjacent;
-    const auto ring = mesh.ring;
-
-    // Emit, and name every ring slot by its tetrahedron.
+    Assembly<typename ExecSpace::memory_space> a;
+    assemble(exec, cells, mesh, a);
+    allocate_centres(exec, mesh, a);
+    face_start = a.face_start;
     int unresolved = 0;
-    Kokkos::parallel_reduce(
-        "tet_mesh::emit", Range(exec, 0, faces),
-        KOKKOS_LAMBDA(int g, int& missing) {
-            const int i = owner(g), j = neighbour(g);
-            for (int m = 0, e = first_tet(g); m < length(g); ++m) {
-                const int p = ring_of(g, m), q = ring_of(g, m + 1);
-                if (emits(g, m)) {
-                    vertex(e, 0) = i;
-                    vertex(e, 1) = j;
-                    vertex(e, 2) = p;
-                    vertex(e, 3) = q;
-                    ring(ring_start(g) + m) = e++;
-                    continue;
-                }
-                // The two smallest of {i, j, p, q} own the face that emits it.
-                int s[4] = {i, j, p, q};
-                for (int a = 1; a < 4; ++a)
-                    for (int b = a; b > 0 && s[b - 1] > s[b]; --b) Kokkos::kokkos_swap(s[b - 1], s[b]);
-                const int h = face_of(s[0], s[1]);
-                int id = -1;
-                for (int r = 0, e2 = h < 0 ? 0 : first_tet(h); h >= 0 && r < length(h); ++r) {
-                    const bool emitted = emits(h, r);
-                    const int u = ring_of(h, r), w = ring_of(h, r + 1);
-                    if (emitted && ((u == s[2] && w == s[3]) || (u == s[3] && w == s[2]))) {
-                        id = e2;
-                        break;
-                    }
-                    e2 += emitted;
-                }
-                ring(ring_start(g) + m) = id;
-                missing += id < 0;
-            }
-        },
-        unresolved);
-
-    // Neighbours: across a triangle through edge i-j, the next tetrahedron in that ring; across the other two
-    // triangles, look up their own rings.
-    int open = 0;
-    Kokkos::parallel_reduce(
-        "tet_mesh::adjacency", Range(exec, 0, faces),
-        KOKKOS_LAMBDA(int g, int& missing) {
-            const int k = length(g), base = ring_start(g);
-            for (int m = 0; m < k; ++m) {
-                if (!emits(g, m)) continue;
-                const int e = ring(base + m);
-                adjacent(e, 2) = ring(base + (m + 1) % k);
-                adjacent(e, 3) = ring(base + (m + k - 1) % k);
-                const int v[4] = {vertex(e, 0), vertex(e, 1), vertex(e, 2), vertex(e, 3)};
-                for (int drop = 0; drop < 2; ++drop) {
-                    int tri[3];
-                    sorted_face(v, drop, tri);
-                    const int h = face_of(tri[0], tri[1]);
-                    int other = -1;
-                    for (int r = 0; h >= 0 && r < length(h); ++r)
-                        if (ring_of(h, r) == tri[2]) {
-                            // Tetrahedra at slots r - 1 and r share this triangle.
-                            const int before = ring(ring_start(h) + (r + length(h) - 1) % length(h));
-                            const int after = ring(ring_start(h) + r);
-                            other = before == e ? after : before;
-                            break;
-                        }
-                    adjacent(e, drop) = other;
-                    missing += other < 0;
-                }
-                missing += adjacent(e, 2) < 0 || adjacent(e, 3) < 0;
-            }
-        },
-        open);
-    return unresolved + open;
+    Kokkos::deep_copy(exec, unresolved, a.unresolved);
+    exec.fence();
+    return unresolved;
 }
 
 // After assemble, on a mesh that passed tet_start::check: every edge is represented by the lowest-numbered

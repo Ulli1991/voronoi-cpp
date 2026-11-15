@@ -446,12 +446,16 @@ __device__ inline bool box_meets_a_ball(const Polyhedron& c, std::uint64_t live,
 #endif  // __CUDA_ARCH__
 
 #if defined(KOKKOS_ENABLE_CUDA)
+// What a build records per cell besides status, volume and centroid.
+enum class Output { faces, rings, volumes };
+
 // Adaptive: walk each cell at its level (CellList::level), else only at the base level and leave
-// uncertified cells to the thread kernel. with_rings: record face rings instead of face geometry.
+// uncertified cells to the thread kernel. output: owned face geometry, face rings, or nothing more.
 // cubic: the grid is one cube (Grid::cube()). filtered: build the slots of `list` and skip what cannot cut (#60).
 // Used by: construct_warp.
-template <class MemorySpace, bool adaptive, bool with_rings, bool cubic = false, bool filtered = false>
+template <class MemorySpace, bool adaptive, Output output, bool cubic = false, bool filtered = false>
 struct Kernel {
+    static constexpr bool with_rings = output == Output::rings, with_faces = output != Output::volumes;
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
     Cells<MemorySpace> out;
@@ -787,6 +791,7 @@ struct Kernel {
             const double pyramid = dot(area, first) * (1.0 / 3.0);
             volume += pyramid;
             moment = moment + centroid * (0.75 * pyramid);
+            if constexpr (!with_faces) continue;
             area_sum = area_sum + area;
             const double magnitude = Kokkos::sqrt(dot(area, area));
             if (magnitude <= sliver) continue;
@@ -804,6 +809,18 @@ struct Kernel {
 
         volume = warp_sum(volume);
         moment = {warp_sum(moment.x), warp_sum(moment.y), warp_sum(moment.z)};
+        if constexpr (!with_faces) {
+            if (status == ok && !(volume > 0)) status = degenerate;
+            if (l == 0) {
+                const bool good = status == ok;
+                out.status(id) = status;
+                out.volume(id) = good ? volume : 0.0;
+                out.centroid(id, 0) = good ? moment.x / volume : 0.0;
+                out.centroid(id, 1) = good ? moment.y / volume : 0.0;
+                out.centroid(id, 2) = good ? moment.z / volume : 0.0;
+            }
+            return;
+        }
         area_sum = {warp_sum(area_sum.x), warp_sum(area_sum.y), warp_sum(area_sum.z)};
         area_magnitude = warp_sum(area_magnitude);
         faces = warp_sum(faces);
@@ -925,8 +942,9 @@ struct Kernel {
 
 }  // namespace warp
 
-// Build every cell with one warp per cell, then rebuild the ones that overflowed with the per-thread kernel, and those
-// still failing exactly; with face rings if `out` records them. Other backends use that kernel throughout.
+// Build every cell with one warp per cell, then the needle cells with the filtered warp kernel (#60), then rebuild the
+// ones given up with the per-thread kernel (finish_failed), and those still failing exactly; with face rings if `out`
+// records them. Other backends use that kernel throughout.
 // Used by: Mesh<3>::rebuild.
 template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
@@ -958,32 +976,27 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         constexpr int budget = heavy_clips;
         const auto status = out.status;
         const auto order = grid.order;
-        detail::until_pool_fits(exec, out, [&] {
-            Kokkos::deep_copy(exec, next_cell, 0);
-            if (rings && off_base > 0)
-                Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
-                                     warp::Kernel<Memory, true, true>{
-                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
-            else if (rings)
-                Kokkos::parallel_for("shell_voronoi::construct_warp_rings", policy,
-                                     warp::Kernel<Memory, false, true>{
-                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
-            else if (off_base > 0 && cube)
-                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, true, false, true>{
-                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+        auto run = [&](auto output) {
+            constexpr warp::Output o = decltype(output)::value;
+            using warp::Kernel;
+            const char* const label = o == warp::Output::rings     ? "shell_voronoi::construct_warp_rings"
+                                      : o == warp::Output::volumes ? "shell_voronoi::construct_warp_volumes"
+                                                                   : "shell_voronoi::construct_warp";
+            const Kernel<Memory, true, o> walk{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}};
+            if (off_base > 0 && cube && o != warp::Output::rings)
+                Kokkos::parallel_for(
+                    label, policy,
+                    Kernel<Memory, true, o, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else if (off_base > 0)
-                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, true, false>{
-                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
-            else if (cube)
-                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, false, false, true>{
-                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+                Kokkos::parallel_for(label, policy, walk);
+            else if (cube && o != warp::Output::rings)
+                Kokkos::parallel_for(
+                    label, policy,
+                    Kernel<Memory, false, o, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             else
-                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
-                                     warp::Kernel<Memory, false, false>{
-                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
+                Kokkos::parallel_for(
+                    label, policy,
+                    Kernel<Memory, false, o>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
             // the filtered kernel, over a list of their slots.
             const bool levels = off_base > 0;
@@ -995,37 +1008,89 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Kokkos::parallel_reduce(
                 "shell_voronoi::count_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
                 KOKKOS_LAMBDA(int t, int& sum) { sum += heavy(t); }, heavy_count);
-            if (heavy_count > 0) {
-                Kokkos::View<int*, Memory> list(Kokkos::view_alloc(Kokkos::WithoutInitializing, "shell_warp_heavy"),
-                                                heavy_count);
-                Kokkos::parallel_scan(
-                    "shell_voronoi::list_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-                    KOKKOS_LAMBDA(int t, int& at, bool last) {
-                        if (!heavy(t)) return;
-                        if (last) list(at) = t;
-                        ++at;
-                    });
-                Kokkos::deep_copy(exec, next_cell, 0);
-                if (rings)
-                    Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
-                                         warp::Kernel<Memory, true, true, false, true>{
-                                             grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
-                else if (cube)
-                    Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
-                                         warp::Kernel<Memory, true, false, true, true>{
-                                             grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
-                else
-                    Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
-                                         warp::Kernel<Memory, true, false, false, true>{
-                                             grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
-            }
-            detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
+            if (heavy_count == 0) return;
+            Kokkos::View<int*, Memory> list(Kokkos::view_alloc(Kokkos::WithoutInitializing, "shell_warp_heavy"),
+                                            heavy_count);
+            Kokkos::parallel_scan(
+                "shell_voronoi::list_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+                KOKKOS_LAMBDA(int t, int& at, bool last) {
+                    if (!heavy(t)) return;
+                    if (last) list(at) = t;
+                    ++at;
+                });
+            Kokkos::deep_copy(exec, next_cell, 0);
+            if (cube && o != warp::Output::rings)
+                Kokkos::parallel_for(
+                    "shell_voronoi::construct_warp_filtered", policy,
+                    Kernel<Memory, true, o, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget,
+                                                        list});
+            else
+                Kokkos::parallel_for(
+                    "shell_voronoi::construct_warp_filtered", policy,
+                    Kernel<Memory, true, o, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget,
+                                                         list});
+        };
+        using Faces = std::integral_constant<warp::Output, warp::Output::faces>;
+        using Rings = std::integral_constant<warp::Output, warp::Output::rings>;
+        using Volumes = std::integral_constant<warp::Output, warp::Output::volumes>;
+        detail::until_pool_fits(exec, out, [&] {
+            Kokkos::deep_copy(exec, next_cell, 0);
+            if (rings)
+                run(Rings{});
+            else if (out.without_faces())
+                run(Volumes{});
+            else
+                run(Faces{});
+            detail::finish_failed(exec, grid, stencil, out);
             detail::exact_where_failed(exec, grid, stencil, out);
         });
         return;
     }
 #endif
     construct(exec, grid, out);
+}
+
+// Volumes and centroids only, no faces or rings: volume(i) and centroid(i, a) (relative to particle i) of the cells
+// of x(i, a), snapped to the grid of `box`. The warp build's certification and fallbacks, then exact cells for any
+// left unbuilt; throws if one still is. Used by: callers that need no faces, library_bench (warp-vo paths).
+template <class ExecSpace, class X>
+void volumes_and_centroids(const ExecSpace& exec, const exact_predicates::Box& box, const X& x,
+                           const Kokkos::View<double*, typename ExecSpace::memory_space>& volume,
+                           const Kokkos::View<double* [3], typename ExecSpace::memory_space>& centroid) {
+    using Memory = typename ExecSpace::memory_space;
+    const int n = static_cast<int>(x.extent(0));
+    if (n <= 0 || volume.extent(0) != x.extent(0) || centroid.extent(0) != x.extent(0))
+        throw std::invalid_argument("shell_voronoi::volumes_and_centroids: no particles, or outputs of another size");
+    neighbor_search::CellList<ExecSpace> list;
+    neighbor_search::configure(list, n, box,
+                               box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n));
+    {
+        Kokkos::View<double* [3], Memory> snapped(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("volumes_snapped")), n);
+        Kokkos::parallel_for(
+            "shell_voronoi::volumes_snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, n), KOKKOS_LAMBDA(int i) {
+                for (int a = 0; a < 3; ++a) snapped(i, a) = exact_predicates::snap(x(i, a), box, a) * box.step;
+            });
+        neighbor_search::build(exec, list, snapped);
+    }
+    Cells<Memory> cells;
+    cells.status = Kokkos::View<int*, Memory>("cell_status", n);
+    cells.volume = volume;
+    cells.centroid = centroid;
+    const Grid<Memory> grid = make_grid(list);
+    construct_warp(exec, grid, cells);
+    const auto status = cells.status;
+    int left = 0;
+    Kokkos::parallel_reduce(
+        "shell_voronoi::volumes_left", Kokkos::RangePolicy<ExecSpace>(exec, 0, n),
+        KOKKOS_LAMBDA(int i, int& sum) { sum += status(i) != ok; }, left);
+    if (left == 0) return;
+    detail::construct_cells<detail::ExactCell>(exec, grid, make_stencil(exec), cells, detail::Pass::failed);
+    Kokkos::parallel_reduce(
+        "shell_voronoi::volumes_left", Kokkos::RangePolicy<ExecSpace>(exec, 0, n),
+        KOKKOS_LAMBDA(int i, int& sum) { sum += status(i) != ok; }, left);
+    if (left > 0)
+        throw std::runtime_error("shell_voronoi::volumes_and_centroids: " + std::to_string(left) + " cells unbuilt");
 }
 
 }  // namespace shell_voronoi

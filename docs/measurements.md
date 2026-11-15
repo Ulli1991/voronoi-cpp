@@ -11,6 +11,7 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates are mill
 | Moving-mesh update, update plus `update_cells()`, 128³ and 256³ | 32269165, 32237516 (interleaved with main 9e9ec03; [fewer bytes per step](#fewer-bytes-per-step-incremental-face-numbers-e-and-the-ring-re-walk-k2-2026-11-12)) | `step-bytes` (the ring re-walk commit) |
 | `update_cells()` alone | 32231679 ([step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
 | Full rebuilds at 2.1M and 16.8M, exact start at 2.1M | 32269868, 32269874, 32269869 ([lean cut](#canonical-rings-and-a-lean-cut-2026-11-13)) | `clip-canonical` |
+| Full rebuilds, uniform, clustered and halo, at 2.1M and 16.8M | 32366435, 32366438 ([hard cells](#hard-cells-on-clustered-and-halo-input-and-49-2026-11-15)) | `clustered-build` |
 | Exact start, the sum row, at 2.1M | 31701509 | 2311937 |
 | The 256³ column, except the moving-mesh rows | 31694457 | f32c909 (older than the current code, which is faster there) |
 | Moving-mesh rows (also in research_notes/mesh_speed_2026-11-04.md) | 31886231, 31886232 | |
@@ -50,15 +51,61 @@ Job 31702953 (research_notes/box3_2026-10-31.md). Kelvin-Helmholtz-like slab, Lx
 
 The bench flow, stretched with the box, shears across the 16-cell thickness: 4x the flips per cell of the cube. Peak 2192 B/cell at 16.8M. The cubic case is bit-identical to the cubic-only code and within 0.3 to 0.7 % of its rebuild speed.
 
-### Against other libraries (2026-11-12 to 2026-11-14)
+### Against other libraries (2026-11-12 to 2026-11-15)
 
 The README's library table: methods, every setting, 256³ and the per-code versions, compilers and jobs in
 [library_benchmark.md](library_benchmark.md); raw records in `bench/libraries/results/` and the tables generated from
-them by `scripts/library_benchmark.py` (`summary.md`). voronoi-cpp rows: ad62997 (main b2faee8 plus the benchmark),
-A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under load), CPU job 32272650 (Kokkos OpenMP,
-72 cores and 1). Every other GPU code ran on the same node in chained jobs (`bench/libraries/run_chain_a100.sh`), each
+them by `scripts/library_benchmark.py` (`summary.md`). voronoi-cpp rows: 77055a4 (close-gaps, below), A100 jobs
+32368078, 32368079, 32368080 (gpu1, 1305 MHz), CPU job 32367276 (with voro++ in the same job); before that ad62997
+(main b2faee8 plus the benchmark), A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under
+load), CPU job 32272650 (Kokkos OpenMP, 72 cores and 1). Every other GPU code ran on the same node in chained jobs (`bench/libraries/run_chain_a100.sh`), each
 with our warp rebuild as a same-GPU reference. Inputs: jobs 32225761 (generators) and 32234292 (blue noise, 100 Lloyd
 iterations). Oracle checks: job 32269164 and accuracy-main-login.jsonl (one core, login node).
+
+### Volumes-only output and the CPU path (2026-11-15)
+
+Branch close-gaps, commit 77055a4 (main c42c230 plus the changes below). Library benchmark inputs and scripts
+([library_benchmark.md](library_benchmark.md)), 128³ unless stated, median of 3 timed runs, M cells/s.
+
+**Volumes and centroids only** (`shell_voronoi::volumes_and_centroids`, `Cells::volumes_only`): the warp kernel with
+`warp::Output::volumes` records status, volume and centroid and skips the face sums, face writes and pool claim; the
+walk, certification, canonical face starts (so the bits of the volume sums) and fallbacks are unchanged. Volumes and
+centroids are bit-identical to the full rebuild's on blue noise, jittered and halo input (`cmp` of the volume files,
+job 32361903); the oracle checks of every new file give at most 1.6e-13, no cell missing (job 32371853).
+
+| A100, 1305 MHz | jittered | blue noise | uniform | clustered | halo | B/cell |
+|---|---|---|---|---|---|---|
+| full warp rebuild, device | 37.8 | 34.8 | 19.1 | 16.6 | 15.2 | 671 |
+| volumes only, device | 43.1 | 40.4 | 24.3 | 16.7 | 17.0 | 101 |
+| full rebuild, host to host, volumes and centroids copied out (before) | 19.7 | 18.4 | 13.6 | 11.6 | 11.0 | 696 |
+| volumes only, host to host, pageable | 34.5 | 33.2 | 21.5 | 16.5 | 15.6 | 126 |
+| volumes only, host to host, pinned buffers | 31.4 | 34.4 | 22.4 | 17.9 | 16.1 | 126 |
+| volumes only, host to host, pageable, 256³ | 35.1 | 33.0 | 21.9 | 18.5 | 17.7 | |
+
+Jobs 32368079 (128³) and 32368080 (256³), and 32368078 (blue noise with Liu et al., VoroGPU and Basselin et al. in the
+same job: 18.1, 18.1 and 10.4 at 128³; 24.4, 19.7 and 11.6 at 256³). Pinned buffers are within the run-to-run spread of
+pageable ones at 128³ and 5 to 11 % faster at 256³.
+
+**CPU** (72 cores, 2x Xeon Platinum 8360Y, `OMP_PROC_BIND=spread OMP_PLACES=cores`, full cells with the cell list):
+
+| | jittered | blue noise | uniform | clustered | halo |
+|---|---|---|---|---|---|
+| before (ad62997, job 32272650) | 2.6 | 2.2 | 1.7 | 1.4 | 1.3 |
+| parallel radix sort of the host cell list (job 32362120) | 3.4 | 3.6 | 2.4 | 1.9 | 1.7 |
+| + dynamic chunks of 16 (77055a4, job 32367276) | 3.4 | 3.8 | 2.6 | 2.0 | 2.0 |
+| voro++ multithreaded, same job | 2.4 | 2.5 | 1.8 | 0.38 | 0.085 |
+
+Phases on blue noise before (job 32361898): cell list 370 to 450 ms (one thread's `std::sort` of 2.1M keys), clipping
+575 to 600 ms. The radix sort (8 bits a pass, per-chunk counts, stable, so the slot order is the same) takes 11 ms.
+Dynamic chunks of 16 or 128 cut the clipping by 7 % (blue noise) to 17 % (halo); close binding changes nothing; 144
+hyperthreads are 0 to 18 % slower (job 32362198). Volumes bit-identical to ad62997's on all five inputs.
+
+**Default paths unchanged** (job 32368117, main 55cd6b1 against close-gaps, alternating, 1305 MHz, 128³): rebuild
+42.6 / 21.9 M cells/s jittered / uniform on both; update + `update_cells()` 161.2 / 162.4 M cells/s at 0.03 spacings
+and 99.8 / 99.6 at 0.1; clip, tetrahedra, ring, geometry, face and list checksums identical (the cells checksum hashes
+face numbers and differs between any two runs, as before). A100 `ctest` 22 of 22 (job 32368083); CI's host steps (gcc 15,
+host Kokkos 5.0.99 OpenMP at 2 threads, sanitizers off and on): 22 of 22 each, clang-tidy stops on `mesh_fuzz_test.cpp`
+as on main (#56) (job 32367277).
 
 ### Application inputs: cosmic web, fcc solid, surface (2026-11-15)
 
@@ -324,6 +371,39 @@ Fallbacks at 256³ are the same shares as at 128³ (k = 24: 14.3, 95.2, 95.2, 95
 
 **What it says.** kNN-first is slower than the walk on every input at both sizes: 4 to 11 % on jittered and wave input in its best form (k = 32, resume), 16 to 22 % on unstructured input. Two reasons. (1) A list certifies a cell only when its last entry lies beyond 2R, as the walk's stop does; k = 32 does that for jittered, lattice and wave input, but on uniform, clustered and halo input 79 % of the cells need more (k = 48: 32 %, k = 64 at 64³: 8 %), so they are clipped twice or resumed. (2) A list clips the same particles as the walk: everything within 2R at its turn, nearest first. Its global order saves 8 to 16 % of the clips (uniform 48.0 to 44.3), and its cuts fall from 17.9 to 16.6 on unstructured input, but the clipping without any walk (45 ms jittered) is already 92 % of main's whole kernel (49 ms), so the gather the list replaces is worth at most 8 % there, less than the kNN pass costs (10 to 15 ms). A per-region choice changes nothing: the octree level does not tell which cells a list certifies. The vertex balls remove half the clips on unstructured input (48 to 24 uniform, 54 to 25 halo) and a quarter on jittered, with every cut and bit the same, but they save no time: a clip that cuts nothing is a side test and a ballot, about as dear as the filter's own test, and the cuts (16 to 20 a cell, about a face each) are the cost. The lower bound of about one cut per face is already met within 1 to 25 % (cuts against 15.9 faces), so no candidate order, list or bound can make the rebuild several times faster; that needs a cheaper cut (C, R16) or no clipping (D).
 
+### Hard cells on clustered and halo input, and #49 (2026-11-15)
+
+Branch `clustered-build` against main c42c230 (`ref`; the library of 55cd6b1), one A100 at 1305 MHz on `gpu1`, every comparison in one job. Script `scripts/clustered_build_a100.sh` (bench binaries in `build-jobs/bin`, blue noise the library benchmark's point file), tables by `scripts/clustered_build_tables.py`; logs in `build-jobs/` of the `voronoi-cpp-clustered` worktree on Raven. The bench's `--kernels` now also splits the rebuild and the start by kernel label (it fences every kernel).
+
+**Where the time of a clustered or halo rebuild goes** (128³, job 32362275; counters from the measurement build, job 32365230). Per kernel: the warp kernel takes 93.0 ms on uniform, 116.6 on clustered and 119.3 on halo input; the thread-kernel pass for the cells the warp gives up takes 3.1, 6.7 and 17.2 ms (12 % of a halo rebuild). Those cells are few: 33, 68 and 261 of 2.1M (more than 64 planes or 64 vertices; none on jittered, lattice, wave and blue noise). The tail of the warp kernel is thin: the slowest 0.1 % of cells hold 0.2, 0.3 and 0.8 % of its cycles and the slowest 1 % hold 1.8, 2.2 and 4.0 %, since persistent warps take cells from a counter and a slow cell holds only its own warp. Clips per cell, mean, p99 and max: uniform 48.0, 92, 188; clustered 50.7, 106, 448; halo 53.6, 210, 2096; blue noise 19.6, 36, 75 (jittered, lattice and wave as before). The clipping of every cell is the same in every variant below, so these counts hold for all of them.
+
+By grid level against the base (halo): level −1 is 8 % of the cells and 7 % of the cycles (clips mean 54.6, p99 267) and holds 170 of the 261 overflowing cells; the base level is 10 % of the cells, 13 % of the cycles (clips mean 91.4, p99 590) and 64 overflows; the finer levels are 82 % of the cells, 80 % of the cycles and 27 overflows. On clustered input the overflows are spread over all four levels (27, 5, 20, 16).
+
+**Lever 1, overflowed cells straight to big thread cells (kept).** Main rebuilt a cell the warp gave up first in a thread cell of 48 planes and 64 vertices and, when that overflowed too, in one of 128 and 256. A cell that overflows the warp's 64 planes or 64 vertices overflows the thread's 48 and 64 as well, so that first pass was wasted; uncertified cells still take it. A cell that fits gives the same bits at either capacity. Thread pass 17.2 → 10.2 ms on halo, 6.7 → 5.3 clustered, unchanged elsewhere (job 32366435).
+
+Rebuild (`construct_ms`, median of 5, M cells/s; 128³ two rounds, job 32366435; 256³ one round, job 32366438):
+
+| | jittered | uniform | clustered | halo | lattice | wave | blue noise |
+|---|---|---|---|---|---|---|---|
+| main, 128³ | 42.5 | 21.9 | 17.1 | 15.5 | 55.1 | 40.8 | 37.0 |
+| branch, 128³ | 42.5 (−0.1 %) | 22.2 (+1.2 %) | 17.3 (+1.2 %) | 16.3 (+5.3 %) | 55.0 (−0.1 %) | 40.8 (−0.1 %) | 36.9 (−0.1 %) |
+| main, 256³ | 42.8 | 22.4 | 18.6 | 17.9 | 57.7 | 41.0 | 37.0 |
+| branch, 256³ | 42.8 (0 %) | 22.5 (+0.3 %) | 18.6 (+0.3 %) | 18.0 (+0.7 %) | 57.7 (0 %) | 41.1 (0 %) | 37.1 (+0.2 %) |
+
+At 256³ the pass is the time of its slowest cell on one thread, much as at 128³, against an eight times longer warp kernel. Exact start (`start_ms`, median of 3, M cells/s, one round; jobs 32366435, 32366439): 128³ main 18.6, 8.9, 7.8, 10.3, 7.7, 4.4, 18.8 against 18.5, 9.0, 8.0, 10.7, 7.5, 4.2, 18.7 (jittered, uniform, clustered, halo, lattice, wave, blue noise); 256³ main 12.7, 9.0, 8.7, 8.7, 7.8, 4.4, 13.8 against 12.9, 8.9, 9.1, 8.3, 8.0, 4.4, 13.7, and again over three rounds (job 32367236) uniform 9.0 → 9.5, clustered 9.1 → 9.0, halo 8.3 → 8.8. The start varies by 5 to 8 % from run to run; lattice and wave, where no cell overflows, run the same kernels as main.
+
+**Lever 1, a queue of hard cells first (dropped).** The cells below the base level (halo 168k, clustered 379k) built first by their own launch of the warp kernel, the rest by a second launch on another stream that fills the SMs they free, and the big thread pass for the hard cells' overflows on a third stream while the rest is built (`VORONOI_HARD=2` in commit f6535fc, a level more with `=3`). Halo 136.6 ms against 128.6 with lever 1 alone, clustered 124.4 against 121.5 (job 32365816). The timeline (Nsight Systems, job 32366007) shows why: the second launch is a persistent kernel that keeps every SM slot until it ends, so the overlapped thread pass starts only after it (at 126 ms of 137); and a third of the halo overflows (91 of 261, 5.5 ms of thread pass) lie on finer levels the queue does not hold. A hard-first order cannot shorten the drain either, which is under 1 % of the cycles. The vertex balls (P1) and the R8 box were meant to pay in this queue; with the thread kernel for the hard cells they would only skip clips that cut nothing in a pass whose time is that of one cell, and a warp kernel of larger capacity would change bits (next paragraph).
+
+**Lever 2, balancing by expected work (not built).** The warp kernel's persistent warps already balance the load (above). A block or several warps per huge cell needs a warp kernel of larger capacity in place of the thread kernel for the cells that overflow, and the two kernels do not give the same bits: building every cell with the thread kernel (`VORONOI_HARD=9`, commit cdf04d4, job 32365528) gives other `clip_checksum` and `clip_topology` on jittered, uniform and halo input than the warp kernel. So the overflowing cells of uniform, clustered and halo input would change their last bits against main.
+
+**Lever 3, overflowing cells on the host (dropped).** The big rounded cells built on the host (Kokkos Serial, the arrays copied there and back; `VORONOI_HARD=8`, commit f6535fc) while nothing else runs: 276.7 ms against 122.9 on clustered and 283.4 against 135.2 on halo (job 32365816), and the host's rounding differs: `clip_checksum` changes on clustered and halo input, with the same topology. Run beside the warp kernel it would need the copies to overlap too, and it would still change bits. Exact huge cells were already built on the host; they now use every core (#49, below).
+
+**Adaptive levels.** A different level for a slot changes which particles share a batch of the walk and so the order of the cuts and the last bits of the cell; with the mesh held bit for bit to main, the level choice stays.
+
+**#49.** Seeds that ran out of time, with the passes timed (`VORONOI_TRACE` in commit f6535fc; jobs 32365817 to 32365819, Nsight Systems jobs 32362474 and 32362475). Seed 3000000000009 (156,273 particles, a Fibonacci sphere with a diamond lattice and clumps): per update the warp kernel 0.12 s, 42,543 rounded thread cells 0.7 s, 34,355 big ones 5.4 s, then the exact patch: 35,488 big exact cells 15.5 s and 5525 huge ones on the host, 408 s on one core, since the CUDA build's host space is Kokkos Serial. Seed 4000000000002 (1,551,620 particles, no background: a cusp, a spiral, polytopes): 97 % of the cells overflow the warp; the rounded thread pass took 40.6 s and the big one 412 s for 1,485,690 cells (3600 cells/s), then 1,416,857 exact cells 105 s. So two causes: (a) inputs where most cells have more than 64 faces send nearly every cell to the thread kernel, which builds big cells at a few thousand per second; (b) cells past 128 planes or 256 vertices go to the host one at a time. (b) is fixed: the host builds huge cells one at a time on every core the process may use, each thread with its own Serial instance, and gives the same bits as before. Seed 3000000000009 now ends in 110 s (job 32366437, 18 cores), with the right refusal (5 cells need more than 16000 planes); main was still in its first `update()` after 830 s. (a) is not fixed: lever 1 drops the 40.6 s of doomed small cells (16.8 s left for the uncertified ones), but the 412 s of big thread cells stay. It needs a warp kernel of larger capacity for such cells, which changes the warp kernel's output code and, on inputs with few overflowing cells, bits (above).
+
+**Mesh.** After the build and two steps at 0.1 spacings, `tets_checksum`, `rings_checksum`, `rings_topology`, the build's `cells_checksum`, `geometry_checksum`, `faces_checksum` and `lists_checksum`, and a plain rebuild's `clip_checksum` and `clip_topology` equal main's on all seven inputs at 128³ (job 32366436) and 256³ (jobs 32366440 to 32366442; wave at 256³ the start's and the rebuild's checksums, as its step runs out of memory on main too), with main's bad tetrahedra and patched cells. The step's `cells_checksum` differs between runs of main as well. Tests: A100 ctest 22 of 22 (job 32367231, with the fuzz smoke); CI's host steps with GCC 15 and the OpenMP Kokkos, sanitizers off and on, 22 of 22 each (jobs 32367232, 32367233; lint reports one clang-analyzer warning in `mesh_fuzz_test.cpp` that main has too). A100 fuzz, profile huge (1e6 to 4.5e6 particles, with its Gaussian, power-law and void families; jobs 32367234, 32367235): 18 cases, 8 exact, 7 refused correctly, 3 out of time (280 s), no WRONG or CRASH. The three (4000000000098, 105, 107: spirals, lines and coplanar sets, cause (a) of #49) run out of time alone with main as well (260 s; jobs 32367945, 32367946).
+
 ### Step kernels at today's bytes (2026-11-12)
 
 Branch `step-kernels` against main 5d23b26 (with the re-sort, layout off, and the #48 fix), one A100 at 1305 MHz application clock, double, jittered input, median of steps 2 to 10 over two interleaved runs of each build (scripts `scripts/ab_step_a100.sh`, `scripts/ab_step_tables.py`; logs archived on Raven in `voronoi-cpp-joblogs/voronoi-cpp-step/build-cuda/jobs/`). The target was the bandwidth ceiling of [measure_2026-11-12.md](measure_2026-11-12.md) at today's bytes: 434 M cells/s for the step at 0.03 spacings, 320 with `update_cells()`, 259 at 0.1. Nothing stored changed.
@@ -396,6 +476,70 @@ luna-cpp (branch `resort` a82092c, the first that builds against main's API with
 
 
 **Left to the 5× budget.** The step now moves 2392 B/cell at 0.03 spacings and 4133 at 0.1 (step 3, 128³; main 69de1d3 moved 2866 and 4795, main 9e9ec03 2717 and 4292). The 5× budgets are 1269 and 2182 B/cell: 1123 and 1951 B/cell still to go, with every kernel at 80 % of peak besides. By kernel at 0.03: `faces` 1005 and `cell_sums` 737 (R14 and float centres, R6), `screen` 528 (K4), the repair and ring re-walk 617 (the repair's rounds and the `dirty_faces` walks, K2), the numbering now 63.
+
+### The exact start: assembly from the ring blocks and an incremental patch round (2026-11-15)
+
+Branch `start-fast` against main c42c230, both in the same `gpu1` job (one A100 at the 1305 MHz application clock; `scripts/start_fast_a100.sh proof`, tables by `scripts/start_fast_tables.py`). The start is the bench's `start_ms`: the warp clipping with rings and `tet_start::build`, median of 3 after a warm-up. "Exact" is `tet_start::build` alone: assembly, check, exact re-clips and further rounds.
+
+What changed, all in `tet_mesh::assemble` and `tet_start.hpp`:
+
+- **Lookups read the clipping's ring blocks** in place. Main copied every ring into a face-ordered array (`face_particles`) and looked a tetrahedron up through three face arrays and that copy; now a lookup reads one 32-byte record of the owner cell, then the cell's block. No `face_particles`, `face_lengths`, `first_tet` scan or `ring_start` scan.
+- **One thread per ring slot** for emitting and naming (main: one per face, 9 threads busy per warp instruction), **one per tetrahedron** for the adjacency (main: one per face, 4.9), **one per face** for the face arrays (coalesced writes; a thread per cell wrote six arrays at 74 % of DRAM peak but 8× the bytes needed). Ring wraps without integer division.
+- **The check by the double filters** (91 registers, 168 before); tetrahedra a filter cannot decide go to a second kernel with the exact predicates, so the outcome is the exact one.
+- **#59: the round after a partial re-clip is incremental.** Cells whose ring block names a re-clipped particle look up again; every other lookup and adjacency is the last round's, shifted by the change in its cell's first tetrahedron. The check tests only the tetrahedra looked up again and their neighbours. The arrays are those of a full round, entry for entry (`start_arrays_checksum`).
+- **Storage kept between rounds.** Freeing gigabytes and allocating again right after made single `cudaMalloc` calls take 76 to 103 ms at 256³ (Nsight Systems); the assembly and the check now keep their arrays, with a second set of tetrahedra and slots for the incremental round.
+
+**Rates.** `start_ms`, median of 3 unfenced runs, job 32373387 (ravg1082, 1305 MHz); M cells/s and ns per cell, main → start-fast:
+
+| input | 128³ M cells/s | 128³ ns/cell | 256³ M cells/s | 256³ ns/cell | rounds, bad tetrahedra, re-clipped cells at 256³ |
+|---|---|---|---|---|---|
+| jittered | 18.6 → 25.3 | 53.8 → 39.5 | 12.7 → 22.2 | 78.5 → 45.1 | 2, 44, 830 |
+| blue noise | 18.6 → 23.1 | 53.7 → 43.3 | 13.6 → 20.6 | 73.3 → 48.5 | 2, 10, 127 |
+| uniform | 8.6 → 12.3 | 116.5 → 81.3 | 9.4 → 12.6 | 106.1 → 79.3 | 2, 18, 277 |
+| clustered | 8.0 → 10.3 | 125.0 → 97.0 | 8.9 → 12.5 | 112.5 → 79.9 | 2, 10, 203 |
+| halo | 9.8 → 11.9 | 102.0 → 83.9 | 8.6 → 12.1 | 116.5 → 82.4 | 2, 24, 393 |
+| lattice | 7.5 → 8.0 | 133.4 → 124.5 | 7.8 → 8.4 | 128.0 → 119.3 | 2, all, all |
+| wave | 4.4 → 5.0 | 229.7 → 198.3 | 4.3 → 5.1 | 231.0 → 196.4 | 2, 481311, all |
+
+At 128³ jittered, uniform and clustered need 1, 2 and 2 rounds (as on main). Lattice and wave re-clip every cell exactly in the second round (more than n/8 marked), which is unchanged and is most of their time.
+
+**Kernels by group**, ms per start, fenced per kernel (`--kernels`, same job), main → start-fast. Clipping: the warp kernel with rings; re-clip: the exact re-clips; assembly: `assemble` (main: face_start, face_lengths, ring_start, face_particles, first_tet, emit, adjacency; branch: cell_counts, cell_starts, faces_of_cells, emit, adjacency); check: check, its exact pass, the incremental list, unused, the carried volume.
+
+| input, 128³ | clipping | re-clip | assembly | check | represent |
+|---|---|---|---|---|---|
+| jittered | 56.6 → 56.7 | 0.1 → 0.1 | 41.7 → 13.9 | 5.1 → 3.3 | 3.3 → 3.3 |
+| blue noise | 68.3 → 68.3 | 0.1 → 0.1 | 31.1 → 11.4 | 4.5 → 2.9 | 2.5 → 2.4 |
+| uniform | 114.8 → 114.8 | 15.8 → 15.8 | 80.2 → 24.4 | 10.1 → 4.5 | 3.2 → 3.2 |
+| clustered | 131.3 → 132.1 | 23.9 → 23.7 | 81.8 → 24.3 | 10.0 → 4.5 | 3.2 → 3.2 |
+| halo | 133.8 → 133.9 | 16.6 → 16.5 | 39.6 → 13.6 | 5.1 → 3.2 | 3.2 → 3.2 |
+| lattice | 39.7 → 39.7 | 182.0 → 182.0 | 33.7 → 15.2 | 8.2 → 10.4 | 2.3 → 2.3 |
+| wave | 58.6 → 58.6 | 313.4 → 313.0 | 86.1 → 28.0 | 10.3 → 6.6 | 3.3 → 3.4 |
+
+| input, 256³ | clipping | re-clip | assembly | check | represent |
+|---|---|---|---|---|---|
+| jittered | 453 → 453 | 4 → 4 | 681 → 197 | 79 → 35 | 26 → 26 |
+| blue noise | 546 → 546 | 6 → 5 | 529 → 164 | 69 → 31 | 19 → 19 |
+| uniform | 918 → 918 | 17 → 17 | 687 → 192 | 77 → 34 | 25 → 25 |
+| clustered | 1008 → 1015 | 23 → 23 | 653 → 192 | 77 → 34 | 25 → 25 |
+| halo | 1009 → 1010 | 69 → 69 | 684 → 192 | 77 → 35 | 25 → 25 |
+| lattice | 303 → 304 | 1438 → 1437 | 281 → 118 | 63 → 80 | 18 → 18 |
+| wave | 468 → 468 | 2494 → 2496 | 731 → 222 | 80 → 51 | 27 → 27 |
+
+256³ jittered by kernel, both rounds: main emit 265.6, adjacency 218.3, face_particles 116.4, check 78.3, first_tet 38.2, face_lengths 33.2, represent 25.8, ring_start 7.7 ms; branch emit 92.7, faces_of_cells 41.0, adjacency 34.6, represent 25.9, cell_counts 25.5, check 25.4, near_redone 7.5, cell_starts 3.7 ms. On lattice the check is slower (63 → 80 ms at 256³): every tetrahedron has a cospherical tie, so all go through the exact pass after the filters. One 128³ jittered start under Nsight Compute (job 32370306, before the incremental round and the per-face face arrays): main's assembly kernels ran at 4.9 to 9.8 of 32 lanes per instruction and 13 to 44 % of DRAM peak; the branch's emit 14.2 lanes, 52 % issue active, 668 + 304 B/cell; the adjacency 14.7 lanes, 874 + 158 B/cell at 48 % of DRAM peak; the filtered check 91 registers (main 168, 12 % occupancy).
+
+**Host side.** One 256³ jittered `tet_start::build` (the bench's last start, Nsight Systems): main 840 ms wall, 791 of kernels; the branch at v7 366 ms wall, 240 of kernels, the rest `cudaMalloc` and `cudaFree` (jobs 32371594, 32372190). Syncs and launches per start: 92 and 32 on main, 72 to 74 and 29 on the branch.
+
+**Memory.** Peak device memory through the first `Mesh::update` (`--memory`, job 32373385): 1955.2 B/cell at 256³ jittered and 1719.5 blue noise, both main's to 0.01 B/cell; the peak is in `prepare` and the geometry, not the start. The bench's own start block, which keeps the previous run's mesh alive while the next start builds, peaks at 1973 against 1696 B/cell (jittered 256³). A per-slot face map instead of bisection on `ring_start` makes emit 1.6 ms faster at 128³ (5.0 against 6.6 ms) for 167 B/cell more at the start's peak; not taken.
+
+**Bits.** `tets_checksum`, `rings_checksum`, `rings_topology`, `assembly_checksum` (one assembly of the first clipping, entry for entry, also where the check rejects it), `start_arrays_checksum` (the final start's vertex, adjacency, edge bits, faces and ring slots, entry for entry), the build's `cells_checksum`, and after two steps at 0.1 spacings `geometry_checksum`, `faces_checksum` and `lists_checksum`: identical to main on all seven inputs at 128³ and 256³ (job 32373387; the final binary, with the round-3 volume fix below, again in job 32374526). Wave at 256³ runs out of memory in the bench's step on main and the branch alike, so for it the start's checksums only. The step's `cells_checksum` hashes face numbers that follow the repair's atomics and differs between runs of main, so it is not compared. The patched cells and bad tetrahedra per round are main's.
+
+**Found by the tests.** The first full build of the branch failed `mesh_cases.valence` (`valence.ring.step.128` and `.129`): after an incremental second round failed, the third, full round still added the second round's carried volume (1.94 instead of 1) and refused the mesh. None of the seven bench inputs reach a third round. Fixed before the proof's final binary; A100 ctest 22 of 22 (job 32373935).
+
+**Tests.** A100 ctest 22 of 22, the fuzz smoke included (job 32373935). CI's host steps (gcc 15, host Kokkos 5.0.99 OpenMP at 2 threads; CI builds a Serial Kokkos 5.0.2): comment and format checks pass, ctest 22 of 22 with sanitizers off and on, clang-tidy 18 clean on `voronoi_bench.cpp`, `start_test.cpp` and `mesh_test.cpp` with the library headers (job 32374568). A100 fuzz batch, profiles large, huge and giant on four A100 for 10 minutes (job 32373936): 52 cases, 26 exact, 17 refused for causes the input has, 9 out of time and no WRONG or CRASH; main's campaign of 2026-11-10 had 85 of 604 out of time (#49), and seed 4000000000005 rerun alone times out at 900 s on main and on the branch alike (job 32374773).
+
+**Face output (about 17.5 ns per cell of the start).** It cannot come out of the check's pass: faces are numbered by the edge representatives, which `represent` sets only once the check has passed, and most inputs need a second round at 256³. Where its time goes (main, 128³ jittered, Nsight Systems job 32369633, one build): about 22 ms of kernels, of which the two walks around every edge in `number_faces` and `update_face_rings` are 9.0 ms (40 %), `tet_repair::prepare`'s resize copies of the start's arrays 5.0 ms, `faces` 2.2, the cell sums and sort 3.0, circumcentres 1.1. The assembly already holds every face's ring of tetrahedra (`mesh.ring`, in owner order); numbering the build's faces from it (a face's representative is its lowest tetrahedron; its ring rotated to the canonical start) would replace both walks, and sizing the start's arrays with `prepare`'s room would drop the copies. Both change `update_face_rings`, `number_faces` and `Mesh::rebuild` (voronoi_mesh.hpp), so they are left for the owner of those files; #48 (a rounded cell naming a face twice) needs the walk kept for cells with repeated neighbours.
+
+**Allocation.** The first `Mesh::update` at 256³ spends 528 ms of its 1992 in `cudaMalloc` on main (Nsight Systems job 32372190): mapping fresh device memory costs about as much as the start's kernels. A pool for the mesh's arrays would remove it for every caller; not done here.
 
 ## Removed, and where to find it
 

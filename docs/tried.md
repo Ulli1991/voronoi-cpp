@@ -25,6 +25,25 @@ Reason gives the structural cause, not "method X is worse".
 | Vertex-ball filter on the walk | −2 to −16 % | dropped | halves the candidate tests (uniform 48 → 24, halo p99 211 → 46), but the filter costs as many instructions as it saves | same |
 | Delaunay-first: lattice plus motion through `update()` | jittered 3.5 against 17.4 (start); stuck on uniform, clustered, halo | dropped | lattice ties force a full re-triangulation; large shifts stall the repair | branch `delaunay-first`, research_notes/delaunay_first_2026-11-12.md |
 | Delaunay-first: batched insertion with exact flips | 0.38 when it finishes; falls back on most inputs | dropped | floored by flips: about 13.5 flips per cell at 17–21 M flips/s | same |
+| Overflowed warp cells straight to big thread cells (skip the 48/64 thread pass they overflow again) | rebuild 128³: halo +5.3 %, clustered +1.2 %, uniform +1.2 %, jittered, lattice, wave, blue noise −0.1 to 0 %; 256³: 0 to +0.7 %; start within its 5–8 % spread | kept | the thread pass for the 33–261 cells the warp gives up was twice the work it needed; it is still the time of its slowest cell on one thread (10 ms of 129 on halo) | measurements.md, "Hard cells on clustered and halo input, and #49"; `cbfd8b3` |
+| Queue of hard cells (below the base level) first, their overflows on a concurrent stream | halo −6 %, clustered −2 % against the row above | dropped | the persistent warp kernel holds every SM slot until it ends, so the overlapped thread pass cannot start; a third of the halo overflows are on finer levels anyway; the tail is under 1 % of the warp cycles | same; `f6535fc` |
+| Overflowing rounded cells on the host | clustered and halo 2.1–2.3× slower; other last bits | dropped | copies to and from the host, and the host's rounding differs from the device's | same |
+| A larger-capacity warp kernel (or a block) for big cells | not built | — | the thread and warp kernels give different bits, so the overflowing cells of uniform, clustered and halo input would change against main; it is what #49's inputs with most cells overflowing need | same |
+| Another choice of the adaptive grid level | not built | — | the level decides which particles share a batch, so the cut order and last bits | same |
+| Exact huge cells on every host core (#49) | a fuzz case with 5525 huge cells: over 830 s → 110 s (18 cores) | kept | the CUDA build's host space is Serial, so they ran on one core; now one Serial instance per core, same bits | same |
+
+| Volumes-only output (`volumes_and_centroids`: no face sums, face writes or pool) | device +16 % on blue noise (34.8 → 40.4), +12 to +27 % on jittered, uniform and halo, +1 % clustered; host to host 18.4 → 33.2 (blue noise, 128³); 671 → 101 B/cell; same bits | kept (new option) | the face rows were few bytes but the 1.1 GB face pool, its allocation and the host mirrors dominated host-to-host time; the walk and cuts are unchanged | measurements.md, "Volumes-only output and the CPU path"; jobs 32368078–80 |
+| Pinned host buffers for the volumes-only copies | 128³: within the run spread (31 to 37 against 33 to 35); 256³: +5 to +11 % | option in the bench only; tables use pageable memory | the copies are 56 B/cell, a few ms at 128³; pinned memory pays only once the copies are a larger share | same |
+
+## CPU path
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| Parallel stable radix sort of the host cell list (was `std::sort` on one thread) | cell list 370–450 → 11 ms; build 2.2 → 3.6 M cells/s on blue noise (72 cores); same slot order and bits | kept | the sort was serial while everything else used 72 threads | measurements.md, "Volumes-only output and the CPU path"; jobs 32361898, 32362120 |
+| Dynamic chunks of 16 cells in the host thread kernel | +7 % (blue noise) to +17 % (halo) | kept (host backends only; CUDA unchanged) | cell costs vary, static blocks leave threads idle at the end | same; job 32362198 |
+| Dynamic chunks of 128 | about equal to 16 | not chosen | load balance is already even at 16 | job 32362198 |
+| Close instead of spread binding | 0 to +3 % (within noise) | not changed | the kernel is not bound by where threads sit | same |
+| 144 hyperthreads instead of 72 cores | −18 % (blue noise) to 0 % | dropped | clipping is compute-bound per core; a second thread per core only competes for it | same |
 
 ## Surface input, issue #60 (2026-11-15)
 
@@ -57,6 +76,26 @@ Branch `fix-60` against `new-inputs` `c4e6249`, one A100 at 1305 MHz, the same g
 | Re-sort by Morton, Moore, Gray | about equal to Hilbert | not default | Hilbert sorts fastest | same |
 | Re-sort by row-major, reverse Cuthill–McKee | 10–12 % worse than the curves | dropped | worse locality | same |
 | Faces by owner + owner bit | hydro +16 %, whole step about +1 % | kept, opt-in | numbering cost eats the hydro gain until it is incremental (#53) | same |
+
+## Exact start (`tet_start::build`)
+
+Kernel times fenced per kernel (`--kernels`), 128³ jittered unless stated, against main c42c230 in the same job; job ids in [measurements.md](measurements.md#the-exact-start-assembly-from-the-ring-blocks-and-an-incremental-patch-round-2026-11-15).
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| Lookups read the clipping's ring blocks; no face-ordered copy of the rings | `face_particles`, `face_lengths`, `first_tet` and the scans (12.7 ms) gone | kept | the copy moved 2353 B/cell for 167 B of rings; the blocks hold the same data in place | `tet_mesh::assemble` |
+| One thread per ring slot for emit and lookups, first try (per-slot face map, modulo wraps, counting earlier faces) | emit 15.7 → 20.1 ms | changed | integer division and re-counting the owner's earlier faces per lookup cost more than the divergence saved | job 32370011 |
+| The same with `after()` wraps and the face's first tetrahedron read, not counted | emit 15.7 → 5.0 ms | kept | one lookup per thread, 14 of 32 lanes busy against 9.8 | job 32370305 |
+| One thread per tetrahedron for the adjacency | 13.0 → 3.0 ms | kept | main ran one thread per face, 4.9 lanes busy | same |
+| Face arrays by one thread per cell | 6.6 ms, 2210 + 1392 B/cell at 74 % of DRAM peak | changed | uncoalesced writes of six arrays: partial sectors read back from DRAM | ncu job 32370306 |
+| Face arrays by one thread per face (owner by bisection) | 6.6 → 2.6 ms | kept | coalesced writes | job 32370596 |
+| Check by the double filters, undecided tetrahedra by the exact predicates in a second kernel | 5.1 → 3.2 ms; lattice: 8.2 → 2.8 + 7.5 (all ties go exact) | kept | 91 registers instead of 168: 12 → about 25 % occupancy | same |
+| A lookup reads one 32-byte cell record (block, faces, first face, slot, tetrahedron) | not measured on its own | kept | one memory sector per lookup instead of three | |
+| Per-slot face map against bisection on `ring_start` | map: emit 5.0 ms; bisection 6.6 ms | bisection kept | the map costs 167 B/cell at the start's peak; owner's call | job 32373386 |
+| #59: incremental round after a partial re-clip | 256³ jittered: second round 407 → 108 ms of kernels (main → branch), the first 381 → 129 | kept | only cells naming a re-clipped particle look up again; the passes over all cells, faces, slots and tetrahedra that shift the rest (about 70 ms at 256³) remain | nsys job 32372190 |
+| Freeing the old mesh and temporaries before allocating | `cudaMalloc` 534 → 297 ms in one 256³ start | changed | a large `cudaMalloc` right after large frees stalls (76 to 103 ms each) | nsys jobs 32371022, 32371295 |
+| Storage kept from round to round (two sets for the incremental round) | host gap of one 256³ start 559 → 126 ms | kept | no frees between rounds | nsys job 32371594 |
+| Slack of 1/16 on kept storage, check lists of their own | start peak through `Mesh::update` 1955 → 2059 B/cell (256³) | changed to 1/64 and lists in idle assembly storage | the peak equals main's again (1955.2) | memory job 32373385 |
 
 ## Precision
 

@@ -36,9 +36,9 @@ SIZE_NAME = {2097152: "128³", 16777216: "256³", 1048576: "2²⁰", 8388608: "2
 # at l = 64 and 128 unit cells (2²⁰ and 2²³ atoms) rather than 128³ and 256³.
 APPLICATION = [(2097152, "cosmicweb"), (16777216, "cosmicweb"), (2097152, "surface"), (16777216, "surface"),
                (1048576, "fccsolid"), (8388608, "fccsolid")]
-# The voronoi-cpp commit of the tables (main b2faee8 + this benchmark); records of earlier commits serve only as the
-# same-GPU references of the other libraries' jobs (same_gpu_table).
-OURS = "ad62997"
+# The voronoi-cpp commit of the tables (close-gaps: volumes-only output, parallel host sort, dynamic chunks); records of
+# earlier commits serve only as the same-GPU references of the other libraries' jobs (same_gpu_table).
+OURS = "77055a4"
 OURS_APPLICATION = "631af46"  # main c42c230 + the application inputs: our rows of those inputs only
 
 
@@ -287,8 +287,9 @@ FIGURE_GPU_FULL = [
     ("votess", "tesellate + faces", "A100", 1, "votess + faces (ours)"),
 ]
 FIGURE_GPU_VOLUMES = [
-    ("voronoi-cpp", "warp clipping rebuild, host to host, volumes", "A100", 1,
-     "voronoi-cpp, host to host, volumes + centroids out"),
+    ("voronoi-cpp", "volumes and centroids only, host to host$", "A100", 1,
+     "voronoi-cpp, volumes only, host to host"),
+    ("voronoi-cpp", "volumes and centroids only (", "A100", 1, "voronoi-cpp, volumes only, device"),
     ("Basselin", "", "A100", 1, "Basselin et al. 2021"),
     ("Liu et al.", "tet-centric", "A100", 1, "Liu et al. 2022 (float)"),
     ("VoroGPU", "", "A100", 1, "Ray et al. 2018 (float)"),
@@ -331,7 +332,8 @@ def curve(summary, lib, variant, device, threads, n, phase="build"):
     got = {}
     for g, s in summary.items():
         k = g[0]
-        if g[1] == phase and g[3] == n and k[0].startswith(lib) and k[1].startswith(variant) and \
+        same = k[1] == variant[:-1] if variant.endswith("$") else k[1].startswith(variant)  # "$": whole variant
+        if g[1] == phase and g[3] == n and k[0].startswith(lib) and same and \
                 k[2].startswith(device) and k[3] == threads and readme_choice(k[0], k[1], g[2], n):
             got[g[2]] = s
     return got

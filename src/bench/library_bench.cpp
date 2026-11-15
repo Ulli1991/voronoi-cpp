@@ -67,6 +67,60 @@ double peak_of(const F& f) {
     return peak.stop();
 }
 
+#ifdef KOKKOS_ENABLE_CUDA
+using PinnedSpace = Kokkos::CudaHostPinnedSpace;
+#else
+using PinnedSpace = Kokkos::HostSpace;
+#endif
+
+// Host buffers of the host-to-host volumes paths: points (rows x, y, z), volumes, centroids (columns x, y, z).
+struct HostBuffers {
+    Kokkos::View<const double* [3], Kokkos::LayoutRight, Kokkos::HostSpace, Kokkos::MemoryUnmanaged> points;
+    Kokkos::View<double*, Kokkos::HostSpace> volume;
+    Kokkos::View<double* [3], Kokkos::LayoutLeft, Kokkos::HostSpace> centroid;
+    Kokkos::View<double* [3], Kokkos::LayoutRight, PinnedSpace> pinned_points;
+    Kokkos::View<double*, PinnedSpace> pinned_volume;
+    Kokkos::View<double* [3], Kokkos::LayoutLeft, PinnedSpace> pinned_centroid;
+};
+
+// The caller's buffers, made and touched once outside the clock (points stay where the file was read).
+HostBuffers host_buffers(const double* xyz, std::uint64_t n) {
+    HostBuffers b;
+    b.points = decltype(b.points)(xyz, n);
+    b.volume = decltype(b.volume)("host_v", n);
+    b.centroid = decltype(b.centroid)("host_c", n);
+    b.pinned_points = decltype(b.pinned_points)("pinned_points", n);
+    b.pinned_volume = decltype(b.pinned_volume)("pinned_v", n);
+    b.pinned_centroid = decltype(b.pinned_centroid)("pinned_c", n);
+    Kokkos::deep_copy(b.pinned_points, b.points);
+    return b;
+}
+
+// One host-to-host build of volumes and centroids from the points in pageable or pinned memory. With copy, the
+// volumes go to `out`.
+void host_volumes(const Exec& exec, const Box& box, const HostBuffers& b, std::uint64_t n, bool pinned,
+                  std::vector<double>& out, bool copy) {
+    Kokkos::View<double* [3], Kokkos::LayoutRight, Memory> xd(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("points")), n);
+    Kokkos::View<double*, Memory> v(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("v")), n);
+    Kokkos::View<double* [3], Memory> c(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("c")), n);
+    if (pinned)
+        Kokkos::deep_copy(exec, xd, b.pinned_points);
+    else
+        Kokkos::deep_copy(exec, xd, b.points);
+    shell_voronoi::volumes_and_centroids(exec, box, xd, v, c);
+    if (pinned) {
+        Kokkos::deep_copy(exec, b.pinned_volume, v);
+        Kokkos::deep_copy(exec, b.pinned_centroid, c);
+    } else {
+        Kokkos::deep_copy(exec, b.volume, v);
+        Kokkos::deep_copy(exec, b.centroid, c);
+    }
+    exec.fence();
+    if (!copy) return;
+    for (std::uint64_t i = 0; i < n; ++i) out[i] = pinned ? b.pinned_volume(i) : b.volume(i);
+}
+
 int build(int argc, char** argv) {
     const std::string file = argv[2];
     const std::string path = libbench::option(argc, argv, "path", "warp");
@@ -81,6 +135,7 @@ int build(int argc, char** argv) {
     // One build; with copy, its volumes to `volume` (outside the clock: timed runs do not copy).
     std::function<void(bool)> body;
     libbench::Setup s;
+    HostBuffers buffers;
     if (path == "warp") {
         s = setup("warp clipping rebuild (cell list + construct_warp)", "volumes faces areas centroids",
                   "points on the device to cells on the device: cell list, grid, cell arrays, clipping");
@@ -129,6 +184,31 @@ int build(int argc, char** argv) {
             if (!copy) return;
             for (std::uint64_t i = 0; i < n; ++i) volume[i] = v(i);
         };
+    } else if (path == "warp-vo") {
+        s = setup("volumes and centroids only (shell_voronoi::volumes_and_centroids)", "volumes centroids",
+                  "points on the device to volumes and centroids on the device: snap, cell list, grid, clipping "
+                  "without faces");
+        body = [&](bool copy) {
+            Kokkos::View<double*, Memory> v(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("v")), n);
+            Kokkos::View<double* [3], Memory> c(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("c")), n);
+            shell_voronoi::volumes_and_centroids(exec, box, x, v, c);
+            exec.fence();
+            if (!copy) return;
+            const auto h = to_host(v);
+            for (std::uint64_t i = 0; i < n; ++i) volume[i] = h(i);
+        };
+    } else if (path == "warp-host-vo" || path == "warp-pinned-vo") {
+        const bool pinned = path == "warp-pinned-vo";
+        if (pinned)
+            s = setup("volumes and centroids only, host to host, pinned host buffers", "volumes centroids",
+                      "points in pinned host memory to volumes and centroids in pinned host memory: points copied "
+                      "to the device, snap, cell list, grid, clipping without faces, the two arrays copied back");
+        else
+            s = setup("volumes and centroids only, host to host", "volumes centroids",
+                      "points in host memory to volumes and centroids in host memory: points copied to the device, "
+                      "snap, cell list, grid, clipping without faces, the two arrays copied back");
+        buffers = host_buffers(frames.frame(0), n);
+        body = [&, pinned](bool copy) { host_volumes(exec, box, buffers, n, pinned, volume, copy); };
     } else {
         s = setup("exact start (Mesh::update from scratch + update_cells)",
                   "Delaunay tetrahedra, volumes faces areas centroids, per-cell face lists",
@@ -289,7 +369,8 @@ int main(int argc, char** argv) {
     if (mode == "step" && argc >= 3) return step(argc, argv);
     std::cerr << "usage: library_bench points <n> <distribution> <file>\n"
                  "       library_bench trajectory <n> <distribution> <spacings> <steps> <file>\n"
-                 "       library_bench build <points file> [--path=warp|warp-host|warp-host-vc|exact] [--repeats=3] "
+                 "       library_bench build <points file> "
+                 "[--path=warp|warp-host|warp-host-vc|warp-vo|warp-host-vo|warp-pinned-vo|exact] [--repeats=3] "
                  "[--volumes=file]\n"
                  "       library_bench step <trajectory file> [--volumes=file]\n"
                  "       library_bench lloyd <points file> <iterations> <file>\n";
