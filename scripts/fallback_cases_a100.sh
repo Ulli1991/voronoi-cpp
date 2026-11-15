@@ -20,7 +20,7 @@ smi=$!
 trap 'kill $smi 2>/dev/null' EXIT
 run() {  # case label, input, spacings, flags
     echo "== case $1 $2 $n $3 ${*:4}"
-    timeout ${LIMIT:-240} "$bin/voronoi_bench" step "$n" "$2" "$3" "$steps" "${@:4}" | grep -E "^(#|motion|gpuflips|refused|final)"
+    timeout ${LIMIT:-240} "$bin/voronoi_bench" step "$n" "$2" "$3" "$steps" "${@:4}" | grep -E "^(#|motion|gpuflips|verify|refused|final)"
 }
 case "$part" in
 flow)  # the smooth flow at large steps, and the fallback policies at 1 spacing
@@ -51,6 +51,12 @@ often)  # how often the realistic host finishes come: 30 steps, and the same wit
     run flow-0.5 clustered 0.5 --no-start
     run flow-1 cosmicweb 1 --no-start
     run flow-0.5-rebuild clustered 0.5 --no-start --fallback=rebuild
+    ;;
+verify)  # the fallback cases against a fresh rebuild at every step (--verify)
+    run flow-1-verify cosmicweb 1 --no-start --verify
+    run flow-0.5-verify clustered 0.5 --no-start --verify
+    run jump-1e-6-1-verify jittered 0.1 --jump-share=1e-6 --jump-spacings=1 --no-start --verify
+    run jump-1e-6-2-host-verify jittered 0.1 --jump-share=1e-6 --jump-spacings=2 --fallback=host --no-start --verify
     ;;
 surface)  # one start (minutes, #60) and 6 steps
     steps=6 LIMIT=800
