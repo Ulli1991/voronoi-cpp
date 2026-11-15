@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <type_traits>
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
@@ -87,6 +88,21 @@ int main(int argc, char** argv) {
                              " kernel certifies every cell and agrees with the exact (" + std::to_string(d.neighbours) +
                              " neighbour sets, volumes " + sci(d.volume) + ")\n" + details);
         }
+    }
+
+    // #60 at full size: the surface input, 64³ on a GPU (32³ on the host, in CI time), every cell certified and checked.
+    {
+        const bool device = !std::is_same_v<Exec, Kokkos::DefaultHostExecutionSpace>;
+        const int m = device ? 262144 : 32768;
+        const Positions x = to_device(make_points("surface", m));
+        shell_voronoi::Cells<Memory> cells(m, true);
+        shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(cell_list(x)), cells);
+        std::ostringstream summary;
+        const bool valid = check_cells(cells, x, summary) == 0;
+        std::string details = summary.str();
+        details.pop_back();
+        check.expect(valid,
+                     "#60 surface input, " + std::to_string(m) + " points: every cell certified and valid\n" + details);
     }
 
     // Non-finite positions are never a candidate, so every other cell is the cell without them: the same neighbours and
