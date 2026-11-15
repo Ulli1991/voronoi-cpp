@@ -49,7 +49,7 @@ def main():
     axes[2].set_xlim(2e-19, 1e-2)
     axes[2].set_xticks([1e-16, 1e-12, 1e-8, 1e-4])
     axes[2].set_ylim(0, 0.88)
-    axes[2].annotate("= 0", (1.4e-18, 0.34), xytext=(4e-18, 0.37), fontsize=11, arrowprops=dict(arrowstyle="-", lw=0.8))
+    axes[2].annotate("= 0", (1.4e-18, 0.34), xytext=(3e-18, 0.24), fontsize=11, arrowprops=dict(arrowstyle="-", lw=0.8))
     for ax in axes:
         ax.set_xscale("log")
         ax.axvline(EPS, color="0.4", lw=1.0, ls=":")

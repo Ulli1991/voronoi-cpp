@@ -1,50 +1,67 @@
 # Figures of the CPC paper (plan)
 
-"Computer Programs in Physics": voronoi-cpp on its own terms (algorithm, exactness, robustness, performance, memory,
-API), with applications. Every figure is drawn by one script in `paper/scripts/` from data in `paper/data/` (or, for
-diagrams, from the library's own rules); `paper/scripts/make_all.sh` redraws them all, so they follow the speed work.
+"Computer Programs in Physics": voronoi-cpp on its own terms, then a showcase of the moving-mesh code built on it.
+Owner's budget: part 1 (the library) at most 6–7 figures, part 2 (luna-cpp) 3–4. Every figure is drawn by one script
+in `paper/scripts/` from stored data, so it can be redrawn after each speed merge (`paper/scripts/make_all.sh`).
 
-**Format.** Vector PDF plus a 600 dpi PNG, scaled to CPC's column (90 mm) or page width (190 mm). Style: LUNA's
-`scripts/figstyle.py` unchanged; `paper/scripts/paperfig.py` draws at design size (print / 0.633) and scales the PDF,
-so figstyle's 12 to 14 pt print at 7.6 to 8.9 pt. Curves 2.2 pt (1.4 pt printed), legends inside, no dark versions,
-one colour and marker per input in every figure. Sizes only powers of two or 3 × 2^k; speed in M cells/s, memory in
-B/cell; every A100 caption states the SM clock its jobs logged. Other codes only from the like-for-like library
-benchmark or published numbers with citations.
+**Format.** Vector PDF + 600 dpi PNG, 90 mm (column) or 190 mm (page width). LUNA's `scripts/figstyle.py` unchanged;
+`paper/scripts/paperfig.py` draws at design size and scales the PDF to the print width, so text prints at 7–9.6 pt.
+Curves 2.2 pt at design size, legends inside, no dark versions. Sizes powers of two or 3 × 2^k; M cells/s, B/cell;
+captions state the A100's SM clock. Other codes only from the like-for-like benchmark or cited published numbers.
 
-Status: **done** (paper version in this folder), **redraw** (a docs/figures version exists, the paper needs a
-smaller, print-sized one), **runs** (needs the listed jobs; scripts exist), **later** (needs work not yet done).
+## Part 1: the library (6–7 figures)
 
-## Main text
-
-| # | figure | message (one sentence) | section | data | status |
-|---|---|---|---|---|---|
-| 1 | `overview` (build and step, 2 panels or 2 figures) | A periodic point set goes through snapping, the cell list, clipping, exact tetrahedra and faces in a build, and through screening, flips and geometry in a step. | 2 Algorithm | library arrays of `Mesh<2>` (`scripts/overview_mesh2d.cpp`) | redraw: `docs/figures/overview_{build,step}.pdf` are 9.7 in wide with 9.5 to 12.5 pt text, i.e. 7.3 to 9.6 pt at 190 mm; a paper copy needs only the scaled PDF and one font step less in titles |
-| 2 | `exact` (predicates and ties) | Snapping to the 2⁻³⁰ grid makes every orientation and in-sphere test exact in 128-bit integers, and symbolic perturbation breaks cospherical ties the same way on every device. | 3.1 Exact predicates | port of `exact_predicates_2d.hpp` | redraw from `construction_exact.png` (12 in, 2×2) at 190 mm |
-| 3 | `cell_list_clipping` | Each cell is cut from a cube by bisectors in nearest-first order from a Morton cell list, and the walk stops once the security radius certifies it. | 3.2 Cell list and clipping | ports in `scripts/construction_figures.py` | redraw: merge `construction_cell_list` and `construction_clipping` (+ rings) into one 190 mm figure |
-| 4 | `flips` (persistent tetrahedra) | Between steps the tetrahedra persist; only those whose in-sphere test fails after the move are repaired by 2-3/3-2 flips on the GPU, with a host fallback and a rebuild as last resort. | 3.3 Moving mesh | `construction_flip` + `flow_step` | redraw: one 190 mm figure from `construction_flip` and a slim `flow_step` |
-| 5 | `memory_layout` | Cells, tetrahedra and faces live in flat pools ordered along a space-filling curve, sized by measured bounds and grown on overflow. | 4 Data layout | `data_arrays`, `memory_pools`, `gpu_access_*` | redraw: one 190 mm figure (arrays and pools), access patterns to the appendix |
-| 6 | `oracle_errors` | Every sampled cell volume is within 2·10⁻¹³ of a brute-force oracle with exact predicates on all inputs, no cell is missing, while float and inexact codes miss cells or err by up to 10⁻⁴. | 5 Correctness | `paper/data/oracle_errors.csv` | **done** (190 mm) |
-| 7 | `fuzz` | Fuzzed inputs (lattices, ties, clusters, 3·10⁴ to 1.6·10⁷ points) end exact or are refused with a reason; none is wrong. | 5 Robustness | `build-fuzz/` campaign results, A100 campaign `mesh_fuzz_a100.sh` | runs: the A100 campaign of 2026-11-10 ran on branch fuzz-45 (604 cases, 3 WRONG, 85 HANG); rerun on current main before drawing |
-| 8 | `weak_scaling` | Rebuild, exact start and steps keep their rate from 32³ to 256³ on every input; nonuniform input costs 2-3× in the rebuild and start, not in the step. | 6 Performance | `paper/data/weak_scaling.csv` from `weak_scaling_a100.sh` | **pending**: jobs 32362447-32362450 (queued); then `extract_sweep.py`, `fig_sweep.py` |
-| 9 | `step_vs_displacement` | The step's rate falls with the displacement per step (flips per cell), and stays above the exact start up to large steps. | 6 Performance | same sweep, + 0.01 and 1 spacings at 128³ | **pending**: jobs 32362447, 32362451 |
-| 10 | `stages` (time per stage and per kernel) | Most of a step is the repair and the face geometry; most of a rebuild is clipping. | 6 Performance | `stages_a100.sh kernels`, `extract_stages.py` | **pending**: job 32362452; figure script to write once the output is in |
-| 11 | `ceiling` | The step moves 2,900 to 4,800 DRAM bytes per cell (0.03 and 0.1 spacings) where 5× its rate at 80 % of the A100's bandwidth allows about 1,300 to 2,200, so the step needs fewer bytes, while the rebuild is compute-bound (991 B/cell against a budget of 6,300). | 6 Performance | `paper/data/ceiling.json` (Nsight Compute jobs 32222161-32222228, main 69de1d3, 1279-1305 MHz) | **done** (190 mm) on main 69de1d3 data; rerun `scripts/ceiling_a100.sh` after the speed merges |
-| 12 | `memory` (B/cell by array) | The peak B/cell of a rebuild and of a moving step, split by array, and the largest n one 40 GB A100 holds. | 4/6 | `stages_a100.sh memory` | **pending**: job 32362454 (the numbers in `data_figure.py` predate the step-bytes work) |
-| 13 | `library_comparison` | Like for like on the same points and A100, voronoi-cpp builds full cells 4 to 55× faster than the fastest other GPU code with full cells, and steps a moving mesh 20× faster than peclet-voro. | 7 Comparison | `bench/libraries/results/*.jsonl`, `published.csv` | **done** (190 mm); voronoi-cpp rows are ad62997 at 1095 MHz (ravg1002), 10 to 15 % slower than 55cd6b1: rerun `run_voronoi_cpp_a100.sh` with a same-job reference before submission |
-| 14 | `applications` (4 panels) | MD (fcc melt vs voro++), cosmological density (DTFE-like), Lloyd relaxation, moving-mesh hydro (luna-cpp). | 8 Applications | application codes | later: placeholders until the applications run |
-
-## Appendix
-
-| # | figure | message | data | status |
+| Fig. | file | message | data | status |
 |---|---|---|---|---|
-| A1 | `resort` (long runs) | Without re-sort the step's rate decays by a third over 500 steps as the faces scatter in memory; a Hilbert re-sort every 50 updates keeps it. | `stages_a100.sh long128`, `long256`; `fig_resort.py` | **pending**: jobs 32362455, 32362456 (the 2026-11-10 data are on an older library) |
-| A2 | `clip_tails` | Clipping work per cell has short tails on all inputs (cuts per cell, p99). | `measure_a100.sh clip` (VORONOI_MEASURE build) | redraw from `measure_clip_tails.png` (data in build-measure/jobs); refresh on 55cd6b1 |
-| A3 | `faces_per_cell` | Every rebuild passes the cell checks (closure, both-sided faces), and faces per cell match Poisson-Voronoi theory (15.535, Meijering 1953) on uniform input at every N. | `check-*.txt` of the sweep | **pending**: the sweep jobs |
-| A4 | `gpu_access` | Warps read neighbours along the Morton order; flips and faces touch tetrahedra in pool order. | rules in `scripts/access_figures.py` | redraw at 190 mm |
-| A5 | `flow` (control flow of update and rebuild) | Which kernel runs where, and where the host waits. | `flow_mesh`, `flow_rebuild` | redraw at 190 mm; times from the stages run |
-| A6 | `oracle_by_size` | Errors do not grow from 128³ to 256³ (median ≈ 2× with twice the faces per volume ulp). | `oracle_errors.csv` | can be drawn now; optional |
+| 1 | `walkthrough_build` (panels 1–6) | A periodic point set goes through snapping, the Morton cell list, clipping one cell, all cells with their face rings, the exact start, and the first move. | the library's own 2D arrays (`scripts/overview_mesh2d.cpp`, `Mesh<2>`) | **done**, 190 × 193 mm (`paper/scripts/fig_walkthrough.py` wraps `scripts/overview_figure.py` unchanged) |
+| 2 | `walkthrough_step` (panels 7–12) | A step screens the old triangles, flips the failing ones in rounds, writes the dual's faces, sums the cells in a fixed order, falls back to the host or a rebuild when stuck, and re-sorts. | same | **done**, 190 × 194 mm |
+| 3 | `library_comparison` | Like for like on the same points and A100, voronoi-cpp builds full cells 4 to 55× faster than the fastest other GPU code with full cells (a); volumes-only codes (b), one CPU node (c) and the moving step (d) as panels; published numbers as open markers, cited in the caption. | `bench/libraries/results/*.jsonl`, `published.csv`, through `scripts/library_benchmark.py`'s readers | **done**, 190 × 149 mm (`fig_library.py`); regenerable when close-gaps adds rows. voronoi-cpp rows are ad62997 at 1095 MHz (ravg1002); rerun on the final commit before submission |
+| 4 | `quality` | Speed against quality per library and input, every code measured against our oracle the same way. | the oracle measurements listed below | **proposal**: measured by another agent |
+| 5 | (optional) `oracle_errors` | Relative volume error per input for voronoi-cpp (warp rebuild, exact start), and per code on halo input. | `paper/data/oracle_errors.csv` (per-cell errors from the benchmark's volumes, the same 1000-cell sample as `oracle_check`) | draft drawn (190 mm); may fold into Fig. 4 |
+| 6 | (optional) `performance` | Weak scaling 32³–256³ of rebuild, exact start and step on seven inputs, and the step rate against the displacement per step. | `paper/scripts/weak_scaling_a100.sh` (55cd6b1, gpu1) | **pending**: jobs 32362447–32362451 queued; `extract_sweep.py`, `fig_sweep.py` ready |
+| 7 | (optional) `ceiling` or `stages` | Where the step's time and bytes go per kernel, against the bandwidth budget for 5× and 10×. | `paper/data/ceiling.json` (main 69de1d3), or job 32362452 | `ceiling` draft on old data; `stages` pending |
 
-## How to refresh after a speed merge
+Long runs with and without re-sort (jobs 32362455, 32362456, `fig_resort.py`) and memory by array (job 32362454) are
+queued too; candidates for an appendix.
+
+**Captions of Figs. 1–2, 2D stand-ins.** Every panel is computed by the library's 2D mesh (`Mesh<2>`), which shares the
+3D mesh's structure; the code line under each panel names the 3D counterpart. The same in 3D: panel 1 (snapping, per
+coordinate), 6 (the caller moves the points), 10 (update_cells is the same code in 2D and 3D; triangles over edges
+stand for pyramids over faces). 2D stand-ins for 3D: 2 (a quadtree cell list for the octree), 3 (a polygon cut by
+bisector lines for a polyhedron cut by bisector planes; the 2R circle is a sphere), 4 (one neighbour ring per cell for
+one ring per face), 5 (triangles for tetrahedra), 7 and 8 (in-circle tests and edge flips for in-sphere tests and 2-3/3-2
+flips), 9 (polygon edges for polygonal faces), 11 (an inverted triangle for an inverted tetrahedron). Panel 12 shows in
+2D a step only the 3D mesh takes (the re-sort).
+
+**Fig. 4: oracle measurements needed per library and input** (jittered, blue noise, uniform, clustered, halo; 128³,
+and 256³ where the code runs), against the brute-force oracle of `src/test/oracle.hpp`, the same way for every code:
+1. completeness: cells missing or with non-positive volume, of all n (exists for volumes, `accuracy-*.jsonl`);
+2. exact neighbour sets: per sampled cell, the code's neighbour set against the oracle's (needs each code's faces or
+   neighbour lists dumped; not applicable to volumes-only codes, said so in the figure);
+3. volume error: per-cell relative error on the 1000-cell sample (exists, `paper/data/oracle_errors.csv`);
+4. closure: per cell |Σ area vectors| / Σ |area| (codes with area vectors: voronoi-cpp, voro++, peclet-voro, our faces
+   on the Delaunay codes);
+5. total volume: Σ V − box volume (exists, `accuracy-*.jsonl`);
+6. face agreement: each face seen from both cells, with equal and opposite area vectors and the same centroid.
+Speed on the other axis from the same jobs (M cells/s, the output group stated).
+
+## Part 2: luna-cpp on the library (3–4 figures, owner to pick)
+
+From the existing luna-cpp figures (`/raven/u/uli/luna-cpp/docs/figures`):
+- **A. Sedov–Taylor blast in 3D** (`sedov_3d`, `sedov3d_mesh`, `sedov3d_radial`): the mesh follows the shock; radial
+  profile against the exact solution. 3D, large deformation, the step's robustness.
+- **B. Kelvin–Helmholtz in 2D** (`kh_2d_evolution`, `kh_2d_mesh`): the mesh moving with the shear against a fixed grid
+  at the same N; the moving-mesh advantage.
+- **C. 3D vortex** (`vortex_3d`): a long run with many flips per cell, mesh quality kept.
+- **D. 1D ladder** (`ladder_1d`, `time_to_target_1d`): GPU time to a target error against a fixed grid (accuracy per
+  cost).
+- **E. Super-hard tube** (`super_tube_t01_luna`, `super_tube_t2_luna`): extreme compression without failure.
+Suggested three: A, B, D (3D robustness, the moving-mesh advantage, accuracy per cost); C or E as a fourth. Each needs
+a 90 or 190 mm version from its stored npz (luna-reference-solutions).
+
+## Data and refresh
+
+`paper/data/SOURCES.md` lists every data file, job id, commit and clock; raw job output in `paper/data/raw/`.
 
 ```
 bash paper/scripts/build_cuda.sh   # or sbatch; binaries in /ptmp/uli/voronoi-paper/bin/<commit>
@@ -53,8 +70,3 @@ sbatch -o paper/data/raw/<mode>-%j.txt paper/scripts/stages_a100.sh <bin> kernel
 python3 paper/scripts/extract_sweep.py; python3 paper/scripts/extract_stages.py
 bash paper/scripts/make_all.sh
 ```
-
-## Data
-
-`paper/data/` holds the extracted data (CSV/JSON) with their sources; raw job output in `paper/data/raw/`.
-`paper/data/SOURCES.md` lists every file, the job ids, the commit and the clock.
