@@ -160,11 +160,9 @@ struct CheckStore {
     Kokkos::View<int*, MemorySpace> used, listed, undecided;
 };
 
-// Exact check of a tetrahedralization of all n particles, one thread per tetrahedron: it is not flat; across each face
-// lies a tetrahedron sharing it and pointing back, its far vertex on the other side and outside this circumsphere
-// (local Delaunay, perturbed); every particle is used; the volumes sum to the box. Marks the particles of bad
-// tetrahedra and the unused ones in `marked` (1), leaving other entries as they are. `count` = tetrahedra to check.
-// Used by: build.
+// Exact check, one thread per tetrahedron: not flat; across each face a tetrahedron pointing back, its far vertex on
+// the other side and outside this circumsphere (perturbed); every particle used; volumes sum to the box. Marks particles
+// of bad tetrahedra and unused ones in `marked`; `count` = tetrahedra. Used by: build.
 template <class ExecSpace>
 Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_space>& mesh,
              const ep::Points<typename ExecSpace::memory_space>& point, int count,
@@ -254,11 +252,9 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     return report;
 }
 
-// The Delaunay tetrahedralization from a clipping build with face rings: assemble, check, and where it fails rebuild
-// the bad cells by exact clipping and check again (3 rounds at most). After a partial rebuild the next round assembles
-// and checks incrementally (only around the rebuilt cells, the same arrays as a full round). `cells` are the clipping's
-// output, `mesh` the result. face_overflow means build again with a pool of Cells::needed().
-// Used by: voronoi::Mesh<3>::rebuild.
+// The Delaunay tetrahedralization from a clipping build with rings: assemble, check, re-clip the bad cells exactly and
+// check again (3 rounds at most; after a partial re-clip incrementally, #59). face_overflow: build again with a pool of
+// Cells::needed(). Used by: voronoi::Mesh<3>::rebuild.
 template <class ExecSpace>
 Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
             const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,

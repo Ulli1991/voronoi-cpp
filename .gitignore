@@ -5,3 +5,4 @@ cmake_install.cmake
 Makefile
 .claude/
 __pycache__/
+build-cuda.cfg.log

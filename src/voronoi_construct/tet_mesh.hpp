@@ -439,13 +439,9 @@ struct Previous {
     Kokkos::View<const int*, MemorySpace> changed;  // by particle
 };
 
-// Stage 3: The tetrahedra and their adjacency from the face rings of a clipping build (Cells::with_rings, cells in slot
-// order, every cell ok), without hashing: tetrahedron (i, j, q_m, q_m+1) is emitted only by the face of its two smallest
-// particles, and each triangle's two tetrahedra are adjacent in the ring of its two smallest particles' face. Lookups
-// read the clipping's ring block of the face's owner; one thread per ring slot, then one per tetrahedron. Faces in CSR
-// come back in a.face_start; a.unresolved (device) counts ring slots or adjacencies not resolved, 0 for a consistent
-// build. With `previous`, only cells whose block names a changed cell look up again: the same arrays as a full
-// assemble. No host synchronisation but the counts. Used by: assemble, tet_start::build.
+// Stage 3: tetrahedra (i, j, q_m, q_m+1), each emitted by the face of its two smallest particles, and their adjacency,
+// read from the clipping's ring blocks without hashing (how_it_works.md). With `previous`, only cells naming a changed
+// cell look up again; the arrays equal a full round's. Syncs only for the counts. Used by: assemble, tet_start::build.
 template <class ExecSpace>
 void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpace::memory_space>& cells,
               Mesh<typename ExecSpace::memory_space>& mesh, Assembly<typename ExecSpace::memory_space>& a,
