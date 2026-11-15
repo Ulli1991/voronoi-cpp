@@ -1,0 +1,48 @@
+{"volumes":"/raven/u/uli/libbench-data/volumes/paragram-a100_cosmicweb_16777216.f64","points":"/raven/u/uli/libbench-data/points/cosmicweb_16777216.pts","n":16777216,"sample":1000,"missing_or_nonpositive":5,"sum_minus_box":1.234e-06,"median_rel_err":1.768e-16,"max_rel_err":1.270e-15,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/paragram-a100_cosmicweb_2097152.f64","points":"/raven/u/uli/libbench-data/points/cosmicweb_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":3.483e-07,"median_rel_err":1.714e-16,"max_rel_err":7.756e-15,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/paragram-a100_fccsolid_1048576.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_1048576.pts","n":1048576,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-4.608e-18,"median_rel_err":2.086e-16,"max_rel_err":8.570e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/paragram-a100_fccsolid_8388608.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_8388608.pts","n":8388608,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":1.117e-17,"median_rel_err":2.052e-16,"max_rel_err":6.713e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/paragram-a100_surface_2097152.f64","points":"/raven/u/uli/libbench-data/points/surface_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":647,"sum_minus_box":3.602e-02,"median_rel_err":3.576e-16,"max_rel_err":7.623e-01,"cells_rel_err_above_1e-12":71,"above_1e-6":69,"above_1e-2":22}
+{"volumes":"/raven/u/uli/libbench-data/volumes/peclet-voro-cpu_fccsolid_1048576.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_1048576.pts","n":1048576,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-4.353e-17,"median_rel_err":1.163e-16,"max_rel_err":6.264e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/peclet-voro-cpu_fccsolid_8388608.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_8388608.pts","n":8388608,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-2.651e-17,"median_rel_err":1.186e-16,"max_rel_err":4.681e-16,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/qhull-cpu_fccsolid_1048576.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_1048576.pts","n":1048576,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-1.084e-18,"median_rel_err":2.174e-16,"max_rel_err":1.068e-15,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voronoi-cpp-warp-a100_cosmicweb_16777216.f64","points":"/raven/u/uli/libbench-data/points/cosmicweb_16777216.pts","n":16777216,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-8.928e-17,"median_rel_err":3.464e-15,"max_rel_err":5.912e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voronoi-cpp-warp-a100_cosmicweb_2097152.f64","points":"/raven/u/uli/libbench-data/points/cosmicweb_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-5.524e-17,"median_rel_err":1.639e-15,"max_rel_err":2.384e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voronoi-cpp-warp-a100_fccsolid_1048576.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_1048576.pts","n":1048576,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-5.974e-17,"median_rel_err":1.265e-15,"max_rel_err":8.640e-15,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voronoi-cpp-warp-a100_fccsolid_8388608.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_8388608.pts","n":8388608,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-2.212e-17,"median_rel_err":2.409e-15,"max_rel_err":1.354e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voronoi-cpp-warp-a100_surface_2097152.f64","points":"/raven/u/uli/libbench-data/points/surface_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":476,"sum_minus_box":-1.139e-03,"median_rel_err":2.159e-15,"max_rel_err":1.192e-13,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voropp-mt-cpu_cosmicweb_16777216.f64","points":"/raven/u/uli/libbench-data/points/cosmicweb_16777216.pts","n":16777216,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-1.734e-16,"median_rel_err":2.915e-15,"max_rel_err":5.069e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voropp-mt-cpu_fccsolid_1048576.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_1048576.pts","n":1048576,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-3.729e-16,"median_rel_err":1.803e-15,"max_rel_err":1.070e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voropp-mt-cpu_fccsolid_8388608.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_8388608.pts","n":8388608,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-1.994e-16,"median_rel_err":3.495e-15,"max_rel_err":1.724e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voropp-mt-cpu_surface_16777216.f64","points":"/raven/u/uli/libbench-data/points/surface_16777216.pts","n":16777216,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":8.327e-17,"median_rel_err":1.743e-15,"max_rel_err":1.287e-13,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/voropp-mt-cpu_surface_2097152.f64","points":"/raven/u/uli/libbench-data/points/surface_2097152.pts","n":2097152,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-6.885e-17,"median_rel_err":1.210e-15,"max_rel_err":3.497e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/votess-cpu_fccsolid_1048576.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_1048576.pts","n":1048576,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-3.285e-16,"median_rel_err":1.611e-15,"max_rel_err":1.438e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+{"volumes":"/raven/u/uli/libbench-data/volumes/votess-cpu_fccsolid_8388608.f64","points":"/raven/u/uli/libbench-data/points/fccsolid_8388608.pts","n":8388608,"sample":1000,"missing_or_nonpositive":0,"sum_minus_box":-1.031e-16,"median_rel_err":2.742e-15,"max_rel_err":1.831e-14,"cells_rel_err_above_1e-12":0,"above_1e-6":0,"above_1e-2":0}
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  lb_acc2
+Node list: ravc3119
+Job start: Sun Nov 15 10:52:22 CET 2026
+Job end:   Sun Nov 15 10:52:30 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-inputs
+Command:   /raven/u/uli/voronoi-cpp-inputs/bench/libraries/oracle_cpu.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32370726         lb_acc2      1           144                             00:00:08      0:0
+  
+Maximum memory per node: 0.944447 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 0.7 %
+CO2 footprint: 0.6499 g (estimate based on total cluster power and electricity mix)
+  
