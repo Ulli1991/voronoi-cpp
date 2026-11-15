@@ -184,6 +184,7 @@ ns per cell per step (mean of steps 2 on; ms per step = ns per cell × 2.097):
 |---|---|---|---|---|---|---|---|
 | jittered, flow 1 spacing | 13.9 | 0 | 0 | 8.34 | 2.39 | 0 / 0 of 11 | 40.6 |
 | jittered, flow 2 spacings | 29 | 0 | 0 | 14 | 2.86 | 0 / 0 of 11 | 21.8 |
+| clustered, flow 0.3 spacings | 4.83 | 0 | 0 | 4.08 | 2.46 | 0 / 0 of 11 | 88 |
 | clustered, flow 0.5 spacings | 7.06 | 0.346 | 0 | 5.53 | 2.42 | 1 / 0 of 11 | 65 |
 | cosmicweb, flow 1 spacing | 15.4 | 0.228 | 0 | 10.2 | 3.09 | 3 / 0 of 29 | 34.6 |
 | jittered, jumps, share 1e-6, 1 spacing | 4.62 | 0.811 | 37.3 | 5.01 | 2.33 | 3 / 7 of 11 | 20 |
@@ -199,7 +200,7 @@ What the runs show:
 - **The smooth flow rarely sticks.** Jittered at 0.5, 1 and 2 spacings, uniform at 1, halo at 0.3, lattice and
   wave at 0.5 and 1: no stuck entry in any step; the repair alone grows (29 ms at 1 spacing, 61 ms at 2).
   (An older build stuck in most steps at 1 spacing, docs/figures/flow_step.png; main 8d7ac1f does not.)
-  Clustered at 0.5 stuck in 1 of 11 steps (6 entries, host 8 ms) in one run and in none of 29 in another (the
+  Clustered at 0.3 (2 of 6 steps on an older build) no longer sticks. Clustered at 0.5 stuck in 1 of 11 steps (6 entries, host 8 ms) in one run and in none of 29 in another (the
   flip order follows atomics). Cosmic web at 1 spacing: 3 of 29 steps, 5 or 6 entries each, host 4 to 8 ms.
 - **A few particles jumping go to a rebuild.** Two particles jumping 2 or 4 spacings leave 20 to 50 stuck entries,
   more than the 10 the default allows at 128³, so every step is a rebuild (118 to 125 ms against 11 ms of repair).
@@ -207,7 +208,7 @@ What the runs show:
 - **The host is not cheaper there.** With `--fallback=host` the same two jumpers at 1 spacing take 4 to 572 ms of
   host time per step (a second, 16-hop round costs 66 to 572 ms), 105 ms on average against 78 ms of rebuild with
   `cheapest`. At 2 and 4 spacings the host takes 0.4 to 1.1 s per step and still gives up in half the steps or more,
-  then rebuilds. At 1e-5 and more jumpers it always gives up (1.1 to 1.3 s, then the rebuild).
+  then rebuilds. At 1e-5 and 1e-4 jumpers it always gives up (1.1 to 1.3 s, then the rebuild); at 1e-3 (38000 entries) after 4.4 s.
 - **On the surface a rebuild costs minutes.** At 0.3 spacings the first two steps stick (65 and 14 entries) and
   rebuild in 82 and 88 s; at 1 spacing every step sticks (10 to 1498 entries) and rebuilds in 79 to 90 s, the
   clipping's needle cells (#60). One step went to the host with 10 entries (882 ms), which gave up.
