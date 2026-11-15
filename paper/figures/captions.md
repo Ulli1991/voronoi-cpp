@@ -3,6 +3,16 @@
 **Figs. 1–2, walk-through.** Panel texts: `walkthrough_captions.md`. Every panel is computed by the library's 2D mesh
 (`Mesh<2>`); 2D stand-ins for 3D as listed in `PLAN.md`.
 
+**inputs.** The benchmark inputs at 64³ (262,144 points; the benchmark runs at 128³ and 256³ with the same generators
+and seed 20261029, `src/test/support.hpp`, snapped to the 2⁻³⁰ grid; blue noise by 100 Lloyd iterations of the uniform
+points, `library_bench lloyd`). (a–e, g, h) Points in a slab one mean spacing thick, projected to x–y; for clustered
+and halo the slab through the densest layer. Jittered: lattice plus uniform shifts up to ±0.1 spacing per axis.
+Clustered: 8 Gaussian blobs, σ = 0.04, 80 % of the points, over 20 % uniform; nominal peak-to-background 1:500. Halo:
+4 profiles ∝ 1/(r² + c²), c = 0.002, out to r = 0.2, 90 % of the points, over 10 % uniform; 1:10⁴ from core to edge
+within a halo. Lattice: exact; wave: shifts of 10⁻⁵ spacing. (f) Nearest-neighbour distance per decade; density
+contrast measured as the 99.9th over the 0.1th percentile of 1/r₃₂³ (r₃₂: distance to the 32nd neighbour), which also
+counts the background and Poisson scatter (uniform 1:3).
+
 **Library headline (full cells) and library_more.** One A100 40 GB (node ravg1002, SM clock 1095 MHz under load in
 every job of these rows; voronoi-cpp rows are commit ad62997 = main b2faee8 + the benchmark, which runs 10–15 % slower
 than main 55cd6b1 at 1305 MHz), double precision, 2,097,152 cells (128³), periodic unit box, median of 3 timed runs

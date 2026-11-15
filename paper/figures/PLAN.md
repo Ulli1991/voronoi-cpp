@@ -15,6 +15,7 @@ captions state the A100's SM clock. Other codes only from the like-for-like benc
 |---|---|---|---|---|
 | 1 | `walkthrough_build` (panels 1–6) | A periodic point set goes through snapping, the Morton cell list, clipping one cell, all cells with their face rings, the exact start, and the first move. | the library's own 2D arrays (`scripts/overview_mesh2d.cpp`, `Mesh<2>`) | **done**, 190 × 139 mm (`fig_walkthrough.py`): titles and drawings only; panel texts and code names in `walkthrough_captions.md` for the caption |
 | 2 | `walkthrough_step` (panels 7–12) | A step screens the old triangles, flips the failing ones in rounds, writes the dual's faces, sums the cells in a fixed order, falls back to the host or a rebuild when stuck, and re-sorts. | same | **done**, 190 × 139 mm |
+| 2b | `inputs` (before the benchmark figures) | The seven inputs every later figure uses: a slab of each at 64³, and their nearest-neighbour distances and density contrast, from even (lattice, jittered, blue noise) to contrasts of 10³ (clustered) and 10⁵ (halo). | `paper/data/inputs.npz` (`extract_inputs.py` on the 64³ point files of `library_bench points` / `lloyd`, same generators and seed) | **done**, 190 × 96 mm (`fig_inputs.py`) |
 | 3 | `library_headline` | Full cells on one A100, like for like: voronoi-cpp's rebuild is 4 to 55× faster than the fastest other GPU code with full cells, more so the less uniform the input; published rates set apart. | `bench/libraries/results/*.jsonl`, `published.csv` (regenerable as rows are added) | **done**, 90 × 84 mm (`fig_library.py`); our rows ad62997 at 1095 MHz: rerun on the final commit |
 | 3a | `library_more` (appendix or second figure) | (a) volumes-only codes on the A100, (b) one 72-core CPU node, (c) the moving step. | same | **done**, 190 × 78 mm |
 | 3b | `tried_key` | The rebuild's key decisions with their measured effect: the lean cut kept (+10 to +15 %); kNN (find all, then clip, against the interleaved walk), P1, split and rounds, the float filter, the compact cell and Delaunay-first dropped, each with its structural reason. | `docs/tried.md`, parsed | **done**, 190 × 91 mm (`fig_tried.py`); the full list as appendix table `tried.md` (and appendix figure `tried`, 190 × 203 mm) |
@@ -49,6 +50,29 @@ and 256³ where the code runs), against the exact reference (`src/test/oracle.hp
 5. total sampled volume: Σ V − box volume, a tiling check, not accuracy (exists, `accuracy-*.jsonl`);
 6. face agreement: each face seen from both cells, with equal and opposite area vectors and the same centroid.
 Speed on the other axis from the same jobs (M cells/s, the output group stated).
+
+## Inputs and tests, in plain words (draft for the results section)
+
+| input | what the points look like | why it is in |
+|---|---|---|
+| jittered | a cubic lattice with each point moved up to ±0.1 spacing per axis | the even, nearly regular case of most simulations; the fastest input |
+| blue noise | uniform points after 100 Lloyd iterations: even spacing without a lattice | the standard input of the GPU Voronoi papers (Ray et al. 2018, Basselin et al. 2021) |
+| uniform | independent uniform random points | the textbook Poisson–Voronoi case, with close pairs and large voids |
+| clustered | 8 Gaussian blobs (σ = 0.04 of the box) holding 80 % of the points over a 20 % uniform background; about 1:500 in density | strong but smooth density contrast, as in galaxies or droplets |
+| halo | 4 halos with density ∝ 1/(r² + c²) out to r = 0.2, c = 0.002, holding 90 % of the points over a 10 % background; about 1:10⁴ from core to edge | extreme contrast, as in cosmological haloes; the hardest input |
+| lattice (secondary) | an exact cubic lattice | every point cospherical with its neighbours: the worst case for ties and exact predicates |
+| wave (secondary) | the lattice with shifts of 10⁻⁵ spacing | near-degenerate: ties broken by tiny perturbations, the hardest case for floating-point codes |
+
+| test | what is timed or checked |
+|---|---|
+| rebuild | cells from scratch: cell list and clipping of every cell, points on the device to cells (volumes, centroids, faces with areas and neighbours) on the device |
+| exact start | the full mesh from scratch: clipping with face rings, exact Delaunay tetrahedra, faces and per-cell lists (`Mesh::update` + `update_cells` on new points) |
+| moving step | one time step of a moving mesh: points moved by a smooth flow by 0.03, 0.1 or 0.3 mean spacings, tetrahedra repaired by exact flips, faces and cells recomputed (`update` + `update_cells`) |
+| against other libraries | the same point files, box, outputs and hardware for every code, each in its documented best configuration; full cells, volumes only, or topology, timed from points in the code's memory to all outputs |
+| accuracy | each cell volume against the exact reference (`src/test/oracle.hpp`, brute force with exact predicates, sharing no code with the mesh) on 1000 sampled cells; checks: the total sampled volume (sum of volumes against the box: no gaps or overlaps) and closure (each cell's area vectors sum to zero) |
+| memory peak | the largest device memory during a rebuild, an exact start or a step, by array (Kokkos) and process-wide (sampled), in B/cell |
+| fuzz robustness | many random and adversarial inputs (lattices, ties, coincident points, clusters, 3·10⁴ to 1.6·10⁷ points); each must end exact, or be refused with a reason, never wrong |
+| speed experiments (`docs/tried.md`) | each alternative design against the code just before it, in the same job and on the same inputs: rate change in %, kept or dropped, and the structural reason |
 
 ## Part 2: luna-cpp on the library (4 figures, all five showcases)
 
