@@ -533,6 +533,34 @@ std::uint64_t lists_checksum(const Mesh& mesh) {
     return h;
 }
 
+bool closure_check = false;  // --closure: the closure of every cell through Mesh::for_each_face after each update
+
+// The cells' sums of their outward area vectors through Mesh::for_each_face (one kernel; atomics), timed, and the
+// largest |sum| in spacings². Used by: step (--closure).
+void closure(const Mesh& mesh, int s, double spacing) {
+    const int n = mesh.particles();
+    Kokkos::View<double* [3], Kokkos::LayoutRight, Memory> sum("closure_sum", n);
+    Kokkos::fence();
+    Kokkos::Timer timer;
+    {
+        const Phase phase("s" + std::to_string(s) + "_closure");
+        mesh.for_each_face(KOKKOS_LAMBDA(int, int i, int j, const tet_mesh::Vec3& a, const tet_mesh::Vec3&) {
+            Kokkos::atomic_add(&sum(i, 0), a.x), Kokkos::atomic_add(&sum(i, 1), a.y), Kokkos::atomic_add(&sum(i, 2), a.z);
+            Kokkos::atomic_sub(&sum(j, 0), a.x), Kokkos::atomic_sub(&sum(j, 1), a.y), Kokkos::atomic_sub(&sum(j, 2), a.z);
+        });
+        Kokkos::fence();
+    }
+    const double ms = timer.seconds() * 1e3;
+    double worst = 0;
+    Kokkos::parallel_reduce(
+        "bench::closure_worst", Kokkos::RangePolicy<Exec>(0, n),
+        KOKKOS_LAMBDA(int i, double& w) {
+            w = Kokkos::fmax(w, Kokkos::sqrt(sum(i, 0) * sum(i, 0) + sum(i, 1) * sum(i, 1) + sum(i, 2) * sum(i, 2)));
+        },
+        Kokkos::Max<double>(worst));
+    std::cout << "closure: step=" << s << " ms=" << ms << " worst=" << worst / (spacing * spacing) << "\n";
+}
+
 // The `step` mode: build the mesh, then `steps` times advect the points, Mesh::update and update_cells, timing the
 // phases. args: step <n> <distribution> <displacement in spacings> [steps]. Returns the failure count (--verify).
 // Used by: main.
@@ -634,6 +662,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
             return mesh.update(x, &t);
         }();
         follow(r);
+        if (closure_check) closure(mesh, s, spacing);
         {
             const Phase phase("s" + std::to_string(s) + "_cells");
             mesh.update_cells(&t);
@@ -681,6 +710,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     if (has_flag(argc, argv, "--memory")) DeviceMemory<Memory>::start();
+    closure_check = has_flag(argc, argv, "--closure");
     if (has_flag(argc, argv, "--kernels")) KernelTimes::start();
     if (has_flag(argc, argv, "--nvtx") || has_flag(argc, argv, "--nvtx=phases"))
         Nvtx::start(has_flag(argc, argv, "--nvtx"));
@@ -697,7 +727,7 @@ int main(int argc, char** argv) {
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] "
+                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] [--closure] "
                  "[--dump-cells=path]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";

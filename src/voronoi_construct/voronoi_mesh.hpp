@@ -450,6 +450,28 @@ public:
     View<const int*> neighbour() const { return face_neighbour_; }
     // Layout::owner_faces: cell i owns faces owned_start(i) .. owned_start(i + 1) - 1; empty otherwise.
     View<const int*> owned_start() const { return layout_.owner_faces ? owner_faces_.owned_start : View<const int*>(); }
+    // One kernel over the faces: visit(f, owner, neighbour, area, centroid) once per face, the geometry in registers,
+    // read from the stored rows or, with Layout::faces_on_read and none stored, computed once from the ring. Same bits.
+    template <class Visit>
+    void for_each_face(const Visit& visit, const std::string& label = "voronoi::for_each_face") const {
+        const auto owner = face_owner_, neighbour = face_neighbour_;
+        const auto area = geometry_.area, centroid = geometry_.centroid;
+        const auto centroid32 = geometry_.centroid32;
+        const bool rows = faces_stored_ || !built(), half = centroid32.extent(0) > 0;
+        const auto ring = face_geometry();
+        Kokkos::parallel_for(
+            label, Kokkos::RangePolicy<ExecSpace>(exec_, 0, faces()), KOKKOS_LAMBDA(int f) {
+                tet_mesh::Vec3 a, c;
+                if (!rows) {
+                    ring.face(f, a, c);
+                } else {
+                    a = {area(f, 0), area(f, 1), area(f, 2)};
+                    c = half ? tet_mesh::Vec3{centroid32(f, 0), centroid32(f, 1), centroid32(f, 2)}
+                             : tet_mesh::Vec3{centroid(f, 0), centroid(f, 1), centroid(f, 2)};
+                }
+                visit(f, owner(f), neighbour(f), a, c);
+            });
+    }
     // Face f's area vector (owner to neighbour) and centroid (relative to the owner) in a kernel:
     // face_geometry().face(f, area, centroid), from its ring; the bits area() and face_centroid() hold. Valid until the
     // next update, like the views below.

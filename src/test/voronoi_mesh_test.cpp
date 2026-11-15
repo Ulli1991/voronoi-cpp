@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
                              ", rebuilt " + std::to_string(r.rebuilt) + ") is exact");
         }
     }
-    {  // Layout::faces_on_read (R14): faces computed where read hold the stored bits; so do the cell sums
+    {  // Layout::faces_on_read (R14): faces computed where read (Mesh::for_each_face) hold the stored bits, as do cell sums
         voronoi::Layout layout;
         layout.faces_on_read = true;
         Mesh stored(Exec{}, box), on_read(Exec{}, box);
@@ -251,14 +251,10 @@ int main(int argc, char** argv) {
             on_read.update_cells();
             const int count = on_read.faces();
             Kokkos::View<double* [6], Kokkos::LayoutRight, Memory> rows("rows", count);
-            const auto geometry = on_read.face_geometry();
-            Kokkos::parallel_for(
-                "test::face_geometry", Kokkos::RangePolicy<Exec>(0, count), KOKKOS_LAMBDA(int f) {
-                    tet_mesh::Vec3 a, c;
-                    geometry.face(f, a, c);
-                    rows(f, 0) = a.x, rows(f, 1) = a.y, rows(f, 2) = a.z;
-                    rows(f, 3) = c.x, rows(f, 4) = c.y, rows(f, 5) = c.z;
-                });
+            on_read.for_each_face(KOKKOS_LAMBDA(int f, int, int, const tet_mesh::Vec3& a, const tet_mesh::Vec3& c) {
+                rows(f, 0) = a.x, rows(f, 1) = a.y, rows(f, 2) = a.z;
+                rows(f, 3) = c.x, rows(f, 4) = c.y, rows(f, 5) = c.z;
+            });
             const auto computed = to_host(rows);
             const auto o1 = to_host(on_read.owner(), count), n1 = to_host(on_read.neighbour(), count);
             const auto o2 = to_host(stored.owner(), stored.faces()), n2 = to_host(stored.neighbour(), stored.faces());
@@ -281,7 +277,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < n; ++i)
                 differ += v1(i) != v2(i) || c1(i, 0) != c2(i, 0) || c1(i, 1) != c2(i, 1) || c1(i, 2) != c2(i, 2);
         }
-        check.expect(differ == 0, "Layout::faces_on_read: faces and cell sums hold the stored bits (" +
+        check.expect(differ == 0, "Layout::faces_on_read: for_each_face and the cell sums hold the stored bits (" +
                                       std::to_string(faces) + " faces over 4 updates, " + std::to_string(differ) +
                                       " differ)");
     }
