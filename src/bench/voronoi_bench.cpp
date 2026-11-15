@@ -347,6 +347,26 @@ std::uint64_t tets_checksum(const tet_mesh::Mesh<Memory>& mesh) {
     return sum;
 }
 
+// A checksum of the start's arrays in their numbering (FNV-1a): vertex, adjacent, edges, the faces and the ring
+// slots, so two assemblies agree entry for entry, also on a clipping the check rejects. Used by: step (the start line).
+std::uint64_t arrays_checksum(const tet_mesh::Mesh<Memory>& mesh) {
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](const auto& view) {
+        const auto host = to_host(view);
+        const std::size_t size = host.span();
+        for (std::size_t i = 0; i < size; ++i) h = (h ^ static_cast<std::uint64_t>(host.data()[i])) * 1099511628211ull;
+    };
+    mix(mesh.vertex);
+    mix(mesh.adjacent);
+    mix(mesh.edges);
+    mix(mesh.owner);
+    mix(mesh.neighbour);
+    mix(mesh.ring_start);
+    mix(mesh.ring_length);
+    mix(mesh.ring);
+    return h;
+}
+
 // Flow::advect on `threads` host threads, one block of points each (the same result). Used by: step.
 void advect(const Flow& flow, Points& points, double distance, const Box& box, int threads) {
     std::vector<std::thread> pool;
@@ -574,6 +594,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
         const std::uint64_t rings_checksum = clip_checksum(cells), rings_topology = clip_checksum(cells, true);
         const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
+        const std::uint64_t assembly_checksum = arrays_checksum(mesh);
         KernelTimes::total.clear();
         const double start_ms = median_ms(repeats, [&] {
             shell_voronoi::construct_warp(exec, grid, cells);
@@ -592,7 +613,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
                   << " tets=" << tets << " tets_checksum=" << tets_checksum(mesh) << " per_cell=" << double(tets) / n
                   << " ring_entries_per_cell=" << double(cells.needed()) / n << " rings_checksum=" << rings_checksum
-                  << " rings_topology=" << rings_topology << "\n";
+                  << " rings_topology=" << rings_topology << " assembly_checksum=" << assembly_checksum
+                  << " start_arrays_checksum=" << arrays_checksum(mesh) << "\n";
     }
 
     DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);
