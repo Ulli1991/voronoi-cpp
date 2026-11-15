@@ -844,6 +844,10 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         const char* env = std::getenv("VORONOI_HARD");
         const double hard_env = env ? std::atof(env) : 0.0;
         const int mode = static_cast<int>(hard_env), depth = static_cast<int>(std::lround(10 * (hard_env - mode)));
+        if (mode == 9) {  // measurement: the thread kernel for every cell
+            construct(exec, grid, out);
+            return;
+        }
         auto launch = [&](const ExecSpace& on, Kokkos::View<int, Memory> counter, Kokkos::View<const int*, Memory> hard,
                           int hard_below, int cells) {
             const int b = Kokkos::min((cells + warp::cells_per_block - 1) / warp::cells_per_block, blocks);
