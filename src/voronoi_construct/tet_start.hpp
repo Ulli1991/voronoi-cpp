@@ -298,7 +298,7 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
         if (round == 0) stats.bad_tets = report.bad_tets;
         stats.tets = count;
         if (report.ok()) {
-            tet_mesh::allocate_centres(mesh);
+            tet_mesh::allocate_centres(exec, mesh, assembly);
             tet_mesh::represent(exec, mesh);
             stats.exact = true;
             break;
@@ -343,7 +343,7 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
         stats.patched += listed;
         Kokkos::deep_copy(exec, marked, 0);
     }
-    if (!stats.exact) tet_mesh::allocate_centres(mesh);
+    if (!stats.exact) tet_mesh::allocate_centres(exec, mesh, assembly);
     return stats;
 }
 

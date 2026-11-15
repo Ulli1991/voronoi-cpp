@@ -1,6 +1,6 @@
 #!/bin/bash
 # The exact start of main (ref) against branch start-fast (new) on one A100, both in the same job:
-#   sbatch -o build-jobs/%x-%j.out scripts/start_fast_a100.sh <mode> <n> [rounds]
+#   sbatch -o build-jobs/%x-%j.out scripts/start_fast_a100.sh <mode> <n> [rounds]   (proof: everything, --time=06:00:00)
 # Binaries: build-jobs/bin/voronoi_bench_{ref,new}; KINDS: inputs (bluenoise reads the libbench .pts file).
 #SBATCH -J start_fast
 #SBATCH -p gpu1
@@ -18,13 +18,20 @@ bin=${BIN:-build-jobs/bin}
 designs="${DESIGNS:-ref new}"
 kinds="${KINDS:-jittered uniform clustered halo lattice wave bluenoise}"
 mode="$1"
-n="$2"
+n="${2:-0}"
 hostname
 nvidia-smi --query-gpu=name,clocks.max.sm,clocks.current.sm,clocks.applications.graphics --format=csv,noheader
 input() {  # input <kind>: the bench's distribution argument
     if [[ $1 == bluenoise ]]; then echo /raven/u/uli/libbench-data/points/bluenoise_$n.pts; else echo "$1"; fi
 }
 case "$mode" in
+proof)  # proof: the start (3 rounds), its kernels and the checksums at 128³ and 256³, all in this job
+    for size in 2097152 16777216; do
+        for m in "start $size 3" "kernels $size" "checksum $size"; do
+            SLURM_JOB_ID=${SLURM_JOB_ID:-0} bash "$0" $m
+        done
+    done
+    ;;
 start)  # start <n> <rounds>: start_ms (clipping + tet_start::build, median of 3), interleaved
     for r in $(seq "${3:-1}"); do
         for kind in $kinds; do
@@ -48,6 +55,14 @@ checksum)  # checksum <n>: the start line, the build's cells_checksum, and the c
         for d in $designs; do
             echo "== checksum $d $kind $n"
             $bin/voronoi_bench_$d step "$n" "$(input $kind)" 0.1 2 --checksum | grep -E "^(start|mesh|geometry_checksum)"
+        done
+    done
+    ;;
+memory)  # memory <n>: device memory peaks per phase (the start block, then Mesh::update's start)
+    for kind in $kinds; do
+        for d in $designs; do
+            echo "== memory $d $kind $n"
+            $bin/voronoi_bench_$d step "$n" "$(input $kind)" 0.1 0 --memory | grep -iE "^(start:|mesh:|memory|phase|device)"
         done
     done
     ;;

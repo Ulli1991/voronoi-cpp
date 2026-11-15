@@ -423,6 +423,8 @@ struct Assembly {
         Kokkos::View<long long*, MemorySpace> face_ring;
         Kokkos::View<char*, MemorySpace> redone;
         Quads<MemorySpace> vertex[2], adjacent[2];
+        Points4<MemorySpace> centre;
+        Kokkos::View<std::uint8_t*, MemorySpace> edges;
         int side = 0;  // the set the mesh views
     } store;
 };
@@ -566,6 +568,8 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     mesh.ring_length = length;
     mesh.ring = detail::take(store.ring[store.side], slots, "face_ring");
     a.tet_slot = detail::take(store.tet_slot, tets, "assemble_tet_slot");
+    detail::take(store.centre, tets, "tet_centre");  // for allocate_centres, now while nothing is freed
+    detail::take(store.edges, tets, "tet_edges");
     a.unresolved = Kokkos::View<int, Memory>("assemble_unresolved");
     a.redone = detail::take(store.redone, incremental ? tets : 0, "assemble_redone");
     const auto vertex = mesh.vertex;
@@ -668,12 +672,16 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
         });
 }
 
-// Zeroed circumcentres and edge bits for the tetrahedra of an assemble. Used by: assemble, tet_start::build.
-template <class MemorySpace>
-void allocate_centres(Mesh<MemorySpace>& mesh) {
+// Zeroed circumcentres and edge bits for the tetrahedra of an assemble, from its storage. Used by: assemble,
+// tet_start::build.
+template <class ExecSpace>
+void allocate_centres(const ExecSpace& exec, Mesh<typename ExecSpace::memory_space>& mesh,
+                      Assembly<typename ExecSpace::memory_space>& a) {
     const auto tets = mesh.vertex.extent(0);
-    mesh.centre = Points4<MemorySpace>("tet_centre", tets);
-    mesh.edges = Kokkos::View<std::uint8_t*, MemorySpace>("tet_edges", tets);
+    mesh.centre = detail::take(a.store.centre, tets, "tet_centre");
+    mesh.edges = detail::take(a.store.edges, tets, "tet_edges");
+    Kokkos::deep_copy(exec, mesh.centre, 0.0);
+    Kokkos::deep_copy(exec, mesh.edges, std::uint8_t(0));
 }
 
 // A full assemble with zeroed centres and edge bits, returning the number of ring slots or adjacencies not resolved
@@ -684,7 +692,7 @@ int assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpac
              Kokkos::View<int*, typename ExecSpace::memory_space>& face_start) {
     Assembly<typename ExecSpace::memory_space> a;
     assemble(exec, cells, mesh, a);
-    allocate_centres(mesh);
+    allocate_centres(exec, mesh, a);
     face_start = a.face_start;
     int unresolved = 0;
     Kokkos::deep_copy(exec, unresolved, a.unresolved);
