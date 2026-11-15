@@ -37,9 +37,7 @@ inline Backend parse_backend(const std::string& name) {
 }
 
 // The backend's name, as parse_backend reads it. Used by: messages, modes_test.
-inline const char* name(Backend b) {
-    return b == Backend::cpu ? "cpu" : b == Backend::gpu ? "gpu" : "hybrid";
-}
+inline const char* name(Backend b) { return b == Backend::cpu ? "cpu" : b == Backend::gpu ? "gpu" : "hybrid"; }
 
 // Whether this build has a device space apart from the host one (gpu and hybrid need it).
 constexpr bool has_device() {
@@ -86,14 +84,30 @@ public:
         return std::visit([](const auto& m) { return m.faces(); }, mesh_);
     }
     // Host views of the last update's results (see Mesh<D>); area() may have spare rows past faces().
-    auto owner() const { return host([](const auto& m) { return m.owner(); }); }
-    auto neighbour() const { return host([](const auto& m) { return m.neighbour(); }); }
-    auto area() const { return host([](const auto& m) { return m.area(); }); }
-    auto face_centroid() const { return host([](const auto& m) { return m.face_centroid(); }); }
-    auto volume() const { return host([](const auto& m) { return m.volume(); }); }
-    auto centroid() const { return host([](const auto& m) { return m.centroid(); }); }
-    auto cell_face_start() const { return host([](const auto& m) { return m.cell_face_start(); }); }
-    auto cell_face() const { return host([](const auto& m) { return m.cell_face(); }); }
+    auto owner() const {
+        return host([](const auto& m) { return m.owner(); });
+    }
+    auto neighbour() const {
+        return host([](const auto& m) { return m.neighbour(); });
+    }
+    auto area() const {
+        return host([](const auto& m) { return m.area(); });
+    }
+    auto face_centroid() const {
+        return host([](const auto& m) { return m.face_centroid(); });
+    }
+    auto volume() const {
+        return host([](const auto& m) { return m.volume(); });
+    }
+    auto centroid() const {
+        return host([](const auto& m) { return m.centroid(); });
+    }
+    auto cell_face_start() const {
+        return host([](const auto& m) { return m.cell_face_start(); });
+    }
+    auto cell_face() const {
+        return host([](const auto& m) { return m.cell_face(); });
+    }
 
     // f(mesh) with the Mesh<D, space> this engine runs; f must accept both kinds.
     template <class F>
@@ -135,7 +149,8 @@ private:
         } else {
             auto& copy = std::get<std::is_same_v<Memory, typename Host::memory_space> ? 0 : 1>(copies_);
             if (copy.extent(0) != x.extent(0))
-                copy = Rows(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("engine_positions")), x.extent(0));
+                copy =
+                    Rows(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("engine_positions")), x.extent(0));
             Kokkos::deep_copy(copy, x);
             return copy;
         }
@@ -157,7 +172,8 @@ private:
 
     Options options_;
     Any mesh_;
-    std::tuple<Kokkos::View<double* [D], typename Host::memory_space>, Kokkos::View<double* [D], typename Device::memory_space>>
+    std::tuple<Kokkos::View<double* [D], typename Host::memory_space>,
+               Kokkos::View<double* [D], typename Device::memory_space>>
         copies_;
 };
 

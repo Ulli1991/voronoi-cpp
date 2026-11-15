@@ -95,9 +95,11 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> run(Points points, double d
         const double ms = t.seconds() * 1e3;
         if (r.resorted) throw std::logic_error("no re-sort expected");
         out.push_back(summary(mesh, label));
-        std::printf("backend=%s step=%d ms=%.2f Mcells_s=%.2f rebuilt=%d stuck=%d host_flips=%lld topology=%016llx all=%016llx\n",
-                    name, s, ms, points.size() / ms / 1e3, int(r.rebuilt), r.stuck, r.host_flips,
-                    (unsigned long long)out.back().first, (unsigned long long)out.back().second);
+        std::printf(
+            "backend=%s step=%d ms=%.2f Mcells_s=%.2f rebuilt=%d stuck=%d host_flips=%lld topology=%016llx "
+            "all=%016llx\n",
+            name, s, ms, points.size() / ms / 1e3, int(r.rebuilt), r.stuck, r.host_flips,
+            (unsigned long long)out.back().first, (unsigned long long)out.back().second);
     }
     return out;
 }
@@ -138,7 +140,8 @@ void tail(const Points& points, int tail_count) {
     std::vector<int> ids(n);
     std::iota(ids.begin(), ids.end(), 0);
     const int count = std::min(n, tail_count);
-    std::partial_sort(ids.begin(), ids.begin() + count, ids.end(), [&](int a, int b) { return work(a, 1) > work(b, 1); });
+    std::partial_sort(ids.begin(), ids.begin() + count, ids.end(),
+                      [&](int a, int b) { return work(a, 1) > work(b, 1); });
     Kokkos::View<int*, Kokkos::HostSpace> slots("slots", count);
     Kokkos::View<char*, Kokkos::HostSpace> listed("listed", n);
     std::vector<int> slot_of(n);
@@ -153,12 +156,13 @@ void tail(const Points& points, int tail_count) {
         tail_ms = std::min(tail_ms, t.seconds() * 1e3);
     }
     if (count > 0)
-        std::printf("tail: cells=%d clips_per_cell=%.0f (all cells: see work) host_ms=%.3f us_per_cell_core=%.1f\n", count,
-                    double(clips) / count, tail_ms, tail_ms * 1e3 * Host().concurrency() / count);
-    std::printf("clip: device_ms=%.2f host_ms=%.2f (%d threads) device_Mcells_s=%.2f host_Mcells_s=%.3f ratio=%.1f "
-                "volume_bits_differ=%lld of %d\n",
-                device_ms, host_ms, Host().concurrency(), n / device_ms / 1e3, n / host_ms / 1e3, host_ms / device_ms,
-                differ, n);
+        std::printf("tail: cells=%d clips_per_cell=%.0f (all cells: see work) host_ms=%.3f us_per_cell_core=%.1f\n",
+                    count, double(clips) / count, tail_ms, tail_ms * 1e3 * Host().concurrency() / count);
+    std::printf(
+        "clip: device_ms=%.2f host_ms=%.2f (%d threads) device_Mcells_s=%.2f host_Mcells_s=%.3f ratio=%.1f "
+        "volume_bits_differ=%lld of %d\n",
+        device_ms, host_ms, Host().concurrency(), n / device_ms / 1e3, n / host_ms / 1e3, host_ms / device_ms, differ,
+        n);
 }
 
 }  // namespace

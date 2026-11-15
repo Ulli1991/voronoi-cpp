@@ -112,12 +112,13 @@ void compare(Check& check, const std::string& what, const Points& points, double
         int topology = 0, all = 0;
         for (std::size_t s = 0; s < first.size(); ++s)
             topology += first[s].first == other[s].first, all += first[s] == other[s];
-        check.expect(all == int(first.size()),
-                     what + ": " + voronoi::name(modes[m]) + " equals cpu in every bit, " + std::to_string(all) + " of " +
-                         std::to_string(first.size()) + " updates (topology " + std::to_string(topology) +
-                         "; last hash " + hex(other.back().second) + ")");
+        check.expect(all == int(first.size()), what + ": " + voronoi::name(modes[m]) + " equals cpu in every bit, " +
+                                                   std::to_string(all) + " of " + std::to_string(first.size()) +
+                                                   " updates (topology " + std::to_string(topology) + "; last hash " +
+                                                   hex(other.back().second) + ")");
     }
-    if (modes.size() == 1) check.expect(true, what + ": cpu only (no device space), last hash " + hex(first.back().second));
+    if (modes.size() == 1)
+        check.expect(true, what + ": cpu only (no device space), last hash " + hex(first.back().second));
 }
 
 }  // namespace
@@ -129,9 +130,10 @@ int main(int argc, char** argv) {
               << Kokkos::DefaultExecutionSpace::name() << "\n";
 
     for (const std::string kind : {"jittered", "uniform", "clustered", "halo", "cosmicweb"})
-        compare<3>(check, "3D " + kind + " 32768, 0.3 spacings, 4 steps", in_slot_order(make_points(kind, 32768)), 0.3, 4);
-    compare<3>(check, "3D uniform 32768, 2 spacings (rebuilds), 2 steps", in_slot_order(make_points("uniform", 32768)), 2.0,
-               2);
+        compare<3>(check, "3D " + kind + " 32768, 0.3 spacings, 4 steps", in_slot_order(make_points(kind, 32768)), 0.3,
+                   4);
+    compare<3>(check, "3D uniform 32768, 2 spacings (rebuilds), 2 steps", in_slot_order(make_points("uniform", 32768)),
+               2.0, 2);
     compare<2>(check, "2D uniform 16384, 0.3 spacings, 4 steps", flat_points(16384, 2, 7), 0.3, 4);
     compare<1>(check, "1D uniform 4096, 0.3 spacings, 4 steps", flat_points(4096, 1, 11), 0.3, 4);
 
