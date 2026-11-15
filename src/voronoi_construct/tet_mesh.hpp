@@ -437,6 +437,8 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     const auto rings = cells.rings;
     const auto cell_ring = cells.ring_start;
     const auto owned = cells.owned_count;
+    mesh = {};  // its arrays are rebuilt; the previous round keeps what it needs
+    a = {};
     const bool incremental = previous.changed.extent(0) > 0;
     const auto changed = previous.changed;
     const auto old_vertex = previous.vertex, old_adjacent = previous.adjacent;
@@ -637,6 +639,9 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
             }
             if (missing) Kokkos::atomic_add(&unresolved(), missing);
         });
+    a.first_tet = a.slot_face = a.tet_slot = {};  // freed once the kernels are done
+    a.face_ring = {};
+    a.block = {};
 }
 
 // Zeroed circumcentres and edge bits for the tetrahedra of an assemble. Used by: assemble, tet_start::build.
