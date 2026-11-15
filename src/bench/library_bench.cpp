@@ -161,7 +161,7 @@ int build(int argc, char** argv) {
             return libbench::now() - t0;
         });
     std::cout << "{\"library\":\"voronoi-cpp\",\"variant\":\"" << s.variant
-              << "\",\"kokkos_arrays_peak_bytes\":" << kokkos_peak << ",\"n\":" << n << "}" << std::endl;
+              << "\",\"kokkos_arrays_peak_bytes\":" << kokkos_peak << ",\"n\":" << n << "}" << '\n' << std::flush;
     return 0;
 }
 
@@ -213,7 +213,7 @@ int step(int argc, char** argv) {
     std::cout << "{\"library\":\"voronoi-cpp\",\"variant\":\"" << s.variant
               << "\",\"start_and_steps_peak_bytes\":" << peak.stop() << ",\"kokkos_arrays_after_start_bytes\":" << built
               << ",\"kokkos_arrays_step_peak_bytes\":" << DeviceMemory<Memory>::peak << ",\"n\":" << n << "}"
-              << std::endl;
+              << '\n' << std::flush;
     const auto v = to_host(mesh.volume());
     std::vector<double> volume(n);
     for (std::uint64_t i = 0; i < n; ++i) volume[label[i]] = v(i);
