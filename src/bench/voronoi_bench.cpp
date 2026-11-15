@@ -55,14 +55,14 @@ struct KernelTimes {
         E::set_begin_deep_copy_callback(begin_copy);
         E::set_end_deep_copy_callback(end_copy);
     }
-    // Prints the slowest kernels per step over `steps` sampled steps, for n cells. Used by: step.
-    static void report(int steps, int n) {
+    // Prints the slowest kernels per step over `steps` sampled steps, for n cells, as `line` lines. Used by: step.
+    static void report(int steps, int n, const char* line = "kernel") {
         if (!on) return;
         std::vector<std::pair<double, std::string>> rows;
         for (const auto& [label, ms] : total) rows.push_back({ms / steps, label});
         std::sort(rows.rbegin(), rows.rend());
         for (const auto& [ms, label] : rows)
-            std::cout << "kernel: " << label << " ms_per_step=" << ms << " Mcells_s=" << n / ms / 1e3 << "\n";
+            std::cout << line << ": " << label << " ms_per_step=" << ms << " Mcells_s=" << n / ms / 1e3 << "\n";
     }
 };
 
@@ -233,6 +233,21 @@ std::uint64_t clip_checksum(const shell_voronoi::Cells<Memory>& cells, bool topo
     return h;
 }
 
+// Points of `kind`, or read from a libbench .pts file (uint64 n, uint64 frames, n x 3 doubles on the snapping grid).
+// Used by: rebuild, step.
+Points bench_points(const std::string& kind, int n, const Box& box) {
+    if (kind.size() < 4 || kind.compare(kind.size() - 4, 4, ".pts") != 0) return make_points(kind, n, box);
+    std::ifstream in(kind, std::ios::binary);
+    std::uint64_t head[2] = {0, 0};
+    in.read(reinterpret_cast<char*>(head), sizeof head);
+    std::vector<double> xyz(3 * head[0]);
+    in.read(reinterpret_cast<char*>(xyz.data()), static_cast<std::streamsize>(xyz.size() * sizeof(double)));
+    if (!in) throw std::runtime_error("cannot read " + kind);
+    Points points(head[0]);
+    for (std::size_t i = 0; i < points.size(); ++i) points[i] = {xyz[3 * i], xyz[3 * i + 1], xyz[3 * i + 2]};
+    return points;
+}
+
 // The `rebuild` mode: times the cell list and the warp clipping on one point set and checks the cells.
 // args: rebuild <n> <distribution> [repeats]. Returns the failure count.
 // Used by: main.
@@ -242,7 +257,7 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     const int requested = std::stoi(args.at(1));
     const std::string& kind = args.at(2);
     const int repeats = args.size() > 3 ? std::max(1, std::stoi(args[3])) : 5;
-    const Positions x = to_device(make_points(kind, requested, box));
+    const Positions x = to_device(bench_points(kind, requested, box));
     const int n = static_cast<int>(x.extent(0));
     neighbor_search::CellList<Exec> list;
     const double width = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
@@ -332,6 +347,26 @@ std::uint64_t tets_checksum(const tet_mesh::Mesh<Memory>& mesh) {
         sum += h;
     }
     return sum;
+}
+
+// A checksum of the start's arrays in their numbering (FNV-1a): vertex, adjacent, edges, the faces and the ring
+// slots, so two assemblies agree entry for entry, also on a clipping the check rejects. Used by: step (the start line).
+std::uint64_t arrays_checksum(const tet_mesh::Mesh<Memory>& mesh) {
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](const auto& view) {
+        const auto host = to_host(view);
+        const std::size_t size = host.span();
+        for (std::size_t i = 0; i < size; ++i) h = (h ^ static_cast<std::uint64_t>(host.data()[i])) * 1099511628211ull;
+    };
+    mix(mesh.vertex);
+    mix(mesh.adjacent);
+    mix(mesh.edges);
+    mix(mesh.owner);
+    mix(mesh.neighbour);
+    mix(mesh.ring_start);
+    mix(mesh.ring_length);
+    mix(mesh.ring);
+    return h;
 }
 
 // Flow::advect on `threads` host threads, one block of points each (the same result). Used by: step.
@@ -543,7 +578,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     const int steps = args.size() > 4 ? std::stoi(args[4]) : 10;
     const int repeats = 3;
     // In slot order: a spatial particle order, as a solver keeps it.
-    Points points = in_slot_order(make_points(kind, requested, box), box);
+    Points points = in_slot_order(bench_points(kind, requested, box), box);
     const int n = static_cast<int>(points.size());
     const double spacing = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
     Positions x = to_device(points);
@@ -561,20 +596,27 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
         const std::uint64_t rings_checksum = clip_checksum(cells), rings_topology = clip_checksum(cells, true);
         const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
+        const std::uint64_t assembly_checksum = arrays_checksum(mesh);
         KernelTimes::total.clear();
         const double start_ms = median_ms(repeats, [&] {
             shell_voronoi::construct_warp(exec, grid, cells);
             start = tet_start::build(exec, grid, cells, mesh);
         });
-        KernelTimes::report(repeats + 1, n);  // with --kernels: the start's kernels, the warm-up included
+        KernelTimes::report(repeats + 1, n, "start_kernel");  // with the warm-up
         KernelTimes::total.clear();
+        if (Nvtx::on) {  // one more start in its own range, for Nsight filters
+            shell_voronoi::construct_warp(exec, grid, cells);
+            const Phase phase("start_once");
+            start = tet_start::build(exec, grid, cells, mesh);
+        }
         const int tets = static_cast<int>(mesh.vertex.extent(0));
         std::cout << "start: clip_ms=" << clip_ms << " from_rings_ms=" << from_rings_ms << " start_ms=" << start_ms
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
                   << " tets=" << tets << " tets_checksum=" << tets_checksum(mesh) << " per_cell=" << double(tets) / n
                   << " ring_entries_per_cell=" << double(cells.needed()) / n << " rings_checksum=" << rings_checksum
-                  << " rings_topology=" << rings_topology << "\n";
+                  << " rings_topology=" << rings_topology << " assembly_checksum=" << assembly_checksum
+                  << " start_arrays_checksum=" << arrays_checksum(mesh) << "\n";
     }
 
     DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);
