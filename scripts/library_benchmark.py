@@ -266,7 +266,7 @@ def published_table(rows):
 # input (README_SETTING); their "variant prefix" matches all their settings.
 FIGURE_GPU_FULL = [
     ("voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "voronoi-cpp, warp rebuild"),
-    ("voronoi-cpp", "warp clipping rebuild, host", "A100", 1, "voronoi-cpp, warp rebuild, host to host"),
+    ("voronoi-cpp", "warp clipping rebuild, host to host (copy", "A100", 1, "voronoi-cpp, warp rebuild, host to host"),
     ("voronoi-cpp", "exact start", "A100", 1, "voronoi-cpp, exact start"),
     ("peclet-voro", "cold build", "A100", 1, "peclet-voro (no centroids)"),
     ("gDel3D", "Delaunay + faces", "A100", 1, "gDel3D + faces (ours)"),
@@ -274,6 +274,8 @@ FIGURE_GPU_FULL = [
     ("votess", "tesellate + faces", "A100", 1, "votess + faces (ours)"),
 ]
 FIGURE_GPU_VOLUMES = [
+    ("voronoi-cpp", "warp clipping rebuild, host to host, volumes", "A100", 1,
+     "voronoi-cpp, host to host, volumes + centroids out"),
     ("Basselin", "", "A100", 1, "Basselin et al. 2021"),
     ("Liu et al.", "tet-centric", "A100", 1, "Liu et al. 2022 (float)"),
     ("VoroGPU", "", "A100", 1, "Ray et al. 2018 (float)"),
@@ -358,7 +360,7 @@ def figure(summary, pub, path):
         shown = [(code, n, dist) for code, n, dist, panel in FIGURE_PUBLISHED if panel == tag]
         for code, n, dist in shown:
             for p in pub:
-                if p["code"].startswith(code) and p["n"] == n and dist in p["distribution"]:
+                if p["code"].startswith(code) and p["n"] == n and p["distribution"].startswith(dist):
                     ax.plot([x0 + 0.12 * (k - (len(shown) - 1) / 2)], [float(p["rate_Mcells_s"])],
                             marker=open_markers[k % len(open_markers)], markerfacecolor="none", markeredgecolor="0.25",
                             markeredgewidth=1.6, markersize=9, linestyle="none",
