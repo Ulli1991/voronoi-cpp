@@ -58,3 +58,14 @@ Reason gives the structural cause, not "method X is worse".
 |---|---|---|---|---|
 | #45: circumcentres in grid steps | step −0.9 to −1.7 % | kept | equal centres must round equally | measurements.md, "After the fix of #45" |
 | #48: edge representatives from the tetrahedra, plus the face-count check | step −0.9 % | kept | a doubled face gave wrong cells; the check makes such errors impossible to miss | issue #48 |
+
+## CPU and GPU together (measured, not built)
+
+Upper bounds from Nsight traces (measurements.md, "CPU and GPU together: where the GPU waits"); none of these was implemented.
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| CPU finishes stuck flips while the GPU goes on (H5) | 0: no triangle stuck in 240 steps, six inputs, 0.03 to 0.3 spacings, 128³ and 256³ | dropped | nothing to hide; the host fallback stays as the rare path it is | ideas.md, "CPU and GPU together" |
+| CPU runs the start's patch rounds while the GPU writes faces (H6) | 0 | dropped | the faces are computed from the patched tetrahedra, so the two are sequential by data; the re-clipping inside the rounds is the tail (H2) | same |
+| Hilbert re-sort keys on the CPU (H7) | below 0: the positions copy (about 12 ms at 128³) costs more than the key kernel | dropped | the keys need every position on the host; the re-sort is off by default | same |
+| CPU takes a share of bulk cells (H8) | at most 7 % of a rebuild before copies; the positions copy alone is about 10 % of a jittered clipping | dropped | a 72-core node is 13× slower clipping and 17× slower stepping than the A100 with the same code; a step would need the mesh mirrored on the host | same |

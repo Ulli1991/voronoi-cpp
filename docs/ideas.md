@@ -127,3 +127,47 @@ Ideas from plume's local Voronoi cells, to test on our A100. plume was tuned onl
 | P3 | Faces taken from one shared pool, exactly a cell's count per cell, by one atomic add; grow 1.25 times and repeat when short (plume `79dbcd9`, 1.66 to 1.0 kB a row there) | memory, with #28 | our pools against exact-count claiming: B/cell and speed | open |
 | P4 | Reflecting walls by mirror ghosts: a cell beside a wall closes on the bisector with its own mirror image (plume `77d0d05`) | walls in 2D and 3D, which we do not have | a lattice beside a wall: every cell's volume equals the interior's | open |
 | P5 | Merge face pairs found beyond a cell's list into both cells' lists, sorted and unique (plume `6f2c8d4`) | symmetric neighbour lists in the local mode (`clip()`) | only if the local mode needs lists | research |
+
+## CPU and GPU together (2026-11-15)
+
+The CPU idles while the GPU builds and steps the mesh: in every phase the host spends the kernels blocked in a synchronising call ([measurements.md](measurements.md#cpu-and-gpu-together-where-the-gpu-waits-2026-11-15), one A100 at 1305 MHz, 128³ and 256³, six inputs). The question was which work the CPU can take over, or which waits can go, while results stay bit-identical. Upper bounds are the measured times each item could hide.
+
+| ID | Candidate | Measured, upper bound | Status |
+|---|---|---|---|
+| H1 | Allocations off the critical path of the exact start: keep capacity between builds, or allocate the next phase's arrays from a host thread while the warp kernel runs (`cudaMalloc` does not wait for kernels; `cudaFree` does) | the GPU waits on `cudaMalloc`/`cudaFree` 9 to 49 ms of a 140 to 344 ms start at 128³ (6 to 18 %), 0.48 to 0.63 s of a 2.0 to 3.0 s start at 256³ (18 to 31 %) | queued as S1 |
+| H2 | The CPU clips the clipping's tail (the cells the warp kernel overflows, today a per-thread GPU pass after it) while the GPU clips the rest: the warp kernel appends their ids to a pinned queue the host reads during the kernel; the start's exact re-clipping the same way | rebuild: 2.5 to 17 ms at 128³ (up to 11.6 %), up to 114 ms at 256³ (8.7 %, cosmic web, 8501 cells); start: up to 53 ms at 128³ and 154 ms at 256³ | queued as S3 |
+| H3 | Fewer read-backs in the moving step: size decisions on the device or one step ahead, repair rounds as a CUDA graph | the GPU waits 0.5 to 0.9 ms of a step at 128³ (2.4 to 5.1 %), under 1 % at 256³; 10 to 20 read-backs a step | queued as S4 |
+| H4 | Copies of the volumes-only path from pinned memory, the copy-out of one output under the work on the next | copies are 20 to 46 % of points-in to volumes-out (19 to 25 ms in, 13 to 25 ms out at 128³, pageable at 2.6 GB/s) | open; first test: pinned buffers alone |
+| H5 | The CPU finishes stuck flips while the GPU goes on with the geometry | nothing stuck in 240 measured steps (six inputs, 0.03 to 0.3 spacings) | dropped: nothing to hide |
+| H6 | The CPU handles the start's patch rounds while the GPU writes faces | none: faces need the patched tetrahedra, so the two cannot overlap; the re-clipping inside the rounds is H2 | dropped |
+| H7 | Hilbert re-sort keys planned on the CPU | the re-sort is off by default; the positions copy alone (about 12 ms at 128³) costs more than the key kernel | dropped |
+| H8 | The CPU takes a share of ordinary bulk cells | a full 72-core node is 13× slower clipping and 17× slower stepping than the A100 (same code): at most 7 % of a rebuild, while copying the positions over costs about 10 % of a jittered clipping; a step needs the mesh (about 1950 B/cell) mirrored every step | dropped |
+
+Rank by gain per effort: H1 (largest wait, no arithmetic changes), then H2 (the one real CPU-compute overlap), H4, H3.
+
+**Constraints.**
+
+- **Bits:** results must not depend on which side finishes first. Topology is exact and canonical: tetrahedra and face rings follow from exact predicates with symbolic perturbation, rings start from their least id, faces are ordered by neighbour id. So a cell clipped by the host gives the same tetrahedra; the start recomputes all geometry on the device from them. The clipping's own floating-point outputs (volumes and centroids of a plain rebuild) must be computed with the same operations in the same order on both sides, or recomputed on the device from the rings. Merges go by cell id, never by arrival order.
+- **Kokkos:** one build with both backends (S0); a host execution space for the tail with its own thread count; pinned (`Kokkos::SharedHostPinnedSpace`) buffers for the queue and the read-backs; device work on an execution-space instance so the host can run while it waits.
+- **PCIe:** a tail cell's input is the grid it reads (positions and cell list, already needed on the host only if the host clips): copied once per build, 24 B/cell, about 5 ms at 128³ pageable; its output is a few hundred bytes of rings per cell.
+
+**Three modes from one build (owner, 2026-11-15).**
+
+Today there are two builds: CUDA (Kokkos CUDA + Serial) and OpenMP (Kokkos OpenMP + Serial). The library is already templated on the execution space (`Mesh<D, Exec>`), and the CUDA-only kernels are chosen with `if constexpr` with generic per-thread versions behind them: the warp clipping (`construct_warp`), the warp sort and sums of `tet_cells` (`CellSortWarp`, `CellSumsWarp`), the CUB sorts of `mesh_order` and `sorted_mesh`, the CUDA path of `neighbor_search`. The huge-cell pass and the host fallback of the repair run on `Kokkos::DefaultHostExecutionSpace`, which is Serial in today's CUDA build. TESTING.md's `repro` group already measured that the Serial, OpenMP and CUDA builds agree on every hash of faces, volumes and centroids.
+
+Proposal:
+
+- One build with Kokkos CUDA + OpenMP; the host space becomes OpenMP, so the host passes get threads.
+- `voronoi::Options { Backend backend = gpu; Tail tail = Tail::off; int host_threads = 0; }`, with `Backend` one of `cpu | gpu | hybrid`. `cpu` runs `Mesh<D, Kokkos::OpenMP>`, `gpu` runs `Mesh<D, Kokkos::Cuda>`, `hybrid` runs the GPU mesh with the host taking the tail (`Tail::on`) or deciding by the last build's count of tail cells (`Tail::automatic`; no clock decides, so the same input takes the same path). Off by default until hybrid is shown bit-identical and faster.
+- A run-time front end in its own header (`voronoi::Engine<D>`, a variant over the two meshes) with the same calls for all three modes; the compile-time `Mesh<D, Exec>` stays as it is for callers that know their backend.
+- Tests: `modes_test` runs every mode on the same inputs and requires equal hashes of tetrahedra, faces, volumes and centroids; the A100 ctest runs it; CI's host build keeps the CPU mode.
+
+**Workplan.** Approved 2026-11-15: S0 and S2. Queued, each starts on its trigger:
+
+| Step | What | Files | Proof | Trigger |
+|---|---|---|---|---|
+| S0 | One build with CUDA and OpenMP; `modes_test` | CMakeLists.txt, src/test/modes_test.cpp, README, TESTING.md | equal hashes in all modes; rebuild, start and step within 1 % of main in one gpu1 job; compile time and binary size | now |
+| S2 | `voronoi::Options` and the run-time front end, a new header that does not edit `Mesh` | src/voronoi_construct/voronoi_engine.hpp (new), how_it_works.md | the same hashes through the front end as through `Mesh` | now |
+| S1 | Allocations off the critical path of the start (H1) | voronoi_mesh.hpp, tet_start.hpp, tet_mesh.hpp (assembly), shell_voronoi.hpp | same tetrahedra and geometry checksums; start on six inputs at 128³ and 256³; bound 18 to 31 % of the start at 256³ | branches `start-fast` and `step-v1-r14` merged |
+| S3 | Hybrid tail (H2) | shell_voronoi_warp.hpp, shell_voronoi.hpp | same tetrahedra and ring checksums in all modes; rebuild and start times; bound 11.6 % of a rebuild at 128³ | the fix of #60 decided and merged (`fix-60`) |
+| S4 | Fewer read-backs per step (H3) | tet_repair.hpp, tet_mesh.hpp, voronoi_mesh.hpp | same checksums; steps at 0.03, 0.1, 0.3; bound 5 % at 128³, under 1 % at 256³ | `step-v1-r14` merged |
