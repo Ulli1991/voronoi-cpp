@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Library benchmark (docs/library_benchmark.md) at 128³ from its raw records (bench/libraries/results/*.jsonl,
 published.csv) through scripts/library_benchmark.py's readers. library_headline: full cells on one A100, one marker per
-library, ours highlighted, published apart; library_more: volumes only, one CPU node, the moving step."""
+library, ours highlighted; measured rows only (the published rates are in the captions, captions.md); library_more: volumes only, one CPU node, the moving step."""
 import glob
 import json
 import os
@@ -68,32 +68,10 @@ def curves(ax, summary, rows, big=False):
                 ls=ls if not ours or "start" not in label else "--", label=SHORT.get(label, label), zorder=4 if ours else 3)
 
 
-def published(ax, pub, tag, x0, annotate=False):
-    """Published rates as open markers at x0 (+0.3 per marker, or one column with text labels); returns the count."""
-    k = 0
-    for code, n, dist, where in lb.FIGURE_PUBLISHED:
-        for p in pub if where == tag else []:
-            if p["code"].startswith(code) and p["n"] == n and p["distribution"].startswith(dist):
-                name = p["code"].split(" (")[0].replace(" 2021", "").replace(" 2018", "").replace("Voro++", "voro++")
-                dist_s = p["distribution"].split(" (")[0].replace(" noise", "")
-                label = f"{name}{', ' + dist_s if 'Basselin' in name else ''}"
-                rate = float(p["rate_Mcells_s"])
-                ax.plot([x0 if annotate else x0 + 0.3 * k], [rate], marker="o^sDv"[k], mfc="white", mec="0.25",
-                        mew=1.6, ms=8, ls="none", zorder=5, label=None if annotate else label + " (published)")
-                if annotate:
-                    ax.text(x0 + 0.25, rate, f"{label.replace(' et al.', '')}: {rate:.3g}", va="center", fontsize=10,
-                            color="0.25")
-                k += 1
-                break
-    return k
-
-
-def axes_inputs(ax, k, x0, short=False, width=None):
-    width = 0.3 * max(k - 1, 0) if width is None else width
-    ax.axvspan(x0 - 0.45, x0 + width + 0.45, color="0.93", zorder=0)
-    ax.set_xticks(list(range(len(lb.INPUTS))) + ([x0 + width / 2] if k else []),
-                  (["jittered", "blue noise", "white noise", "clustered", "halo"] if short else LABELS) + ((["publ."] if short else ["pub-\nlished"]) if k else []))
-    ax.set_xlim(-0.4, x0 + width + 0.5 if k else len(lb.INPUTS) - 0.6)
+def axes_inputs(ax, short=False):
+    ax.set_xticks(range(len(lb.INPUTS)), ["jittered", "blue noise", "white noise", "clustered", "halo"] if short
+                  else LABELS)
+    ax.set_xlim(-0.4, len(lb.INPUTS) - 0.6)
     if short:
         ax.tick_params(axis="x", labelrotation=35)
         for t in ax.get_xticklabels():
@@ -108,9 +86,7 @@ def axes_inputs(ax, k, x0, short=False, width=None):
 def headline(summary, pub):
     fig, ax = figure(SINGLE, 85)
     curves(ax, summary, HEADLINE, big=True)
-    x0 = len(lb.INPUTS) + 0.3
-    k = published(ax, pub, "gpu_full", x0)
-    axes_inputs(ax, k, x0)
+    axes_inputs(ax)  # measured rows only; the published rates are in captions.md
     ax.set_ylim(0.1, 1000)
     ax.set_ylabel("full cells, M cells/s")
     ax.legend(loc="upper right", fontsize=11, ncol=2, columnspacing=0.6, handlelength=1.5)
@@ -136,12 +112,10 @@ def gaps():
 
 def more(summary, pub):
     g = gaps()
-    fig, axes = figure(DOUBLE, 80, ncols=3, gridspec_kw=dict(width_ratios=[1.5, 0.95, 1.0]))
+    fig, axes = figure(DOUBLE, 80, ncols=3, gridspec_kw=dict(width_ratios=[1.15, 1.0, 0.85]))
     a, b, c = axes
-    x0 = len(lb.INPUTS) + 0.3
     curves(a, summary, lb.FIGURE_GPU_VOLUMES)
-    xa = x0 + 0.7  # room for the ratio note next to the star
-    axes_inputs(a, published(a, pub, "gpu_volumes", xa, annotate=True), xa, short=True, width=4.2)
+    axes_inputs(a, short=True)
     # Our volumes-only path, host to host like the three codes, from the job that ran them on blue noise.
     vol = next(v for k, v in g.items() if k[0][1] == "volumes and centroids only, host to host"  # pageable buffers
                and k[2] == "bluenoise" and k[3] == lb.SIZES[0])
@@ -162,7 +136,7 @@ def more(summary, pub):
         [r for r in lb.FIGURE_CPU_FULL[1:7]]
     curves(b, merged, cpu)
     summary = merged
-    axes_inputs(b, published(b, pub, "cpu", x0), x0, short=True)
+    axes_inputs(b, short=True)
     b.set_ylim(0.05, 5000)
     b.text(0.03, 0.97, "(b) 72 cores, full cells", transform=b.transAxes, va="top")
     b.legend(loc="upper right", fontsize=11, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))

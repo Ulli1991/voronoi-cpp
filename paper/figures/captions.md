@@ -56,13 +56,11 @@ reference at 10.3 to 12.8 M cells/s on cosmic web (12.0 in our own job) and 17 t
 c42c230), 1305 MHz SM clock under load, node ravg1034, job 32366449. Other GPU codes: node ravg1002 at 1095 MHz (the
 benchmark's jobs, docs/library_benchmark.md); their rates at 1305 MHz would be up to about 15 % higher, double precision, 2,097,152 cells (128³), periodic unit box, median of 3 timed runs
 (steps: frames 2 to 10). "+ faces": the code's tetrahedra or neighbour lists turned into full cells by our faces step,
-timed in. Open markers: published rates on other hardware and points (peclet-voro; Basselin et al. 2021; Ray et al.
-2018; Paragram; votess; Voro++, Lu et al. 2023), cited per marker. To be regenerated when the close-gaps CPU rows and
-our rerun at 1305 MHz exist.
+timed in. Only measured rows are drawn (every code on the same points and hardware); the rates the papers report on
+their own hardware and points are in the table "Published rates" below, for the text.
 
 **library_more, additions (close-gaps, voronoi-cpp 77055a4).** (a) "ours, full cells, host to host": the warp rebuild with volumes and centroids copied out (faces stay on the
-device). Open markers in the published column: the rates the papers report on their own hardware and points, value
-printed next to each. Star: our volumes-only path
+device). Star: our volumes-only path
 (`shell_voronoi::volumes_and_centroids`), host to host with pageable buffers like the three volumes-only codes, blue
 noise only: 33.2 M cells/s in A100 job 32368078 (node ravg1004), which also ran Basselin et al. (10.4), Ray et al.
 (18.1) and Liu et al. (18.1) on blue noise in their README setting; the ratios printed are from that job alone (3.2×,
@@ -121,3 +119,19 @@ cell list itself and its lap holds the whole call (configure, Morton keys, radix
 positions: 2.4 ns on 72 cores); the sort and the host work around them fall outside labelled kernels and are counted in
 the exact Delaunay start. Our rebuild's rest on the A100 (1.4 ns) is the cell arrays' allocation (0.5) and the time
 between laps (0.9); it has no copies because it is timed from points on the device to cells on the device.
+
+**Published rates (for the text; not drawn).** As the papers report them, on their own hardware and points; from
+`bench/libraries/published.csv`, where precision, outputs, timing and source locations are recorded per row.
+
+| code | reference | hardware | points | distribution | precision | outputs | M cells/s | source |
+|---|---|---|---|---|---|---|---|---|
+| peclet-voro (cold build) | peters2026peclet | GeForce RTX 5080 | 2·10⁶ | uniform Poisson | double | topology, volumes, facet areas | 3.61 | repository docs |
+| Basselin et al. 2021 | basselin2021restricted | Tesla V100 | 10⁷ | blue noise | double | volumes and barycentres | 34.5 | CGF 40(2), Fig. 10 (top) |
+| Basselin et al. 2021 | basselin2021restricted | Tesla V100 | 10⁷ | white noise | double | volumes and barycentres | 4.65 | CGF 40(2), Fig. 10 (bottom) |
+| Ray et al. 2018 | ray2018meshless | Tesla V100 | 10⁷ | blue noise | not stated | cell geometry | 17.4 | ACM TOG 37(6):265, Table 2 |
+| Paragram | taveira2026paragram | RTX 5090 | 2·10⁶ | white noise | float | connectivity | 9.35 | SIGGRAPH '26 (arXiv:2605.06408), suppl. Table 7 |
+| votess (GPU) | singh2024votess | A100 40 GB | 10⁶ | uniform | not stated | neighbour lists | 0.85 (read from a bar chart) | arXiv:2412.04514v2, Fig. 1 |
+| voro++ multithreaded | lu2023voro | 2 × Xeon E5-2650L v4, 28 threads | 10⁸ | homogeneous random | double | full cells | 1.07 | CPC 291, 108832, Table 4 |
+
+Basselin et al.'s 34.5 matches their cell kernel alone (docs/library_benchmark.md, Stages: 38.4 M cells/s on our A100,
+33.3 scaled to a V100), not the full build host to host (10.4 on our A100).
