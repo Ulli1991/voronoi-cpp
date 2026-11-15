@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Figure: relative volume error against the brute-force oracle (1000 sampled cells per input), voronoi-cpp's warp
+"""Figure: relative volume error against the exact reference (src/test/oracle.hpp; 1000 sampled cells per input), voronoi-cpp's warp
 rebuild and exact start on the A100 per input at 256³, and the codes of the library benchmark on halo input at 128³.
 Data: paper/data/oracle_errors.csv (paper/scripts/extract_oracle.py)."""
 import matplotlib.ticker
@@ -53,7 +53,7 @@ def main():
     for ax in axes:
         ax.set_xscale("log")
         ax.axvline(EPS, color="0.4", lw=1.0, ls=":")
-        ax.set_xlabel(r"$|V - V_\mathrm{oracle}|\,/\,V_\mathrm{oracle}$")
+        ax.set_xlabel(r"$|V - V_\mathrm{exact}|\,/\,V_\mathrm{exact}$")
         figstyle.decorate(ax)
         ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(numticks=30))
         ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
