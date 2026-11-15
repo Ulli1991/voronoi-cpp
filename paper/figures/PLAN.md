@@ -13,12 +13,14 @@ captions state the A100's SM clock. Other codes only from the like-for-like benc
 
 | Fig. | file | message | data | status |
 |---|---|---|---|---|
-| 1 | `walkthrough_build` (panels 1–6) | A periodic point set goes through snapping, the Morton cell list, clipping one cell, all cells with their face rings, the exact start, and the first move. | the library's own 2D arrays (`scripts/overview_mesh2d.cpp`, `Mesh<2>`) | **done**, 190 × 193 mm (`paper/scripts/fig_walkthrough.py` wraps `scripts/overview_figure.py` unchanged) |
-| 2 | `walkthrough_step` (panels 7–12) | A step screens the old triangles, flips the failing ones in rounds, writes the dual's faces, sums the cells in a fixed order, falls back to the host or a rebuild when stuck, and re-sorts. | same | **done**, 190 × 194 mm |
-| 3 | `library_comparison` | Like for like on the same points and A100, voronoi-cpp builds full cells 4 to 55× faster than the fastest other GPU code with full cells (a); volumes-only codes (b), one CPU node (c) and the moving step (d) as panels; published numbers as open markers, cited in the caption. | `bench/libraries/results/*.jsonl`, `published.csv`, through `scripts/library_benchmark.py`'s readers | **done**, 190 × 149 mm (`fig_library.py`); regenerable when close-gaps adds rows. voronoi-cpp rows are ad62997 at 1095 MHz (ravg1002); rerun on the final commit before submission |
-| 3b | `tried` (design decisions) | Every alternative tried since 2026-11-12, its measured rate change against the code before (dots: the values in the row; markers: the inputs it names), kept or dropped, and the structural reason (e.g. kNN: find-then-clip with a fixed k against the interleaved find-and-clip walk, −6 to −58 %). | `docs/tried.md` (parsed; the figure follows the list as rows are added); appendix table `figures/tried.md` from the same parse | **done**, 190 × 213 mm (`fig_tried.py`); rows without a baseline (Delaunay-first insertion: 0.38 M cells/s "when it finishes") and the precision rows are text only |
+| 1 | `walkthrough_build` (panels 1–6) | A periodic point set goes through snapping, the Morton cell list, clipping one cell, all cells with their face rings, the exact start, and the first move. | the library's own 2D arrays (`scripts/overview_mesh2d.cpp`, `Mesh<2>`) | **done**, 190 × 139 mm (`fig_walkthrough.py`): titles and drawings only; panel texts and code names in `walkthrough_captions.md` for the caption |
+| 2 | `walkthrough_step` (panels 7–12) | A step screens the old triangles, flips the failing ones in rounds, writes the dual's faces, sums the cells in a fixed order, falls back to the host or a rebuild when stuck, and re-sorts. | same | **done**, 190 × 139 mm |
+| 3 | `library_headline` | Full cells on one A100, like for like: voronoi-cpp's rebuild is 4 to 55× faster than the fastest other GPU code with full cells, more so the less uniform the input; published rates set apart. | `bench/libraries/results/*.jsonl`, `published.csv` (regenerable as rows are added) | **done**, 90 × 84 mm (`fig_library.py`); our rows ad62997 at 1095 MHz: rerun on the final commit |
+| 3a | `library_more` (appendix or second figure) | (a) volumes-only codes on the A100, (b) one 72-core CPU node, (c) the moving step. | same | **done**, 190 × 78 mm |
+| 3b | `tried_key` | The rebuild's key decisions with their measured effect: the lean cut kept (+10 to +15 %); kNN (find all, then clip, against the interleaved walk), P1, split and rounds, the float filter, the compact cell and Delaunay-first dropped, each with its structural reason. | `docs/tried.md`, parsed | **done**, 190 × 91 mm (`fig_tried.py`); the full list as appendix table `tried.md` (and appendix figure `tried`, 190 × 203 mm) |
+| 3c | `memory` | (a) Device B/cell by array role at the peak of the rebuild (701), exact start (1955) and moving step (1979), 128³ jittered, Kokkos arrays; (b) peak device B/cell per code in the library benchmark against the B/cell at which 256³ (2384), 384³ (706) and 512³ (298) fit one A100 40 GB. | `paper/data/memory_by_array.csv` (job 32362454, 55cd6b1), `bench/libraries/results` | **done**, 190 × 80 mm (`fig_memory.py`). Our rows in (b) are process-wide device use (benchmark, ad62997) except the step (Kokkos arrays, 55cd6b1); the ring pool's 32-bit offsets also overflow between 256³ and 384³ |
 | 4 | `quality` | Speed against quality per library and input, every code measured against our oracle the same way. | the oracle measurements listed below | **proposal**: measured by another agent |
-| 5 | (optional) `oracle_errors` | Relative volume error per input for voronoi-cpp (warp rebuild, exact start), and per code on halo input. | `paper/data/oracle_errors.csv` (per-cell errors from the benchmark's volumes, the same 1000-cell sample as `oracle_check`) | draft drawn (190 mm); may fold into Fig. 4 |
+| 5 | (optional) `oracle_errors` | Relative volume error per cell against the exact reference (`src/test/oracle.hpp`: 128-bit integer predicates and long-double clipping over all periodic images; it includes only the C++ standard library and shares no code with the mesh; its driver shares only the point-file reader), per input for voronoi-cpp and per code on halo input. | `paper/data/oracle_errors.csv` | draft (190 mm); may fold into Fig. 4 |
 | 6 | (optional) `performance` | Weak scaling 32³–256³ of rebuild, exact start and step on seven inputs, and the step rate against the displacement per step. | `paper/scripts/weak_scaling_a100.sh` (55cd6b1, gpu1) | **held** for gpu1 (speed work): jobs 32362447–51 cancelled before they ran; resubmit with `submit_sweep.sh` after the speed branches merge; `extract_sweep.py`, `fig_sweep.py` ready |
 | 7 | (optional) `ceiling` or `stages` | Where the step's time and bytes go per kernel, against the bandwidth budget for 5× and 10×. | `paper/data/ceiling.json` (main 69de1d3), or job 32362452 | `ceiling` draft on old data; `stages` held (job 32362452 ran, raw output kept) |
 
@@ -34,15 +36,17 @@ one ring per face), 5 (triangles for tetrahedra), 7 and 8 (in-circle tests and e
 flips), 9 (polygon edges for polygonal faces), 11 (an inverted triangle for an inverted tetrahedron). Panel 12 shows in
 2D a step only the 3D mesh takes (the re-sort).
 
-**Fig. 4: oracle measurements needed per library and input** (jittered, blue noise, uniform, clustered, halo; 128³,
+**Terms (owner):** *exact reference* = the per-cell exact computation of `src/test/oracle.hpp`; only errors against it are accuracy. *Total sampled volume* = the sum of the cell volumes against the box: shows the tiling has no gaps or overlaps, not per-cell accuracy. *Closure* = the sum of each cell's area vectors: a per-cell consistency check.
+
+**Fig. 4: measurements needed per library and input, against the exact reference** (jittered, blue noise, uniform, clustered, halo; 128³,
 and 256³ where the code runs), against the brute-force oracle of `src/test/oracle.hpp`, the same way for every code:
 1. completeness: cells missing or with non-positive volume, of all n (exists for volumes, `accuracy-*.jsonl`);
 2. exact neighbour sets: per sampled cell, the code's neighbour set against the oracle's (needs each code's faces or
    neighbour lists dumped; not applicable to volumes-only codes, said so in the figure);
 3. volume error: per-cell relative error on the 1000-cell sample (exists, `paper/data/oracle_errors.csv`);
-4. closure: per cell |Σ area vectors| / Σ |area| (codes with area vectors: voronoi-cpp, voro++, peclet-voro, our faces
+4. closure (consistency, not accuracy): per cell |Σ area vectors| / Σ |area| (codes with area vectors: voronoi-cpp, voro++, peclet-voro, our faces
    on the Delaunay codes);
-5. total volume: Σ V − box volume (exists, `accuracy-*.jsonl`);
+5. total sampled volume: Σ V − box volume, a tiling check, not accuracy (exists, `accuracy-*.jsonl`);
 6. face agreement: each face seen from both cells, with equal and opposite area vectors and the same centroid.
 Speed on the other axis from the same jobs (M cells/s, the output group stated).
 
