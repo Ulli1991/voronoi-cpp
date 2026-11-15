@@ -319,6 +319,10 @@ What changed, all in `tet_mesh::assemble` and `tet_start.hpp`:
 
 RESULTS_PLACEHOLDER
 
+**Face output (about 17.5 ns per cell of the start).** It cannot come out of the check's pass: faces are numbered by the edge representatives, which `represent` sets only once the check has passed, and most inputs need a second round at 256³. Where its time goes (main, 128³ jittered, Nsight Systems job 32369633, one build): about 22 ms of kernels, of which the two walks around every edge in `number_faces` and `update_face_rings` are 9.0 ms (40 %), `tet_repair::prepare`'s resize copies of the start's arrays 5.0 ms, `faces` 2.2, the cell sums and sort 3.0, circumcentres 1.1. The assembly already holds every face's ring of tetrahedra (`mesh.ring`, in owner order); numbering the build's faces from it (a face's representative is its lowest tetrahedron; its ring rotated to the canonical start) would replace both walks, and sizing the start's arrays with `prepare`'s room would drop the copies. Both change `update_face_rings`, `number_faces` and `Mesh::rebuild` (voronoi_mesh.hpp), so they are left for the owner of those files; #48 (a rounded cell naming a face twice) needs the walk kept for cells with repeated neighbours.
+
+**Allocation.** The first `Mesh::update` at 256³ spends 528 ms of its 1992 in `cudaMalloc` on main (Nsight Systems job 32372190): mapping fresh device memory costs about as much as the start's kernels. A pool for the mesh's arrays would remove it for every caller; not done here.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).

@@ -21,7 +21,7 @@ for san in OFF ON; do
     dir=build-jobs/ci-$san
     cmake -S . -B $dir -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DVORONOI_SANITIZERS=$san \
         -DKokkos_DIR=/u/uli/kokkos-gcc15/lib64/cmake/Kokkos >/dev/null
-    cmake --build $dir --parallel 36 2>&1 | grep -E "error|warning: " | head -20
+    cmake --build $dir --parallel ${SLURM_CPUS_PER_TASK:-36} 2>&1 | grep -E "error|warning: " | head -20
     echo "== ctest sanitizers $san"
     ctest --test-dir $dir --output-on-failure --parallel 8 2>&1 | tail -30
 done

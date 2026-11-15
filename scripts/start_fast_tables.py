@@ -87,9 +87,9 @@ def log_table(paths):
     for path in paths:
         key = None
         for line in open(path):
-            m = re.match(r"== \w+ (\S+) (\S+) (\S+)", line)
+            m = re.match(r"== (\w+) (\S+) (\S+) (\S+)", line)
             if m:
-                design, kind, n = m.groups()
+                mode, design, kind, n = m.groups()
                 key = (kind, n)
                 runs.setdefault(key, OrderedDict()).setdefault(design, {"start_ms": [], "kernels": {}, "line": ""})
                 continue
@@ -101,7 +101,8 @@ def log_table(paths):
                 d["kernels"][m.group(1)] = float(m.group(2))
             m = re.search(r"start_ms=(\S+)", line)
             if line.startswith("start:") and m:
-                d["start_ms"].append(float(m.group(1)))
+                if mode == "start":  # unfenced; the kernels mode fences every kernel
+                    d["start_ms"].append(float(m.group(1)))
                 d["line"] = line
     for (kind, n), designs in runs.items():
         print("\n%s, n = %s" % (kind, n))
