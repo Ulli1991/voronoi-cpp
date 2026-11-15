@@ -20,7 +20,7 @@ smi=$!
 trap 'kill $smi 2>/dev/null' EXIT
 run() {  # case label, input, spacings, flags
     echo "== case $1 $2 $n $3 ${*:4}"
-    timeout 240 "$bin/voronoi_bench" step "$n" "$2" "$3" "$steps" "${@:4}" | grep -E "^(#|motion|gpuflips|refused|final)"
+    timeout ${LIMIT:-240} "$bin/voronoi_bench" step "$n" "$2" "$3" "$steps" "${@:4}" | grep -E "^(#|motion|gpuflips|refused|final)"
 }
 case "$part" in
 flow)  # the smooth flow at large steps, and the fallback policies at 1 spacing
@@ -39,5 +39,21 @@ jumps)  # flow at 0.1 spacings plus a share of points jumping 4 spacings each st
 inputs)  # the surface, cosmic web, lattice and wave inputs at large steps
     for kind in surface cosmicweb; do for d in 0.3 1; do run "flow-$d" "$kind" "$d"; done; done
     for kind in lattice wave; do for d in 0.5 1; do run "flow-$d" "$kind" "$d"; done; done
+    ;;
+single)  # two particles (share 1e-6) jumping 1, 2 and 4 spacings, cheapest against host; host at more jumpers
+    for d in 1 2 4; do for f in cheapest host; do
+        run "jump-1e-6-$d-$f" jittered 0.1 --jump-share=1e-6 --jump-spacings=$d --fallback=$f
+    done; done
+    for s in 1e-5 1e-4; do run "jump-$s-host" jittered 0.1 --jump-share=$s --jump-spacings=4 --fallback=host; done
+    ;;
+often)  # how often the realistic host finishes come: 30 steps, and the same with rebuild only
+    steps=30
+    run flow-0.5 clustered 0.5 --no-start
+    run flow-1 cosmicweb 1 --no-start
+    run flow-0.5-rebuild clustered 0.5 --no-start --fallback=rebuild
+    ;;
+surface)  # one start (minutes, #60) and 6 steps
+    steps=6 LIMIT=800
+    run "flow-${D:-0.3}" surface "${D:-0.3}" --no-start
     ;;
 esac

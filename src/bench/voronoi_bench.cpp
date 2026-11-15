@@ -399,6 +399,12 @@ void jump(Points& points, double fraction, double distance, const Box& box, int 
     to_grid(points, box);
 }
 
+// Set by main from the command line. Used by: step.
+std::vector<std::string> bench_flags;
+bool flag_given(const std::string& flag) {
+    return std::find(bench_flags.begin(), bench_flags.end(), flag) != bench_flags.end();
+}
+
 // The q-quantile of v (reordered). Used by: report_order.
 template <class T>
 T quantile(std::vector<T>& v, double q) {
@@ -602,7 +608,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0] << ","
               << box.side[1] << "," << box.side[2] << " displacement=" << displacement << " steps=" << steps << "\n";
 
-    {
+    if (!flag_given("--no-start")) {  // --no-start skips this timing (inputs whose clipping takes minutes)
         // The start kernels: clipping with rings, from_rings and the exact start; tet_start::build rewrites
         // rings, so it is timed with a fresh clipping.
         const auto list = cell_list(x, box);
@@ -756,6 +762,7 @@ int main(int argc, char** argv) {
     if (has_flag(argc, argv, "--nvtx") || has_flag(argc, argv, "--nvtx=phases"))
         Nvtx::start(has_flag(argc, argv, "--nvtx"));
     const auto args = positional(argc, argv);
+    bench_flags.assign(argv + 1, argv + argc);
     if (args.size() >= 3 && args[0] == "rebuild")
         return rebuild(args, box_flag(argc, argv), !has_flag(argc, argv, "--no-check"),
                        static_cast<int>(flag_value(argc, argv, "--measure", 0)), dump_flag(argc, argv)) != 0;
@@ -772,6 +779,7 @@ int main(int argc, char** argv) {
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
                  "                          [--owner-faces] [--owner-bit] [--dump-cells=path]\n"
                  "                          [--jump-share=f --jump-spacings=d] [--fallback=cheapest|host|rebuild]\n"
+                 "                          [--no-start]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
