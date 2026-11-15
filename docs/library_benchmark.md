@@ -13,15 +13,15 @@ unless stated, on one A100 (node `ravg1002`: every GPU row ran there, SM clock 1
 our earlier rows on other nodes ran at 1305 MHz and are about 15 % faster) or one 72-core CPU node.
 
 **Basselin et al. 2021, run as its README says.** With its blue-noise setting (K 20, P 25, V 30) on our blue noise it
-builds 9.4 M cells/s at 128³ and 10.2 at 256³, host to host (padding with images, copy in, kNN, clipping, copy out of
+builds 9.0 M cells/s at 128³ and 10.2 at 256³, host to host (padding with images, copy in, kNN, clipping, copy out of
 volumes and barycentres). Its own pass timers put the device part (kNN and clipping, relaunches included) at 0.12 s
 for 2.4M padded points: 17.5 M original cells/s (19.5 at 256³). The paper's 34.5 M cells/s (V100, 10M blue-noise
 seeds, Fig. 10) is 1.8 to 2 times that; our runs add images (+15 %), a 1095 MHz clock and our own blue noise, and the
 paper does not say what its bar includes. In the same jobs our warp rebuild runs at 29.6 (128³) and 29.3 (256³)
 M cells/s device to device, 1.5 to 1.7 times Basselin's device part, while it also builds the faces, areas and
 neighbours Basselin does not return. With the same outputs taken back to the host (volumes and centroids; the faces
-stay on the device) ours runs at 16.3 and 16.2: 1.7 and 1.6 times Basselin's 9.4 and 10.2. Off blue noise Basselin
-runs at its other settings' rates (perturbed-grid setting on jittered 6.1, white-noise setting on uniform 2.0,
+stay on the device) ours runs at 16.3 and 16.2: 1.8 and 1.6 times Basselin's 9.0 and 10.2. Off blue noise Basselin
+runs at its other settings' rates (perturbed-grid setting on jittered 6.3, white-noise setting on uniform 2.3,
 clustered 1.4, halo 0.9 M cells/s) and leaves cells unbuilt on halo input (2023 cells with the white-noise setting
 after its relaunches; 28,055 with the blue-noise setting). Like for like: same points (images added for its box),
 double, same A100 jobs. Not matched: no exact predicates, no faces returned, host-to-host scope.
