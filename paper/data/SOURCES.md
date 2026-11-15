@@ -20,3 +20,5 @@ Point files: `/ptmp/uli/voronoi-paper/points` (128³ and 256³ linked to the lib
 and seed; the rest made by the sweep with `library_bench points` and, for blue noise, 100 Lloyd iterations).
 Binaries: `/ptmp/uli/voronoi-paper/bin/<commit>/` (built by `paper/scripts/build_cuda.sh`: gcc 14, CUDA 13.0,
 Kokkos 5.0.99 AMPERE80, Release).
+| `luna/yee_vortex_convergence.npz` | LUNA MC 3D Yee vortex convergence | `git show yee-vortex:luna/yee_vortex/yee_vortex_convergence.npz` in luna-reference-solutions (99a52d0) | its own `slurm_job_id`, `gpu_clock_mhz` fields |
+| `luna/vortex_norms.csv` | luna-cpp moving (two passes) and static vortex L1 | parsed from `voronoi-cpp/build-1ddiag/logs/{n-vortex-31920446,fin-norm-31922276}.out` (same regex as luna-cpp's `make_figures.py`) | jobs 31920446, 31922276 (library of early November) |
