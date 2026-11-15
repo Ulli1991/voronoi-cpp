@@ -214,14 +214,22 @@ inline void clipping(const Exec& exec, const shell_voronoi::Grid<Memory>& grid, 
         sums[sm::clips_p1] / sums[sm::clipped], sums[sm::clips_r8] / sums[sm::clipped],
         sums[sm::cuts] / sums[sm::clipped]);
     if (!dump.empty()) {
-        // Columns 0-14 as in shell_voronoi::measure, the vertex-ball columns from the second run.
-        std::vector<int> data(std::size_t(n) * sm::count);
+        // Columns as in shell_voronoi::measure (the vertex-ball ones from the second run), then the slot's grid level
+        // minus the base level, and the slot (rows are by particle).
+        const int columns = sm::count + 2;
+        const auto level = to_host(grid.level);
+        const auto order = to_host(grid.order);
+        std::vector<int> data(std::size_t(n) * columns);
+        for (int t = 0; t < n; ++t) {
+            data[std::size_t(order(t)) * columns + sm::count] = int(level(t)) - grid.levels;
+            data[std::size_t(order(t)) * columns + sm::count + 1] = t;
+        }
         for (int i = 0; i < n; ++i)
             for (int k = 0; k < sm::count; ++k) {
                 const bool ball_column = (k >= sm::tested_outside && k <= sm::in_open_outside) || k >= sm::rounds;
-                data[std::size_t(i) * sm::count + k] = static_cast<int>((ball_column ? balls : plain)(i, k));
+                data[std::size_t(i) * columns + k] = static_cast<int>((ball_column ? balls : plain)(i, k));
             }
-        write_npy(dump, data, n, sm::count);
+        write_npy(dump, data, n, columns);
     }
     shuffle(cells, box, 64);
 }

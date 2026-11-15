@@ -10,9 +10,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <atomic>
 #include <cstdint>
+#include <sched.h>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -211,10 +214,10 @@ struct Candidate {
     std::int8_t image[3];  // periodic image of the slot, in box lengths
 };
 
-// Which of the selected cells a pass builds: all, those not ok, or those
-// that overflowed the usual capacities.
-// Used by: construct_cells, construct_huge.
-enum class Pass { all, failed, overflowed };
+// Which of the selected cells a pass builds: all, those not ok, those that overflowed the usual capacities, or
+// those not ok that did not overflow (uncertain).
+// Used by: construct_cells, construct_huge, finish_failed.
+enum class Pass { all, failed, overflowed, uncertain };
 
 // A thread's cell: on its stack, the host's huge ones (over a megabyte) on
 // the heap, as an OpenMP thread may have little more than that.
@@ -265,8 +268,10 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             const int id = grid.order(t);
             const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
+            const bool overflow = before == vertex_overflow || before == plane_overflow;
             if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
-                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow))
+                (pass == Pass::overflowed && !overflow) ||
+                (pass == Pass::uncertain && (before == ok || before == face_overflow || overflow)))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
             ep::i64 self[3] = {0, 0, 0};
@@ -544,6 +549,42 @@ void copy_back_added(const From& from, const To& to, const Used& before, const U
     }
 }
 
+// The overflowed cells of `selection` in huge cells on the host. A serial host space builds them one cell at a time on
+// every core the process may use, each with its own instance (#49: 5525 such cells took 408 s on one core).
+// Used by: construct_huge.
+template <class Huge, class HostMemory>
+void huge_on_host(const Grid<HostMemory>& grid, const Cells<HostMemory>& out, const Selection<HostMemory>& selection) {
+    using Host = Kokkos::DefaultHostExecutionSpace;
+    const auto stencil = make_stencil(Host{});
+#if defined(KOKKOS_ENABLE_SERIAL)
+    if constexpr (std::is_same_v<Host, Kokkos::Serial>) {
+        cpu_set_t usable;
+        const int cores = sched_getaffinity(0, sizeof usable, &usable) == 0 ? CPU_COUNT(&usable) : 1;
+        std::vector<int> todo;
+        for (int i = 0; i < selection.count(grid.n); ++i) {
+            const int s = out.status(grid.order(selection.slot(i)));
+            if (s == vertex_overflow || s == plane_overflow) todo.push_back(selection.slot(i));
+        }
+        const int threads = Kokkos::min(cores, static_cast<int>(todo.size()));
+        if (threads > 1) {
+            const Kokkos::View<const int*, HostMemory, Kokkos::MemoryUnmanaged> slots(todo.data(), todo.size());
+            std::atomic<int> next{0};
+            std::vector<std::thread> pool;
+            for (int k = 0; k < threads; ++k)
+                pool.emplace_back([&] {
+                    const Kokkos::Serial own(Kokkos::NewInstance{});
+                    for (int i = next++; i < static_cast<int>(todo.size()); i = next++)
+                        construct_pass<Huge>(own, grid, stencil, out, Pass::overflowed,
+                                             {Kokkos::subview(slots, std::make_pair(i, i + 1)), selection.listed});
+                });
+            for (auto& thread : pool) thread.join();
+            return;
+        }
+    }
+#endif
+    construct_pass<Huge>(Host{}, grid, stencil, out, Pass::overflowed, selection);
+}
+
 // The cells that overflowed big exact cells: exact cells of huge capacity, on
 // the host, with the grid and the results copied there and back unless they
 // are there already. A rare path: its cost per cell grows as faces x vertices.
@@ -557,7 +598,7 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
     using HostMemory = typename Host::memory_space;
     using Huge = ExactCell<huge_planes, huge_vertices>;
     if constexpr (std::is_same_v<Memory, HostMemory>) {
-        construct_pass<Huge>(Host{}, grid, make_stencil(Host{}), out, Pass::overflowed, selection);
+        huge_on_host<Huge>(grid, out, selection);
     } else {
         Grid<HostMemory> g;
         g.positions = host_copy<decltype(g.positions)>(grid.positions);
@@ -592,7 +633,7 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
         const auto ring_before = host_copy<decltype(c.ring_used)>(out.ring_used);
         const Selection<HostMemory> s{host_copy<Kokkos::View<int*, HostMemory>>(selection.slots),
                                       host_copy<Kokkos::View<char*, HostMemory>>(selection.listed)};
-        construct_pass<Huge>(Host{}, g, make_stencil(Host{}), c, Pass::overflowed, s);
+        huge_on_host<Huge>(g, c, s);
         copy_back(c.status, out.status);
         copy_back(c.face_count, out.face_count);
         copy_back(c.owned_count, out.owned_count);
@@ -636,6 +677,23 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
     construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
     if constexpr (Cell<big_planes, big_vertices>::exact)
         if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
+}
+
+// The cells the warp kernel gave up, with rounded cells: uncertified ones at the usual capacities, then every
+// overflowed one at big capacities at once (the warp's capacities are not smaller than the usual ones). The same
+// cells and bits as construct_cells(Pass::failed): a cell that fits gives the same bits at either. Used by: construct_warp.
+template <class ExecSpace>
+void finish_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                   const Stencil<typename ExecSpace::memory_space>& stencil,
+                   const Cells<typename ExecSpace::memory_space>& out) {
+    construct_pass<RoundedCell<max_planes, max_vertices>>(exec, grid, stencil, out, Pass::uncertain, {});
+    const auto status = out.status;
+    int count = 0;
+    Kokkos::parallel_reduce(
+        "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+        KOKKOS_LAMBDA(int i, int& sum) { sum += status(i) == vertex_overflow || status(i) == plane_overflow; }, count);
+    if (count > 0)
+        construct_pass<RoundedCell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, {});
 }
 
 // Run build() on an empty pool; if the pool turned out too small (cells
