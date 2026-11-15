@@ -150,7 +150,9 @@ int main(int argc, char** argv) {
         const int faces = static_cast<int>(owned_faces.size());
         tet_mesh::Geometry<Memory> geometry{Kokkos::View<double* [3], Kokkos::LayoutRight, Memory>("area", faces),
                                             Kokkos::View<double* [3], Kokkos::LayoutRight, Memory>("centroid", faces),
-                                            Kokkos::View<double*, Memory>("volume", n), {}, {}};
+                                            Kokkos::View<double*, Memory>("volume", n),
+                                            {},
+                                            {}};
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         double worst = worst_volume_difference(geometry, cells);
         check.expect(worst < 1e-12, "volumes from stored rings match clipping (" + sci(worst) + ")");
@@ -247,9 +249,12 @@ int main(int argc, char** argv) {
         const exact_predicates::BoxN<2> square(1.0);
         Kokkos::View<double* [2], Memory> p("p2", n);
         Kokkos::View<int*, Memory> owner("owner2", 2 * n), neighbour("neighbour2", 2 * n);
-        tet_mesh::Geometry<Memory, 2> geometry{Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("area2", 2 * n),
-                                               Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("centroid2", 2 * n),
-                                               Kokkos::View<double*, Memory>("volume2", n), {}, {}};
+        tet_mesh::Geometry<Memory, 2> geometry{
+            Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("area2", 2 * n),
+            Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("centroid2", 2 * n),
+            Kokkos::View<double*, Memory>("volume2", n),
+            {},
+            {}};
         auto hp = Kokkos::create_mirror_view(p);
         auto ho = Kokkos::create_mirror_view(owner);
         auto hn = Kokkos::create_mirror_view(neighbour);

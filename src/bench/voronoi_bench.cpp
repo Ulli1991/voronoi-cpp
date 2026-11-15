@@ -697,7 +697,8 @@ int main(int argc, char** argv) {
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] [--dump-cells=path]\n"
+                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] "
+                 "[--dump-cells=path]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
