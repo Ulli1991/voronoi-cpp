@@ -581,6 +581,11 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         });
         KernelTimes::report(repeats + 1, n, "start_kernel");  // with the warm-up
         KernelTimes::total.clear();
+        if (Nvtx::on) {  // one more start in its own range, for Nsight filters
+            shell_voronoi::construct_warp(exec, grid, cells);
+            const Phase phase("start_once");
+            start = tet_start::build(exec, grid, cells, mesh);
+        }
         const int tets = static_cast<int>(mesh.vertex.extent(0));
         std::cout << "start: clip_ms=" << clip_ms << " from_rings_ms=" << from_rings_ms << " start_ms=" << start_ms
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
