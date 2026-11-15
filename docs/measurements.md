@@ -303,7 +303,26 @@ luna-cpp (branch `resort` a82092c, the first that builds against main's API with
 **Face numbering, for callers.** As before, faces are numbered 0 .. faces() − 1, `owner(f) < neighbour(f)`, each cell's list is sorted by the other particle, and with `Layout::owner_faces` the numbers go by owner. What changed: without the owner layout a face's number no longer follows the slot order of the tetrahedra after every update; it stays the same from update to update while the tetrahedron representing its edge is not touched by a flip, and a new face takes a freed number. Numbers were never stable across updates before; a caller that keyed data by face number across an update (luna-cpp does not) now sees most numbers kept, not all.
 
 
-**Left to the 5× budget.** The step now moves 2392 B/cell at 0.03 spacings and 4133 at 0.1 (step 3, 128³; main 69de1d3 moved 2866 and 4795, main 9e9ec03 2717 and 4292). The 5× budgets are 1269 and 2182 B/cell: 1123 and 1951 B/cell still to go, with every kernel at 80 % of peak besides. By kernel at 0.03: `faces` 1005 and `cell_sums` 737 (R14 and float centres, R6), `screen` 528 (K4), the repair and ring re-walk 617 (the repair's rounds and the `dirty_faces` walks, K2), the numbering now 63.
+**Left to the 5× budget.** The step now moves 2392 B/cell at 0.03 spacings and 4133 at 0.1 (step 3, 128³; main 69de1d3 moved 2866 and 4795, main 9e9ec03 2717 and 4292). The 5× budgets are 1269 and 2182 B/cell: 1123 and 1951 B/cell still to go, with every kernel at 80 % of peak besides. By kernel at 0.03: `faces` 1005 and `cell_sums` 737 (R14 measured below: −753 B/cell but slower; float centres, R6), `screen` 528 (K4), the repair and ring re-walk 617 (the repair's rounds and the `dirty_faces` walks, K2), the numbering now 63.
+
+### V1 and R14 (branch `step-v1-r14`, job 32370682)
+
+One A100 40 GB at 1305 MHz, jittered, 10 steps twice per build, steps 2–10 averaged; M cells/s of `update()` and, in brackets, of `update()` + `update_cells()`. main is c42c230; head is the branch with V1 dropped and R14 opt-in; V1 is the quiet screen alone (faces stored); R14 is head with `Layout::faces_on_read`.
+
+| | main | head | V1 | R14 |
+|---|---|---|---|---|
+| 128³, 0.03 | 225.8 (162.8) | 224.4 (162.1) | 72.8 (64.7) | 280.5 (127.7) |
+| 128³, 0.1 | 128.5 (98.8) | 128.0 (98.4) | 54.7 (48.5) | 146.4 (86.1) |
+| 128³, 0.3 | 66.8 (57.8) | 66.6 (57.6) | 36.5 (33.7) | 71.1 (53.3) |
+| 256³, 0.03 | 325.3 (218.3) | 324.0 (217.8) | 87.1 (77.0) | |
+| 256³, 0.1 | 212.7 (153.2) | 211.2 (152.5) | 72.1 (63.7) | |
+| 256³, 0.3 | 108.4 (85.3) | 108.0 (85.0) | 50.7 (45.0) | |
+
+DRAM bytes of step 3 (Nsight Compute, 128³, `update()` + `update_cells()`): head 3304 B/cell at 0.03 spacings and 5263 at 0.1, as main; R14 2552 and 4464 (no `faces` kernel, 1005 B/cell, but `cell_sums` 834 B/cell in 7.4 ms against 736 in 2.2, and `tet_volumes` 170); V1 13777 and 16370, of which `screen` 10984 and 11621 (main 528 and 553). With the certificates off, V1's motion measure alone leaves `screen` at 1733 B/cell and 4.2 ms.
+
+Bits (5 steps at 0.03, 0.1, 0.3, jittered and clustered, 128³): `geometry_checksum`, `faces_checksum` (face areas and centroids) and `lists_checksum` equal to main at all 30 checks for head, V1, R14 and V1's motion measure. The centroid of a face computed where it is read rounds its last product on its own (c39b548), so the bits are those of the stored rows; the stored rows did not change. `voronoi_mesh_test` checks `faces_on_read` against the stored faces and cell sums bit for bit over four updates.
+
+luna-cpp's mesh step on this branch before these changes, 23.8 ms against 6.75 on its pin 6ead543 (128³, `grad32`, 1410 MHz), was V1: on by default, its screen 3–4× slower. R14 was then off in practice, since luna-cpp reads `area()`, which stores the faces after the update.
 
 ## Removed, and where to find it
 
