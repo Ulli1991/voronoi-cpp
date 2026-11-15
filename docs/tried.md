@@ -43,6 +43,8 @@ Reason gives the structural cause, not "method X is worse".
 | Re-sort by Morton, Moore, Gray | about equal to Hilbert | not default | Hilbert sorts fastest | same |
 | Re-sort by row-major, reverse Cuthill–McKee | 10–12 % worse than the curves | dropped | worse locality | same |
 | Faces by owner + owner bit | hydro +16 %, whole step about +1 % | kept, opt-in | numbering cost eats the hydro gain until it is incremental (#53) | same |
+| R14: face geometry not stored by `update()`; `update_cells()` computes each face from its ring (twice), callers through `Mesh::face_geometry()`; the update's checks from tetrahedron volumes | A100 pending (jobs 32362111, 32362113, 32362116, 32362118); host 32³: same volumes, centroids one rounding apart (6e-17 h) | pending | removes the faces kernel's 1005 B/cell from `update()`, but `update_cells()` gathers each ring twice instead of reading 48-byte rows | branch `step-v1-r14` |
+| V1: quiet tetrahedra skip the screen's neighbour tests under a certified motion bound (cofactors + Hadamard, one byte per tetrahedron) | A100 pending (same jobs); host 32³, 0.1 spacings: 2–5 % of tetrahedra skipped, same flips and checksums | pending | saves about 111 B/cell × the skipped share and adds about 23 B/cell (old points, certificate bytes); certificates last only while relative motion stays below about a tenth of the critical one | same |
 
 ## Precision
 
