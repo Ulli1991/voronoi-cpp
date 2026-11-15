@@ -60,6 +60,16 @@ timed in. Open markers: published rates on other hardware and points (peclet-vor
 2018; Paragram; votess; Voro++, Lu et al. 2023), cited per marker. To be regenerated when the close-gaps CPU rows and
 our rerun at 1305 MHz exist.
 
+**library_more, additions (close-gaps, voronoi-cpp 77055a4).** (a) Star: our volumes-only path
+(`shell_voronoi::volumes_and_centroids`), host to host with pageable buffers like the three volumes-only codes, blue
+noise only: 33.2 M cells/s in A100 job 32368078 (node ravg1004), which also ran Basselin et al. (10.4), Ray et al.
+(18.1) and Liu et al. (18.1) on blue noise in their README setting; the ratios printed are from that job alone (3.2×,
+1.8×, 1.8×). With pinned host buffers 36.1, on the device 40.2. The curves are the benchmark's rows as before.
+(b) voronoi-cpp's warp rebuild and voro++ multithreaded from one CPU job on one node (32367276, ravc4079, 72 threads,
+77055a4): ours 3.4 / 3.8 / 2.6 / 2.0 / 2.0 against voro++ 2.4 / 2.5 / 1.8 / 0.38 / 0.085 M cells/s on jittered, blue
+noise, white noise, clustered, halo; the other codes from the benchmark's CPU jobs (other nodes). (c) ours CPU: the
+moving step at 72 threads from the same job (8.5 M cells/s, jittered, 0.03 spacings).
+
 **Memory.** (a) Kokkos device arrays at the peak of each phase, jittered input, main 55cd6b1, job 32362454; the 256³
 values, measured in the same job, are 655.8, 1955.2 and 1979.2 B/cell (the arrays scale with n: the same B/cell as
 at 128³ to 0.1 B but for the rebuild's face pool), so the bars show 128³ only. (b) Process-wide device use sampled
@@ -81,8 +91,25 @@ updates; the legend gives cells × steps over the summed step times, re-sorts in
 (median to max); completeness over all cells; total sampled volume |Σ V − box| (a tiling check, not accuracy).
 Neighbour-set agreement and closure are not shown: the benchmark runs stored volumes only.
 
+**Note for throughput_vs_n (b), #59 fixed (not yet redrawn).** On branch start-fast (to be merged), the exact start
+builds the same arrays 1.07 to 1.74× faster; at 256³ jittered it goes from 12.7 to 22.2 M cells/s (start-fast's own
+measurement against main c42c230; README of close-gaps). The figure keeps 55cd6b1 until the full sweep reruns after
+the merges; the note below explains the old dip.
+
 **Note for throughput_vs_n (b).** The exact start of jittered input slows from 128³ to 256³ (9.5 → 6.6 M cells/s) because
 at 256³ its check finds 44 bad tetrahedra and patches 830 cells in a second round (job 32366447: clipping with rings
 455 ms, from_rings 378 ms, start 1333 ms in all, so about 500 ms, 30 ns a cell, for the second round); at 128³ the start
 has one round, no bad tetrahedra, and costs clipping 57 + from_rings 50 ≈ start 117 ms. Per cell, clipping (27 ns)
 and from_rings (23 ns) are the same at both sizes.
+
+**library_stages.** Where each code's build time goes, ns per cell at 128³ (2,097,152 cells) on jittered and white-noise
+input. Each code's staged runs repeat its timed runs with a lap at the end of each stage (device synchronized first) and,
+inside a library call, the code's own timers or its kernels by label (method per code: docs/library_benchmark.md,
+"Stages", branch library-stages). Markers on one log axis: neighbour search (cell list, kNN grid and query, BVH,
+spatial sort), cell kernel with its relaunches, exact Delaunay start (ours only), faces (the code's own or our faces
+step), copies host ↔ device, and the rest (preparation, padding with periodic images, time between laps); stages under
+0.05 ns are not drawn; markers sit above or below the row's centre so equal times both show. Bar: the plain (unstaged)
+runs' median total. kNN codes in their README setting (jittered: perturbed grid, white noise: white noise). gDel3D's
+own phase timers are inconsistent (init reads about 1.4·10⁵ s, star splaying about 1.9 s in runs of 0.5 to 1.4 s),
+so only its total is shown. One A100 at 1305 MHz, job 32368965 (node ravg1013; voronoi-cpp de57e65+local); one CPU
+node, 72 threads, job 32368966 (ravl1045; voronoi-cpp d06ddc4). Double precision but Ray et al. and Liu et al. (float).

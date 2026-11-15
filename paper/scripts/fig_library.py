@@ -117,17 +117,49 @@ def headline(summary, pub):
     save(fig, "library_headline", SINGLE)
 
 
+GAPS = ("gaps-chain-a100-32368078.jsonl", "gaps-cpu-pair-32367276.jsonl")  # branch close-gaps, voronoi-cpp 77055a4
+
+
+def gaps():
+    """Summary of the close-gaps jobs: our volumes-only path with the three volumes-only codes in one A100 job
+    (blue noise only), and our CPU path with voro++ multithreaded on one node."""
+    rs = []
+    for name in GAPS:
+        for line in open(os.path.join(DATA, "raw", name)):
+            if line.startswith("{") and '"phase"' in line:
+                r = json.loads(line)
+                r["file"] = name
+                rs.append(r)
+    return lb.summarise(rs)
+
+
 def more(summary, pub):
+    g = gaps()
     fig, axes = figure(DOUBLE, 80, ncols=3, gridspec_kw=dict(width_ratios=[1.3, 1, 1]))
     a, b, c = axes
     x0 = len(lb.INPUTS) + 0.3
     curves(a, summary, lb.FIGURE_GPU_VOLUMES)
     axes_inputs(a, published(a, pub, "gpu_volumes", x0, annotate=True), x0, short=True, width=2.7)
-    a.set_ylim(0.5, 1000)
+    # Our volumes-only path, host to host like the three codes, from the job that ran them on blue noise.
+    vol = next(v for k, v in g.items() if k[0][1] == "volumes and centroids only, host to host"  # pageable buffers
+               and k[2] == "bluenoise" and k[3] == lb.SIZES[0])
+    others = [lb.curve(g, lib, var, "A100", 1, lb.SIZES[0])["bluenoise"]["median"]
+              for lib, var in (("Basselin", ""), ("VoroGPU", ""), ("Liu et al.", "tet-centric"))]
+    a.plot(1, vol["median"], "*", color=OURS, ms=15, mec="white", mew=0.5, zorder=6,
+           label="ours, volumes only, host to host")
+    a.annotate("{:.1f}× Basselin, {:.1f}× Ray,\n{:.1f}× Liu (same job)".format(*(vol["median"] / o for o in others)),
+               (1, vol["median"]), xytext=(-0.3, vol["median"] * 2.2), fontsize=10, va="bottom", ha="left")
+    a.set_ylim(0.5, 5000)
     a.set_ylabel("M cells/s")
     a.text(0.03, 0.97, "(a) A100, volumes", transform=a.transAxes, va="top")
-    a.legend(loc="upper right", fontsize=11, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
-    curves(b, summary, lb.FIGURE_CPU_FULL[:7])
+    a.legend(loc="upper right", fontsize=10, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
+    # (b): ours and voro++ multithreaded from the same node and job; the other codes from the benchmark's CPU jobs.
+    merged = {k: v for k, v in summary.items() if not (k[0][0] in ("voronoi-cpp", "voro++") and k[0][3] == 72)}
+    merged.update({k: v for k, v in g.items() if k[0][3] == 72})
+    cpu = [("voronoi-cpp", "warp clipping rebuild (cell", "2x Xeon", 72, "voronoi-cpp, warp rebuild")] + \
+        [r for r in lb.FIGURE_CPU_FULL[1:7]]
+    curves(b, merged, cpu)
+    summary = merged
     axes_inputs(b, published(b, pub, "cpu", x0), x0, short=True)
     b.set_ylim(0.05, 1000)
     b.text(0.03, 0.97, "(b) 72 cores, full cells", transform=b.transAxes, va="top")
