@@ -37,8 +37,8 @@ struct KernelTimes {
         timer.reset();
     }
     static void end(std::uint64_t) { total[running] += timer.seconds() * 1e3; }
-    static void begin_copy(Kokkos_Profiling_SpaceHandle, const char*, const void*, Kokkos_Profiling_SpaceHandle, const char*,
-                           const void*, std::uint64_t) {
+    static void begin_copy(Kokkos_Profiling_SpaceHandle, const char*, const void*, Kokkos_Profiling_SpaceHandle,
+                           const char*, const void*, std::uint64_t) {
         running = "deep_copy";
         timer.reset();
     }
@@ -265,16 +265,8 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
               << " construct_Mcells_s=" << n / construct_ms / 1e3
               << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
-    if (shell_voronoi::Listing::from_environment().k > 0) {
-        const auto& s = shell_voronoi::listing_stats;
-        std::cout << "listed: list_ms=" << s.list_ms << " clip_ms=" << s.clip_ms << " relist_ms=" << s.relist_ms
-                  << " reclip_ms=" << s.reclip_ms << " walk_ms=" << s.walk_ms << " rest_ms=" << s.rest_ms
-                  << " relisted=" << s.relisted << " walked=" << s.walked
-                  << " list_reads_per_cell=" << double(s.list_reads) / n
-                  << " relist_reads_per_cell=" << double(s.relist_reads) / n << "\n";
-    }
     if (check) {
-        // Work per cell: batches (listed: entries loaded), clips, cuts; mean and p99.
+        // Work per cell: batches, clips, cuts; mean and p99.
         const auto work = to_host(cells.work);
         for (int k = 0; k < 3; ++k) {
             std::vector<int> v(n);
@@ -283,7 +275,8 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
             std::sort(v.begin(), v.end());
             std::cout << "work" << k << ": mean=" << total / n << " p99=" << v[std::size_t(0.99 * (n - 1))] << "\n";
         }
-        std::cout << "clip_checksum=" << clip_checksum(cells) << " clip_topology=" << clip_checksum(cells, true) << "\n";
+        std::cout << "clip_checksum=" << clip_checksum(cells) << " clip_topology=" << clip_checksum(cells, true)
+                  << "\n";
         failures += check_cells(cells, x, std::cout, box);
     }
     DeviceMemory<Memory>::phase("warp", n);
@@ -552,9 +545,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     const int n = static_cast<int>(points.size());
     const double spacing = box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n);
     Positions x = to_device(points);
-    std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0]
-              << "," << box.side[1] << "," << box.side[2] << " displacement=" << displacement << " steps=" << steps
-              << "\n";
+    std::cout << "# backend=" << Exec::name() << " n=" << n << " distribution=" << kind << " box=" << box.side[0] << ","
+              << box.side[1] << "," << box.side[2] << " displacement=" << displacement << " steps=" << steps << "\n";
 
     {
         // The start kernels: clipping with rings, from_rings and the exact start; tet_start::build rewrites
@@ -576,8 +568,8 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
                   << " tets=" << tets << " tets_checksum=" << tets_checksum(mesh) << " per_cell=" << double(tets) / n
-                  << " ring_entries_per_cell=" << double(cells.needed()) / n << " rings_checksum=" << rings_checksum << " rings_topology=" << rings_topology
-                  << "\n";
+                  << " ring_entries_per_cell=" << double(cells.needed()) / n << " rings_checksum=" << rings_checksum
+                  << " rings_topology=" << rings_topology << "\n";
     }
 
     DeviceMemory<Memory>::phase("positions_and_bench_start_kernels", n, false);

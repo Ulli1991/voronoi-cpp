@@ -158,6 +158,70 @@ Nsight Compute of the warp kernel (job 32269328, 1095 MHz), warp instructions pe
 
 **What it says.** The bookkeeping that slots and cut order forced was worth 10 to 15 %, not several times: the cut that is left is mostly the work of finding and building the new vertices, and the kernel still waits on that chain's latency and, on uniform and clustered input, on instruction fetch. A rebuild several times faster needs fewer clips (B, the rounds of `clip-split`) or no clipping (D).
 
+### kNN-first clipping, hybrids and a vertex-ball filter (2026-11-15)
+
+Branch `fewer-clips`; the code is in commit c192c49 (`shell_knn.hpp`, the `listed` and `walk_todo` modes of the warp kernel, chosen by `VORONOI_KNN` and `VORONOI_BALLS`) and was taken out again, so the library is main's. One A100 at 1305 MHz on `gpu1`, main b2faee8 (`ref`) and the branch in the same job. Script `scripts/fewer_clips_a100.sh`, tables by `scripts/fewer_clips_tables.py`; logs in `build-jobs/` of the `voronoi-cpp-fewer` worktree on Raven.
+
+**The designs.** *kNN pass*: one thread per particle walks the cell list as a linear octree (the particle's level, stencil cells nearest first, coarser levels as the walk does) and keeps the k nearest in registers, sorted by a float key; it stops when the next cell lies beyond the k-th. *kNN-first*: the warp clips by the list, nearest first, and stops when the next entry lies beyond 2R; past the list every particle lies at least as far as its last entry (with a margin of 2^-20 for the float keys), so a cell is certified if that entry lies beyond 2R. A cell the list cannot certify is built again by the walk (*fallback*). Hybrids: `:resume` goes on with the walk in the same warp, skipping the listed particles; `k+k2` lists the uncertified cells again with k2 before the walk; `:even` lists only cells at the base grid level (even density) and walks the rest; `:balls8` and `w8` (the walk) skip a candidate, from the 8th of a batch on, that lies outside every vertex ball by a margin above the rounding of later cuts (2^-36 (|d| R + |d|²); later vertices stay in the hull of the current ones), which leaves every cut and every vertex bit as without it. Memory of the lists: 4k + 4 B/cell during the rebuild (k = 24, 32, 48: 100, 132, 196 B/cell).
+
+**Rate of the rebuild** (`construct_ms`, median of 5; 128³ two rounds, job 32319474; 256³ one round, jobs 32319849, 32319851), M cells/s and against main; fallbacks are the cells the walk built after the list, as a share of all:
+
+| design | jittered | uniform | clustered | halo | lattice | wave |
+|---|---|---|---|---|---|---|
+| main's walk, 128³ | 42.6 | 21.9 | 17.0 | 15.5 | 55.1 | 40.8 |
+| kNN-first k = 24 | 36.1 (−15 %) | 12.5 (−43 %) | 10.5 (−38 %) | 10.0 (−36 %) | 28.1 (−49 %) | 36.4 (−11 %) |
+| fallbacks | 14.3 % | 95.2 % | 95.3 % | 95.3 % | 100 % | 12.7 % |
+| kNN-first k = 32 | 37.7 (−12 %) | 12.6 (−43 %) | 7.8 (−54 %) | 6.6 (−58 %) | 49.8 (−10 %) | 38.4 (−6 %) |
+| fallbacks | 0 | 79.1 % | 79.7 % | 79.6 % | 0 | 0 |
+| kNN-first k = 48 | 33.4 (−22 %) | 14.8 (−33 %) | 11.4 (−33 %) | 10.8 (−31 %) | 41.8 (−24 %) | 33.4 (−18 %) |
+| fallbacks | 0 | 31.8 % | 34.2 % | 34.2 % | 0 | 0 |
+| k = 32, resume in the warp | 38.0 (−11 %) | 17.3 (−21 %) | 14.3 (−16 %) | 12.1 (−22 %) | 50.2 (−9 %) | 38.5 (−6 %) |
+| k = 24, then 48, then the walk | 34.9 (−18 %) | 11.0 (−50 %) | 8.8 (−49 %) | 8.3 (−47 %) | 25.0 (−55 %) | 35.4 (−13 %) |
+| k = 32 at the base level, resume | 38.0 (−11 %) | 17.2 (−21 %) | 13.5 (−21 %) | 12.3 (−21 %) | 50.2 (−9 %) | 38.5 (−6 %) |
+| k = 32, resume, balls | 37.9 (−11 %) | 16.9 (−23 %) | 14.1 (−17 %) | 12.5 (−20 %) | 48.7 (−12 %) | 38.4 (−6 %) |
+| walk with balls (`w8`) | 40.8 (−4 %) | 18.4 (−16 %) | 14.5 (−15 %) | 13.4 (−14 %) | 49.9 (−9 %) | 40.0 (−2 %) |
+| main's walk, 256³ | 42.8 | 22.4 | 18.5 | 17.9 | 57.6 | 41.0 |
+| kNN-first k = 24 | 36.8 (−14 %) | 12.7 (−43 %) | 11.5 (−38 %) | 11.2 (−37 %) | 29.2 (−49 %) | 37.2 (−9 %) |
+| kNN-first k = 32 | 38.4 (−10 %) | 12.8 (−43 %) | 11.5 (−38 %) | 11.1 (−38 %) | 51.9 (−10 %) | 39.0 (−5 %) |
+| kNN-first k = 48 | 33.8 (−21 %) | 15.2 (−32 %) | 12.9 (−30 %) | 12.3 (−31 %) | 43.6 (−24 %) | 34.0 (−17 %) |
+| k = 32, resume in the warp | 38.5 (−10 %) | 17.7 (−21 %) | 15.3 (−18 %) | 14.1 (−21 %) | 52.9 (−8 %) | 39.3 (−4 %) |
+| k = 24, then 48, then the walk | 35.8 (−16 %) | 11.3 (−50 %) | 9.8 (−47 %) | 9.3 (−48 %) | 26.5 (−54 %) | 36.2 (−12 %) |
+| k = 32 at the base level, resume | 38.7 (−10 %) | 17.7 (−21 %) | 15.0 (−19 %) | 14.8 (−17 %) | 53.0 (−8 %) | 39.3 (−4 %) |
+| k = 32, resume, balls | 38.5 (−10 %) | 17.4 (−22 %) | 15.0 (−19 %) | 14.1 (−21 %) | 51.1 (−11 %) | 38.9 (−5 %) |
+| walk with balls (`w8`) | 41.0 (−4 %) | 18.7 (−17 %) | 15.7 (−15 %) | 15.3 (−14 %) | 52.2 (−9 %) | 40.2 (−2 %) |
+| the branch's walk, balls off (256³) | 41.1 (−4 %) | 18.8 (−16 %) | 16.2 (−13 %) | 15.8 (−12 %) | 54.0 (−6 %) | 39.3 (−4 %) |
+
+Fallbacks at 256³ are the same shares as at 128³ (k = 24: 14.3, 95.2, 95.2, 95.2, 100, 12.8 %; k = 32: 0, 79.0, 79.2, 79.2, 0, 0 %; k = 48: 0, 31.8, 32.6, 32.8, 0, 0 %). With resume, 26 to 110 cells of 2.1M (235 to 582 of 16.8M) still went to the walk kernel: incomplete lists.
+
+**Where the time goes** at 128³, k = 32 (ms of the kNN pass, the listed clipping and the walk for the fallbacks, from the same job; main's whole kernel for comparison):
+
+| | jittered | uniform | clustered | halo | lattice | wave |
+|---|---|---|---|---|---|---|
+| main, the walk | 49.2 | 95.8 | 123.4 | 135.3 | 38.1 | 51.4 |
+| kNN pass | 15.4 | 20.1 | 34.8 | 33.0 | 8.8 | 9.4 |
+| listed clipping | 45.4 | 44.2 | 44.1 | 44.1 | 32.3 | 44.4 |
+| walk of the fallbacks | 0.2 | 98.9 | 114.0 | 117.5 | 0.2 | 0.2 |
+| with resume: pass, clipping | 10.4, 43.9 | 20.1, 97.6 | 31.7, 110.7 | 33.0, 122.6 | 8.7, 32.0 | 13.9, 53.8 |
+
+**Work per cell** at 128³ (jobs 32319383, 32319476; candidate reads from the measurement build, job 32319475: particles whose distance was computed, the kNN pass included), mean (p99):
+
+| design | jittered: clips, cuts, reads | uniform | clustered | halo | lattice | wave |
+|---|---|---|---|---|---|---|
+| main's walk | 21.9 (25), 16.0, 76 | 48.0 (92), 17.9, 103 | 50.7 (106), 19.8, 112 | 53.7 (211), 19.4, 115 | 26.0, 6.0, 80 | 26.0, 16.1, 80 |
+| kNN-first k = 32 | 21.9 (25), 16.0, 117 | 47.1 (92), 17.7, 181 | 49.2 (106), 19.1, 191 | 52.3 (211), 18.8, 192 | 26.0, 6.0, 112 | 21.8 (25), 16.1, 112 |
+| kNN-first k = 48 | 21.9 (25), 16.0, 146 | 44.5 (92), 17.0, 183 | 46.1 (105), 17.7, 197 | 49.5 (211), 17.6, 198 | 26.0, 6.0, 148 | 21.8 (25), 16.1, 148 |
+| k = 32, resume | 21.9 (25), 16.0, 117 | 44.3 (89), 16.6, 204 | 45.6 (100), 16.6, 214 | 49.1 (208), 16.6, 215 | 26.0, 6.0, 112 | 21.8 (25), 16.1, 112 |
+| k = 32, resume, balls | 16.8 (22), 16.0, 117 | 25.8 (40), 16.6, 204 | 26.0 (40), 16.6, 214 | 25.8 (40), 16.6, 215 | 26.0, 6.0, 112 | 16.8 (22), 16.1, 112 |
+| walk with balls | 16.8 (22), 16.0, 76 | 23.8 (41), 17.9, 103 | 25.7 (46), 19.8, 112 | 25.1 (46), 19.4, 115 | 26.0, 6.0, 80 | 17.5 (23), 16.1, 80 |
+
+**Instructions** (Nsight Compute, job 32360847, warp instructions per cell, 128³): main's kernel 8802 jittered, 14020 uniform, 16751 halo; kNN pass (k = 32) 1404, 2764, 3897 (136 registers); listed clipping 8110 jittered and, with resume, 13580 uniform and 15336 halo; the walk with balls 9085, 15368, 18380 (the filter's lane loop over the vertices costs more instructions than the clips it removes); the branch's walk with the balls compiled in but off 9090, 14740, 17548, and 4 to 19 % slower than main at the same 96 registers (51.0 against 48.9 ms jittered, 110.7 against 92.8 uniform): the kernel's instruction-cache limit of the P1 section again.
+
+**Exact start** (`start_ms`, median of 2 × 3, job 32319853), M cells/s: main 18.5, 8.9, 8.0, 10.4, 7.7, 4.4 against k = 32 with resume 18.4, 8.5, 7.4, 9.0, 7.6, 4.4 and the walk with balls 18.1, 8.2, 7.0, 9.3, 7.5, 4.3 (jittered, uniform, clustered, halo, lattice, wave).
+
+**Mesh.** After the build and two steps at 0.1 spacings (job 32319852, 128³) `tets_checksum`, `geometry_checksum`, `faces_checksum` and `lists_checksum` equal main's on all six inputs for the branch's walk, k = 32 with resume (with and without balls) and the walk with balls, with main's bad tetrahedra and patched cells. The rings' topology (`rings_topology`, the bench's ring checksum without geometry bits) is the same in all of them. `rings_checksum` and a plain rebuild's `clip_checksum` are main's for the walk with balls (the filter changes no cut); a kNN order cuts in another order, so the clipped volumes and centroids differ in the last bits (not the mesh's, which come from the tetrahedra).
+
+**What it says.** kNN-first is slower than the walk on every input at both sizes: 4 to 11 % on jittered and wave input in its best form (k = 32, resume), 16 to 22 % on unstructured input. Two reasons. (1) A list certifies a cell only when its last entry lies beyond 2R, as the walk's stop does; k = 32 does that for jittered, lattice and wave input, but on uniform, clustered and halo input 79 % of the cells need more (k = 48: 32 %, k = 64 at 64³: 8 %), so they are clipped twice or resumed. (2) A list clips the same particles as the walk: everything within 2R at its turn, nearest first. Its global order saves 8 to 16 % of the clips (uniform 48.0 to 44.3), and its cuts fall from 17.9 to 16.6 on unstructured input, but the clipping without any walk (45 ms jittered) is already 92 % of main's whole kernel (49 ms), so the gather the list replaces is worth at most 8 % there, less than the kNN pass costs (10 to 15 ms). A per-region choice changes nothing: the octree level does not tell which cells a list certifies. The vertex balls remove half the clips on unstructured input (48 to 24 uniform, 54 to 25 halo) and a quarter on jittered, with every cut and bit the same, but they save no time: a clip that cuts nothing is a side test and a ballot, about as dear as the filter's own test, and the cuts (16 to 20 a cell, about a face each) are the cost. The lower bound of about one cut per face is already met within 1 to 25 % (cuts against 15.9 faces), so no candidate order, list or bound can make the rebuild several times faster; that needs a cheaper cut (C, R16) or no clipping (D).
+
 ### Step kernels at today's bytes (2026-11-12)
 
 Branch `step-kernels` against main 5d23b26 (with the re-sort, layout off, and the #48 fix), one A100 at 1305 MHz application clock, double, jittered input, median of steps 2 to 10 over two interleaved runs of each build (scripts `scripts/ab_step_a100.sh`, `scripts/ab_step_tables.py`; logs archived on Raven in `voronoi-cpp-joblogs/voronoi-cpp-step/build-cuda/jobs/`). The target was the bandwidth ceiling of [measure_2026-11-12.md](measure_2026-11-12.md) at today's bytes: 434 M cells/s for the step at 0.03 spacings, 320 with `update_cells()`, 259 at 0.1. Nothing stored changed.

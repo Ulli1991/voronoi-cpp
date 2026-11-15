@@ -81,6 +81,8 @@ The control flow of one `update()`, with its decisions:
 
 **What a cut costs.** In the warp kernel a vertex sits in a slot of 64; lane l owns slots l and l + 32. A cut marks the vertices beyond the plane with a ballot, numbers the edges from a removed to a kept vertex with one ballot per edge of a lane's vertices, and builds each new vertex in the lowest slot that was free before the cut, by the lane that owns that slot; the per-plane arrays `starts` and `ends` then close the new face. The cut is still most of the kernel's instructions, half of them integer bookkeeping, and the kernel waits mostly on the latency of that chain (ballots, shared loads, the division of the new vertex) and on instruction fetch. Measured in [measurements.md](measurements.md#canonical-rings-and-a-lean-cut-2026-11-13).
 
+**Why not fewer clips.** A clip that cuts nothing is one side test and a ballot; the cuts, about one per face, are the cost. Skipping candidates outside every vertex ball halves the clips on unstructured input with the same cuts and no time saved, and clipping by a k-nearest list (kNN-first, as VoroGPU does) is slower than the walk on every input: the list certifies a cell only past 2R, as the walk does, and the walk's gather is under a tenth of the kernel. Measured in [measurements.md](measurements.md#knn-first-clipping-hybrids-and-a-vertex-ball-filter-2026-11-15).
+
 **Pools.** Faces and rings go into one shared pool. The ring pool is split into chunks, and each cell claims room in a chunk chosen by a hash of its slot, so that the claims do not all wait on one counter. A cell whose chunk is full is marked `face_overflow`, and the build runs again with a pool sized from what was needed.
 
 **What can go wrong**, by status:

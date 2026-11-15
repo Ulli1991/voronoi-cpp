@@ -1,12 +1,10 @@
 #pragma once
 
-#include "shell_knn.hpp"
 #include "shell_voronoi.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -272,20 +270,6 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     return ok;
 }
 
-// The lanes from `from` on whose particle (offset `mine`, squared length mine2 >= 0) lies in the ball of a live vertex,
-// widened by a margin above the rounding of later cuts (they stay in the hull of these vertices); lanes below `from`
-// are set. Outside every ball a particle cuts nothing at its turn. Used by: Kernel (listed and walk filters).
-__device__ inline std::uint32_t ball_lanes(const Polyhedron& c, std::uint64_t live, Vec3 mine, double mine2,
-                                          double radius2, int from) {
-    const double margin = 0x1p-36 * (Kokkos::sqrt(mine2 * radius2) + mine2), half = 0.5 * mine2;
-    bool may = lane() < from;
-    for (std::uint64_t m = live; m != 0 && !may && mine2 >= 0; m &= m - 1) {
-        const int w = __ffsll(static_cast<long long>(m)) - 1;
-        may = mine.x * c.x[w] + mine.y * c.y[w] + mine.z * c.z[w] - half > -margin;
-    }
-    return __ballot_sync(all_lanes, may);
-}
-
 // Warp bitonic sort of one (key, slot, image) entry per lane, ascending by
 // key and then slot so the order is deterministic.
 // Used by: Kernel, to order each batch of candidates nearest first.
@@ -372,11 +356,9 @@ __device__ inline bool box_meets_a_ball(const Polyhedron& c, std::uint64_t live,
 #if defined(KOKKOS_ENABLE_CUDA)
 // Adaptive: walk each cell at its level (CellList::level), else only at the base level and leave
 // uncertified cells to the thread kernel. with_rings: record face rings instead of face geometry.
-// cubic: the grid is one cube (Grid::cube()). mode: walk every cell (walk_all), walk the slots `todo` (walk_todo), or
-// clip the cells of `todo` (all if empty) by their lists of k nearest (listed), which leaves the rest uncertified.
+// cubic: the grid is one cube (Grid::cube()).
 // Used by: construct_warp.
-enum Mode : int { walk_all, walk_todo, listed };
-template <class MemorySpace, bool adaptive, bool with_rings, bool cubic = false, int mode = walk_all>
+template <class MemorySpace, bool adaptive, bool with_rings, bool cubic = false>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -388,12 +370,6 @@ struct Kernel {
     // A power of two near 1 / the narrowest tile width: float keys and normals are in these units, so they neither
     // overflow nor underflow in any box (#26), and scaling by a power of two keeps their bits and order.
     double unit = 1, unit2 = 1;  // unit2 = unit^2
-    Kokkos::View<const int*, MemorySpace> todo = {};
-    Kokkos::View<const unsigned*, MemorySpace> knn = {};
-    int list_k = 0;
-    // The entry of the first batch (walk: flush) from which the vertex balls filter entries (-1: off).
-    int filter_at = -1;
-    bool resume = false;  // listed: a cell its list cannot certify goes on with the walk, past the list
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
@@ -404,15 +380,9 @@ struct Kernel {
         while (true) {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
-            const int i = __shfl_sync(all_lanes, taken, 0);
-            if constexpr (mode == walk_all) {
-                if (i >= grid.n) return;
-                build(c, i, i);
-            } else {
-                const bool all = todo.extent(0) == 0;
-                if (i >= (all ? grid.n : static_cast<int>(todo.extent(0)))) return;
-                build(c, all ? i : todo(i), i);
-            }
+            const int t = __shfl_sync(all_lanes, taken, 0);
+            if (t >= grid.n) return;
+            build(c, t);
         }
 #else
         (void)member;
@@ -420,25 +390,19 @@ struct Kernel {
     }
 
 #if defined(__CUDA_ARCH__)
-    // Build cell t (a slot) in polyhedron c, with all lanes of the warp; its list (listed) is the index-th.
-    __device__ __forceinline__ void build(Polyhedron& c, int t, int index) const {
+    // Build cell t (a slot) in polyhedron c, with all lanes of the warp.
+    __device__ __forceinline__ void build(Polyhedron& c, int t) const {
         const int l = lane();
         const auto& positions = grid.positions;
         const double* box = grid.box.side;
         const double side[3] = {box[0], box[cubic ? 0 : 1], box[cubic ? 0 : 2]};
         const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
-        const long long listed_at = static_cast<long long>(index) * list_k;
-        if constexpr (mode == listed)
-            if (!resume && knn(listed_at) == no_entry) {
-                if (l == 0) out.status(grid.order(t)) = uncertified;
-                return;
-            }
 
         int planes = 0;
         std::uint64_t live = 0;
         double radius2 = 3 * half_width * half_width;
         start_cube(c, half_width, planes, live);
-        int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0, flushes = 0;
+        int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
 #if defined(VORONOI_MEASURE)
         const long long started = clock64();
@@ -474,14 +438,9 @@ struct Kernel {
             }
 #endif
             float reach = 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f;
-            std::uint32_t worth = all_lanes;  // candidates that may still cut (filter_at)
-            const double mine2 = l < buffered ? dot(mine, mine) : -1.0;
             for (int i = 0; i < buffered && status == ok; ++i) {
                 const float k = __shfl_sync(all_lanes, key, i);
                 if (k >= reach) break;
-                if (filter_at >= 0 && i == (flushes == 0 ? filter_at : 0))
-                    worth = ball_lanes(c, live, mine, mine2, radius2, i);
-                if (!(worth >> i & 1)) continue;
                 const int q = __shfl_sync(all_lanes, slot, i);
                 const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
                              __shfl_sync(all_lanes, mine.z, i)};
@@ -507,166 +466,116 @@ struct Kernel {
 #endif
             }
             buffered = 0;
-            ++flushes;
         };
 
-        double skip2 = -1;  // listed and resumed: the walk skips particles closer than this (the list's)
-        double last2 = 0;
-        if constexpr (mode == listed) {
-            // Clip by the list, nearest first, until the next entry lies beyond 2R; past the list, every particle lies
-            // at least as far as its last entry.
-            for (int first = 0; first < list_k && status == ok && !certified; first += lanes) {
-                const unsigned entry = first + l < list_k ? knn(listed_at + first + l) : no_entry;
-                Vec3 mine{0, 0, 0};
-                int q = 0;
-                if (entry != no_entry) {
-                    q = static_cast<int>(entry >> 6);
-                    const int packed = static_cast<int>(entry & 63);
-                    mine = {positions(q, 0) + image(packed, 0) * side[0] - p.x,
-                            positions(q, 1) + image(packed, 1) * side[1] - p.y,
-                            positions(q, 2) + image(packed, 2) * side[2] - p.z};
-                }
-                const double mine2 = entry != no_entry ? dot(mine, mine) : -1.0;
-                ++rings;
-                const int count = list_k - first < lanes ? list_k - first : lanes;
-                std::uint32_t worth = all_lanes;  // entries that may still cut (balls)
-                for (int i = 0; i < count && status == ok; ++i) {
-                    if (filter_at >= 0 && i == (first == 0 ? filter_at : 0))
-                        worth = ball_lanes(c, live, mine, mine2, radius2, i);
-                    last2 = __shfl_sync(all_lanes, mine2, i);
-                    if (last2 < 0) break;  // an incomplete list: the walk builds the cell
-                    // Lists are sorted by float keys: later entries and particles past the list lie at least
-                    // 1 - 2^-22 times as far.
-                    if (last2 * (1 - 0x1p-20) >= 4.0 * radius2) {
-                        certified = true;
-                        break;
-                    }
-                    if (!(worth >> i & 1)) continue;
-                    const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
-                                 __shfl_sync(all_lanes, mine.z, i)};
-                    const int before = planes;
-                    status = clip(c, planes, live, radius2, d, __shfl_sync(all_lanes, q, i), unit);
-                    ++clipped;
-                    cuts += planes > before;
-                }
-                if (last2 < 0) break;
-            }
-            if (status == ok && !certified && last2 * (1 - 0x1p-20) >= 4.0 * radius2) certified = true;
-            skip2 = last2 > 0 ? last2 * (1 - 0x1p-20) : -1;
-#if defined(VORONOI_MEASURE)
-            m[measure::tested] = list_k < rings * lanes ? list_k : rings * lanes;
-#endif
-        }
-        if (mode != listed || (resume && status == ok && !certified)) {
-            // Visit the grid cells of the walk (see shell_voronoi.hpp) 32 at a time: each lane checks one cell against 2R
-            // and reads its particles, so the loads overlap.
-            int level = adaptive ? int(grid.level(t)) : grid.levels, home[3], finer = -1;
-            home_cell<cubic>(p, grid, level, home);
-            while (status == ok) {
-                const double width = grid.narrowest / (1 << level);
-                const int reach = level_reach(level, cubic ? 1 : grid.fewest), entries = stencil.ends(reach);
-                for (int first = 0; first < entries && status == ok; first += lanes) {
-                    if (double(stencil.bound2(first)) * width * width >= 4.0 * radius2) {
-                        certified = true;
-                        break;
-                    }
-                    ++rings;
-                    const int e = first + l;
-                    int begin = 0, end = 0, packed = 0;
-                    const double reach2 = 4.0 * radius2;
-                    if (e < entries)
-                        stencil_cell<adaptive, cubic>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end,
-                                                      packed);
-    #if defined(VORONOI_MEASURE)
-                    if (measuring) {
-                        bool cell_outside = false, p1 = false, r8 = false;
-                        double union_lo[3] = {}, union_hi[3] = {};
-                        if (balls) warp_bounds(c, live, true, union_lo, union_hi);
-                        if (balls && begin < end) {
-                            const int code = stencil.offsets(e);
-                            double lo[3], hi[3];
-                            const double q[3] = {p.x, p.y, p.z};
-                            for (int a = 0; a < 3; ++a) {
-                                const double w = (cubic ? grid.width[0] : grid.width[a]) / (1 << level);
-                                lo[a] = (home[a] + ((code >> (4 * a)) & 15) - 8) * w - q[a];
-                                hi[a] = lo[a] + w;
-                            }
-                            cell_outside = !box_meets_a_ball(c, live, lo, hi);
-                            const double mu = 64 * Kokkos::Experimental::epsilon_v<double> * longest;
-                            const double slack = mu + 0x1p-15 * Kokkos::sqrt(radius2);
-                            double wide_lo[3], wide_hi[3];
-                            r8 = true;
-                            for (int a = 0; a < 3; ++a) {
-                                wide_lo[a] = lo[a] - mu;
-                                wide_hi[a] = hi[a] + mu;
-                                r8 = r8 && lo[a] - slack <= union_hi[a] && hi[a] + slack >= union_lo[a];
-                            }
-                            p1 = meets_a_ball(c, live, wide_lo, wide_hi, 0x1p-30 * radius2);
-                        }
-                        m[measure::walk_cells] += __popc(__ballot_sync(all_lanes, e < entries));
-                        m[measure::walk_open] += __popc(__ballot_sync(all_lanes, begin < end));
-                        m[measure::open_outside] += __popc(__ballot_sync(all_lanes, cell_outside));
-                        m[measure::in_open_outside] += warp_sum(cell_outside ? end - begin : 0);
-                        m[measure::rounds] += warp_max(end - begin);
-                        m[measure::open_p1] += __popc(__ballot_sync(all_lanes, p1));
-                        m[measure::in_open_p1] += warp_sum(p1 ? end - begin : 0);
-                        m[measure::rounds_p1] += warp_max(p1 ? end - begin : 0);
-                        m[measure::open_r8] += __popc(__ballot_sync(all_lanes, r8));
-                        m[measure::in_open_r8] += warp_sum(r8 ? end - begin : 0);
-                        m[measure::rounds_r8] += warp_max(r8 ? end - begin : 0);
-                    }
-    #endif
-                    const int most = warp_max(end - begin);
-                    for (int k = 0; k < most && status == ok; ++k) {
-                        const int q = begin + k;
-                        double d2 = 0;
-                        bool take = false;
-    #if defined(VORONOI_MEASURE)
-                        bool outside = false;
-    #endif
-                        if (q < end && q != t) {
-                            const double ddx = positions(q, 0) + image(packed, 0) * side[0] - p.x;
-                            const double ddy = positions(q, 1) + image(packed, 1) * side[1] - p.y;
-                            const double ddz = positions(q, 2) + image(packed, 2) * side[2] - p.z;
-                            d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                            take = d2 < 4.0 * radius2 && d2 >= skip2;
-    #if defined(VORONOI_MEASURE)
-                            outside = balls && !in_a_ball(c, live, ddx, ddy, ddz);
-    #endif
-                        }
-                        const unsigned taking = __ballot_sync(all_lanes, take);
-    #if defined(VORONOI_MEASURE)
-                        if (measuring) {
-                            m[measure::tested] += __popc(__ballot_sync(all_lanes, q < end && q != t));
-                            m[measure::taken] += __popc(taking);
-                            m[measure::tested_outside] += __popc(__ballot_sync(all_lanes, outside));
-                            m[measure::taken_outside] += __popc(__ballot_sync(all_lanes, outside && take));
-                        }
-    #endif
-                        if (taking == 0) continue;
-                        if (buffered + __popc(taking) > lanes) flush();
-                        if (take) {
-                            const int index = buffered + __popc(taking & ((1u << l) - 1));
-                            c.candidate_distance2[index] = static_cast<float>(d2 * unit2);
-                            c.candidate_slot[index] = q;
-                            c.candidate_image[index] = packed;
-                        }
-                        buffered += __popc(taking);
-                        __syncwarp(all_lanes);
-                    }
-                    if (buffered > 0) flush();
-                }
-                if (status != ok || certified) break;
-                // Cells outside the stencil are at least `reach` widths away.
-                if (reach * width * reach * width >= 4.0 * radius2) {
+        // Visit the grid cells of the walk (see shell_voronoi.hpp) 32 at a time: each lane checks one cell against 2R
+        // and reads its particles, so the loads overlap.
+        int level = adaptive ? int(grid.level(t)) : grid.levels, home[3], finer = -1;
+        home_cell<cubic>(p, grid, level, home);
+        while (status == ok) {
+            const double width = grid.narrowest / (1 << level);
+            const int reach = level_reach(level, cubic ? 1 : grid.fewest), entries = stencil.ends(reach);
+            for (int first = 0; first < entries && status == ok; first += lanes) {
+                if (double(stencil.bound2(first)) * width * width >= 4.0 * radius2) {
                     certified = true;
                     break;
                 }
-                if (!adaptive || level == 2) break;
-                finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
-                for (int a = 0; a < 3; ++a) home[a] >>= 1;
-                --level;
+                ++rings;
+                const int e = first + l;
+                int begin = 0, end = 0, packed = 0;
+                const double reach2 = 4.0 * radius2;
+                if (e < entries)
+                    stencil_cell<adaptive, cubic>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end,
+                                                  packed);
+#if defined(VORONOI_MEASURE)
+                if (measuring) {
+                    bool cell_outside = false, p1 = false, r8 = false;
+                    double union_lo[3] = {}, union_hi[3] = {};
+                    if (balls) warp_bounds(c, live, true, union_lo, union_hi);
+                    if (balls && begin < end) {
+                        const int code = stencil.offsets(e);
+                        double lo[3], hi[3];
+                        const double q[3] = {p.x, p.y, p.z};
+                        for (int a = 0; a < 3; ++a) {
+                            const double w = (cubic ? grid.width[0] : grid.width[a]) / (1 << level);
+                            lo[a] = (home[a] + ((code >> (4 * a)) & 15) - 8) * w - q[a];
+                            hi[a] = lo[a] + w;
+                        }
+                        cell_outside = !box_meets_a_ball(c, live, lo, hi);
+                        const double mu = 64 * Kokkos::Experimental::epsilon_v<double> * longest;
+                        const double slack = mu + 0x1p-15 * Kokkos::sqrt(radius2);
+                        double wide_lo[3], wide_hi[3];
+                        r8 = true;
+                        for (int a = 0; a < 3; ++a) {
+                            wide_lo[a] = lo[a] - mu;
+                            wide_hi[a] = hi[a] + mu;
+                            r8 = r8 && lo[a] - slack <= union_hi[a] && hi[a] + slack >= union_lo[a];
+                        }
+                        p1 = meets_a_ball(c, live, wide_lo, wide_hi, 0x1p-30 * radius2);
+                    }
+                    m[measure::walk_cells] += __popc(__ballot_sync(all_lanes, e < entries));
+                    m[measure::walk_open] += __popc(__ballot_sync(all_lanes, begin < end));
+                    m[measure::open_outside] += __popc(__ballot_sync(all_lanes, cell_outside));
+                    m[measure::in_open_outside] += warp_sum(cell_outside ? end - begin : 0);
+                    m[measure::rounds] += warp_max(end - begin);
+                    m[measure::open_p1] += __popc(__ballot_sync(all_lanes, p1));
+                    m[measure::in_open_p1] += warp_sum(p1 ? end - begin : 0);
+                    m[measure::rounds_p1] += warp_max(p1 ? end - begin : 0);
+                    m[measure::open_r8] += __popc(__ballot_sync(all_lanes, r8));
+                    m[measure::in_open_r8] += warp_sum(r8 ? end - begin : 0);
+                    m[measure::rounds_r8] += warp_max(r8 ? end - begin : 0);
+                }
+#endif
+                const int most = warp_max(end - begin);
+                for (int k = 0; k < most && status == ok; ++k) {
+                    const int q = begin + k;
+                    double d2 = 0;
+                    bool take = false;
+#if defined(VORONOI_MEASURE)
+                    bool outside = false;
+#endif
+                    if (q < end && q != t) {
+                        const double ddx = positions(q, 0) + image(packed, 0) * side[0] - p.x;
+                        const double ddy = positions(q, 1) + image(packed, 1) * side[1] - p.y;
+                        const double ddz = positions(q, 2) + image(packed, 2) * side[2] - p.z;
+                        d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                        take = d2 < 4.0 * radius2;
+#if defined(VORONOI_MEASURE)
+                        outside = balls && !in_a_ball(c, live, ddx, ddy, ddz);
+#endif
+                    }
+                    const unsigned taking = __ballot_sync(all_lanes, take);
+#if defined(VORONOI_MEASURE)
+                    if (measuring) {
+                        m[measure::tested] += __popc(__ballot_sync(all_lanes, q < end && q != t));
+                        m[measure::taken] += __popc(taking);
+                        m[measure::tested_outside] += __popc(__ballot_sync(all_lanes, outside));
+                        m[measure::taken_outside] += __popc(__ballot_sync(all_lanes, outside && take));
+                    }
+#endif
+                    if (taking == 0) continue;
+                    if (buffered + __popc(taking) > lanes) flush();
+                    if (take) {
+                        const int index = buffered + __popc(taking & ((1u << l) - 1));
+                        c.candidate_distance2[index] = static_cast<float>(d2 * unit2);
+                        c.candidate_slot[index] = q;
+                        c.candidate_image[index] = packed;
+                    }
+                    buffered += __popc(taking);
+                    __syncwarp(all_lanes);
+                }
+                if (buffered > 0) flush();
             }
+            if (status != ok || certified) break;
+            // Cells outside the stencil are at least `reach` widths away.
+            if (reach * width * reach * width >= 4.0 * radius2) {
+                certified = true;
+                break;
+            }
+            if (!adaptive || level == 2) break;
+            finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
+            for (int a = 0; a < 3; ++a) home[a] >>= 1;
+            --level;
         }
         if (status == ok && !certified) status = uncertified;
 
@@ -869,7 +778,7 @@ struct Kernel {
             out.centroid(id, 2) = good ? moment.z / volume : 0.0;
             if (out.closure.extent(0) > 0) {
                 out.closure(id) = good ? Kokkos::sqrt(dot(area_sum, area_sum)) / area_magnitude : 0.0;
-                out.work(id, 0) = mode == listed && list_k < rings * lanes ? list_k : mode == listed ? rings * lanes : rings;
+                out.work(id, 0) = rings;
                 out.work(id, 1) = clipped;
                 out.work(id, 2) = cuts;
             }
@@ -893,136 +802,6 @@ struct Kernel {
 #endif  // KOKKOS_ENABLE_CUDA
 
 }  // namespace warp
-
-// Experimental (VORONOI_KNN = "k[,k2][:even][:ballsN]"): clip by lists of the k nearest first, cells it cannot certify
-// by lists of k2, then by the walk; ":even" lists only cells at the base level; ":ballsN" skips entries outside every
-// vertex ball from the N-th entry on; ":resume" goes on with the walk in the same warp. Times and counts of the last
-// build.
-struct Listing {
-    int k = 0, k2 = 0, balls = -1;
-    bool even = false, resume = false;
-    static Listing from_environment() {
-        Listing l;
-        const char* text = std::getenv("VORONOI_KNN");
-        if (text == nullptr || *text == 0) return l;
-        const std::string s(text);
-        l.k = std::atoi(s.c_str());
-        const auto comma = s.find(',');
-        if (comma != std::string::npos) l.k2 = std::atoi(s.c_str() + comma + 1);
-        l.even = s.find(":even") != std::string::npos;
-        l.resume = s.find(":resume") != std::string::npos;
-        const auto at = s.find(":balls");
-        if (at != std::string::npos) l.balls = std::atoi(s.c_str() + at + 6);
-        return l;
-    }
-};
-struct ListingStats {
-    double list_ms = 0, clip_ms = 0, relist_ms = 0, reclip_ms = 0, walk_ms = 0, rest_ms = 0;
-    long long relisted = 0, walked = 0, list_reads = 0, relist_reads = 0;
-};
-inline ListingStats listing_stats;
-
-#if defined(KOKKOS_ENABLE_CUDA)
-// The listed build (Listing): lists, the listed warp kernel, the lists of k2 and the walk for what is left uncertified,
-// then the thread kernel for overflows, as in construct_warp.
-template <class Policy, class Memory>
-void construct_listed(const Kokkos::Cuda& exec, const Grid<Memory>& grid, Cells<Memory>& out, const Listing& listing,
-                      const Policy& policy, const Stencil<Memory>& stencil, const Kokkos::View<int, Memory>& next_cell,
-                      double half_width, double unit, double unit2) {
-    using Range = Kokkos::RangePolicy<Kokkos::Cuda>;
-    ListingStats& stats = listing_stats;
-    stats = {};
-    const bool diagnostics = out.closure.extent(0) > 0, rings = out.with_rings(), cube = grid.cube();
-    Kokkos::Timer timer;
-    auto lap = [&](double& ms) {
-        exec.fence();
-        ms += timer.seconds() * 1e3;
-        timer.reset();
-    };
-    auto sum = [&](const Kokkos::View<int*, Memory>& v, int count) {
-        long long total = 0;
-        Kokkos::parallel_reduce(
-            "shell_voronoi::listed_sum", Range(exec, 0, count),
-            KOKKOS_LAMBDA(int i, long long& s) { s += v(i); }, total);
-        return total;
-    };
-    Neighbours<Memory> first{{}, {}, listing.k}, second{{}, {}, listing.k2};
-    if (diagnostics) first.reads = Kokkos::View<int*, Memory>("shell_knn_reads", grid.n);
-    list_nearest(exec, grid, stencil, first, {}, listing.even ? grid.levels : -1);
-    lap(stats.list_ms);
-    if (diagnostics) stats.list_reads = sum(first.reads, grid.n);
-    timer.reset();
-    Kokkos::View<int*, Memory> todo("shell_knn_todo", grid.n);
-    // The slots whose cells are not ok (face_overflow aside: the pool is grown and the build repeated).
-    auto failed = [&] {
-        const auto status = out.status;
-        const auto order = grid.order;
-        int count = 0;
-        Kokkos::parallel_scan(
-            "shell_voronoi::listed_failed", Range(exec, 0, grid.n),
-            KOKKOS_LAMBDA(int t, int& at, bool last) {
-                const int s = status(order(t));
-                if (s == ok || s == face_overflow) return;
-                if (last) todo(at) = t;
-                ++at;
-            },
-            count);
-        return Kokkos::subview(todo, std::make_pair(0, count));
-    };
-    auto launch = [&](auto mode, auto with_rings, auto cubic, const auto& slots, const auto& list, int k) {
-        Kokkos::deep_copy(exec, next_cell, 0);
-        warp::Kernel<Memory, true, decltype(with_rings)::value, decltype(cubic)::value, decltype(mode)::value> kernel{
-            grid, out, half_width, stencil, next_cell, unit, unit2};
-        kernel.todo = slots;
-        kernel.knn = list;
-        kernel.list_k = k;
-        kernel.filter_at = listing.balls;
-        kernel.resume = listing.resume;
-        Kokkos::parallel_for("shell_voronoi::construct_warp_listed", policy, kernel);
-    };
-    auto run = [&](auto mode, const Kokkos::View<const int*, Memory>& slots, const Kokkos::View<unsigned*, Memory>& list,
-                   int k) {
-        using Mode = decltype(mode);
-        if (rings && cube)
-            launch(Mode{}, std::true_type{}, std::true_type{}, slots, list, k);
-        else if (rings)
-            launch(Mode{}, std::true_type{}, std::false_type{}, slots, list, k);
-        else if (cube)
-            launch(Mode{}, std::false_type{}, std::true_type{}, slots, list, k);
-        else
-            launch(Mode{}, std::false_type{}, std::false_type{}, slots, list, k);
-    };
-    using Listed = std::integral_constant<int, warp::listed>;
-    using Walk = std::integral_constant<int, warp::walk_todo>;
-    detail::until_pool_fits(exec, out, [&] {
-        run(Listed{}, {}, first.list, first.k);
-        lap(stats.clip_ms);
-        auto left = failed();
-        if (listing.k2 > 0 && left.extent(0) > 0) {
-            stats.relisted = static_cast<long long>(left.extent(0));
-            if (diagnostics) second.reads = Kokkos::View<int*, Memory>("shell_knn_reads2", left.extent(0));
-            list_nearest(exec, grid, stencil, second, left);
-            lap(stats.relist_ms);
-            if (diagnostics) stats.relist_reads = sum(second.reads, static_cast<int>(left.extent(0)));
-            timer.reset();
-            Kokkos::View<int*, Memory> copy("shell_knn_todo2", left.extent(0));
-            Kokkos::deep_copy(exec, copy, left);
-            run(Listed{}, copy, second.list, second.k);
-            lap(stats.reclip_ms);
-            left = failed();
-        }
-        stats.walked = static_cast<long long>(left.extent(0));
-        if (left.extent(0) > 0) {
-            Kokkos::View<int*, Memory> copy("shell_knn_todo3", left.extent(0));
-            Kokkos::deep_copy(exec, copy, left);
-            run(Walk{}, copy, {}, 0);
-        }
-        lap(stats.walk_ms);
-        detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
-        lap(stats.rest_ms);
-    });
-}
-#endif
 
 // Build every cell with one warp per cell, then rebuild the ones that overflowed with the per-thread kernel;
 // with face rings if `out` records them. Other backends use that kernel throughout.
@@ -1054,35 +833,28 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         Kokkos::parallel_reduce(
             "shell_voronoi::off_base_levels", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
             KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
-        const Listing listing = Listing::from_environment();
-        const char* balls_text = std::getenv("VORONOI_BALLS");  // experimental: the walk's ball filter (filter_at)
-        const int walk_balls = balls_text != nullptr && *balls_text != 0 ? std::atoi(balls_text) : -1;
-        if (listing.k > 0) {
-            construct_listed(exec, grid, out, listing, policy, stencil, next_cell, half_width, unit, unit2);
-            return;
-        }
         detail::until_pool_fits(exec, out, [&] {
             Kokkos::deep_copy(exec, next_cell, 0);
             if (rings)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp_rings", policy,
-                    warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2, {}, {}, 0, walk_balls});
+                    warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
             else if (off_base > 0 && cube)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2, {}, {}, 0, walk_balls});
+                    warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
             else if (off_base > 0)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, unit, unit2, {}, {}, 0, walk_balls});
+                    warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, unit, unit2});
             else if (cube)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, false, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2, {}, {}, 0, walk_balls});
+                    warp::Kernel<Memory, false, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
             else
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2, {}, {}, 0, walk_balls});
+                    warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2});
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
         });
         return;

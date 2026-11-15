@@ -77,4 +77,24 @@ measure)  # measure <n>: the measurement build's counters (tested = candidate re
         done
     done
     ;;
+ncu)  # ncu <n>: warp instructions and time of the clipping kernels and the kNN pass, one build each
+    NCU=/mpcdf/soft/SLE_15/packages/x86_64/nsight_compute/2026/ncu
+    dcgmi profile --pause 2>/dev/null
+    for kind in $kinds; do
+        for p in $(pairs); do
+            echo "== ncu $p $kind $1"
+            run $p rebuild "$1" "$kind" 1 --no-check >/dev/null 2>&1  # warm-up outside the profiler
+            d=${p%%:*} k=${p#*:}
+            [[ $k == 0 ]] && unset VORONOI_KNN VORONOI_BALLS
+            [[ $k == w* ]] && { unset VORONOI_KNN; export VORONOI_BALLS=${k#w}; }
+            [[ $k != 0 && $k != w* ]] && { unset VORONOI_BALLS; export VORONOI_KNN=${k//+/,}; }
+            timeout 600 $NCU --target-processes all --clock-control none --kernel-name-base demangled \
+                --kernel-name regex:"warp::Kernel|list_nearest" --launch-count 3 \
+                --metrics smsp__inst_executed.sum,gpu__time_duration.sum,launch__registers_per_thread \
+                $bin/voronoi_bench_$d rebuild "$1" "$kind" 1 --no-check 2>&1 | grep -E "Kernel|list_nearest|inst_executed|time_duration|registers"
+            unset VORONOI_KNN VORONOI_BALLS
+        done
+    done
+    dcgmi profile --resume 2>/dev/null
+    ;;
 esac
