@@ -145,6 +145,55 @@ inline SortBuffers sort_buffers(double* storage, int n) {
     return {{keys, keys + n}, {ids, ids + n}};
 }
 
+// Stable LSD radix sort of (keys[0], ids[0]) by the low `bits` key bits on a host backend, 8 bits a pass: per-chunk
+// digit counts, then each chunk scatters its slots in order, so equal keys keep their order. Returns the buffer index
+// (0 or 1) holding the result. Used by: build (host backends).
+template <class ExecSpace>
+int host_radix_sort(const ExecSpace& exec, const SortBuffers& b, int n, int bits) {
+    constexpr int radix = 8, digits = 1 << radix;
+    const int chunks = Kokkos::max(1, Kokkos::min(static_cast<int>(exec.concurrency()), n / 4096));
+    const long long per = (static_cast<long long>(n) + chunks - 1) / chunks;
+    Kokkos::View<int**, Kokkos::LayoutRight, Kokkos::HostSpace> count("cell_list_radix_counts", chunks, digits);
+    using Range = Kokkos::RangePolicy<ExecSpace, Kokkos::Schedule<Kokkos::Static>>;
+    int from = 0;
+    for (int shift = 0; shift < bits; shift += radix) {
+        const std::uint64_t* key = b.keys[from];
+        const int* id = b.ids[from];
+        std::uint64_t* to_key = b.keys[1 - from];
+        int* to_id = b.ids[1 - from];
+        Kokkos::parallel_for("cell_list::radix_count", Range(exec, 0, chunks), [=](int c) {
+            for (int d = 0; d < digits; ++d) count(c, d) = 0;
+            const long long end = Kokkos::min<long long>(n, (c + 1) * per);
+            for (long long i = c * per; i < end; ++i) ++count(c, static_cast<int>(key[i] >> shift) & (digits - 1));
+        });
+        exec.fence();
+        int at = 0;
+        bool one_digit = false;  // every key has the same digit: nothing moves
+        for (int d = 0; d < digits; ++d) {
+            int total = 0;
+            for (int c = 0; c < chunks; ++c) {
+                const int k = count(c, d);
+                count(c, d) = at;
+                at += k;
+                total += k;
+            }
+            one_digit = one_digit || total == n;
+        }
+        if (one_digit) continue;
+        Kokkos::parallel_for("cell_list::radix_scatter", Range(exec, 0, chunks), [=](int c) {
+            const long long end = Kokkos::min<long long>(n, (c + 1) * per);
+            for (long long i = c * per; i < end; ++i) {
+                const int slot = count(c, static_cast<int>(key[i] >> shift) & (digits - 1))++;
+                to_key[slot] = key[i];
+                to_id[slot] = id[i];
+            }
+        });
+        exec.fence();
+        from = 1 - from;
+    }
+    return from;
+}
+
 }  // namespace detail
 
 // Bits of the numbers 0 .. count - 1.
@@ -248,12 +297,7 @@ void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPosit
     {
         if constexpr (Kokkos::SpaceAccessibility<Kokkos::HostSpace, typename ExecSpace::memory_space>::accessible) {
             exec.fence();
-            std::sort(b.ids[0], b.ids[0] + n, [&](int i, int j) {
-                return b.keys[0][i] != b.keys[0][j] ? b.keys[0][i] < b.keys[0][j] : i < j;
-            });
-            for (int q = 0; q < n; ++q) b.keys[1][q] = b.keys[0][b.ids[0][q]];
-            std::copy(b.ids[0], b.ids[0] + n, b.ids[1]);
-            sorted = 1;
+            sorted = detail::host_radix_sort(exec, b, n, key_bits(s));
         } else {
             throw std::runtime_error("neighbor_search::build: no sort for this backend");
         }
