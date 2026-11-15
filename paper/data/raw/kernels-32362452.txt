@@ -1,0 +1,911 @@
+# bin=/ptmp/uli/voronoi-paper/bin/55cd6b1 host=ravg1061 job=32362452
+# NVIDIA A100-SXM4-40GB, 1410 MHz, 1305 MHz
+== rebuild jittered 2097152
+# backend=Cuda n=2097152 distribution=jittered box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=5
+warp: build_ms=0.727693 construct_ms=49.3295 construct_Mcells_s=42.5131 pipeline_Mcells_s=41.8951
+== step jittered 2097152 0.03
+# backend=Cuda n=2097152 distribution=jittered box=1,1,1 displacement=0.03 steps=10
+start: clip_ms=57.0204 from_rings_ms=50.1734 start_ms=114.554 extra_vs_clip=1.009 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14583412 tets_checksum=5432839122813726276 per_cell=6.95391 ring_entries_per_cell=59.374 rings_checksum=4597420765284248766 rings_topology=14312002267668502331
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=135.363 resort_ms=0 geometry_ms=13.0739 cells_ms=5.34224 total_ms=148.437 faces=16680564 faces_per_cell=7.95391 cells_checksum=9118950859045097172
+gpuflips: step=1 gpu_ms=5.53487 rounds=5 flips=61214 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16680304 centres_faces_ms=4.63375 cells_ms=3.92313 resorted=0 resort_ms=0 step_ms=10.1686 step_Mcells_s=206.237 all_ms=14.0918 advect_ms=40.1156 copy_ms=28.8328
+gpuflips: step=2 gpu_ms=5.22953 rounds=6 flips=60928 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16680092 centres_faces_ms=4.3751 cells_ms=3.67415 resorted=0 resort_ms=0 step_ms=9.60463 step_Mcells_s=218.348 all_ms=13.2788 advect_ms=33.6447 copy_ms=28.7254
+gpuflips: step=3 gpu_ms=5.10507 rounds=5 flips=60916 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16679684 centres_faces_ms=4.40535 cells_ms=3.65203 resorted=0 resort_ms=0 step_ms=9.51042 step_Mcells_s=220.511 all_ms=13.1625 advect_ms=36.3548 copy_ms=33.3226
+gpuflips: step=4 gpu_ms=5.45791 rounds=6 flips=60895 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16679353 centres_faces_ms=4.45118 cells_ms=3.66288 resorted=0 resort_ms=0 step_ms=9.90909 step_Mcells_s=211.639 all_ms=13.572 advect_ms=32.2542 copy_ms=28.026
+gpuflips: step=5 gpu_ms=5.29998 rounds=5 flips=60768 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16678903 centres_faces_ms=4.56162 cells_ms=3.71853 resorted=0 resort_ms=0 step_ms=9.8616 step_Mcells_s=212.658 all_ms=13.5801 advect_ms=33.674 copy_ms=26.0346
+gpuflips: step=6 gpu_ms=5.63418 rounds=7 flips=61040 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16678139 centres_faces_ms=4.49595 cells_ms=3.6959 resorted=0 resort_ms=0 step_ms=10.1301 step_Mcells_s=207.021 all_ms=13.826 advect_ms=38.8615 copy_ms=26.9507
+gpuflips: step=7 gpu_ms=5.5345 rounds=6 flips=60752 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16677255 centres_faces_ms=4.52402 cells_ms=3.70022 resorted=0 resort_ms=0 step_ms=10.0585 step_Mcells_s=208.495 all_ms=13.7587 advect_ms=33.1017 copy_ms=30.7798
+gpuflips: step=8 gpu_ms=6.46139 rounds=6 flips=60800 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16676101 centres_faces_ms=4.8255 cells_ms=3.91723 resorted=0 resort_ms=0 step_ms=11.2869 step_Mcells_s=185.804 all_ms=15.2041 advect_ms=34.7484 copy_ms=170.139
+gpuflips: step=9 gpu_ms=5.6744 rounds=6 flips=60868 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16674829 centres_faces_ms=4.57971 cells_ms=3.71781 resorted=0 resort_ms=0 step_ms=10.2541 step_Mcells_s=204.518 all_ms=13.9719 advect_ms=29.4459 copy_ms=38.9099
+gpuflips: step=10 gpu_ms=6.40732 rounds=5 flips=60550 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14611521 faces=16673423 centres_faces_ms=4.85371 cells_ms=3.73548 resorted=0 resort_ms=0 step_ms=11.261 step_Mcells_s=186.231 all_ms=14.9965 advect_ms=36.0085 copy_ms=112.492
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.2936 Mcells_s=185.693
+kernel: deep_copy ms_per_step=5.36673 Mcells_s=390.769
+kernel: tet_mesh::faces ms_per_step=2.37583 Mcells_s=882.701
+kernel: tet_mesh::cell_sums ms_per_step=2.23318 Mcells_s=939.087
+kernel: tet_repair::screen ms_per_step=2.0932 Mcells_s=1001.89
+kernel: tet_repair::apply ms_per_step=1.06196 Mcells_s=1974.8
+kernel: tet_repair::plan ms_per_step=0.901371 Mcells_s=2326.62
+kernel: tet_mesh::append_rings ms_per_step=0.610889 Mcells_s=3432.95
+kernel: tet_mesh::cell_sort ms_per_step=0.507107 Mcells_s=4135.52
+kernel: tet_mesh::face_touched ms_per_step=0.496224 Mcells_s=4226.22
+kernel: tet_repair::find ms_per_step=0.491766 Mcells_s=4264.54
+kernel: tet_mesh::dirty_faces ms_per_step=0.462449 Mcells_s=4534.88
+kernel: voronoi::snap ms_per_step=0.249537 Mcells_s=8404.17
+kernel: tet_mesh::marked_fill ms_per_step=0.232549 Mcells_s=9018.11
+kernel: tet_mesh::cell_face_start ms_per_step=0.216563 Mcells_s=9683.79
+kernel: exact_predicates::snap ms_per_step=0.119154 Mcells_s=17600.3
+kernel: tet_repair::unlist ms_per_step=0.110744 Mcells_s=18937
+kernel: tet_mesh::marked_counts ms_per_step=0.105198 Mcells_s=19935.4
+kernel: voronoi::total_volume ms_per_step=0.0930994 Mcells_s=22525.9
+kernel: tet_mesh::circumcentres ms_per_step=0.0867057 Mcells_s=24187
+kernel: tet_mesh::fresh_fill ms_per_step=0.0772619 Mcells_s=27143.4
+kernel: tet_mesh::face_release ms_per_step=0.0767266 Mcells_s=27332.8
+kernel: tet_mesh::face_offsets ms_per_step=0.0720058 Mcells_s=29124.8
+kernel: tet_repair::release ms_per_step=0.0706116 Mcells_s=29699.8
+kernel: tet_mesh::face_assign ms_per_step=0.0675208 Mcells_s=31059.4
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0578064 Mcells_s=36278.9
+kernel: tet_mesh::mark_cells ms_per_step=0.0514576 Mcells_s=40755
+kernel: tet_mesh::fresh_counts ms_per_step=0.0357556 Mcells_s=58652.5
+kernel: tet_mesh::face_move ms_per_step=0.0279427 Mcells_s=75052
+kernel: tet_mesh::face_low ms_per_step=0.0273433 Mcells_s=76697
+kernel: tet_mesh::face_numbered ms_per_step=0.026156 Mcells_s=80178.6
+kernel: tet_repair::retry_stuck ms_per_step=0.0191331 Mcells_s=109609
+final_rebuild: build_ms=258.818 resort_ms=0 geometry_ms=12.7088 cells_ms=4.97781 total_ms=276.505 Mcells_s=7.5845
+== step jittered 2097152 0.1
+# backend=Cuda n=2097152 distribution=jittered box=1,1,1 displacement=0.1 steps=10
+start: clip_ms=57.008 from_rings_ms=50.1296 start_ms=112.856 extra_vs_clip=0.979655 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14583412 tets_checksum=5432839122813726276 per_cell=6.95391 ring_entries_per_cell=59.374 rings_checksum=4597420765284248766 rings_topology=14312002267668502331
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=130.589 resort_ms=0 geometry_ms=13.0973 cells_ms=5.34782 total_ms=143.687 faces=16680564 faces_per_cell=7.95391 cells_checksum=9118950859045097172
+gpuflips: step=1 gpu_ms=9.11198 rounds=8 flips=203538 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16679848 centres_faces_ms=7.2968 cells_ms=4.80126 resorted=0 resort_ms=0 step_ms=16.4088 step_Mcells_s=127.807 all_ms=21.21 advect_ms=38.1886 copy_ms=32.732
+gpuflips: step=2 gpu_ms=8.7465 rounds=7 flips=203258 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16677532 centres_faces_ms=7.20256 cells_ms=4.84615 resorted=0 resort_ms=0 step_ms=15.9491 step_Mcells_s=131.491 all_ms=20.7952 advect_ms=34.3061 copy_ms=34.0405
+gpuflips: step=3 gpu_ms=10.1328 rounds=8 flips=202645 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16673395 centres_faces_ms=7.53795 cells_ms=4.87502 resorted=0 resort_ms=0 step_ms=17.6707 step_Mcells_s=118.679 all_ms=22.5457 advect_ms=37.127 copy_ms=152.716
+gpuflips: step=4 gpu_ms=9.00622 rounds=7 flips=201471 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16668014 centres_faces_ms=7.42747 cells_ms=4.91186 resorted=0 resort_ms=0 step_ms=16.4337 step_Mcells_s=127.613 all_ms=21.3455 advect_ms=35.7521 copy_ms=26.5431
+gpuflips: step=5 gpu_ms=10.1431 rounds=7 flips=200115 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16662063 centres_faces_ms=7.53487 cells_ms=4.92958 resorted=0 resort_ms=0 step_ms=17.678 step_Mcells_s=118.631 all_ms=22.6075 advect_ms=33.1869 copy_ms=109.24
+gpuflips: step=6 gpu_ms=9.37526 rounds=8 flips=199003 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16654516 centres_faces_ms=7.59683 cells_ms=4.96992 resorted=0 resort_ms=0 step_ms=16.9721 step_Mcells_s=123.565 all_ms=21.942 advect_ms=36.4409 copy_ms=26.8999
+gpuflips: step=7 gpu_ms=9.25033 rounds=7 flips=196614 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16645032 centres_faces_ms=10.8535 cells_ms=5.01152 resorted=0 resort_ms=0 step_ms=20.1038 step_Mcells_s=104.316 all_ms=25.1154 advect_ms=34.106 copy_ms=27.0212
+gpuflips: step=8 gpu_ms=9.5234 rounds=8 flips=194727 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16634557 centres_faces_ms=7.45313 cells_ms=5.08327 resorted=0 resort_ms=0 step_ms=16.9765 step_Mcells_s=123.532 all_ms=22.0598 advect_ms=35.027 copy_ms=30.5268
+gpuflips: step=9 gpu_ms=9.26683 rounds=7 flips=191844 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16622093 centres_faces_ms=7.52822 cells_ms=5.10552 resorted=0 resort_ms=0 step_ms=16.795 step_Mcells_s=124.867 all_ms=21.9006 advect_ms=36.5128 copy_ms=26.3014
+gpuflips: step=10 gpu_ms=9.52407 rounds=8 flips=189741 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14662143 faces=16607992 centres_faces_ms=7.58679 cells_ms=5.15767 resorted=0 resort_ms=0 step_ms=17.1109 step_Mcells_s=122.563 all_ms=22.2685 advect_ms=33.1005 copy_ms=27.392
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.4943 Mcells_s=182.451
+kernel: deep_copy ms_per_step=4.7004 Mcells_s=446.164
+kernel: tet_mesh::faces ms_per_step=2.57496 Mcells_s=814.439
+kernel: tet_repair::apply ms_per_step=2.52222 Mcells_s=831.47
+kernel: tet_repair::screen ms_per_step=2.40989 Mcells_s=870.229
+kernel: tet_repair::plan ms_per_step=2.17264 Mcells_s=965.253
+kernel: tet_mesh::append_rings ms_per_step=1.98944 Mcells_s=1054.14
+kernel: tet_mesh::cell_sums ms_per_step=1.90482 Mcells_s=1100.97
+kernel: tet_mesh::dirty_faces ms_per_step=1.39585 Mcells_s=1502.41
+kernel: tet_mesh::cell_sort ms_per_step=1.09831 Mcells_s=1909.44
+kernel: tet_mesh::cell_face_fill ms_per_step=1.08739 Mcells_s=1928.62
+kernel: tet_repair::find ms_per_step=1.0786 Mcells_s=1944.32
+kernel: tet_mesh::cell_face_counts ms_per_step=0.666115 Mcells_s=3148.34
+kernel: tet_mesh::face_touched ms_per_step=0.498867 Mcells_s=4203.83
+kernel: tet_mesh::compact_rings ms_per_step=0.39238 Mcells_s=5344.7
+kernel: voronoi::snap ms_per_step=0.233131 Mcells_s=8995.6
+kernel: tet_mesh::cell_face_start ms_per_step=0.198655 Mcells_s=10556.7
+kernel: tet_mesh::face_assign ms_per_step=0.182709 Mcells_s=11478.1
+kernel: tet_mesh::face_release ms_per_step=0.176585 Mcells_s=11876.2
+kernel: tet_repair::unlist ms_per_step=0.174177 Mcells_s=12040.4
+kernel: tet_mesh::circumcentres ms_per_step=0.169957 Mcells_s=12339.3
+kernel: tet_mesh::face_offsets ms_per_step=0.132775 Mcells_s=15794.8
+kernel: exact_predicates::snap ms_per_step=0.118919 Mcells_s=17635.1
+kernel: tet_repair::release ms_per_step=0.0952042 Mcells_s=22027.9
+kernel: voronoi::total_volume ms_per_step=0.0915251 Mcells_s=22913.4
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0600164 Mcells_s=34943
+kernel: tet_mesh::face_numbered ms_per_step=0.0386253 Mcells_s=54294.7
+kernel: tet_mesh::face_low ms_per_step=0.0359262 Mcells_s=58373.9
+kernel: tet_mesh::face_move ms_per_step=0.0355724 Mcells_s=58954.4
+kernel: tet_repair::retry_stuck ms_per_step=0.0204231 Mcells_s=102685
+kernel: tet_mesh::ring_entries ms_per_step=0.0110884 Mcells_s=189130
+final_rebuild: build_ms=209.993 resort_ms=0 geometry_ms=12.6528 cells_ms=4.94851 total_ms=227.594 Mcells_s=9.21443
+== step jittered 2097152 0.3
+# backend=Cuda n=2097152 distribution=jittered box=1,1,1 displacement=0.3 steps=10
+start: clip_ms=57.0027 from_rings_ms=51.194 start_ms=112.625 extra_vs_clip=0.975784 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14583412 tets_checksum=5432839122813726276 per_cell=6.95391 ring_entries_per_cell=59.374 rings_checksum=4597420765284248766 rings_topology=14312002267668502331
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=129.602 resort_ms=0 geometry_ms=13.0833 cells_ms=5.3653 total_ms=142.685 faces=16680564 faces_per_cell=7.95391 cells_checksum=9118950859045097172
+gpuflips: step=1 gpu_ms=23.1524 rounds=14 flips=611581 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16673361 centres_faces_ms=13.6807 cells_ms=4.7975 resorted=0 resort_ms=0 step_ms=36.8331 step_Mcells_s=56.9367 all_ms=41.6306 advect_ms=33.9789 copy_ms=28.3283
+gpuflips: step=2 gpu_ms=20.6533 rounds=13 flips=602567 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16654538 centres_faces_ms=13.4068 cells_ms=4.82688 resorted=0 resort_ms=0 step_ms=34.0601 step_Mcells_s=61.5721 all_ms=38.887 advect_ms=35.255 copy_ms=30.4588
+gpuflips: step=3 gpu_ms=20.7548 rounds=12 flips=584947 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16622097 centres_faces_ms=17.4536 cells_ms=4.85199 resorted=0 resort_ms=0 step_ms=38.2085 step_Mcells_s=54.8871 all_ms=43.0605 advect_ms=32.1412 copy_ms=26.2281
+gpuflips: step=4 gpu_ms=20.6275 rounds=11 flips=562464 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16577057 centres_faces_ms=13.4645 cells_ms=4.95804 resorted=0 resort_ms=0 step_ms=34.092 step_Mcells_s=61.5144 all_ms=39.0501 advect_ms=36.1173 copy_ms=27.1406
+gpuflips: step=5 gpu_ms=19.9857 rounds=12 flips=531841 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16524378 centres_faces_ms=13.0985 cells_ms=4.90083 resorted=0 resort_ms=0 step_ms=33.0842 step_Mcells_s=63.3883 all_ms=37.985 advect_ms=32.6149 copy_ms=26.2087
+gpuflips: step=6 gpu_ms=19.1737 rounds=10 flips=497854 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16463340 centres_faces_ms=15.3121 cells_ms=4.91795 resorted=0 resort_ms=0 step_ms=34.4858 step_Mcells_s=60.812 all_ms=39.4038 advect_ms=31.91 copy_ms=25.8833
+gpuflips: step=7 gpu_ms=18.2584 rounds=9 flips=463470 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16397056 centres_faces_ms=12.2534 cells_ms=4.93427 resorted=0 resort_ms=0 step_ms=30.5117 step_Mcells_s=68.7327 all_ms=35.446 advect_ms=34.5687 copy_ms=28.3545
+gpuflips: step=8 gpu_ms=17.7437 rounds=10 flips=427256 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16325986 centres_faces_ms=11.9443 cells_ms=4.94976 resorted=0 resort_ms=0 step_ms=29.688 step_Mcells_s=70.6397 all_ms=34.6378 advect_ms=34.6359 copy_ms=23.7202
+gpuflips: step=9 gpu_ms=17.1779 rounds=10 flips=392135 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16254581 centres_faces_ms=12.017 cells_ms=5.11372 resorted=0 resort_ms=0 step_ms=29.1949 step_Mcells_s=71.8329 all_ms=34.3086 advect_ms=36.4955 copy_ms=27.0464
+gpuflips: step=10 gpu_ms=15.3167 rounds=9 flips=358333 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14739398 faces=16182884 centres_faces_ms=14.3127 cells_ms=5.17078 resorted=0 resort_ms=0 step_ms=29.6294 step_Mcells_s=70.7794 all_ms=34.8002 advect_ms=35.1425 copy_ms=27.4925
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=10.5357 Mcells_s=199.051
+kernel: tet_repair::apply ms_per_step=6.18429 Mcells_s=339.11
+kernel: tet_repair::plan ms_per_step=5.63231 Mcells_s=372.343
+kernel: deep_copy ms_per_step=5.39226 Mcells_s=388.919
+kernel: tet_mesh::append_rings ms_per_step=4.51631 Mcells_s=464.351
+kernel: tet_mesh::dirty_faces ms_per_step=2.99943 Mcells_s=699.183
+kernel: tet_repair::screen ms_per_step=2.86725 Mcells_s=731.417
+kernel: tet_mesh::faces ms_per_step=2.59123 Mcells_s=809.328
+kernel: tet_repair::find ms_per_step=2.50436 Mcells_s=837.4
+kernel: tet_mesh::cell_sums ms_per_step=1.88945 Mcells_s=1109.93
+kernel: tet_mesh::face_numbers ms_per_step=1.18223 Mcells_s=1773.89
+kernel: tet_mesh::compact_rings ms_per_step=1.15231 Mcells_s=1819.96
+kernel: tet_mesh::cell_sort ms_per_step=1.10916 Mcells_s=1890.76
+kernel: tet_mesh::cell_face_fill ms_per_step=1.08466 Mcells_s=1933.47
+kernel: tet_mesh::cell_face_counts ms_per_step=0.642558 Mcells_s=3263.76
+kernel: tet_mesh::circumcentres ms_per_step=0.344305 Mcells_s=6090.96
+kernel: tet_repair::unlist ms_per_step=0.291315 Mcells_s=7198.92
+kernel: voronoi::snap ms_per_step=0.211263 Mcells_s=9926.74
+kernel: tet_mesh::cell_face_start ms_per_step=0.197801 Mcells_s=10602.3
+kernel: tet_repair::release ms_per_step=0.128928 Mcells_s=16266.1
+kernel: tet_mesh::face_touched ms_per_step=0.127609 Mcells_s=16434.2
+kernel: exact_predicates::snap ms_per_step=0.115382 Mcells_s=18175.7
+kernel: tet_mesh::face_ids ms_per_step=0.0926922 Mcells_s=22624.9
+kernel: voronoi::total_volume ms_per_step=0.0923923 Mcells_s=22698.3
+kernel: tet_mesh::face_assign ms_per_step=0.0636396 Mcells_s=32953.6
+kernel: tet_mesh::face_release ms_per_step=0.0606536 Mcells_s=34575.9
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0591496 Mcells_s=35455.1
+kernel: tet_mesh::face_offsets ms_per_step=0.0527944 Mcells_s=39723
+kernel: tet_mesh::ring_entries ms_per_step=0.0372238 Mcells_s=56339
+kernel: tet_repair::retry_stuck ms_per_step=0.0248468 Mcells_s=84403.4
+kernel: tet_mesh::face_move ms_per_step=0.0171086 Mcells_s=122579
+kernel: tet_mesh::face_low ms_per_step=0.0156877 Mcells_s=133682
+kernel: tet_mesh::face_numbered ms_per_step=0.0117146 Mcells_s=179021
+kernel: Kokkos::ViewCopy-1D ms_per_step=0.00975689 Mcells_s=214941
+kernel: Kokkos::View::initialization [tet_repair_free] via memset ms_per_step=0.00824156 Mcells_s=254461
+final_rebuild: build_ms=210.309 resort_ms=0 geometry_ms=12.0143 cells_ms=4.84694 total_ms=227.17 Mcells_s=9.23164
+== rebuild uniform 2097152
+# backend=Cuda n=2097152 distribution=uniform box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=5
+warp: build_ms=1.00766 construct_ms=95.6374 construct_Mcells_s=21.9281 pipeline_Mcells_s=21.6995
+== step uniform 2097152 0.03
+# backend=Cuda n=2097152 distribution=uniform box=1,1,1 displacement=0.03 steps=10
+start: clip_ms=117.898 from_rings_ms=44.8539 start_ms=235.588 extra_vs_clip=0.998244 exact=1 rounds=2 bad_tets=10 patched_cells=129 tets=14192643 tets_checksum=15187384094876653853 per_cell=6.76758 ring_entries_per_cell=58.5371 rings_checksum=16159656153024765942 rings_topology=16959793097513946542
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=255.374 resort_ms=0 geometry_ms=13.1585 cells_ms=5.38816 total_ms=268.533 faces=16289795 faces_per_cell=7.76758 cells_checksum=2765936481889794470
+gpuflips: step=1 gpu_ms=4.56902 rounds=4 flips=25052 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289975 centres_faces_ms=12.3478 cells_ms=3.69864 resorted=0 resort_ms=0 step_ms=16.9168 step_Mcells_s=123.969 all_ms=20.6154 advect_ms=37.5362 copy_ms=29.6327
+gpuflips: step=2 gpu_ms=3.98973 rounds=4 flips=24446 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289899 centres_faces_ms=3.66771 cells_ms=3.4947 resorted=0 resort_ms=0 step_ms=7.65744 step_Mcells_s=273.871 all_ms=11.1521 advect_ms=36.5335 copy_ms=141.646
+gpuflips: step=3 gpu_ms=4.0439 rounds=4 flips=24942 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289665 centres_faces_ms=3.63688 cells_ms=3.49931 resorted=0 resort_ms=0 step_ms=7.68078 step_Mcells_s=273.039 all_ms=11.1801 advect_ms=35.5879 copy_ms=53.661
+gpuflips: step=4 gpu_ms=4.84481 rounds=4 flips=25002 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289679 centres_faces_ms=3.86184 cells_ms=3.63481 resorted=0 resort_ms=0 step_ms=8.70665 step_Mcells_s=240.868 all_ms=12.3415 advect_ms=34.0395 copy_ms=173.333
+gpuflips: step=5 gpu_ms=4.17791 rounds=4 flips=25070 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289445 centres_faces_ms=3.65262 cells_ms=3.51503 resorted=0 resort_ms=0 step_ms=7.83053 step_Mcells_s=267.817 all_ms=11.3456 advect_ms=32.1246 copy_ms=36.9837
+gpuflips: step=6 gpu_ms=4.1601 rounds=4 flips=24932 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289833 centres_faces_ms=3.6414 cells_ms=3.51603 resorted=0 resort_ms=0 step_ms=7.80151 step_Mcells_s=268.814 all_ms=11.3175 advect_ms=33.3042 copy_ms=31.1879
+gpuflips: step=7 gpu_ms=4.34697 rounds=5 flips=24865 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289802 centres_faces_ms=3.69035 cells_ms=3.52226 resorted=0 resort_ms=0 step_ms=8.03732 step_Mcells_s=260.927 all_ms=11.5596 advect_ms=33.7235 copy_ms=30.1288
+gpuflips: step=8 gpu_ms=4.3256 rounds=5 flips=24614 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289790 centres_faces_ms=3.67921 cells_ms=3.53036 resorted=0 resort_ms=0 step_ms=8.00481 step_Mcells_s=261.987 all_ms=11.5352 advect_ms=34.5149 copy_ms=26.5382
+gpuflips: step=9 gpu_ms=4.4017 rounds=5 flips=24782 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289862 centres_faces_ms=3.66948 cells_ms=3.52215 resorted=0 resort_ms=0 step_ms=8.07118 step_Mcells_s=259.832 all_ms=11.5933 advect_ms=31.5272 copy_ms=33.4366
+gpuflips: step=10 gpu_ms=4.4044 rounds=5 flips=25022 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14204827 faces=16289838 centres_faces_ms=3.70715 cells_ms=3.53954 resorted=0 resort_ms=0 step_ms=8.11155 step_Mcells_s=258.539 all_ms=11.6511 advect_ms=31.0626 copy_ms=33.3085
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.9972 Mcells_s=174.804
+kernel: deep_copy ms_per_step=4.93264 Mcells_s=425.158
+kernel: tet_mesh::cell_sums ms_per_step=2.29671 Mcells_s=913.112
+kernel: tet_mesh::faces ms_per_step=2.26598 Mcells_s=925.496
+kernel: tet_repair::screen ms_per_step=1.9541 Mcells_s=1073.21
+kernel: tet_repair::plan ms_per_step=0.595571 Mcells_s=3521.25
+kernel: tet_repair::apply ms_per_step=0.594095 Mcells_s=3529.99
+kernel: tet_mesh::face_touched ms_per_step=0.490751 Mcells_s=4273.35
+kernel: tet_mesh::cell_sort ms_per_step=0.455319 Mcells_s=4605.9
+kernel: tet_repair::find ms_per_step=0.287759 Mcells_s=7287.87
+kernel: tet_mesh::append_rings ms_per_step=0.274478 Mcells_s=7640.52
+kernel: voronoi::snap ms_per_step=0.226743 Mcells_s=9249.02
+kernel: tet_mesh::cell_face_start ms_per_step=0.215392 Mcells_s=9736.44
+kernel: tet_mesh::dirty_faces ms_per_step=0.204665 Mcells_s=10246.7
+kernel: tet_mesh::marked_fill ms_per_step=0.133462 Mcells_s=15713.5
+kernel: exact_predicates::snap ms_per_step=0.118977 Mcells_s=17626.5
+kernel: voronoi::total_volume ms_per_step=0.0889799 Mcells_s=23568.8
+kernel: tet_mesh::marked_counts ms_per_step=0.0824354 Mcells_s=25439.9
+kernel: tet_repair::unlist ms_per_step=0.0782682 Mcells_s=26794.4
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0654614 Mcells_s=32036.4
+kernel: tet_repair::release ms_per_step=0.0517467 Mcells_s=40527.3
+kernel: tet_mesh::face_offsets ms_per_step=0.0501292 Mcells_s=41834.9
+kernel: tet_mesh::circumcentres ms_per_step=0.048153 Mcells_s=43551.8
+kernel: tet_mesh::face_release ms_per_step=0.0383196 Mcells_s=54728
+kernel: tet_mesh::fresh_fill ms_per_step=0.0373841 Mcells_s=56097.4
+kernel: tet_mesh::face_assign ms_per_step=0.0300211 Mcells_s=69855.9
+kernel: tet_mesh::mark_cells ms_per_step=0.0296918 Mcells_s=70630.7
+kernel: tet_mesh::fresh_counts ms_per_step=0.0251182 Mcells_s=83491.3
+kernel: tet_mesh::face_low ms_per_step=0.0236788 Mcells_s=88566.7
+kernel: tet_mesh::face_move ms_per_step=0.0216126 Mcells_s=97034
+kernel: tet_mesh::face_numbered ms_per_step=0.0183308 Mcells_s=114406
+kernel: tet_repair::retry_stuck ms_per_step=0.0166243 Mcells_s=126150
+final_rebuild: build_ms=252.452 resort_ms=0 geometry_ms=12.7672 cells_ms=5.16237 total_ms=270.381 Mcells_s=7.75628
+== step uniform 2097152 0.1
+# backend=Cuda n=2097152 distribution=uniform box=1,1,1 displacement=0.1 steps=10
+start: clip_ms=117.987 from_rings_ms=45.5217 start_ms=235.982 extra_vs_clip=1.00007 exact=1 rounds=2 bad_tets=10 patched_cells=129 tets=14192643 tets_checksum=15187384094876653853 per_cell=6.76758 ring_entries_per_cell=58.5371 rings_checksum=16159656153024765942 rings_topology=16959793097513946542
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=251.414 resort_ms=0 geometry_ms=13.1482 cells_ms=5.3988 total_ms=264.562 faces=16289795 faces_per_cell=7.76758 cells_checksum=2765936481889794470
+gpuflips: step=1 gpu_ms=6.31727 rounds=6 flips=82784 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14229573 faces=16289669 centres_faces_ms=5.16703 cells_ms=4.1341 resorted=0 resort_ms=0 step_ms=11.4843 step_Mcells_s=182.61 all_ms=15.6184 advect_ms=39.293 copy_ms=24.9598
+gpuflips: step=2 gpu_ms=5.78752 rounds=6 flips=83293 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14229798 faces=16289876 centres_faces_ms=4.77462 cells_ms=3.96369 resorted=0 resort_ms=0 step_ms=10.5621 step_Mcells_s=198.554 all_ms=14.5258 advect_ms=36.5203 copy_ms=23.6042
+gpuflips: step=3 gpu_ms=6.46184 rounds=8 flips=82799 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14229830 faces=16289823 centres_faces_ms=4.8381 cells_ms=3.978 resorted=0 resort_ms=0 step_ms=11.2999 step_Mcells_s=185.59 all_ms=15.2779 advect_ms=33.4437 copy_ms=27.4899
+gpuflips: step=4 gpu_ms=6.16327 rounds=7 flips=82834 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14229856 faces=16290101 centres_faces_ms=4.83319 cells_ms=3.98199 resorted=0 resort_ms=0 step_ms=10.9965 step_Mcells_s=190.711 all_ms=14.9785 advect_ms=30.2634 copy_ms=30.7305
+gpuflips: step=5 gpu_ms=6.20348 rounds=7 flips=83543 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14230200 faces=16290076 centres_faces_ms=4.96819 cells_ms=4.00146 resorted=0 resort_ms=0 step_ms=11.1717 step_Mcells_s=187.721 all_ms=15.1731 advect_ms=35.8855 copy_ms=24.2792
+gpuflips: step=6 gpu_ms=6.35321 rounds=7 flips=83461 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14230356 faces=16290459 centres_faces_ms=4.94957 cells_ms=4.01991 resorted=0 resort_ms=0 step_ms=11.3028 step_Mcells_s=185.543 all_ms=15.3227 advect_ms=30.8608 copy_ms=32.229
+gpuflips: step=7 gpu_ms=6.30767 rounds=7 flips=82893 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14230356 faces=16290334 centres_faces_ms=5.04448 cells_ms=4.02941 resorted=0 resort_ms=0 step_ms=11.3521 step_Mcells_s=184.736 all_ms=15.3816 advect_ms=32.9237 copy_ms=25.2937
+gpuflips: step=8 gpu_ms=6.60055 rounds=8 flips=82627 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14230356 faces=16290327 centres_faces_ms=5.02203 cells_ms=4.04617 resorted=0 resort_ms=0 step_ms=11.6226 step_Mcells_s=180.438 all_ms=15.6688 advect_ms=33.4 copy_ms=23.8504
+gpuflips: step=9 gpu_ms=6.20529 rounds=6 flips=83069 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14230356 faces=16290234 centres_faces_ms=5.10665 cells_ms=4.0693 resorted=0 resort_ms=0 step_ms=11.3119 step_Mcells_s=185.393 all_ms=15.3812 advect_ms=35.2987 copy_ms=24.3312
+gpuflips: step=10 gpu_ms=6.25172 rounds=6 flips=83136 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14230424 faces=16290506 centres_faces_ms=5.08302 cells_ms=4.08161 resorted=0 resort_ms=0 step_ms=11.3347 step_Mcells_s=185.02 all_ms=15.4163 advect_ms=31.147 copy_ms=32.5321
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.4252 Mcells_s=183.555
+kernel: deep_copy ms_per_step=4.71972 Mcells_s=444.338
+kernel: tet_mesh::faces ms_per_step=2.40693 Mcells_s=871.298
+kernel: tet_mesh::cell_sums ms_per_step=2.38383 Mcells_s=879.74
+kernel: tet_repair::screen ms_per_step=2.14536 Mcells_s=977.53
+kernel: tet_repair::apply ms_per_step=1.36161 Mcells_s=1540.2
+kernel: tet_repair::plan ms_per_step=1.15737 Mcells_s=1812
+kernel: tet_mesh::append_rings ms_per_step=0.8269 Mcells_s=2536.16
+kernel: tet_mesh::dirty_faces ms_per_step=0.59139 Mcells_s=3546.14
+kernel: tet_repair::find ms_per_step=0.588426 Mcells_s=3564
+kernel: tet_mesh::cell_sort ms_per_step=0.543079 Mcells_s=3861.6
+kernel: tet_mesh::face_touched ms_per_step=0.490015 Mcells_s=4279.77
+kernel: tet_mesh::marked_fill ms_per_step=0.305044 Mcells_s=6874.92
+kernel: tet_mesh::cell_face_start ms_per_step=0.215796 Mcells_s=9718.2
+kernel: voronoi::snap ms_per_step=0.215058 Mcells_s=9751.54
+kernel: tet_mesh::marked_counts ms_per_step=0.120397 Mcells_s=17418.6
+kernel: exact_predicates::snap ms_per_step=0.115816 Mcells_s=18107.7
+kernel: tet_repair::unlist ms_per_step=0.114829 Mcells_s=18263.3
+kernel: tet_mesh::circumcentres ms_per_step=0.100236 Mcells_s=20922.1
+kernel: tet_mesh::fresh_fill ms_per_step=0.0970643 Mcells_s=21605.8
+kernel: tet_mesh::face_release ms_per_step=0.0928949 Mcells_s=22575.5
+kernel: voronoi::total_volume ms_per_step=0.0874501 Mcells_s=23981.1
+kernel: tet_mesh::face_assign ms_per_step=0.0872433 Mcells_s=24038
+kernel: tet_mesh::face_offsets ms_per_step=0.0827463 Mcells_s=25344.3
+kernel: tet_repair::release ms_per_step=0.0721374 Mcells_s=29071.6
+kernel: tet_mesh::mark_cells ms_per_step=0.0627118 Mcells_s=33441.1
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0591871 Mcells_s=35432.6
+kernel: tet_mesh::fresh_counts ms_per_step=0.0430641 Mcells_s=48698.4
+kernel: tet_mesh::face_numbered ms_per_step=0.0316268 Mcells_s=66309.4
+kernel: tet_mesh::face_low ms_per_step=0.0268063 Mcells_s=78233.5
+kernel: tet_mesh::face_move ms_per_step=0.0190613 Mcells_s=110021
+kernel: tet_repair::retry_stuck ms_per_step=0.0163166 Mcells_s=128529
+final_rebuild: build_ms=250.073 resort_ms=0 geometry_ms=12.7475 cells_ms=5.14582 total_ms=267.966 Mcells_s=7.82619
+== step uniform 2097152 0.3
+# backend=Cuda n=2097152 distribution=uniform box=1,1,1 displacement=0.3 steps=10
+start: clip_ms=117.729 from_rings_ms=45.6295 start_ms=235.805 extra_vs_clip=1.00294 exact=1 rounds=2 bad_tets=10 patched_cells=129 tets=14192643 tets_checksum=15187384094876653853 per_cell=6.76758 ring_entries_per_cell=58.5371 rings_checksum=16159656153024765942 rings_topology=16959793097513946542
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=249.687 resort_ms=0 geometry_ms=13.4889 cells_ms=5.42728 total_ms=263.176 faces=16289795 faces_per_cell=7.76758 cells_checksum=2765936481889794470
+gpuflips: step=1 gpu_ms=12.0304 rounds=11 flips=249368 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14283948 faces=16289855 centres_faces_ms=8.97404 cells_ms=4.98736 resorted=0 resort_ms=0 step_ms=21.0044 step_Mcells_s=99.8434 all_ms=25.9918 advect_ms=36.6745 copy_ms=28.5214
+gpuflips: step=2 gpu_ms=10.6864 rounds=10 flips=250174 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14284340 faces=16290431 centres_faces_ms=8.12689 cells_ms=5.0414 resorted=0 resort_ms=0 step_ms=18.8133 step_Mcells_s=111.472 all_ms=23.8547 advect_ms=33.6532 copy_ms=30.171
+gpuflips: step=3 gpu_ms=10.88 rounds=10 flips=249082 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14284340 faces=16290167 centres_faces_ms=8.26937 cells_ms=5.08338 resorted=0 resort_ms=0 step_ms=19.1494 step_Mcells_s=109.515 all_ms=24.2328 advect_ms=36.4155 copy_ms=25.2388
+gpuflips: step=4 gpu_ms=11.4967 rounds=12 flips=249210 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14284340 faces=16290175 centres_faces_ms=8.27396 cells_ms=5.10588 resorted=0 resort_ms=0 step_ms=19.7707 step_Mcells_s=106.074 all_ms=24.8766 advect_ms=35.3878 copy_ms=34.0264
+gpuflips: step=5 gpu_ms=11.4571 rounds=11 flips=248957 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14284340 faces=16290550 centres_faces_ms=8.44556 cells_ms=5.14584 resorted=0 resort_ms=0 step_ms=19.9026 step_Mcells_s=105.371 all_ms=25.0485 advect_ms=30.9119 copy_ms=27.347
+gpuflips: step=6 gpu_ms=12.0917 rounds=14 flips=249443 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14284611 faces=16290839 centres_faces_ms=12.4817 cells_ms=5.20916 resorted=0 resort_ms=0 step_ms=24.5735 step_Mcells_s=85.3422 all_ms=29.7826 advect_ms=33.8405 copy_ms=26.2642
+gpuflips: step=7 gpu_ms=11.65 rounds=10 flips=250232 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14285070 faces=16290447 centres_faces_ms=8.54553 cells_ms=5.2405 resorted=0 resort_ms=0 step_ms=20.1956 step_Mcells_s=103.842 all_ms=25.436 advect_ms=35.3469 copy_ms=28.4363
+gpuflips: step=8 gpu_ms=11.4074 rounds=9 flips=249628 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14285070 faces=16290331 centres_faces_ms=8.66525 cells_ms=5.28495 resorted=0 resort_ms=0 step_ms=20.0727 step_Mcells_s=104.478 all_ms=25.3576 advect_ms=34.892 copy_ms=26.2784
+gpuflips: step=9 gpu_ms=11.7102 rounds=10 flips=249319 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14285070 faces=16289940 centres_faces_ms=8.85958 cells_ms=5.34508 resorted=0 resort_ms=0 step_ms=20.5697 step_Mcells_s=101.953 all_ms=25.9148 advect_ms=35.7654 copy_ms=28.6736
+gpuflips: step=10 gpu_ms=11.8549 rounds=10 flips=249425 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14285070 faces=16289845 centres_faces_ms=9.01422 cells_ms=5.41744 resorted=0 resort_ms=0 step_ms=20.8691 step_Mcells_s=100.491 all_ms=26.2866 advect_ms=34.3502 copy_ms=27.9129
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=12.1307 Mcells_s=172.88
+kernel: deep_copy ms_per_step=5.00149 Mcells_s=419.305
+kernel: tet_repair::apply ms_per_step=3.32355 Mcells_s=630.997
+kernel: tet_repair::plan ms_per_step=2.95767 Mcells_s=709.055
+kernel: tet_mesh::faces ms_per_step=2.6018 Mcells_s=806.038
+kernel: tet_mesh::append_rings ms_per_step=2.49885 Mcells_s=839.248
+kernel: tet_repair::screen ms_per_step=2.49449 Mcells_s=840.714
+kernel: tet_mesh::cell_sums ms_per_step=2.03817 Mcells_s=1028.94
+kernel: tet_mesh::dirty_faces ms_per_step=1.77061 Mcells_s=1184.43
+kernel: tet_repair::find ms_per_step=1.41413 Mcells_s=1482.99
+kernel: tet_mesh::cell_face_fill ms_per_step=1.13233 Mcells_s=1852.07
+kernel: tet_mesh::cell_sort ms_per_step=1.11074 Mcells_s=1888.06
+kernel: tet_mesh::cell_face_counts ms_per_step=0.699387 Mcells_s=2998.56
+kernel: tet_mesh::face_touched ms_per_step=0.496944 Mcells_s=4220.1
+kernel: tet_mesh::compact_rings ms_per_step=0.47567 Mcells_s=4408.84
+kernel: tet_mesh::face_assign ms_per_step=0.229068 Mcells_s=9155.17
+kernel: voronoi::snap ms_per_step=0.2141 Mcells_s=9795.18
+kernel: tet_repair::unlist ms_per_step=0.207928 Mcells_s=10085.9
+kernel: tet_mesh::face_release ms_per_step=0.204576 Mcells_s=10251.2
+kernel: tet_mesh::circumcentres ms_per_step=0.20214 Mcells_s=10374.8
+kernel: tet_mesh::cell_face_start ms_per_step=0.197216 Mcells_s=10633.8
+kernel: tet_mesh::face_offsets ms_per_step=0.15463 Mcells_s=13562.4
+kernel: exact_predicates::snap ms_per_step=0.116295 Mcells_s=18033.1
+kernel: tet_repair::release ms_per_step=0.113394 Mcells_s=18494.5
+kernel: voronoi::total_volume ms_per_step=0.086965 Mcells_s=24114.9
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0594511 Mcells_s=35275.2
+kernel: tet_mesh::face_numbered ms_per_step=0.0404077 Mcells_s=51899.9
+kernel: tet_mesh::face_low ms_per_step=0.0393151 Mcells_s=53342.1
+kernel: tet_mesh::face_move ms_per_step=0.0251162 Mcells_s=83497.9
+kernel: tet_repair::retry_stuck ms_per_step=0.018326 Mcells_s=114436
+kernel: tet_mesh::ring_entries ms_per_step=0.0107653 Mcells_s=194806
+final_rebuild: build_ms=246.627 resort_ms=0 geometry_ms=12.76 cells_ms=5.20183 total_ms=264.589 Mcells_s=7.92607
+== rebuild clustered 2097152
+# backend=Cuda n=2097152 distribution=clustered box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=5
+warp: build_ms=1.05046 construct_ms=123.23 construct_Mcells_s=17.0182 pipeline_Mcells_s=16.8744
+== step clustered 2097152 0.03
+# backend=Cuda n=2097152 distribution=clustered box=1,1,1 displacement=0.03 steps=10
+start: clip_ms=138.215 from_rings_ms=45.8297 start_ms=267.965 extra_vs_clip=0.938752 exact=1 rounds=2 bad_tets=8 patched_cells=134 tets=14188653 tets_checksum=5564097838225550365 per_cell=6.76568 ring_entries_per_cell=58.3252 rings_checksum=15137923545175694958 rings_topology=6368642431555391836
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=277.374 resort_ms=0 geometry_ms=13.2956 cells_ms=5.83091 total_ms=290.67 faces=16285805 faces_per_cell=7.76568 cells_checksum=1820455477084611387
+gpuflips: step=1 gpu_ms=4.51251 rounds=4 flips=23048 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285777 centres_faces_ms=4.00253 cells_ms=3.65661 resorted=0 resort_ms=0 step_ms=8.51505 step_Mcells_s=246.288 all_ms=12.1717 advect_ms=36.589 copy_ms=30.5859
+gpuflips: step=2 gpu_ms=3.96634 rounds=4 flips=22735 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285542 centres_faces_ms=3.53071 cells_ms=3.46644 resorted=0 resort_ms=0 step_ms=7.49705 step_Mcells_s=279.73 all_ms=10.9635 advect_ms=35.9119 copy_ms=23.2586
+gpuflips: step=3 gpu_ms=4.05121 rounds=4 flips=23117 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285413 centres_faces_ms=3.55406 cells_ms=3.47502 resorted=0 resort_ms=0 step_ms=7.60527 step_Mcells_s=275.75 all_ms=11.0803 advect_ms=39.4619 copy_ms=24.3589
+gpuflips: step=4 gpu_ms=4.03957 rounds=4 flips=22685 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285286 centres_faces_ms=3.55348 cells_ms=3.47079 resorted=0 resort_ms=0 step_ms=7.59305 step_Mcells_s=276.194 all_ms=11.0638 advect_ms=32.5629 copy_ms=28.1622
+gpuflips: step=5 gpu_ms=3.98068 rounds=4 flips=23041 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285161 centres_faces_ms=3.57636 cells_ms=3.4742 resorted=0 resort_ms=0 step_ms=7.55704 step_Mcells_s=277.51 all_ms=11.0312 advect_ms=36.7037 copy_ms=25.8542
+gpuflips: step=6 gpu_ms=4.25705 rounds=5 flips=22859 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285212 centres_faces_ms=3.55133 cells_ms=3.4817 resorted=0 resort_ms=0 step_ms=7.80838 step_Mcells_s=268.577 all_ms=11.2901 advect_ms=34.3862 copy_ms=27.8827
+gpuflips: step=7 gpu_ms=4.11318 rounds=4 flips=22600 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285336 centres_faces_ms=3.55824 cells_ms=3.47933 resorted=0 resort_ms=0 step_ms=7.67142 step_Mcells_s=273.372 all_ms=11.1507 advect_ms=32.6071 copy_ms=27.7195
+gpuflips: step=8 gpu_ms=4.70929 rounds=7 flips=22689 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285443 centres_faces_ms=3.57378 cells_ms=3.48854 resorted=0 resort_ms=0 step_ms=8.28307 step_Mcells_s=253.185 all_ms=11.7716 advect_ms=35.3722 copy_ms=23.5405
+gpuflips: step=9 gpu_ms=4.12567 rounds=4 flips=22799 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16285370 centres_faces_ms=3.63171 cells_ms=3.49178 resorted=0 resort_ms=0 step_ms=7.75738 step_Mcells_s=270.343 all_ms=11.2492 advect_ms=33.259 copy_ms=42.7238
+gpuflips: step=10 gpu_ms=4.12483 rounds=4 flips=22862 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14199828 faces=16284992 centres_faces_ms=3.63814 cells_ms=3.49714 resorted=0 resort_ms=0 step_ms=7.76297 step_Mcells_s=270.148 all_ms=11.2601 advect_ms=30.9692 copy_ms=25.7013
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.0326 Mcells_s=190.087
+kernel: deep_copy ms_per_step=4.92324 Mcells_s=425.97
+kernel: tet_mesh::cell_sums ms_per_step=2.28054 Mcells_s=919.587
+kernel: tet_mesh::faces ms_per_step=2.25457 Mcells_s=930.178
+kernel: tet_repair::screen ms_per_step=1.94264 Mcells_s=1079.54
+kernel: tet_repair::plan ms_per_step=0.572616 Mcells_s=3662.4
+kernel: tet_repair::apply ms_per_step=0.557425 Mcells_s=3762.22
+kernel: tet_mesh::face_touched ms_per_step=0.488733 Mcells_s=4291
+kernel: tet_mesh::cell_sort ms_per_step=0.45019 Mcells_s=4658.37
+kernel: tet_repair::find ms_per_step=0.276666 Mcells_s=7580.09
+kernel: tet_mesh::append_rings ms_per_step=0.229734 Mcells_s=9128.61
+kernel: tet_mesh::cell_face_start ms_per_step=0.214222 Mcells_s=9789.6
+kernel: voronoi::snap ms_per_step=0.211885 Mcells_s=9897.61
+kernel: tet_mesh::dirty_faces ms_per_step=0.190792 Mcells_s=10991.8
+kernel: tet_mesh::marked_fill ms_per_step=0.126057 Mcells_s=16636.5
+kernel: exact_predicates::snap ms_per_step=0.114945 Mcells_s=18244.8
+kernel: voronoi::total_volume ms_per_step=0.087939 Mcells_s=23847.8
+kernel: tet_mesh::marked_counts ms_per_step=0.0789911 Mcells_s=26549.2
+kernel: tet_repair::unlist ms_per_step=0.0724893 Mcells_s=28930.5
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0583144 Mcells_s=35962.8
+kernel: tet_repair::release ms_per_step=0.0491239 Mcells_s=42691.1
+kernel: tet_mesh::circumcentres ms_per_step=0.048484 Mcells_s=43254.5
+kernel: tet_mesh::face_offsets ms_per_step=0.0432954 Mcells_s=48438.2
+kernel: tet_mesh::face_release ms_per_step=0.0348292 Mcells_s=60212.4
+kernel: tet_mesh::fresh_fill ms_per_step=0.033405 Mcells_s=62779.6
+kernel: tet_mesh::mark_cells ms_per_step=0.0274293 Mcells_s=76456.5
+kernel: tet_mesh::face_assign ms_per_step=0.0270548 Mcells_s=77515
+kernel: tet_mesh::fresh_counts ms_per_step=0.0227776 Mcells_s=92071
+kernel: tet_mesh::face_low ms_per_step=0.0225201 Mcells_s=93123.5
+kernel: tet_mesh::face_numbered ms_per_step=0.0170276 Mcells_s=123162
+kernel: tet_mesh::face_move ms_per_step=0.0165342 Mcells_s=126837
+kernel: tet_repair::retry_stuck ms_per_step=0.0154244 Mcells_s=135963
+final_rebuild: build_ms=275.042 resort_ms=0 geometry_ms=12.8035 cells_ms=5.12966 total_ms=292.975 Mcells_s=7.15812
+== step clustered 2097152 0.1
+# backend=Cuda n=2097152 distribution=clustered box=1,1,1 displacement=0.1 steps=10
+start: clip_ms=137.882 from_rings_ms=45.9669 start_ms=264.445 extra_vs_clip=0.917907 exact=1 rounds=2 bad_tets=8 patched_cells=134 tets=14188653 tets_checksum=5564097838225550365 per_cell=6.76568 ring_entries_per_cell=58.3252 rings_checksum=15137923545175694958 rings_topology=6368642431555391836
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=276.48 resort_ms=0 geometry_ms=13.4656 cells_ms=5.59314 total_ms=289.945 faces=16285805 faces_per_cell=7.76568 cells_checksum=1820455477084611387
+gpuflips: step=1 gpu_ms=6.32262 rounds=7 flips=76524 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16285277 centres_faces_ms=5.13426 cells_ms=4.08167 resorted=0 resort_ms=0 step_ms=11.4569 step_Mcells_s=183.047 all_ms=15.5386 advect_ms=37.9065 copy_ms=28.4307
+gpuflips: step=2 gpu_ms=6.03762 rounds=8 flips=76096 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16285281 centres_faces_ms=4.63624 cells_ms=3.89658 resorted=0 resort_ms=0 step_ms=10.6739 step_Mcells_s=196.476 all_ms=14.5704 advect_ms=32.2462 copy_ms=33.7363
+gpuflips: step=3 gpu_ms=6.10213 rounds=8 flips=75937 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16284974 centres_faces_ms=4.71632 cells_ms=3.90953 resorted=0 resort_ms=0 step_ms=10.8184 step_Mcells_s=193.85 all_ms=14.728 advect_ms=32.9573 copy_ms=25.2172
+gpuflips: step=4 gpu_ms=6.00454 rounds=7 flips=76801 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16285021 centres_faces_ms=4.71953 cells_ms=3.92821 resorted=0 resort_ms=0 step_ms=10.7241 step_Mcells_s=195.556 all_ms=14.6523 advect_ms=25.861 copy_ms=24.5593
+gpuflips: step=5 gpu_ms=5.68071 rounds=5 flips=76322 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16284851 centres_faces_ms=4.82688 cells_ms=3.93199 resorted=0 resort_ms=0 step_ms=10.5076 step_Mcells_s=199.584 all_ms=14.4396 advect_ms=35.9585 copy_ms=32.3807
+gpuflips: step=6 gpu_ms=5.95074 rounds=6 flips=75997 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16284784 centres_faces_ms=4.83515 cells_ms=3.94645 resorted=0 resort_ms=0 step_ms=10.7859 step_Mcells_s=194.435 all_ms=14.7323 advect_ms=37.1279 copy_ms=26.0589
+gpuflips: step=7 gpu_ms=6.18476 rounds=7 flips=76219 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16284881 centres_faces_ms=4.81657 cells_ms=3.96282 resorted=0 resort_ms=0 step_ms=11.0013 step_Mcells_s=190.627 all_ms=14.9641 advect_ms=32.4476 copy_ms=29.888
+gpuflips: step=8 gpu_ms=6.26411 rounds=7 flips=76625 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16284772 centres_faces_ms=4.89666 cells_ms=3.97437 resorted=0 resort_ms=0 step_ms=11.1608 step_Mcells_s=187.904 all_ms=15.1351 advect_ms=31.8784 copy_ms=28.8534
+gpuflips: step=9 gpu_ms=6.30172 rounds=7 flips=75834 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16284430 centres_faces_ms=4.90454 cells_ms=3.9856 resorted=0 resort_ms=0 step_ms=11.2063 step_Mcells_s=187.141 all_ms=15.1919 advect_ms=28.9802 copy_ms=21.5752
+gpuflips: step=10 gpu_ms=6.27281 rounds=6 flips=75816 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14222929 faces=16284376 centres_faces_ms=4.96897 cells_ms=4.02562 resorted=0 resort_ms=0 step_ms=11.2418 step_Mcells_s=186.55 all_ms=15.2674 advect_ms=32.0911 copy_ms=28.0485
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.2728 Mcells_s=186.036
+kernel: deep_copy ms_per_step=4.81798 Mcells_s=435.276
+kernel: tet_mesh::faces ms_per_step=2.38427 Mcells_s=879.578
+kernel: tet_mesh::cell_sums ms_per_step=2.35897 Mcells_s=889.01
+kernel: tet_repair::screen ms_per_step=2.12468 Mcells_s=987.045
+kernel: tet_repair::apply ms_per_step=1.2946 Mcells_s=1619.93
+kernel: tet_repair::plan ms_per_step=1.13163 Mcells_s=1853.21
+kernel: tet_mesh::append_rings ms_per_step=0.766873 Mcells_s=2734.68
+kernel: tet_repair::find ms_per_step=0.567451 Mcells_s=3695.74
+kernel: tet_mesh::dirty_faces ms_per_step=0.560257 Mcells_s=3743.19
+kernel: tet_mesh::cell_sort ms_per_step=0.531366 Mcells_s=3946.72
+kernel: tet_mesh::face_touched ms_per_step=0.48789 Mcells_s=4298.41
+kernel: tet_mesh::marked_fill ms_per_step=0.286505 Mcells_s=7319.77
+kernel: tet_mesh::cell_face_start ms_per_step=0.215664 Mcells_s=9724.18
+kernel: voronoi::snap ms_per_step=0.212242 Mcells_s=9880.97
+kernel: tet_mesh::marked_counts ms_per_step=0.117703 Mcells_s=17817.4
+kernel: exact_predicates::snap ms_per_step=0.116645 Mcells_s=17978.9
+kernel: tet_repair::unlist ms_per_step=0.110679 Mcells_s=18948.1
+kernel: tet_mesh::fresh_fill ms_per_step=0.0904844 Mcells_s=23176.9
+kernel: voronoi::total_volume ms_per_step=0.0874916 Mcells_s=23969.8
+kernel: tet_mesh::face_release ms_per_step=0.0872124 Mcells_s=24046.5
+kernel: tet_mesh::circumcentres ms_per_step=0.0836656 Mcells_s=25065.9
+kernel: tet_mesh::face_assign ms_per_step=0.081515 Mcells_s=25727.2
+kernel: tet_mesh::face_offsets ms_per_step=0.0762611 Mcells_s=27499.6
+kernel: tet_repair::release ms_per_step=0.0728547 Mcells_s=28785.4
+kernel: tet_mesh::mark_cells ms_per_step=0.0596902 Mcells_s=35133.9
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0577691 Mcells_s=36302.3
+kernel: tet_mesh::fresh_counts ms_per_step=0.0410638 Mcells_s=51070.6
+kernel: tet_mesh::face_numbered ms_per_step=0.0273419 Mcells_s=76701.1
+kernel: tet_mesh::face_low ms_per_step=0.0255763 Mcells_s=81995.8
+kernel: tet_mesh::face_move ms_per_step=0.0199131 Mcells_s=105315
+kernel: tet_repair::retry_stuck ms_per_step=0.0167633 Mcells_s=125104
+final_rebuild: build_ms=859.502 resort_ms=0 geometry_ms=12.751 cells_ms=5.14864 total_ms=877.401 Mcells_s=2.39019
+== step clustered 2097152 0.3
+# backend=Cuda n=2097152 distribution=clustered box=1,1,1 displacement=0.3 steps=10
+start: clip_ms=138.169 from_rings_ms=46.4471 start_ms=263.942 extra_vs_clip=0.910284 exact=1 rounds=2 bad_tets=8 patched_cells=134 tets=14188653 tets_checksum=5564097838225550365 per_cell=6.76568 ring_entries_per_cell=58.3252 rings_checksum=15137923545175694958 rings_topology=6368642431555391836
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=277.942 resort_ms=0 geometry_ms=13.1532 cells_ms=5.38316 total_ms=291.096 faces=16285805 faces_per_cell=7.76568 cells_checksum=1820455477084611387
+gpuflips: step=1 gpu_ms=10.8585 rounds=11 flips=229022 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16284977 centres_faces_ms=7.82383 cells_ms=4.95646 resorted=0 resort_ms=0 step_ms=18.6823 step_Mcells_s=112.253 all_ms=23.6388 advect_ms=37.8159 copy_ms=25.3533
+gpuflips: step=2 gpu_ms=10.6431 rounds=10 flips=229593 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16284692 centres_faces_ms=7.61237 cells_ms=5.00182 resorted=0 resort_ms=0 step_ms=18.2554 step_Mcells_s=114.878 all_ms=23.2572 advect_ms=33.2619 copy_ms=23.5499
+gpuflips: step=3 gpu_ms=10.1314 rounds=9 flips=229160 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16284360 centres_faces_ms=7.81426 cells_ms=5.04918 resorted=0 resort_ms=0 step_ms=17.9457 step_Mcells_s=116.861 all_ms=22.9949 advect_ms=33.141 copy_ms=26.8153
+gpuflips: step=4 gpu_ms=10.6804 rounds=11 flips=228638 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16284016 centres_faces_ms=7.85324 cells_ms=5.10026 resorted=0 resort_ms=0 step_ms=18.5337 step_Mcells_s=113.154 all_ms=23.634 advect_ms=35.3137 copy_ms=31.5161
+gpuflips: step=5 gpu_ms=10.4681 rounds=9 flips=228996 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16283516 centres_faces_ms=8.04482 cells_ms=5.14376 resorted=0 resort_ms=0 step_ms=18.513 step_Mcells_s=113.28 all_ms=23.6567 advect_ms=35.3276 copy_ms=145.753
+gpuflips: step=6 gpu_ms=10.8441 rounds=10 flips=228039 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16283127 centres_faces_ms=11.2686 cells_ms=5.16275 resorted=0 resort_ms=0 step_ms=22.1127 step_Mcells_s=94.8393 all_ms=27.2755 advect_ms=35.0007 copy_ms=28.7441
+gpuflips: step=7 gpu_ms=11.3959 rounds=13 flips=228233 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16283654 centres_faces_ms=7.99481 cells_ms=5.20292 resorted=0 resort_ms=0 step_ms=19.3907 step_Mcells_s=108.152 all_ms=24.5936 advect_ms=36.5973 copy_ms=26.31
+gpuflips: step=8 gpu_ms=10.964 rounds=10 flips=228109 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16283325 centres_faces_ms=8.13437 cells_ms=5.29251 resorted=0 resort_ms=0 step_ms=19.0983 step_Mcells_s=109.808 all_ms=24.3909 advect_ms=36.274 copy_ms=26.7681
+gpuflips: step=9 gpu_ms=11.6649 rounds=11 flips=227794 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16282813 centres_faces_ms=8.47639 cells_ms=5.30383 resorted=0 resort_ms=0 step_ms=20.1413 step_Mcells_s=104.122 all_ms=25.4451 advect_ms=33.6155 copy_ms=32.5745
+gpuflips: step=10 gpu_ms=11.0856 rounds=10 flips=226801 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14274148 faces=16282540 centres_faces_ms=8.46682 cells_ms=5.33317 resorted=0 resort_ms=0 step_ms=19.5525 step_Mcells_s=107.258 all_ms=24.8856 advect_ms=34.4464 copy_ms=30.114
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=12.1759 Mcells_s=172.238
+kernel: deep_copy ms_per_step=4.76994 Mcells_s=439.66
+kernel: tet_repair::apply ms_per_step=3.04805 Mcells_s=688.031
+kernel: tet_repair::plan ms_per_step=2.74392 Mcells_s=764.292
+kernel: tet_mesh::faces ms_per_step=2.55957 Mcells_s=819.337
+kernel: tet_repair::screen ms_per_step=2.45097 Mcells_s=855.643
+kernel: tet_mesh::append_rings ms_per_step=2.28259 Mcells_s=918.761
+kernel: tet_mesh::cell_sums ms_per_step=2.01498 Mcells_s=1040.78
+kernel: tet_mesh::dirty_faces ms_per_step=1.60384 Mcells_s=1307.58
+kernel: tet_repair::find ms_per_step=1.32423 Mcells_s=1583.68
+kernel: tet_mesh::cell_face_fill ms_per_step=1.12423 Mcells_s=1865.41
+kernel: tet_mesh::cell_sort ms_per_step=1.10751 Mcells_s=1893.58
+kernel: tet_mesh::cell_face_counts ms_per_step=0.702116 Mcells_s=2986.9
+kernel: tet_mesh::face_touched ms_per_step=0.494671 Mcells_s=4239.49
+kernel: tet_mesh::compact_rings ms_per_step=0.380859 Mcells_s=5506.38
+kernel: tet_mesh::face_assign ms_per_step=0.215536 Mcells_s=9729.94
+kernel: voronoi::snap ms_per_step=0.213318 Mcells_s=9831.12
+kernel: tet_repair::unlist ms_per_step=0.204802 Mcells_s=10239.9
+kernel: tet_mesh::cell_face_start ms_per_step=0.197174 Mcells_s=10636.1
+kernel: tet_mesh::circumcentres ms_per_step=0.19499 Mcells_s=10755.2
+kernel: tet_mesh::face_release ms_per_step=0.193194 Mcells_s=10855.1
+kernel: tet_mesh::face_offsets ms_per_step=0.148748 Mcells_s=14098.7
+kernel: tet_repair::release ms_per_step=0.118059 Mcells_s=17763.6
+kernel: exact_predicates::snap ms_per_step=0.114664 Mcells_s=18289.6
+kernel: voronoi::total_volume ms_per_step=0.0876257 Mcells_s=23933.1
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0592952 Mcells_s=35368
+kernel: tet_mesh::face_numbered ms_per_step=0.0396224 Mcells_s=52928.4
+kernel: tet_mesh::face_low ms_per_step=0.0394434 Mcells_s=53168.6
+kernel: tet_mesh::face_move ms_per_step=0.029474 Mcells_s=71152.6
+kernel: tet_repair::retry_stuck ms_per_step=0.0190944 Mcells_s=109830
+kernel: tet_mesh::ring_entries ms_per_step=0.0108164 Mcells_s=193886
+final_rebuild: build_ms=216.028 resort_ms=0 geometry_ms=12.8434 cells_ms=5.13601 total_ms=234.007 Mcells_s=8.9619
+== rebuild halo 2097152
+# backend=Cuda n=2097152 distribution=halo box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=5
+warp: build_ms=1.05677 construct_ms=135.196 construct_Mcells_s=15.512 pipeline_Mcells_s=15.3916
+== step halo 2097152 0.03
+# backend=Cuda n=2097152 distribution=halo box=1,1,1 displacement=0.03 steps=10
+start: clip_ms=150.22 from_rings_ms=48.1342 start_ms=203.189 extra_vs_clip=0.352612 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14180474 tets_checksum=752029910958384503 per_cell=6.76178 ring_entries_per_cell=59.125 rings_checksum=17883358698937515552 rings_topology=7951306052149369673
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=219.511 resort_ms=0 geometry_ms=13.1778 cells_ms=5.474 total_ms=232.689 faces=16277626 faces_per_cell=7.76178 cells_checksum=3032620572523510991
+gpuflips: step=1 gpu_ms=4.72234 rounds=5 flips=24678 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192419 faces=16277758 centres_faces_ms=3.84024 cells_ms=3.68131 resorted=0 resort_ms=0 step_ms=8.56258 step_Mcells_s=244.921 all_ms=12.2439 advect_ms=33.6578 copy_ms=24.3251
+gpuflips: step=2 gpu_ms=4.40148 rounds=6 flips=24685 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16277769 centres_faces_ms=3.57687 cells_ms=3.49635 resorted=0 resort_ms=0 step_ms=7.97835 step_Mcells_s=262.855 all_ms=11.4747 advect_ms=38.5218 copy_ms=29.2569
+gpuflips: step=3 gpu_ms=4.07925 rounds=4 flips=24375 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16277578 centres_faces_ms=3.69318 cells_ms=3.48176 resorted=0 resort_ms=0 step_ms=7.77243 step_Mcells_s=269.819 all_ms=11.2542 advect_ms=33.5224 copy_ms=30.3333
+gpuflips: step=4 gpu_ms=4.07832 rounds=4 flips=24647 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16277825 centres_faces_ms=3.60573 cells_ms=3.48928 resorted=0 resort_ms=0 step_ms=7.68405 step_Mcells_s=272.923 all_ms=11.1733 advect_ms=30.0194 copy_ms=30.4215
+gpuflips: step=5 gpu_ms=4.09354 rounds=4 flips=24630 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16277713 centres_faces_ms=3.65463 cells_ms=3.4993 resorted=0 resort_ms=0 step_ms=7.74817 step_Mcells_s=270.664 all_ms=11.2475 advect_ms=34.1604 copy_ms=23.3874
+gpuflips: step=6 gpu_ms=4.82599 rounds=4 flips=24522 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16277355 centres_faces_ms=3.93747 cells_ms=3.49862 resorted=0 resort_ms=0 step_ms=8.76346 step_Mcells_s=239.306 all_ms=12.2621 advect_ms=33.8079 copy_ms=29.5846
+gpuflips: step=7 gpu_ms=4.2566 rounds=4 flips=24599 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16277236 centres_faces_ms=3.66801 cells_ms=3.50423 resorted=0 resort_ms=0 step_ms=7.92461 step_Mcells_s=264.638 all_ms=11.4288 advect_ms=31.3839 copy_ms=27.965
+gpuflips: step=8 gpu_ms=4.36609 rounds=5 flips=24472 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16276986 centres_faces_ms=3.67887 cells_ms=3.50509 resorted=0 resort_ms=0 step_ms=8.04495 step_Mcells_s=260.679 all_ms=11.55 advect_ms=37.1063 copy_ms=27.1981
+gpuflips: step=9 gpu_ms=4.37338 rounds=5 flips=24524 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16276952 centres_faces_ms=3.66929 cells_ms=3.508 resorted=0 resort_ms=0 step_ms=8.04267 step_Mcells_s=260.753 all_ms=11.5507 advect_ms=35.1437 copy_ms=23.1913
+gpuflips: step=10 gpu_ms=4.1937 rounds=4 flips=24633 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14192524 faces=16276759 centres_faces_ms=3.69506 cells_ms=3.51256 resorted=0 resort_ms=0 step_ms=7.88876 step_Mcells_s=265.84 all_ms=11.4013 advect_ms=32.592 copy_ms=26.6648
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.712 Mcells_s=179.06
+kernel: deep_copy ms_per_step=4.90119 Mcells_s=427.886
+kernel: tet_mesh::cell_sums ms_per_step=2.28312 Mcells_s=918.547
+kernel: tet_mesh::faces ms_per_step=2.25812 Mcells_s=928.714
+kernel: tet_repair::screen ms_per_step=1.95903 Mcells_s=1070.5
+kernel: tet_repair::plan ms_per_step=0.58196 Mcells_s=3603.6
+kernel: tet_repair::apply ms_per_step=0.578075 Mcells_s=3627.82
+kernel: tet_mesh::face_touched ms_per_step=0.489217 Mcells_s=4286.76
+kernel: tet_mesh::cell_sort ms_per_step=0.452217 Mcells_s=4637.49
+kernel: tet_repair::find ms_per_step=0.286338 Mcells_s=7324.04
+kernel: tet_mesh::append_rings ms_per_step=0.270769 Mcells_s=7745.18
+kernel: voronoi::snap ms_per_step=0.219518 Mcells_s=9553.44
+kernel: tet_mesh::cell_face_start ms_per_step=0.214703 Mcells_s=9767.71
+kernel: tet_mesh::dirty_faces ms_per_step=0.204867 Mcells_s=10236.6
+kernel: tet_mesh::marked_fill ms_per_step=0.130505 Mcells_s=16069.5
+kernel: exact_predicates::snap ms_per_step=0.119456 Mcells_s=17555.9
+kernel: voronoi::total_volume ms_per_step=0.0883702 Mcells_s=23731.4
+kernel: tet_mesh::marked_counts ms_per_step=0.0811707 Mcells_s=25836.3
+kernel: tet_repair::unlist ms_per_step=0.0782447 Mcells_s=26802.5
+kernel: tet_mesh::circumcentres ms_per_step=0.0619549 Mcells_s=33849.7
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0605742 Mcells_s=34621.2
+kernel: tet_repair::release ms_per_step=0.0509043 Mcells_s=41197.9
+kernel: tet_mesh::face_offsets ms_per_step=0.0506218 Mcells_s=41427.9
+kernel: tet_mesh::face_assign ms_per_step=0.0393969 Mcells_s=53231.4
+kernel: tet_mesh::face_release ms_per_step=0.0382553 Mcells_s=54819.9
+kernel: tet_mesh::fresh_fill ms_per_step=0.0358147 Mcells_s=58555.7
+kernel: tet_mesh::mark_cells ms_per_step=0.0286903 Mcells_s=73096.1
+kernel: tet_mesh::face_move ms_per_step=0.0262979 Mcells_s=79746
+kernel: tet_mesh::fresh_counts ms_per_step=0.0239134 Mcells_s=87697.6
+kernel: tet_mesh::face_low ms_per_step=0.0232413 Mcells_s=90233.7
+kernel: tet_mesh::face_numbered ms_per_step=0.018427 Mcells_s=113809
+kernel: tet_repair::retry_stuck ms_per_step=0.0166579 Mcells_s=125895
+final_rebuild: build_ms=300.098 resort_ms=0 geometry_ms=12.7853 cells_ms=5.12471 total_ms=318.008 Mcells_s=6.59464
+== step halo 2097152 0.1
+# backend=Cuda n=2097152 distribution=halo box=1,1,1 displacement=0.1 steps=10
+start: clip_ms=150.663 from_rings_ms=47.6937 start_ms=203.582 extra_vs_clip=0.351244 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14180474 tets_checksum=752029910958384503 per_cell=6.76178 ring_entries_per_cell=59.125 rings_checksum=17883358698937515552 rings_topology=7951306052149369673
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=218.769 resort_ms=0 geometry_ms=13.1722 cells_ms=5.47623 total_ms=231.942 faces=16277626 faces_per_cell=7.76178 cells_checksum=3032620572523510991
+gpuflips: step=1 gpu_ms=6.42222 rounds=7 flips=81889 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217014 faces=16277631 centres_faces_ms=4.95064 cells_ms=4.11616 resorted=0 resort_ms=0 step_ms=11.3728 step_Mcells_s=184.4 all_ms=15.489 advect_ms=32.5708 copy_ms=25.9778
+gpuflips: step=2 gpu_ms=6.22311 rounds=8 flips=82116 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16277259 centres_faces_ms=4.85424 cells_ms=3.95345 resorted=0 resort_ms=0 step_ms=11.0773 step_Mcells_s=189.319 all_ms=15.0308 advect_ms=35.0314 copy_ms=24.7011
+gpuflips: step=3 gpu_ms=5.98111 rounds=6 flips=81864 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276815 centres_faces_ms=4.82919 cells_ms=3.96734 resorted=0 resort_ms=0 step_ms=10.8103 step_Mcells_s=193.996 all_ms=14.7776 advect_ms=29.0199 copy_ms=30.154
+gpuflips: step=4 gpu_ms=5.91082 rounds=6 flips=81716 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276611 centres_faces_ms=4.8565 cells_ms=3.96385 resorted=0 resort_ms=0 step_ms=10.7673 step_Mcells_s=194.77 all_ms=14.7312 advect_ms=34.8559 copy_ms=24.5161
+gpuflips: step=5 gpu_ms=6.02673 rounds=6 flips=81376 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276557 centres_faces_ms=4.90906 cells_ms=3.97044 resorted=0 resort_ms=0 step_ms=10.9358 step_Mcells_s=191.77 all_ms=14.9062 advect_ms=35.4736 copy_ms=26.8152
+gpuflips: step=6 gpu_ms=6.23382 rounds=7 flips=81385 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276228 centres_faces_ms=4.94177 cells_ms=3.99158 resorted=0 resort_ms=0 step_ms=11.1756 step_Mcells_s=187.655 all_ms=15.1672 advect_ms=36.4777 copy_ms=23.9759
+gpuflips: step=7 gpu_ms=6.46108 rounds=8 flips=81640 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276478 centres_faces_ms=4.93157 cells_ms=4.00287 resorted=0 resort_ms=0 step_ms=11.3926 step_Mcells_s=184.079 all_ms=15.3955 advect_ms=34.6837 copy_ms=25.0862
+gpuflips: step=8 gpu_ms=6.22203 rounds=6 flips=81441 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276647 centres_faces_ms=4.98013 cells_ms=4.01335 resorted=0 resort_ms=0 step_ms=11.2022 step_Mcells_s=187.21 all_ms=15.2155 advect_ms=33.7979 copy_ms=27.7382
+gpuflips: step=9 gpu_ms=6.30302 rounds=6 flips=81415 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276488 centres_faces_ms=5.06165 cells_ms=4.03412 resorted=0 resort_ms=0 step_ms=11.3647 step_Mcells_s=184.533 all_ms=15.3988 advect_ms=35.1898 copy_ms=27.9331
+gpuflips: step=10 gpu_ms=6.49253 rounds=7 flips=81254 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14217064 faces=16276794 centres_faces_ms=5.02054 cells_ms=4.04265 resorted=0 resort_ms=0 step_ms=11.5131 step_Mcells_s=182.154 all_ms=15.5557 advect_ms=28.5126 copy_ms=32.3355
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.3759 Mcells_s=184.35
+kernel: deep_copy ms_per_step=5.11999 Mcells_s=409.601
+kernel: tet_mesh::faces ms_per_step=2.38982 Mcells_s=877.535
+kernel: tet_mesh::cell_sums ms_per_step=2.36571 Mcells_s=886.478
+kernel: tet_repair::screen ms_per_step=2.14442 Mcells_s=977.957
+kernel: tet_repair::apply ms_per_step=1.34124 Mcells_s=1563.59
+kernel: tet_repair::plan ms_per_step=1.14707 Mcells_s=1828.28
+kernel: tet_mesh::append_rings ms_per_step=0.821586 Mcells_s=2552.57
+kernel: tet_mesh::dirty_faces ms_per_step=0.588937 Mcells_s=3560.91
+kernel: tet_repair::find ms_per_step=0.579368 Mcells_s=3619.72
+kernel: tet_mesh::cell_sort ms_per_step=0.537019 Mcells_s=3905.18
+kernel: tet_mesh::face_touched ms_per_step=0.494204 Mcells_s=4243.5
+kernel: tet_mesh::marked_fill ms_per_step=0.302495 Mcells_s=6932.84
+kernel: tet_mesh::cell_face_start ms_per_step=0.217355 Mcells_s=9648.52
+kernel: voronoi::snap ms_per_step=0.215701 Mcells_s=9722.49
+kernel: tet_mesh::marked_counts ms_per_step=0.119753 Mcells_s=17512.3
+kernel: exact_predicates::snap ms_per_step=0.116355 Mcells_s=18023.7
+kernel: tet_repair::unlist ms_per_step=0.111582 Mcells_s=18794.8
+kernel: tet_mesh::circumcentres ms_per_step=0.102889 Mcells_s=20382.7
+kernel: tet_mesh::fresh_fill ms_per_step=0.0951727 Mcells_s=22035.2
+kernel: tet_mesh::face_release ms_per_step=0.09252 Mcells_s=22667
+kernel: voronoi::total_volume ms_per_step=0.087294 Mcells_s=24024
+kernel: tet_mesh::face_assign ms_per_step=0.0853018 Mcells_s=24585.1
+kernel: tet_mesh::face_offsets ms_per_step=0.0819454 Mcells_s=25592.1
+kernel: tet_repair::release ms_per_step=0.0745993 Mcells_s=28112.2
+kernel: tet_mesh::mark_cells ms_per_step=0.0623754 Mcells_s=33621.4
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0602049 Mcells_s=34833.6
+kernel: tet_mesh::fresh_counts ms_per_step=0.0434168 Mcells_s=48302.8
+kernel: tet_mesh::face_numbered ms_per_step=0.0284137 Mcells_s=73807.9
+kernel: tet_mesh::face_low ms_per_step=0.0265657 Mcells_s=78942.2
+kernel: tet_mesh::face_move ms_per_step=0.0235557 Mcells_s=89029.6
+kernel: tet_repair::retry_stuck ms_per_step=0.01653 Mcells_s=126869
+final_rebuild: build_ms=228.427 resort_ms=0 geometry_ms=12.7507 cells_ms=5.16083 total_ms=246.339 Mcells_s=8.51328
+== step halo 2097152 0.3
+# backend=Cuda n=2097152 distribution=halo box=1,1,1 displacement=0.3 steps=10
+start: clip_ms=150.193 from_rings_ms=48.5895 start_ms=204.539 extra_vs_clip=0.361843 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14180474 tets_checksum=752029910958384503 per_cell=6.76178 ring_entries_per_cell=59.125 rings_checksum=17883358698937515552 rings_topology=7951306052149369673
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=218.874 resort_ms=0 geometry_ms=13.1685 cells_ms=5.47824 total_ms=232.042 faces=16277626 faces_per_cell=7.76178 cells_checksum=3032620572523510991
+gpuflips: step=1 gpu_ms=11.2979 rounds=11 flips=246208 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16276846 centres_faces_ms=8.03118 cells_ms=4.95617 resorted=0 resort_ms=0 step_ms=19.3291 step_Mcells_s=108.497 all_ms=24.2853 advect_ms=33.7475 copy_ms=30.5916
+gpuflips: step=2 gpu_ms=10.9626 rounds=12 flips=244587 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16276289 centres_faces_ms=7.93356 cells_ms=4.99842 resorted=0 resort_ms=0 step_ms=18.8961 step_Mcells_s=110.983 all_ms=23.8945 advect_ms=35.8602 copy_ms=26.704
+gpuflips: step=3 gpu_ms=10.7973 rounds=10 flips=244988 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16276451 centres_faces_ms=8.09397 cells_ms=5.03994 resorted=0 resort_ms=0 step_ms=18.8913 step_Mcells_s=111.012 all_ms=23.9312 advect_ms=33.6785 copy_ms=28.7847
+gpuflips: step=4 gpu_ms=11.1055 rounds=11 flips=244198 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16276903 centres_faces_ms=8.12087 cells_ms=5.08894 resorted=0 resort_ms=0 step_ms=19.2264 step_Mcells_s=109.077 all_ms=24.3153 advect_ms=32.7997 copy_ms=25.0033
+gpuflips: step=5 gpu_ms=11.0393 rounds=10 flips=244092 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16277059 centres_faces_ms=8.33571 cells_ms=5.13539 resorted=0 resort_ms=0 step_ms=19.375 step_Mcells_s=108.24 all_ms=24.5104 advect_ms=30.3416 copy_ms=26.0523
+gpuflips: step=6 gpu_ms=11.5611 rounds=12 flips=243622 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16276719 centres_faces_ms=12.1518 cells_ms=5.16629 resorted=0 resort_ms=0 step_ms=23.713 step_Mcells_s=88.439 all_ms=28.8793 advect_ms=36.157 copy_ms=23.4528
+gpuflips: step=7 gpu_ms=11.3154 rounds=10 flips=243857 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16276688 centres_faces_ms=8.40776 cells_ms=5.20667 resorted=0 resort_ms=0 step_ms=19.7232 step_Mcells_s=106.329 all_ms=24.9299 advect_ms=35.5522 copy_ms=26.5843
+gpuflips: step=8 gpu_ms=11.183 rounds=9 flips=244621 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16277059 centres_faces_ms=8.55434 cells_ms=5.25399 resorted=0 resort_ms=0 step_ms=19.7373 step_Mcells_s=106.253 all_ms=24.9913 advect_ms=32.4435 copy_ms=23.4641
+gpuflips: step=9 gpu_ms=11.4519 rounds=10 flips=243697 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16277508 centres_faces_ms=8.70525 cells_ms=5.3067 resorted=0 resort_ms=0 step_ms=20.1571 step_Mcells_s=104.04 all_ms=25.4638 advect_ms=32.6945 copy_ms=32.0447
+gpuflips: step=10 gpu_ms=11.4179 rounds=9 flips=243773 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14270414 faces=16277455 centres_faces_ms=8.8941 cells_ms=5.3542 resorted=0 resort_ms=0 step_ms=20.312 step_Mcells_s=103.247 all_ms=25.6662 advect_ms=34.401 copy_ms=26.1512
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.0927 Mcells_s=189.057
+kernel: deep_copy ms_per_step=4.75176 Mcells_s=441.342
+kernel: tet_repair::apply ms_per_step=3.23397 Mcells_s=648.477
+kernel: tet_repair::plan ms_per_step=2.84877 Mcells_s=736.16
+kernel: tet_mesh::faces ms_per_step=2.58 Mcells_s=812.85
+kernel: tet_repair::screen ms_per_step=2.47651 Mcells_s=846.819
+kernel: tet_mesh::append_rings ms_per_step=2.45623 Mcells_s=853.809
+kernel: tet_mesh::cell_sums ms_per_step=2.02413 Mcells_s=1036.07
+kernel: tet_mesh::dirty_faces ms_per_step=1.72872 Mcells_s=1213.12
+kernel: tet_repair::find ms_per_step=1.37944 Mcells_s=1520.3
+kernel: tet_mesh::cell_face_fill ms_per_step=1.12266 Mcells_s=1868.03
+kernel: tet_mesh::cell_sort ms_per_step=1.10357 Mcells_s=1900.34
+kernel: tet_mesh::cell_face_counts ms_per_step=0.694994 Mcells_s=3017.51
+kernel: tet_mesh::face_touched ms_per_step=0.493858 Mcells_s=4246.47
+kernel: tet_mesh::compact_rings ms_per_step=0.450383 Mcells_s=4656.38
+kernel: tet_mesh::face_assign ms_per_step=0.224074 Mcells_s=9359.18
+kernel: voronoi::snap ms_per_step=0.212985 Mcells_s=9846.48
+kernel: tet_repair::unlist ms_per_step=0.20474 Mcells_s=10243
+kernel: tet_mesh::circumcentres ms_per_step=0.203318 Mcells_s=10314.6
+kernel: tet_mesh::face_release ms_per_step=0.202395 Mcells_s=10361.7
+kernel: tet_mesh::cell_face_start ms_per_step=0.197653 Mcells_s=10610.2
+kernel: tet_mesh::face_offsets ms_per_step=0.150337 Mcells_s=13949.7
+kernel: exact_predicates::snap ms_per_step=0.118477 Mcells_s=17701
+kernel: tet_repair::release ms_per_step=0.110811 Mcells_s=18925.5
+kernel: voronoi::total_volume ms_per_step=0.0875269 Mcells_s=23960.1
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0592519 Mcells_s=35393.8
+kernel: tet_mesh::face_numbered ms_per_step=0.0400031 Mcells_s=52424.7
+kernel: tet_mesh::face_low ms_per_step=0.0382104 Mcells_s=54884.3
+kernel: tet_repair::retry_stuck ms_per_step=0.0180101 Mcells_s=116443
+kernel: tet_mesh::face_move ms_per_step=0.0143582 Mcells_s=146059
+kernel: tet_mesh::ring_entries ms_per_step=0.0107683 Mcells_s=194752
+final_rebuild: build_ms=276.749 resort_ms=0 geometry_ms=12.7642 cells_ms=5.11691 total_ms=294.63 Mcells_s=7.11791
+== rebuild lattice 2097152
+# backend=Cuda n=2097152 distribution=lattice box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=5
+warp: build_ms=0.683105 construct_ms=38.1682 construct_Mcells_s=54.945 pipeline_Mcells_s=53.979
+== step lattice 2097152 0.03
+# backend=Cuda n=2097152 distribution=lattice box=1,1,1 displacement=0.03 steps=10
+start: clip_ms=40.0062 from_rings_ms=7.88154 start_ms=277.289 extra_vs_clip=5.93116 exact=1 rounds=2 bad_tets=2097152 patched_cells=2097152 tets=12582912 tets_checksum=14370429282192956057 per_cell=6 ring_entries_per_cell=50.9355 rings_checksum=12622829563378494971 rings_topology=1503728892770167675
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=288.817 resort_ms=0 geometry_ms=9.45205 cells_ms=4.7001 total_ms=298.269 faces=14680064 faces_per_cell=7 cells_checksum=8578277864420652823
+gpuflips: step=1 gpu_ms=528.923 rounds=72 flips=10933653 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761609 centres_faces_ms=54.7002 cells_ms=5.73353 resorted=0 resort_ms=0 step_ms=583.623 step_Mcells_s=3.59333 all_ms=589.357 advect_ms=32.7206 copy_ms=24.9775
+gpuflips: step=2 gpu_ms=6.21131 rounds=5 flips=7520 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761627 centres_faces_ms=4.94852 cells_ms=4.70707 resorted=0 resort_ms=0 step_ms=11.1598 step_Mcells_s=187.92 all_ms=15.8669 advect_ms=34.3803 copy_ms=26.9728
+gpuflips: step=3 gpu_ms=5.93769 rounds=4 flips=7525 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761554 centres_faces_ms=4.52758 cells_ms=4.4476 resorted=0 resort_ms=0 step_ms=10.4653 step_Mcells_s=200.392 all_ms=14.9129 advect_ms=35.9471 copy_ms=26.3422
+gpuflips: step=4 gpu_ms=5.87385 rounds=4 flips=7516 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761550 centres_faces_ms=4.48157 cells_ms=4.45698 resorted=0 resort_ms=0 step_ms=10.3554 step_Mcells_s=202.517 all_ms=14.8124 advect_ms=32.8144 copy_ms=29.234
+gpuflips: step=5 gpu_ms=5.91706 rounds=4 flips=7506 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761504 centres_faces_ms=4.50524 cells_ms=4.45316 resorted=0 resort_ms=0 step_ms=10.4223 step_Mcells_s=201.218 all_ms=14.8755 advect_ms=33.9618 copy_ms=22.946
+gpuflips: step=6 gpu_ms=5.90733 rounds=4 flips=7244 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761448 centres_faces_ms=4.48961 cells_ms=4.46592 resorted=0 resort_ms=0 step_ms=10.3969 step_Mcells_s=201.708 all_ms=14.8629 advect_ms=29.154 copy_ms=32.6775
+gpuflips: step=7 gpu_ms=6.07237 rounds=5 flips=7517 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761463 centres_faces_ms=4.46569 cells_ms=4.47102 resorted=0 resort_ms=0 step_ms=10.5381 step_Mcells_s=199.007 all_ms=15.0091 advect_ms=30.3868 copy_ms=31.0583
+gpuflips: step=8 gpu_ms=5.88738 rounds=4 flips=7445 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761302 centres_faces_ms=4.53515 cells_ms=4.47264 resorted=0 resort_ms=0 step_ms=10.4225 step_Mcells_s=201.213 all_ms=14.8952 advect_ms=30.5201 copy_ms=23.9058
+gpuflips: step=9 gpu_ms=5.88948 rounds=4 flips=7569 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14761169 centres_faces_ms=4.51798 cells_ms=4.48348 resorted=0 resort_ms=0 step_ms=10.4075 step_Mcells_s=201.505 all_ms=14.8909 advect_ms=33.483 copy_ms=30.9735
+gpuflips: step=10 gpu_ms=5.85592 rounds=4 flips=7524 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13825723 faces=14760995 centres_faces_ms=4.5225 cells_ms=4.48484 resorted=0 resort_ms=0 step_ms=10.3784 step_Mcells_s=202.068 all_ms=14.8633 advect_ms=36.0194 copy_ms=23.1074
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.6558 Mcells_s=179.924
+kernel: deep_copy ms_per_step=4.48789 Mcells_s=467.292
+kernel: tet_repair::screen ms_per_step=3.8609 Mcells_s=543.177
+kernel: tet_mesh::faces ms_per_step=3.4527 Mcells_s=607.395
+kernel: tet_mesh::cell_sums ms_per_step=3.43286 Mcells_s=610.905
+kernel: tet_mesh::face_touched ms_per_step=0.51797 Mcells_s=4048.79
+kernel: tet_repair::apply ms_per_step=0.49124 Mcells_s=4269.1
+kernel: tet_repair::plan ms_per_step=0.470181 Mcells_s=4460.31
+kernel: tet_mesh::cell_sort ms_per_step=0.438296 Mcells_s=4784.78
+kernel: tet_repair::find ms_per_step=0.31305 Mcells_s=6699.11
+kernel: tet_mesh::cell_face_start ms_per_step=0.216859 Mcells_s=9670.56
+kernel: voronoi::snap ms_per_step=0.214366 Mcells_s=9783.06
+kernel: exact_predicates::snap ms_per_step=0.116603 Mcells_s=17985.3
+kernel: tet_mesh::dirty_faces ms_per_step=0.0892604 Mcells_s=23494.8
+kernel: tet_mesh::append_rings ms_per_step=0.0886243 Mcells_s=23663.4
+kernel: voronoi::total_volume ms_per_step=0.0851279 Mcells_s=24635.3
+kernel: tet_repair::unlist ms_per_step=0.0714139 Mcells_s=29366.2
+kernel: tet_mesh::marked_fill ms_per_step=0.0609827 Mcells_s=34389.3
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0599131 Mcells_s=35003.2
+kernel: tet_mesh::circumcentres ms_per_step=0.0565529 Mcells_s=37083
+kernel: tet_mesh::marked_counts ms_per_step=0.0464029 Mcells_s=45194.4
+kernel: tet_mesh::face_offsets ms_per_step=0.0461272 Mcells_s=45464.5
+kernel: tet_repair::release ms_per_step=0.0460707 Mcells_s=45520.3
+kernel: tet_mesh::face_move ms_per_step=0.0277302 Mcells_s=75626.9
+kernel: tet_mesh::face_release ms_per_step=0.0262239 Mcells_s=79971.1
+kernel: tet_mesh::face_low ms_per_step=0.0255451 Mcells_s=82096
+kernel: tet_mesh::fresh_fill ms_per_step=0.0237752 Mcells_s=88207.5
+kernel: tet_mesh::mark_cells ms_per_step=0.0237493 Mcells_s=88303.6
+kernel: tet_mesh::face_assign ms_per_step=0.0234899 Mcells_s=89278.9
+kernel: tet_mesh::fresh_counts ms_per_step=0.019651 Mcells_s=106720
+kernel: tet_mesh::face_numbered ms_per_step=0.0185537 Mcells_s=113032
+kernel: tet_repair::retry_stuck ms_per_step=0.0161166 Mcells_s=130124
+final_rebuild: build_ms=116.264 resort_ms=0 geometry_ms=9.48641 cells_ms=4.45125 total_ms=130.202 Mcells_s=16.107
+== step lattice 2097152 0.1
+# backend=Cuda n=2097152 distribution=lattice box=1,1,1 displacement=0.1 steps=10
+start: clip_ms=40.0286 from_rings_ms=7.83464 start_ms=278.654 extra_vs_clip=5.96138 exact=1 rounds=2 bad_tets=2097152 patched_cells=2097152 tets=12582912 tets_checksum=14370429282192956057 per_cell=6 ring_entries_per_cell=50.9355 rings_checksum=12622829563378494971 rings_topology=1503728892770167675
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=289.361 resort_ms=0 geometry_ms=9.45627 cells_ms=4.70835 total_ms=298.817 faces=14680064 faces_per_cell=7 cells_checksum=8578277864420652823
+gpuflips: step=1 gpu_ms=534.928 rounds=81 flips=10924550 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14761470 centres_faces_ms=54.8809 cells_ms=5.73281 resorted=0 resort_ms=0 step_ms=589.809 step_Mcells_s=3.55565 all_ms=595.542 advect_ms=34.7948 copy_ms=24.6892
+gpuflips: step=2 gpu_ms=6.9382 rounds=7 flips=25008 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14761440 centres_faces_ms=5.3788 cells_ms=4.72419 resorted=0 resort_ms=0 step_ms=12.317 step_Mcells_s=170.265 all_ms=17.0412 advect_ms=34.3323 copy_ms=26.3794
+gpuflips: step=3 gpu_ms=6.95292 rounds=7 flips=25032 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14760946 centres_faces_ms=4.90223 cells_ms=4.54006 resorted=0 resort_ms=0 step_ms=11.8552 step_Mcells_s=176.898 all_ms=16.3952 advect_ms=35.4479 copy_ms=24.947
+gpuflips: step=4 gpu_ms=6.81081 rounds=6 flips=24792 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14760626 centres_faces_ms=4.9225 cells_ms=4.57809 resorted=0 resort_ms=0 step_ms=11.7333 step_Mcells_s=178.735 all_ms=16.3114 advect_ms=39.8335 copy_ms=28.5124
+gpuflips: step=5 gpu_ms=6.86857 rounds=7 flips=24892 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14760308 centres_faces_ms=4.93082 cells_ms=4.58234 resorted=0 resort_ms=0 step_ms=11.7994 step_Mcells_s=177.734 all_ms=16.3817 advect_ms=33.9018 copy_ms=26.3157
+gpuflips: step=6 gpu_ms=6.54465 rounds=5 flips=24636 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14760040 centres_faces_ms=4.97215 cells_ms=4.60157 resorted=0 resort_ms=0 step_ms=11.5168 step_Mcells_s=182.095 all_ms=16.1184 advect_ms=33.9839 copy_ms=28.2025
+gpuflips: step=7 gpu_ms=6.55327 rounds=5 flips=24780 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14759774 centres_faces_ms=4.99612 cells_ms=4.61934 resorted=0 resort_ms=0 step_ms=11.5494 step_Mcells_s=181.581 all_ms=16.1687 advect_ms=32.531 copy_ms=24.4845
+gpuflips: step=8 gpu_ms=6.71162 rounds=6 flips=24815 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14759627 centres_faces_ms=5.01174 cells_ms=4.647 resorted=0 resort_ms=0 step_ms=11.7234 step_Mcells_s=178.887 all_ms=16.3704 advect_ms=36.1045 copy_ms=24.2677
+gpuflips: step=9 gpu_ms=6.60282 rounds=5 flips=24769 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14759186 centres_faces_ms=5.03394 cells_ms=4.66827 resorted=0 resort_ms=0 step_ms=11.6368 step_Mcells_s=180.218 all_ms=16.305 advect_ms=30.7815 copy_ms=24.3406
+gpuflips: step=10 gpu_ms=6.6015 rounds=5 flips=24570 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13823517 faces=14758950 centres_faces_ms=5.24114 cells_ms=4.69669 resorted=0 resort_ms=0 step_ms=11.8426 step_Mcells_s=177.085 all_ms=16.5393 advect_ms=33.5239 copy_ms=25.0866
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=10.3371 Mcells_s=202.876
+kernel: deep_copy ms_per_step=4.78562 Mcells_s=438.22
+kernel: tet_repair::screen ms_per_step=3.86029 Mcells_s=543.262
+kernel: tet_mesh::faces ms_per_step=3.52356 Mcells_s=595.181
+kernel: tet_mesh::cell_sums ms_per_step=3.47098 Mcells_s=604.197
+kernel: tet_repair::apply ms_per_step=0.827325 Mcells_s=2534.86
+kernel: tet_repair::plan ms_per_step=0.71485 Mcells_s=2933.7
+kernel: tet_mesh::face_touched ms_per_step=0.514436 Mcells_s=4076.61
+kernel: tet_mesh::cell_sort ms_per_step=0.447892 Mcells_s=4682.27
+kernel: tet_repair::find ms_per_step=0.424816 Mcells_s=4936.61
+kernel: tet_mesh::append_rings ms_per_step=0.299873 Mcells_s=6993.48
+kernel: tet_mesh::dirty_faces ms_per_step=0.221365 Mcells_s=9473.74
+kernel: tet_mesh::cell_face_start ms_per_step=0.217045 Mcells_s=9662.3
+kernel: voronoi::snap ms_per_step=0.212928 Mcells_s=9849.1
+kernel: exact_predicates::snap ms_per_step=0.115421 Mcells_s=18169.5
+kernel: tet_mesh::marked_fill ms_per_step=0.105186 Mcells_s=19937.6
+kernel: tet_repair::unlist ms_per_step=0.0901093 Mcells_s=23273.4
+kernel: voronoi::total_volume ms_per_step=0.0847133 Mcells_s=24755.9
+kernel: tet_mesh::marked_counts ms_per_step=0.0642366 Mcells_s=32647.3
+kernel: tet_mesh::circumcentres ms_per_step=0.0635451 Mcells_s=33002.6
+kernel: tet_repair::release ms_per_step=0.0603638 Mcells_s=34741.9
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0600244 Mcells_s=34938.3
+kernel: tet_mesh::face_offsets ms_per_step=0.0543639 Mcells_s=38576.2
+kernel: tet_mesh::face_release ms_per_step=0.0418304 Mcells_s=50134.6
+kernel: tet_mesh::fresh_fill ms_per_step=0.0347111 Mcells_s=60417.3
+kernel: tet_mesh::face_assign ms_per_step=0.0341212 Mcells_s=61461.8
+kernel: tet_mesh::face_move ms_per_step=0.0337486 Mcells_s=62140.5
+kernel: tet_mesh::mark_cells ms_per_step=0.0324628 Mcells_s=64601.7
+kernel: tet_mesh::face_low ms_per_step=0.0289197 Mcells_s=72516.5
+kernel: tet_mesh::fresh_counts ms_per_step=0.025665 Mcells_s=81712.5
+kernel: tet_mesh::face_numbered ms_per_step=0.0255028 Mcells_s=82232.3
+kernel: tet_repair::retry_stuck ms_per_step=0.0166646 Mcells_s=125845
+final_rebuild: build_ms=165.066 resort_ms=0 geometry_ms=9.4407 cells_ms=4.44658 total_ms=178.954 Mcells_s=11.719
+== step lattice 2097152 0.3
+# backend=Cuda n=2097152 distribution=lattice box=1,1,1 displacement=0.3 steps=10
+start: clip_ms=40.1311 from_rings_ms=8.88101 start_ms=276.015 extra_vs_clip=5.87783 exact=1 rounds=2 bad_tets=2097152 patched_cells=2097152 tets=12582912 tets_checksum=14370429282192956057 per_cell=6 ring_entries_per_cell=50.9355 rings_checksum=12622829563378494971 rings_topology=1503728892770167675
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=288.585 resort_ms=0 geometry_ms=9.49198 cells_ms=4.7151 total_ms=298.077 faces=14680064 faces_per_cell=7 cells_checksum=8578277864420652823
+gpuflips: step=1 gpu_ms=528.908 rounds=71 flips=10900962 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14760874 centres_faces_ms=54.888 cells_ms=5.71183 resorted=0 resort_ms=0 step_ms=583.796 step_Mcells_s=3.59227 all_ms=589.508 advect_ms=38.9051 copy_ms=26.5569
+gpuflips: step=2 gpu_ms=8.99043 rounds=10 flips=74748 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14760260 centres_faces_ms=6.42423 cells_ms=4.94647 resorted=0 resort_ms=0 step_ms=15.4147 step_Mcells_s=136.049 all_ms=20.3611 advect_ms=34.7241 copy_ms=26.3384
+gpuflips: step=3 gpu_ms=8.85105 rounds=9 flips=74324 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14759302 centres_faces_ms=6.05252 cells_ms=4.80437 resorted=0 resort_ms=0 step_ms=14.9036 step_Mcells_s=140.715 all_ms=19.7079 advect_ms=33.864 copy_ms=27.9224
+gpuflips: step=4 gpu_ms=8.75153 rounds=9 flips=74003 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14758677 centres_faces_ms=6.08588 cells_ms=4.86917 resorted=0 resort_ms=0 step_ms=14.8374 step_Mcells_s=141.342 all_ms=19.7066 advect_ms=35.8736 copy_ms=24.8687
+gpuflips: step=5 gpu_ms=8.94017 rounds=10 flips=74189 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14758234 centres_faces_ms=6.13408 cells_ms=4.90977 resorted=0 resort_ms=0 step_ms=15.0742 step_Mcells_s=139.122 all_ms=19.984 advect_ms=29.8835 copy_ms=30.3459
+gpuflips: step=6 gpu_ms=8.99895 rounds=10 flips=74144 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14757612 centres_faces_ms=6.20463 cells_ms=4.95127 resorted=0 resort_ms=0 step_ms=15.2036 step_Mcells_s=137.938 all_ms=20.1548 advect_ms=32.5714 copy_ms=24.2397
+gpuflips: step=7 gpu_ms=8.79071 rounds=9 flips=74304 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14756864 centres_faces_ms=6.26626 cells_ms=5.002 resorted=0 resort_ms=0 step_ms=15.057 step_Mcells_s=139.281 all_ms=20.059 advect_ms=34.3758 copy_ms=28.0195
+gpuflips: step=8 gpu_ms=8.97437 rounds=10 flips=74407 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14756453 centres_faces_ms=6.3379 cells_ms=5.06128 resorted=0 resort_ms=0 step_ms=15.3123 step_Mcells_s=136.959 all_ms=20.3736 advect_ms=32.7469 copy_ms=25.9355
+gpuflips: step=9 gpu_ms=9.00565 rounds=10 flips=74484 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14755771 centres_faces_ms=6.41263 cells_ms=5.10233 resorted=0 resort_ms=0 step_ms=15.4183 step_Mcells_s=136.017 all_ms=20.5206 advect_ms=35.1323 copy_ms=29.1154
+gpuflips: step=10 gpu_ms=9.16955 rounds=10 flips=74684 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=13822405 faces=14755319 centres_faces_ms=6.45738 cells_ms=5.15787 resorted=0 resort_ms=0 step_ms=15.6269 step_Mcells_s=134.201 all_ms=20.7848 advect_ms=35.6224 copy_ms=28.3886
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.4765 Mcells_s=182.734
+kernel: deep_copy ms_per_step=5.21717 Mcells_s=401.971
+kernel: tet_repair::screen ms_per_step=3.88392 Mcells_s=539.957
+kernel: tet_mesh::faces ms_per_step=3.68927 Mcells_s=568.447
+kernel: tet_mesh::cell_sums ms_per_step=3.57592 Mcells_s=586.465
+kernel: tet_repair::apply ms_per_step=1.65942 Mcells_s=1263.79
+kernel: tet_repair::plan ms_per_step=1.51973 Mcells_s=1379.95
+kernel: tet_mesh::append_rings ms_per_step=0.840827 Mcells_s=2494.15
+kernel: tet_repair::find ms_per_step=0.742866 Mcells_s=2823.06
+kernel: tet_mesh::dirty_faces ms_per_step=0.586604 Mcells_s=3575.07
+kernel: tet_mesh::face_touched ms_per_step=0.515523 Mcells_s=4068.01
+kernel: tet_mesh::cell_sort ms_per_step=0.499581 Mcells_s=4197.82
+kernel: tet_mesh::cell_face_start ms_per_step=0.218735 Mcells_s=9587.62
+kernel: voronoi::snap ms_per_step=0.212182 Mcells_s=9883.76
+kernel: tet_mesh::marked_fill ms_per_step=0.191847 Mcells_s=10931.4
+kernel: tet_repair::unlist ms_per_step=0.140478 Mcells_s=14928.7
+kernel: exact_predicates::snap ms_per_step=0.11595 Mcells_s=18086.7
+kernel: tet_repair::release ms_per_step=0.100935 Mcells_s=20777.2
+kernel: tet_mesh::circumcentres ms_per_step=0.0979641 Mcells_s=21407.3
+kernel: tet_mesh::face_release ms_per_step=0.0860904 Mcells_s=24359.9
+kernel: voronoi::total_volume ms_per_step=0.0849227 Mcells_s=24694.8
+kernel: tet_mesh::marked_counts ms_per_step=0.0822328 Mcells_s=25502.6
+kernel: tet_mesh::face_offsets ms_per_step=0.080472 Mcells_s=26060.6
+kernel: tet_mesh::face_assign ms_per_step=0.0764389 Mcells_s=27435.7
+kernel: tet_mesh::fresh_fill ms_per_step=0.0717569 Mcells_s=29225.8
+kernel: tet_mesh::mark_cells ms_per_step=0.0655804 Mcells_s=31978.3
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0594831 Mcells_s=35256.3
+kernel: tet_mesh::fresh_counts ms_per_step=0.0391378 Mcells_s=53583.8
+kernel: tet_mesh::face_move ms_per_step=0.0352229 Mcells_s=59539.5
+kernel: tet_mesh::face_low ms_per_step=0.0307002 Mcells_s=68310.6
+kernel: tet_mesh::face_numbered ms_per_step=0.029281 Mcells_s=71621.6
+kernel: tet_repair::retry_stuck ms_per_step=0.0182324 Mcells_s=115023
+final_rebuild: build_ms=129.236 resort_ms=0 geometry_ms=9.43816 cells_ms=4.44564 total_ms=143.12 Mcells_s=14.6531
+== rebuild wave 2097152
+# backend=Cuda n=2097152 distribution=wave box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=5
+warp: build_ms=0.738823 construct_ms=51.4301 construct_Mcells_s=40.7768 pipeline_Mcells_s=40.1993
+== step wave 2097152 0.03
+# backend=Cuda n=2097152 distribution=wave box=1,1,1 displacement=0.03 steps=10
+start: clip_ms=58.9703 from_rings_ms=47.637 start_ms=482.316 extra_vs_clip=7.17896 exact=1 rounds=2 bad_tets=35175 patched_cells=2097152 tets=14791286 tets_checksum=17490786523467656927 per_cell=7.05303 ring_entries_per_cell=60.2646 rings_checksum=1704357563411017315 rings_topology=10391640825618483602
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=497.193 resort_ms=0 geometry_ms=15.6203 cells_ms=5.25486 total_ms=512.813 faces=16888438 faces_per_cell=8.05303 cells_checksum=11375369712860223035
+gpuflips: step=1 gpu_ms=775.989 rounds=47 flips=10838425 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14765049 centres_faces_ms=54.3849 cells_ms=5.41897 resorted=0 resort_ms=0 step_ms=830.374 step_Mcells_s=2.52555 all_ms=835.793 advect_ms=35.6888 copy_ms=28.2017
+gpuflips: step=2 gpu_ms=7.01944 rounds=6 flips=31041 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14762558 centres_faces_ms=5.95974 cells_ms=4.55912 resorted=0 resort_ms=0 step_ms=12.9792 step_Mcells_s=161.578 all_ms=17.5383 advect_ms=34.0424 copy_ms=30.3418
+gpuflips: step=3 gpu_ms=6.17197 rounds=5 flips=12700 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14762014 centres_faces_ms=4.3389 cells_ms=4.23218 resorted=0 resort_ms=0 step_ms=10.5109 step_Mcells_s=199.522 all_ms=14.743 advect_ms=35.537 copy_ms=28.4926
+gpuflips: step=4 gpu_ms=5.88537 rounds=4 flips=8916 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14761770 centres_faces_ms=4.2881 cells_ms=4.23762 resorted=0 resort_ms=0 step_ms=10.1735 step_Mcells_s=206.139 all_ms=14.4111 advect_ms=33.0254 copy_ms=28.5197
+gpuflips: step=5 gpu_ms=5.89624 rounds=4 flips=8191 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14761725 centres_faces_ms=4.26929 cells_ms=4.21794 resorted=0 resort_ms=0 step_ms=10.1655 step_Mcells_s=206.3 all_ms=14.3835 advect_ms=33.5217 copy_ms=31.9168
+gpuflips: step=6 gpu_ms=5.85893 rounds=4 flips=7722 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14761565 centres_faces_ms=4.25164 cells_ms=4.22235 resorted=0 resort_ms=0 step_ms=10.1106 step_Mcells_s=207.422 all_ms=14.3329 advect_ms=36.3145 copy_ms=28.5049
+gpuflips: step=7 gpu_ms=5.87537 rounds=4 flips=7536 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14761491 centres_faces_ms=4.27296 cells_ms=4.22721 resorted=0 resort_ms=0 step_ms=10.1483 step_Mcells_s=206.65 all_ms=14.3755 advect_ms=31.4222 copy_ms=31.3844
+gpuflips: step=8 gpu_ms=5.80241 rounds=4 flips=7577 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14761332 centres_faces_ms=4.26781 cells_ms=4.22589 resorted=0 resort_ms=0 step_ms=10.0702 step_Mcells_s=208.253 all_ms=14.2961 advect_ms=33.3993 copy_ms=29.9798
+gpuflips: step=9 gpu_ms=6.08087 rounds=5 flips=7640 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14761216 centres_faces_ms=4.27258 cells_ms=4.2454 resorted=0 resort_ms=0 step_ms=10.3534 step_Mcells_s=202.556 all_ms=14.5988 advect_ms=32.3246 copy_ms=31.2955
+gpuflips: step=10 gpu_ms=6.01418 rounds=5 flips=7560 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14955937 faces=14761040 centres_faces_ms=4.27599 cells_ms=4.23875 resorted=0 resort_ms=0 step_ms=10.2902 step_Mcells_s=203.801 all_ms=14.5289 advect_ms=33.7905 copy_ms=26.3541
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=12.1829 Mcells_s=172.139
+kernel: deep_copy ms_per_step=4.86248 Mcells_s=431.293
+kernel: tet_repair::screen ms_per_step=3.8152 Mcells_s=549.683
+kernel: tet_mesh::cell_sums ms_per_step=3.18413 Mcells_s=658.626
+kernel: tet_mesh::faces ms_per_step=3.14967 Mcells_s=665.832
+kernel: tet_mesh::face_touched ms_per_step=0.651066 Mcells_s=3221.11
+kernel: tet_repair::plan ms_per_step=0.555622 Mcells_s=3774.42
+kernel: tet_repair::apply ms_per_step=0.525105 Mcells_s=3993.78
+kernel: tet_mesh::cell_sort ms_per_step=0.439878 Mcells_s=4767.58
+kernel: tet_repair::find ms_per_step=0.333151 Mcells_s=6294.9
+kernel: tet_mesh::cell_face_start ms_per_step=0.217849 Mcells_s=9626.61
+kernel: voronoi::snap ms_per_step=0.214691 Mcells_s=9768.22
+kernel: tet_mesh::append_rings ms_per_step=0.123612 Mcells_s=16965.6
+kernel: exact_predicates::snap ms_per_step=0.115947 Mcells_s=18087.2
+kernel: tet_mesh::dirty_faces ms_per_step=0.112401 Mcells_s=18657.7
+kernel: voronoi::total_volume ms_per_step=0.0893309 Mcells_s=23476.2
+kernel: tet_repair::unlist ms_per_step=0.076184 Mcells_s=27527.5
+kernel: tet_mesh::marked_fill ms_per_step=0.0706494 Mcells_s=29683.9
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0598794 Mcells_s=35022.9
+kernel: tet_mesh::circumcentres ms_per_step=0.0565752 Mcells_s=37068.4
+kernel: tet_mesh::marked_counts ms_per_step=0.0513028 Mcells_s=40877.9
+kernel: tet_repair::release ms_per_step=0.0496746 Mcells_s=42217.8
+kernel: tet_mesh::face_offsets ms_per_step=0.0471638 Mcells_s=44465.3
+kernel: tet_mesh::face_move ms_per_step=0.0317953 Mcells_s=65957.9
+kernel: tet_mesh::face_release ms_per_step=0.0289334 Mcells_s=72481.9
+kernel: tet_mesh::face_low ms_per_step=0.026479 Mcells_s=79200.6
+kernel: tet_mesh::mark_cells ms_per_step=0.0257484 Mcells_s=81447.7
+kernel: tet_mesh::face_assign ms_per_step=0.0254566 Mcells_s=82381.6
+kernel: tet_mesh::fresh_fill ms_per_step=0.023762 Mcells_s=88256.5
+kernel: tet_mesh::fresh_counts ms_per_step=0.0204479 Mcells_s=102561
+kernel: tet_mesh::face_numbered ms_per_step=0.0185168 Mcells_s=113257
+kernel: tet_repair::retry_stuck ms_per_step=0.0161462 Mcells_s=129885
+final_rebuild: build_ms=111.426 resort_ms=0 geometry_ms=9.48459 cells_ms=4.45439 total_ms=125.365 Mcells_s=16.7284
+== step wave 2097152 0.1
+# backend=Cuda n=2097152 distribution=wave box=1,1,1 displacement=0.1 steps=10
+start: clip_ms=58.9317 from_rings_ms=48.3134 start_ms=481.23 extra_vs_clip=7.1659 exact=1 rounds=2 bad_tets=35175 patched_cells=2097152 tets=14791286 tets_checksum=17490786523467656927 per_cell=7.05303 ring_entries_per_cell=60.2646 rings_checksum=1704357563411017315 rings_topology=10391640825618483602
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=495.536 resort_ms=0 geometry_ms=15.417 cells_ms=5.27797 total_ms=510.953 faces=16888438 faces_per_cell=8.05303 cells_checksum=11375369712860223035
+gpuflips: step=1 gpu_ms=805.567 rounds=47 flips=11008505 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14761853 centres_faces_ms=54.6833 cells_ms=5.50423 resorted=0 resort_ms=0 step_ms=860.251 step_Mcells_s=2.43784 all_ms=865.755 advect_ms=34.827 copy_ms=32.6219
+gpuflips: step=2 gpu_ms=7.10329 rounds=7 flips=26808 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14761463 centres_faces_ms=5.13161 cells_ms=4.55191 resorted=0 resort_ms=0 step_ms=12.2349 step_Mcells_s=171.407 all_ms=16.7868 advect_ms=33.8777 copy_ms=33.6979
+gpuflips: step=3 gpu_ms=6.74248 rounds=6 flips=25005 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14761004 centres_faces_ms=4.64822 cells_ms=4.30609 resorted=0 resort_ms=0 step_ms=11.3907 step_Mcells_s=184.111 all_ms=15.6968 advect_ms=33.5646 copy_ms=24.0208
+gpuflips: step=4 gpu_ms=7.00794 rounds=7 flips=24994 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14760660 centres_faces_ms=4.66791 cells_ms=4.3235 resorted=0 resort_ms=0 step_ms=11.6759 step_Mcells_s=179.614 all_ms=15.9994 advect_ms=29.5532 copy_ms=33.8049
+gpuflips: step=5 gpu_ms=6.70337 rounds=6 flips=24800 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14760432 centres_faces_ms=4.68654 cells_ms=4.34042 resorted=0 resort_ms=0 step_ms=11.3899 step_Mcells_s=184.124 all_ms=15.7303 advect_ms=39.5071 copy_ms=23.1121
+gpuflips: step=6 gpu_ms=6.65784 rounds=6 flips=24733 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14760165 centres_faces_ms=4.71831 cells_ms=4.36307 resorted=0 resort_ms=0 step_ms=11.3761 step_Mcells_s=184.346 all_ms=15.7392 advect_ms=33.6718 copy_ms=28.2574
+gpuflips: step=7 gpu_ms=6.9093 rounds=7 flips=24757 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14759860 centres_faces_ms=4.73139 cells_ms=4.38596 resorted=0 resort_ms=0 step_ms=11.6407 step_Mcells_s=180.157 all_ms=16.0266 advect_ms=34.4445 copy_ms=23.5424
+gpuflips: step=8 gpu_ms=6.76203 rounds=6 flips=24794 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14759586 centres_faces_ms=4.73738 cells_ms=4.40827 resorted=0 resort_ms=0 step_ms=11.4994 step_Mcells_s=182.37 all_ms=15.9077 advect_ms=31.9757 copy_ms=25.1759
+gpuflips: step=9 gpu_ms=6.78817 rounds=6 flips=24826 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14759212 centres_faces_ms=4.76145 cells_ms=4.41065 resorted=0 resort_ms=0 step_ms=11.5496 step_Mcells_s=181.578 all_ms=15.9603 advect_ms=36.759 copy_ms=30.2638
+gpuflips: step=10 gpu_ms=6.72241 rounds=6 flips=24559 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14951036 faces=14758929 centres_faces_ms=4.77695 cells_ms=4.42842 resorted=0 resort_ms=0 step_ms=11.4994 step_Mcells_s=182.371 all_ms=15.9278 advect_ms=33.292 copy_ms=23.0964
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.112 Mcells_s=188.729
+kernel: deep_copy ms_per_step=4.5292 Mcells_s=463.03
+kernel: tet_repair::screen ms_per_step=3.8292 Mcells_s=547.673
+kernel: tet_mesh::cell_sums ms_per_step=3.22693 Mcells_s=649.892
+kernel: tet_mesh::faces ms_per_step=3.22333 Mcells_s=650.616
+kernel: tet_repair::apply ms_per_step=0.839539 Mcells_s=2497.98
+kernel: tet_repair::plan ms_per_step=0.785924 Mcells_s=2668.39
+kernel: tet_mesh::face_touched ms_per_step=0.566499 Mcells_s=3701.95
+kernel: tet_mesh::cell_sort ms_per_step=0.450709 Mcells_s=4653.01
+kernel: tet_repair::find ms_per_step=0.432328 Mcells_s=4850.83
+kernel: tet_mesh::append_rings ms_per_step=0.287948 Mcells_s=7283.1
+kernel: tet_mesh::cell_face_start ms_per_step=0.217643 Mcells_s=9635.73
+kernel: tet_mesh::dirty_faces ms_per_step=0.217579 Mcells_s=9638.58
+kernel: voronoi::snap ms_per_step=0.213639 Mcells_s=9816.35
+kernel: exact_predicates::snap ms_per_step=0.11834 Mcells_s=17721.4
+kernel: tet_mesh::marked_fill ms_per_step=0.105318 Mcells_s=19912.6
+kernel: tet_repair::unlist ms_per_step=0.0952363 Mcells_s=22020.5
+kernel: voronoi::total_volume ms_per_step=0.0889191 Mcells_s=23584.9
+kernel: tet_repair::release ms_per_step=0.0669377 Mcells_s=31329.9
+kernel: tet_mesh::marked_counts ms_per_step=0.0649344 Mcells_s=32296.4
+kernel: tet_mesh::circumcentres ms_per_step=0.0637594 Mcells_s=32891.6
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0598694 Mcells_s=35028.8
+kernel: tet_mesh::face_offsets ms_per_step=0.0535936 Mcells_s=39130.7
+kernel: tet_mesh::face_release ms_per_step=0.0397967 Mcells_s=52696.7
+kernel: tet_mesh::fresh_fill ms_per_step=0.034428 Mcells_s=60914.1
+kernel: tet_mesh::face_assign ms_per_step=0.0331248 Mcells_s=63310.7
+kernel: tet_mesh::mark_cells ms_per_step=0.032744 Mcells_s=64046.9
+kernel: tet_mesh::face_move ms_per_step=0.0316127 Mcells_s=66339
+kernel: tet_mesh::face_low ms_per_step=0.0280589 Mcells_s=74741.1
+kernel: tet_mesh::fresh_counts ms_per_step=0.0255481 Mcells_s=82086.4
+kernel: tet_mesh::face_numbered ms_per_step=0.0202301 Mcells_s=103665
+kernel: tet_repair::retry_stuck ms_per_step=0.01661 Mcells_s=126258
+final_rebuild: build_ms=119.205 resort_ms=0 geometry_ms=9.46651 cells_ms=4.99557 total_ms=133.667 Mcells_s=15.6893
+== step wave 2097152 0.3
+# backend=Cuda n=2097152 distribution=wave box=1,1,1 displacement=0.3 steps=10
+start: clip_ms=58.9731 from_rings_ms=48.2359 start_ms=481.269 extra_vs_clip=7.16083 exact=1 rounds=2 bad_tets=35175 patched_cells=2097152 tets=14791286 tets_checksum=17490786523467656927 per_cell=7.05303 ring_entries_per_cell=60.2646 rings_checksum=1704357563411017315 rings_topology=10391640825618483602
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=498.576 resort_ms=0 geometry_ms=15.4305 cells_ms=5.23258 total_ms=514.006 faces=16888438 faces_per_cell=8.05303 cells_checksum=11375369712860223035
+gpuflips: step=1 gpu_ms=814.122 rounds=49 flips=11060084 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14760890 centres_faces_ms=54.2353 cells_ms=5.48118 resorted=0 resort_ms=0 step_ms=868.357 step_Mcells_s=2.41508 all_ms=873.838 advect_ms=38.0617 copy_ms=26.5016
+gpuflips: step=2 gpu_ms=9.07273 rounds=10 flips=74883 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14760209 centres_faces_ms=6.16973 cells_ms=4.76734 resorted=0 resort_ms=0 step_ms=15.2425 step_Mcells_s=137.586 all_ms=20.0098 advect_ms=34.6216 copy_ms=24.3913
+gpuflips: step=3 gpu_ms=8.75962 rounds=9 flips=74323 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14759206 centres_faces_ms=5.75364 cells_ms=4.61039 resorted=0 resort_ms=0 step_ms=14.5133 step_Mcells_s=144.499 all_ms=19.1237 advect_ms=32.9999 copy_ms=24.2219
+gpuflips: step=4 gpu_ms=8.69392 rounds=9 flips=73978 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14758686 centres_faces_ms=5.83124 cells_ms=4.64466 resorted=0 resort_ms=0 step_ms=14.5252 step_Mcells_s=144.381 all_ms=19.1698 advect_ms=34.7068 copy_ms=26.7624
+gpuflips: step=5 gpu_ms=8.81887 rounds=9 flips=74112 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14758214 centres_faces_ms=5.88324 cells_ms=4.69748 resorted=0 resort_ms=0 step_ms=14.7021 step_Mcells_s=142.643 all_ms=19.3996 advect_ms=30.8039 copy_ms=30.5731
+gpuflips: step=6 gpu_ms=9.21291 rounds=11 flips=74194 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14757636 centres_faces_ms=5.96513 cells_ms=4.76509 resorted=0 resort_ms=0 step_ms=15.178 step_Mcells_s=138.17 all_ms=19.9431 advect_ms=34.6048 copy_ms=26.1518
+gpuflips: step=7 gpu_ms=9.24037 rounds=11 flips=74307 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14756891 centres_faces_ms=6.03822 cells_ms=4.80444 resorted=0 resort_ms=0 step_ms=15.2786 step_Mcells_s=137.261 all_ms=20.083 advect_ms=28.7262 copy_ms=25.0134
+gpuflips: step=8 gpu_ms=9.22992 rounds=11 flips=74387 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14756468 centres_faces_ms=6.06367 cells_ms=4.84749 resorted=0 resort_ms=0 step_ms=15.2936 step_Mcells_s=137.126 all_ms=20.1411 advect_ms=33.917 copy_ms=27.4665
+gpuflips: step=9 gpu_ms=9.03298 rounds=10 flips=74486 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14755806 centres_faces_ms=6.11127 cells_ms=4.90111 resorted=0 resort_ms=0 step_ms=15.1443 step_Mcells_s=138.478 all_ms=20.0454 advect_ms=31.8085 copy_ms=25.7511
+gpuflips: step=10 gpu_ms=9.23527 rounds=11 flips=74696 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 rebuilt=0 rebuild_ms=0 tets=14949789 faces=14755304 centres_faces_ms=6.22369 cells_ms=5.06152 resorted=0 resort_ms=0 step_ms=15.459 step_Mcells_s=135.659 all_ms=20.5205 advect_ms=33.5811 copy_ms=29.8977
+kernel: Kokkos::View::initialization [positions_mirror] via memset ms_per_step=11.7373 Mcells_s=178.673
+kernel: deep_copy ms_per_step=4.77418 Mcells_s=439.269
+kernel: tet_repair::screen ms_per_step=3.86249 Mcells_s=542.954
+kernel: tet_mesh::faces ms_per_step=3.39632 Mcells_s=617.478
+kernel: tet_mesh::cell_sums ms_per_step=3.37869 Mcells_s=620.7
+kernel: tet_repair::apply ms_per_step=1.7037 Mcells_s=1230.94
+kernel: tet_repair::plan ms_per_step=1.55353 Mcells_s=1349.92
+kernel: tet_mesh::append_rings ms_per_step=0.825749 Mcells_s=2539.7
+kernel: tet_repair::find ms_per_step=0.751222 Mcells_s=2791.65
+kernel: tet_mesh::dirty_faces ms_per_step=0.578148 Mcells_s=3627.36
+kernel: tet_mesh::face_touched ms_per_step=0.566802 Mcells_s=3699.97
+kernel: tet_mesh::cell_sort ms_per_step=0.501117 Mcells_s=4184.96
+kernel: tet_mesh::cell_face_start ms_per_step=0.219835 Mcells_s=9539.65
+kernel: voronoi::snap ms_per_step=0.211798 Mcells_s=9901.67
+kernel: tet_mesh::marked_fill ms_per_step=0.190563 Mcells_s=11005
+kernel: tet_repair::unlist ms_per_step=0.144612 Mcells_s=14501.9
+kernel: exact_predicates::snap ms_per_step=0.115366 Mcells_s=18178.3
+kernel: tet_repair::release ms_per_step=0.107394 Mcells_s=19527.6
+kernel: tet_mesh::circumcentres ms_per_step=0.0961979 Mcells_s=21800.4
+kernel: voronoi::total_volume ms_per_step=0.0923449 Mcells_s=22710
+kernel: tet_mesh::marked_counts ms_per_step=0.0834373 Mcells_s=25134.5
+kernel: tet_mesh::face_release ms_per_step=0.0820638 Mcells_s=25555.1
+kernel: tet_mesh::face_offsets ms_per_step=0.08143 Mcells_s=25754
+kernel: tet_mesh::face_assign ms_per_step=0.0760147 Mcells_s=27588.8
+kernel: tet_mesh::fresh_fill ms_per_step=0.0712554 Mcells_s=29431.5
+kernel: tet_mesh::mark_cells ms_per_step=0.0657519 Mcells_s=31894.9
+kernel: Kokkos::View::initialization [positions] via memset ms_per_step=0.0586091 Mcells_s=35782
+kernel: tet_mesh::fresh_counts ms_per_step=0.0395056 Mcells_s=53085
+kernel: tet_mesh::face_move ms_per_step=0.0346889 Mcells_s=60456
+kernel: tet_mesh::face_low ms_per_step=0.0304351 Mcells_s=68905.7
+kernel: tet_mesh::face_numbered ms_per_step=0.0288127 Mcells_s=72785.8
+kernel: tet_repair::retry_stuck ms_per_step=0.017988 Mcells_s=116586
+final_rebuild: build_ms=135.239 resort_ms=0 geometry_ms=9.46344 cells_ms=4.44501 total_ms=149.148 Mcells_s=14.0609
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  paper_stages
+Node list: ravg1061
+Job start: Sun Nov 15 07:37:22 CET 2026
+Job end:   Sun Nov 15 07:39:41 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-paper
+Command:   /raven/u/uli/voronoi-cpp-paper/paper/scripts/stages_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32362452      paper_stag      1            36                             00:02:19      0:0
+  
+Maximum memory per node: 0.768557 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 8.2 %
+CO2 footprint: 2.8231 g (estimate based on total cluster power and electricity mix)
+  

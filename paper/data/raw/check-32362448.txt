@@ -1,0 +1,16 @@
+== check jittered 16777216
+# backend=Cuda n=16777216 distribution=jittered box=1,1,1 tiles=1x1x1 grid=256^3_per_tile repeats=3
+warp: build_ms=4.29221 construct_ms=395.257 construct_Mcells_s=42.4463 pipeline_Mcells_s=41.9903
+work0: mean=4 p99=4
+work1: mean=21.8909 p99=25
+work2: mean=15.9693 p99=21
+clip_checksum=13395265731859319126 clip_topology=11494039412358665188
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0, volume_error=6.65024e-14 min_volume=4.49379e-08 max_closure=1.85432e-16 faces_per_cell=15.909 faces=2*owned:yes centroid_checks=209 worst_centroid_error=5.01593e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.8909,15.9693  PASS
+== check uniform 16777216
+# backend=Cuda n=16777216 distribution=uniform box=1,1,1 tiles=1x1x1 grid=256^3_per_tile repeats=3
+warp: build_ms=8.03036 construct_ms=748.018 construct_Mcells_s=22.4289 pipeline_Mcells_s=22.1907
+work0: mean=6.22252 p99=9
+work1: mean=48.0429 p99=92
+work2: mean=17.9534 p99=28
+clip_checksum=15615661539219971390 clip_topology=13715659474423560244
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0, volume_error=2.42917e-13 min_volume=1.06901e-09 max_closure=2.52864e-16 faces_per_cell=15.5352 faces=2*owned:NO centroid_checks=131 worst_centroid_error=8.54947e-14 violations=0 per_cell(rings,clipped,cuts)=6.22252,48.0429,17.9534  FAIL

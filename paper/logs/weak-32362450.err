@@ -1,0 +1,24 @@
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-8c75b5e7-5d10-c603-0b31-79bc4c92d37a)
+wrote 16777216 points to /ptmp/uli/voronoi-paper/points/lattice_16777216.pts
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/lattice_16777216_0.03-32362450.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/lattice_16777216_0.1-32362450.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/lattice_16777216_0.3-32362450.trj
+wrote 16777216 points to /ptmp/uli/voronoi-paper/points/wave_16777216.pts
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/wave_16777216_0.03-32362450.trj
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Kokkos ERROR: Cuda memory space failed to allocate 1.172 GiB (label="tet_repair_stuck").
+/var/spool/slurmd/job32362450/slurm_script: line 48: 106393 Aborted                 "$bin/library_bench" step "$t"
+     106394 Done                    | sed "s/\"phase\":\"step\"/\"phase\":\"step\",\"spacings\":$d/"
+# failed: step 0.03 /ptmp/uli/voronoi-paper/points/wave_16777216.pts
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/wave_16777216_0.1-32362450.trj
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Kokkos ERROR: Cuda memory space failed to allocate 1.206 GiB (label="tet_repair_stuck").
+/var/spool/slurmd/job32362450/slurm_script: line 48: 106585 Aborted                 "$bin/library_bench" step "$t"
+     106586 Done                    | sed "s/\"phase\":\"step\"/\"phase\":\"step\",\"spacings\":$d/"
+# failed: step 0.1 /ptmp/uli/voronoi-paper/points/wave_16777216.pts
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/wave_16777216_0.3-32362450.trj
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Kokkos ERROR: Cuda memory space failed to allocate 1.261 GiB (label="tet_repair_stuck").
+/var/spool/slurmd/job32362450/slurm_script: line 48: 106949 Aborted                 "$bin/library_bench" step "$t"
+     106950 Done                    | sed "s/\"phase\":\"step\"/\"phase\":\"step\",\"spacings\":$d/"
+# failed: step 0.3 /ptmp/uli/voronoi-paper/points/wave_16777216.pts

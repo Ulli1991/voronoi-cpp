@@ -1,0 +1,17 @@
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-3a47c55c-837b-b3f4-ed9c-a96b5d253202)
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/jittered_2097152_0.01-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/jittered_2097152_1-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_2097152_0.01-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_2097152_1-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/uniform_2097152_0.01-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/uniform_2097152_1-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/clustered_2097152_0.01-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/clustered_2097152_1-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/halo_2097152_0.01-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/halo_2097152_1-32362451.trj
+wrote 2097152 points to /ptmp/uli/voronoi-paper/points/lattice_2097152.pts
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/lattice_2097152_0.01-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/lattice_2097152_1-32362451.trj
+wrote 2097152 points to /ptmp/uli/voronoi-paper/points/wave_2097152.pts
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/wave_2097152_0.01-32362451.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/wave_2097152_1-32362451.trj

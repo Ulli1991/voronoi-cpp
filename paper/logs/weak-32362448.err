@@ -1,0 +1,11 @@
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-7a8b9e26-d3ac-b540-cef8-1ab57f5cfbe0)
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/jittered_16777216_0.03-32362448.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/jittered_16777216_0.1-32362448.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/jittered_16777216_0.3-32362448.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_16777216_0.03-32362448.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_16777216_0.1-32362448.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_16777216_0.3-32362448.trj
+# failed: check uniform 16777216
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/uniform_16777216_0.03-32362448.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/uniform_16777216_0.1-32362448.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/uniform_16777216_0.3-32362448.trj

@@ -19,11 +19,11 @@ captions state the A100's SM clock. Other codes only from the like-for-like benc
 | 3b | `tried` (design decisions) | Every alternative tried since 2026-11-12, its measured rate change against the code before (dots: the values in the row; markers: the inputs it names), kept or dropped, and the structural reason (e.g. kNN: find-then-clip with a fixed k against the interleaved find-and-clip walk, −6 to −58 %). | `docs/tried.md` (parsed; the figure follows the list as rows are added); appendix table `figures/tried.md` from the same parse | **done**, 190 × 213 mm (`fig_tried.py`); rows without a baseline (Delaunay-first insertion: 0.38 M cells/s "when it finishes") and the precision rows are text only |
 | 4 | `quality` | Speed against quality per library and input, every code measured against our oracle the same way. | the oracle measurements listed below | **proposal**: measured by another agent |
 | 5 | (optional) `oracle_errors` | Relative volume error per input for voronoi-cpp (warp rebuild, exact start), and per code on halo input. | `paper/data/oracle_errors.csv` (per-cell errors from the benchmark's volumes, the same 1000-cell sample as `oracle_check`) | draft drawn (190 mm); may fold into Fig. 4 |
-| 6 | (optional) `performance` | Weak scaling 32³–256³ of rebuild, exact start and step on seven inputs, and the step rate against the displacement per step. | `paper/scripts/weak_scaling_a100.sh` (55cd6b1, gpu1) | **pending**: jobs 32362447–32362451 queued; `extract_sweep.py`, `fig_sweep.py` ready |
-| 7 | (optional) `ceiling` or `stages` | Where the step's time and bytes go per kernel, against the bandwidth budget for 5× and 10×. | `paper/data/ceiling.json` (main 69de1d3), or job 32362452 | `ceiling` draft on old data; `stages` pending |
+| 6 | (optional) `performance` | Weak scaling 32³–256³ of rebuild, exact start and step on seven inputs, and the step rate against the displacement per step. | `paper/scripts/weak_scaling_a100.sh` (55cd6b1, gpu1) | **held** for gpu1 (speed work): jobs 32362447–51 cancelled before they ran; resubmit with `submit_sweep.sh` after the speed branches merge; `extract_sweep.py`, `fig_sweep.py` ready |
+| 7 | (optional) `ceiling` or `stages` | Where the step's time and bytes go per kernel, against the bandwidth budget for 5× and 10×. | `paper/data/ceiling.json` (main 69de1d3), or job 32362452 | `ceiling` draft on old data; `stages` held (job 32362452 ran, raw output kept) |
 
-Long runs with and without re-sort (jobs 32362455, 32362456, `fig_resort.py`) and memory by array (job 32362454) are
-queued too; candidates for an appendix.
+Long runs with and without re-sort (jobs 32362455, and 32362456 cancelled mid-way; `fig_resort.py`) and memory by array
+(job 32362454) ran before the hold; raw output kept, held for a rerun after the speed merges; candidates for an appendix.
 
 **Captions of Figs. 1–2, 2D stand-ins.** Every panel is computed by the library's 2D mesh (`Mesh<2>`), which shares the
 3D mesh's structure; the code line under each panel names the 3D counterpart. The same in 3D: panel 1 (snapping, per

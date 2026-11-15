@@ -1,0 +1,505 @@
+# bin=/ptmp/uli/voronoi-paper/bin/55cd6b1 host=ravg1061 job=32362454
+# NVIDIA A100-SXM4-40GB, 1410 MHz, 1305 MHz
+== memory rebuild jittered 2097152
+memory: phase=positions_and_cell_list current_MB=128.494 peak_MB=128.494 peak_bytes_per_cell=61.2708 gpu_used_MB=669.057
+  cell_list_sort_scratch 0.567808 MB 0.270752 B/cell
+  cell_offsets 8.38862 MB 4 B/cell
+  particle_order 8.38861 MB 4 B/cell
+  positions 50.3316 MB 24 B/cell
+  slot_fine_keys 8.38861 MB 4 B/cell
+  slot_levels 2.09715 MB 1 B/cell
+  slot_positions 50.3316 MB 24 B/cell
+# backend=Cuda n=2097152 distribution=jittered box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=1
+warp: build_ms=1.161 construct_ms=49.2727 construct_Mcells_s=42.5622 pipeline_Mcells_s=41.5824
+memory: phase=warp current_MB=1470.67 peak_MB=1470.68 peak_bytes_per_cell=701.273 gpu_used_MB=2883.65
+  cell_centroid 50.3316 MB 24 B/cell
+  cell_closure 16.7772 MB 8 B/cell
+  cell_face_count 8.38861 MB 4 B/cell
+  cell_face_start 8.38861 MB 4 B/cell
+  cell_face_used 8e-06 MB 3.8147e-06 B/cell
+  cell_list_sort_scratch 0.567808 MB 0.270752 B/cell
+  cell_offsets 8.38862 MB 4 B/cell
+  cell_owned_count 8.38861 MB 4 B/cell
+  cell_status 8.38861 MB 4 B/cell
+  cell_volume 16.7772 MB 8 B/cell
+  cell_work 25.1658 MB 12 B/cell
+  face_area 553.648 MB 264 B/cell
+  face_centroid 553.648 MB 264 B/cell
+  face_neighbour 92.2747 MB 44 B/cell
+  particle_order 8.38861 MB 4 B/cell
+  positions 50.3316 MB 24 B/cell
+  shell_stencil 0.002456 MB 0.00117111 B/cell
+  shell_stencil_bound2 0.002456 MB 0.00117111 B/cell
+  shell_stencil_ends 2.4e-05 MB 1.14441e-05 B/cell
+  shell_warp_next_cell 8e-06 MB 3.8147e-06 B/cell
+  slot_fine_keys 8.38861 MB 4 B/cell
+  slot_levels 2.09715 MB 1 B/cell
+  slot_positions 50.3316 MB 24 B/cell
+== memory step jittered 2097152
+# backend=Cuda n=2097152 distribution=jittered box=1,1,1 displacement=0.1 steps=4
+start: clip_ms=56.9881 from_rings_ms=50.0025 start_ms=114.292 extra_vs_clip=1.00555 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14583412 tets_checksum=5432839122813726276 per_cell=6.95391 ring_entries_per_cell=59.374 rings_checksum=4597420765284248766 rings_topology=14312002267668502331
+memory: phase=positions_and_bench_start_kernels current_MB=50.3316 peak_MB=3556.63 peak_bytes_per_cell=1695.94 gpu_used_MB=1430.32
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=127.312 resort_ms=0 geometry_ms=12.9102 cells_ms=5.13894 total_ms=140.222 faces=16680564 faces_per_cell=7.95391 cells_checksum=9118950859045097172
+memory: phase=start_and_prepare current_MB=4100.04 peak_MB=4100.04 peak_bytes_per_cell=1955.05 gpu_used_MB=5521.87
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  cell_centroid 50.3316 MB 24 B/cell
+  cell_face 137.615 MB 65.6198 B/cell
+  cell_face_cursor 8.38861 MB 4 B/cell
+  cell_face_start 8.38862 MB 4 B/cell
+  cell_volume 16.7772 MB 8 B/cell
+  face_area 412.844 MB 196.859 B/cell
+  face_centroid 412.844 MB 196.859 B/cell
+  face_rings_counts 3.2e-05 MB 1.52588e-05 B/cell
+  face_rings_ids 86.0092 MB 41.0124 B/cell
+  face_rings_listed 8e-06 MB 3.8147e-06 B/cell
+  face_rings_neighbour 68.8073 MB 32.8099 B/cell
+  face_rings_numbered 16.4063 MB 7.82315 B/cell
+  face_rings_owner 68.8073 MB 32.8099 B/cell
+  face_rings_pool 1050.01 MB 500.682 B/cell
+  face_rings_ring_length 68.8073 MB 32.8099 B/cell
+  face_rings_ring_start 68.8073 MB 32.8099 B/cell
+  face_rings_start 65.6254 MB 31.2926 B/cell
+  face_rows 0.000128 MB 6.10352e-05 B/cell
+  positions 117.441 MB 56 B/cell
+  tet_adjacent 262.501 MB 125.17 B/cell
+  tet_centre 525.003 MB 250.341 B/cell
+  tet_edges 16.4063 MB 7.82315 B/cell
+  tet_repair_alive 16.4063 MB 7.82315 B/cell
+  tet_repair_counters 4e-05 MB 1.90735e-05 B/cell
+  tet_repair_dirty 65.6254 MB 31.2926 B/cell
+  tet_repair_free 1.0295 MB 0.490902 B/cell
+  tet_repair_freed 2.10125 MB 1.00195 B/cell
+  tet_repair_listed 65.6254 MB 31.2926 B/cell
+  tet_repair_lock 131.251 MB 62.5852 B/cell
+  tet_repair_plans 18.9112 MB 9.01758 B/cell
+  tet_repair_point 33.5544 MB 16 B/cell
+  tet_repair_stuck 4.2025 MB 2.00391 B/cell
+  tet_repair_touched 16.4063 MB 7.82315 B/cell
+  tet_repair_touched_list 16.4104 MB 7.8251 B/cell
+  tet_repair_work 4.2025 MB 2.00391 B/cell
+  tet_vertex 262.501 MB 125.17 B/cell
+memory: phase=steps current_MB=4100.11 peak_MB=4150.45 peak_bytes_per_cell=1979.09 gpu_used_MB=5521.87
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  Kokkos::InternalScratchSpace 0.071168 MB 0.0339355 B/cell
+  cell_centroid 50.3316 MB 24 B/cell
+  cell_face 137.615 MB 65.6198 B/cell
+  cell_face_cursor 8.38861 MB 4 B/cell
+  cell_face_start 8.38862 MB 4 B/cell
+  cell_volume 16.7772 MB 8 B/cell
+  face_area 412.844 MB 196.859 B/cell
+  face_centroid 412.844 MB 196.859 B/cell
+  face_rings_counts 3.2e-05 MB 1.52588e-05 B/cell
+  face_rings_ids 86.0092 MB 41.0124 B/cell
+  face_rings_listed 8e-06 MB 3.8147e-06 B/cell
+  face_rings_neighbour 68.8073 MB 32.8099 B/cell
+  face_rings_numbered 16.4063 MB 7.82315 B/cell
+  face_rings_owner 68.8073 MB 32.8099 B/cell
+  face_rings_pool 1050.01 MB 500.682 B/cell
+  face_rings_ring_length 68.8073 MB 32.8099 B/cell
+  face_rings_ring_start 68.8073 MB 32.8099 B/cell
+  face_rings_start 65.6254 MB 31.2926 B/cell
+  face_rows 0.000128 MB 6.10352e-05 B/cell
+  positions 167.772 MB 80 B/cell
+  tet_adjacent 262.501 MB 125.17 B/cell
+  tet_centre 525.003 MB 250.341 B/cell
+  tet_edges 16.4063 MB 7.82315 B/cell
+  tet_repair_alive 16.4063 MB 7.82315 B/cell
+  tet_repair_counters 4e-05 MB 1.90735e-05 B/cell
+  tet_repair_dirty 65.6254 MB 31.2926 B/cell
+  tet_repair_free 1.0295 MB 0.490902 B/cell
+  tet_repair_freed 2.10125 MB 1.00195 B/cell
+  tet_repair_listed 65.6254 MB 31.2926 B/cell
+  tet_repair_lock 131.251 MB 62.5852 B/cell
+  tet_repair_plans 18.9112 MB 9.01758 B/cell
+  tet_repair_point 33.5544 MB 16 B/cell
+  tet_repair_stuck 4.2025 MB 2.00391 B/cell
+  tet_repair_touched 16.4063 MB 7.82315 B/cell
+  tet_repair_touched_list 16.4104 MB 7.8251 B/cell
+  tet_repair_work 4.2025 MB 2.00391 B/cell
+  tet_vertex 262.501 MB 125.17 B/cell
+final_rebuild: build_ms=196.536 resort_ms=0 geometry_ms=12.6016 cells_ms=4.89287 total_ms=214.031 Mcells_s=9.79838
+== memory rebuild halo 2097152
+memory: phase=positions_and_cell_list current_MB=128.494 peak_MB=128.494 peak_bytes_per_cell=61.2708 gpu_used_MB=669.057
+  cell_list_sort_scratch 0.567808 MB 0.270752 B/cell
+  cell_offsets 8.38862 MB 4 B/cell
+  particle_order 8.38861 MB 4 B/cell
+  positions 50.3316 MB 24 B/cell
+  slot_fine_keys 8.38861 MB 4 B/cell
+  slot_levels 2.09715 MB 1 B/cell
+  slot_positions 50.3316 MB 24 B/cell
+# backend=Cuda n=2097152 distribution=halo box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=1
+warp: build_ms=1.84682 construct_ms=135.932 construct_Mcells_s=15.428 pipeline_Mcells_s=15.2212
+memory: phase=warp current_MB=1470.67 peak_MB=1470.68 peak_bytes_per_cell=701.273 gpu_used_MB=5127.6
+  cell_centroid 50.3316 MB 24 B/cell
+  cell_closure 16.7772 MB 8 B/cell
+  cell_face_count 8.38861 MB 4 B/cell
+  cell_face_start 8.38861 MB 4 B/cell
+  cell_face_used 8e-06 MB 3.8147e-06 B/cell
+  cell_list_sort_scratch 0.567808 MB 0.270752 B/cell
+  cell_offsets 8.38862 MB 4 B/cell
+  cell_owned_count 8.38861 MB 4 B/cell
+  cell_status 8.38861 MB 4 B/cell
+  cell_volume 16.7772 MB 8 B/cell
+  cell_work 25.1658 MB 12 B/cell
+  face_area 553.648 MB 264 B/cell
+  face_centroid 553.648 MB 264 B/cell
+  face_neighbour 92.2747 MB 44 B/cell
+  particle_order 8.38861 MB 4 B/cell
+  positions 50.3316 MB 24 B/cell
+  shell_stencil 0.002456 MB 0.00117111 B/cell
+  shell_stencil_bound2 0.002456 MB 0.00117111 B/cell
+  shell_stencil_ends 2.4e-05 MB 1.14441e-05 B/cell
+  shell_warp_next_cell 8e-06 MB 3.8147e-06 B/cell
+  slot_fine_keys 8.38861 MB 4 B/cell
+  slot_levels 2.09715 MB 1 B/cell
+  slot_positions 50.3316 MB 24 B/cell
+== memory step halo 2097152
+# backend=Cuda n=2097152 distribution=halo box=1,1,1 displacement=0.1 steps=4
+start: clip_ms=149.956 from_rings_ms=76.2841 start_ms=216.925 extra_vs_clip=0.446592 exact=1 rounds=1 bad_tets=0 patched_cells=0 tets=14180474 tets_checksum=752029910958384503 per_cell=6.76178 ring_entries_per_cell=59.125 rings_checksum=17883358698937515552 rings_topology=7951306052149369673
+memory: phase=positions_and_bench_start_kernels current_MB=50.3316 peak_MB=3483.7 peak_bytes_per_cell=1661.16 gpu_used_MB=3674.28
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=217.699 resort_ms=0 geometry_ms=12.9009 cells_ms=5.28043 total_ms=230.6 faces=16277626 faces_per_cell=7.76178 cells_checksum=3032620572523510991
+memory: phase=start_and_prepare current_MB=3998.66 peak_MB=3998.66 peak_bytes_per_cell=1906.71 gpu_used_MB=7673.54
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  cell_centroid 50.3316 MB 24 B/cell
+  cell_face 134.29 MB 64.0347 B/cell
+  cell_face_cursor 8.38861 MB 4 B/cell
+  cell_face_start 8.38862 MB 4 B/cell
+  cell_volume 16.7772 MB 8 B/cell
+  face_area 402.871 MB 192.104 B/cell
+  face_centroid 402.871 MB 192.104 B/cell
+  face_rings_counts 3.2e-05 MB 1.52588e-05 B/cell
+  face_rings_ids 83.9315 MB 40.0217 B/cell
+  face_rings_listed 8e-06 MB 3.8147e-06 B/cell
+  face_rings_neighbour 67.1452 MB 32.0173 B/cell
+  face_rings_numbered 15.953 MB 7.607 B/cell
+  face_rings_owner 67.1452 MB 32.0173 B/cell
+  face_rings_pool 1020.99 MB 486.848 B/cell
+  face_rings_ring_length 67.1452 MB 32.0173 B/cell
+  face_rings_ring_start 67.1452 MB 32.0173 B/cell
+  face_rings_start 63.8121 MB 30.428 B/cell
+  face_rows 0.000128 MB 6.10352e-05 B/cell
+  positions 117.441 MB 56 B/cell
+  tet_adjacent 255.249 MB 121.712 B/cell
+  tet_centre 510.497 MB 243.424 B/cell
+  tet_edges 15.953 MB 7.607 B/cell
+  tet_repair_alive 15.953 MB 7.607 B/cell
+  tet_repair_counters 4e-05 MB 1.90735e-05 B/cell
+  tet_repair_dirty 63.8121 MB 30.428 B/cell
+  tet_repair_free 1.00116 MB 0.47739 B/cell
+  tet_repair_freed 2.10125 MB 1.00195 B/cell
+  tet_repair_listed 63.8121 MB 30.428 B/cell
+  tet_repair_lock 127.624 MB 60.856 B/cell
+  tet_repair_plans 18.9112 MB 9.01758 B/cell
+  tet_repair_point 33.5544 MB 16 B/cell
+  tet_repair_stuck 4.2025 MB 2.00391 B/cell
+  tet_repair_touched 15.953 MB 7.607 B/cell
+  tet_repair_touched_list 15.9571 MB 7.60895 B/cell
+  tet_repair_work 4.2025 MB 2.00391 B/cell
+  tet_vertex 255.249 MB 121.712 B/cell
+memory: phase=steps current_MB=3998.66 peak_MB=4048.99 peak_bytes_per_cell=1930.71 gpu_used_MB=7673.54
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  cell_centroid 50.3316 MB 24 B/cell
+  cell_face 134.29 MB 64.0347 B/cell
+  cell_face_cursor 8.38861 MB 4 B/cell
+  cell_face_start 8.38862 MB 4 B/cell
+  cell_volume 16.7772 MB 8 B/cell
+  face_area 402.871 MB 192.104 B/cell
+  face_centroid 402.871 MB 192.104 B/cell
+  face_rings_counts 3.2e-05 MB 1.52588e-05 B/cell
+  face_rings_ids 83.9315 MB 40.0217 B/cell
+  face_rings_listed 8e-06 MB 3.8147e-06 B/cell
+  face_rings_neighbour 67.1452 MB 32.0173 B/cell
+  face_rings_numbered 15.953 MB 7.607 B/cell
+  face_rings_owner 67.1452 MB 32.0173 B/cell
+  face_rings_pool 1020.99 MB 486.848 B/cell
+  face_rings_ring_length 67.1452 MB 32.0173 B/cell
+  face_rings_ring_start 67.1452 MB 32.0173 B/cell
+  face_rings_start 63.8121 MB 30.428 B/cell
+  face_rows 0.000128 MB 6.10352e-05 B/cell
+  positions 167.772 MB 80 B/cell
+  tet_adjacent 255.249 MB 121.712 B/cell
+  tet_centre 510.497 MB 243.424 B/cell
+  tet_edges 15.953 MB 7.607 B/cell
+  tet_repair_alive 15.953 MB 7.607 B/cell
+  tet_repair_counters 4e-05 MB 1.90735e-05 B/cell
+  tet_repair_dirty 63.8121 MB 30.428 B/cell
+  tet_repair_free 1.00116 MB 0.47739 B/cell
+  tet_repair_freed 2.10125 MB 1.00195 B/cell
+  tet_repair_listed 63.8121 MB 30.428 B/cell
+  tet_repair_lock 127.624 MB 60.856 B/cell
+  tet_repair_plans 18.9112 MB 9.01758 B/cell
+  tet_repair_point 33.5544 MB 16 B/cell
+  tet_repair_stuck 4.2025 MB 2.00391 B/cell
+  tet_repair_touched 15.953 MB 7.607 B/cell
+  tet_repair_touched_list 15.9571 MB 7.60895 B/cell
+  tet_repair_work 4.2025 MB 2.00391 B/cell
+  tet_vertex 255.249 MB 121.712 B/cell
+final_rebuild: build_ms=311.414 resort_ms=0 geometry_ms=12.7555 cells_ms=5.05816 total_ms=329.227 Mcells_s=6.36992
+== memory rebuild jittered 16777216
+memory: phase=positions_and_cell_list current_MB=1027.89 peak_MB=1027.89 peak_bytes_per_cell=61.2672 gpu_used_MB=1570.83
+  cell_list_sort_scratch 4.48256 MB 0.267181 B/cell
+  cell_offsets 67.1089 MB 4 B/cell
+  particle_order 67.1089 MB 4 B/cell
+  positions 402.653 MB 24 B/cell
+  slot_fine_keys 67.1089 MB 4 B/cell
+  slot_levels 16.7772 MB 1 B/cell
+  slot_positions 402.653 MB 24 B/cell
+# backend=Cuda n=16777216 distribution=jittered box=1,1,1 tiles=1x1x1 grid=256^3_per_tile repeats=1
+warp: build_ms=8.54826 construct_ms=391.921 construct_Mcells_s=42.8076 pipeline_Mcells_s=41.8939
+memory: phase=warp current_MB=11001.9 peak_MB=11002 peak_bytes_per_cell=655.767 gpu_used_MB=12417.3
+  cell_centroid 402.653 MB 24 B/cell
+  cell_closure 134.218 MB 8 B/cell
+  cell_face_count 67.1089 MB 4 B/cell
+  cell_face_start 67.1089 MB 4 B/cell
+  cell_face_used 8e-06 MB 4.76837e-07 B/cell
+  cell_list_sort_scratch 4.48256 MB 0.267181 B/cell
+  cell_offsets 67.1089 MB 4 B/cell
+  cell_owned_count 67.1089 MB 4 B/cell
+  cell_status 67.1089 MB 4 B/cell
+  cell_volume 134.218 MB 8 B/cell
+  cell_work 201.327 MB 12 B/cell
+  face_area 4076.86 MB 243 B/cell
+  face_centroid 4076.86 MB 243 B/cell
+  face_neighbour 679.477 MB 40.5 B/cell
+  particle_order 67.1089 MB 4 B/cell
+  positions 402.653 MB 24 B/cell
+  shell_stencil 0.002456 MB 0.000146389 B/cell
+  shell_stencil_bound2 0.002456 MB 0.000146389 B/cell
+  shell_stencil_ends 2.4e-05 MB 1.43051e-06 B/cell
+  shell_warp_next_cell 8e-06 MB 4.76837e-07 B/cell
+  slot_fine_keys 67.1089 MB 4 B/cell
+  slot_levels 16.7772 MB 1 B/cell
+  slot_positions 402.653 MB 24 B/cell
+== memory step jittered 16777216
+# backend=Cuda n=16777216 distribution=jittered box=1,1,1 displacement=0.1 steps=4
+start: clip_ms=453.835 from_rings_ms=374.673 start_ms=1321.35 extra_vs_clip=1.91153 exact=1 rounds=2 bad_tets=44 patched_cells=830 tets=116677551 tets_checksum=4539602371198357898 per_cell=6.95452 ring_entries_per_cell=59.5303 rings_checksum=3355042738836925068 rings_topology=10584954506024271535
+memory: phase=positions_and_bench_start_kernels current_MB=402.653 peak_MB=28454.8 peak_bytes_per_cell=1696.04 gpu_used_MB=1935.74
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=1951.84 resort_ms=0 geometry_ms=99.3059 cells_ms=36.3827 total_ms=2051.15 faces=133454767 faces_per_cell=7.95452 cells_checksum=11591294928884846379
+memory: phase=start_and_prepare current_MB=32802.5 peak_MB=32802.5 peak_bytes_per_cell=1955.18 gpu_used_MB=34374.5
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  cell_centroid 402.653 MB 24 B/cell
+  cell_face 1101 MB 65.6248 B/cell
+  cell_face_cursor 67.1089 MB 4 B/cell
+  cell_face_start 67.1089 MB 4 B/cell
+  cell_volume 134.218 MB 8 B/cell
+  face_area 3303.01 MB 196.874 B/cell
+  face_centroid 3303.01 MB 196.874 B/cell
+  face_rings_counts 3.2e-05 MB 1.90735e-06 B/cell
+  face_rings_ids 688.126 MB 41.0155 B/cell
+  face_rings_listed 8e-06 MB 4.76837e-07 B/cell
+  face_rings_neighbour 550.501 MB 32.8124 B/cell
+  face_rings_numbered 131.262 MB 7.82384 B/cell
+  face_rings_owner 550.501 MB 32.8124 B/cell
+  face_rings_pool 8400.78 MB 500.726 B/cell
+  face_rings_ring_length 550.501 MB 32.8124 B/cell
+  face_rings_ring_start 550.501 MB 32.8124 B/cell
+  face_rings_start 525.049 MB 31.2954 B/cell
+  face_rows 0.000128 MB 7.62939e-06 B/cell
+  positions 939.524 MB 56 B/cell
+  tet_adjacent 2100.2 MB 125.181 B/cell
+  tet_centre 4200.39 MB 250.363 B/cell
+  tet_edges 131.262 MB 7.82384 B/cell
+  tet_repair_alive 131.262 MB 7.82384 B/cell
+  tet_repair_counters 4e-05 MB 2.38419e-06 B/cell
+  tet_repair_dirty 525.049 MB 31.2954 B/cell
+  tet_repair_free 8.20798 MB 0.489234 B/cell
+  tet_repair_freed 16.7813 MB 1.00024 B/cell
+  tet_repair_listed 525.049 MB 31.2954 B/cell
+  tet_repair_lock 1050.1 MB 62.5907 B/cell
+  tet_repair_plans 151.032 MB 9.0022 B/cell
+  tet_repair_point 268.435 MB 16 B/cell
+  tet_repair_stuck 33.5626 MB 2.00049 B/cell
+  tet_repair_touched 131.262 MB 7.82384 B/cell
+  tet_repair_touched_list 131.266 MB 7.82408 B/cell
+  tet_repair_work 33.5626 MB 2.00049 B/cell
+  tet_vertex 2100.2 MB 125.181 B/cell
+memory: phase=steps current_MB=32802.7 peak_MB=33205.4 peak_bytes_per_cell=1979.19 gpu_used_MB=34376.6
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  Kokkos::InternalScratchSpace 0.262144 MB 0.015625 B/cell
+  cell_centroid 402.653 MB 24 B/cell
+  cell_face 1101 MB 65.6248 B/cell
+  cell_face_cursor 67.1089 MB 4 B/cell
+  cell_face_start 67.1089 MB 4 B/cell
+  cell_volume 134.218 MB 8 B/cell
+  face_area 3303.01 MB 196.874 B/cell
+  face_centroid 3303.01 MB 196.874 B/cell
+  face_rings_counts 3.2e-05 MB 1.90735e-06 B/cell
+  face_rings_ids 688.126 MB 41.0155 B/cell
+  face_rings_listed 8e-06 MB 4.76837e-07 B/cell
+  face_rings_neighbour 550.501 MB 32.8124 B/cell
+  face_rings_numbered 131.262 MB 7.82384 B/cell
+  face_rings_owner 550.501 MB 32.8124 B/cell
+  face_rings_pool 8400.78 MB 500.726 B/cell
+  face_rings_ring_length 550.501 MB 32.8124 B/cell
+  face_rings_ring_start 550.501 MB 32.8124 B/cell
+  face_rings_start 525.049 MB 31.2954 B/cell
+  face_rows 0.000128 MB 7.62939e-06 B/cell
+  positions 1342.18 MB 80 B/cell
+  tet_adjacent 2100.2 MB 125.181 B/cell
+  tet_centre 4200.39 MB 250.363 B/cell
+  tet_edges 131.262 MB 7.82384 B/cell
+  tet_repair_alive 131.262 MB 7.82384 B/cell
+  tet_repair_counters 4e-05 MB 2.38419e-06 B/cell
+  tet_repair_dirty 525.049 MB 31.2954 B/cell
+  tet_repair_free 8.20798 MB 0.489234 B/cell
+  tet_repair_freed 16.7813 MB 1.00024 B/cell
+  tet_repair_listed 525.049 MB 31.2954 B/cell
+  tet_repair_lock 1050.1 MB 62.5907 B/cell
+  tet_repair_plans 151.032 MB 9.0022 B/cell
+  tet_repair_point 268.435 MB 16 B/cell
+  tet_repair_stuck 33.5626 MB 2.00049 B/cell
+  tet_repair_touched 131.262 MB 7.82384 B/cell
+  tet_repair_touched_list 131.266 MB 7.82408 B/cell
+  tet_repair_work 33.5626 MB 2.00049 B/cell
+  tet_vertex 2100.2 MB 125.181 B/cell
+final_rebuild: build_ms=2580.64 resort_ms=0 geometry_ms=98.949 cells_ms=36.4137 total_ms=2716 Mcells_s=6.17717
+== memory rebuild halo 16777216
+memory: phase=positions_and_cell_list current_MB=1027.89 peak_MB=1027.89 peak_bytes_per_cell=61.2672 gpu_used_MB=1570.83
+  cell_list_sort_scratch 4.48256 MB 0.267181 B/cell
+  cell_offsets 67.1089 MB 4 B/cell
+  particle_order 67.1089 MB 4 B/cell
+  positions 402.653 MB 24 B/cell
+  slot_fine_keys 67.1089 MB 4 B/cell
+  slot_levels 16.7772 MB 1 B/cell
+  slot_positions 402.653 MB 24 B/cell
+# backend=Cuda n=16777216 distribution=halo box=1,1,1 tiles=1x1x1 grid=256^3_per_tile repeats=1
+warp: build_ms=16.405 construct_ms=943.403 construct_Mcells_s=17.7837 pipeline_Mcells_s=17.4798
+memory: phase=warp current_MB=11001.9 peak_MB=11002 peak_bytes_per_cell=655.767 gpu_used_MB=14661.3
+  cell_centroid 402.653 MB 24 B/cell
+  cell_closure 134.218 MB 8 B/cell
+  cell_face_count 67.1089 MB 4 B/cell
+  cell_face_start 67.1089 MB 4 B/cell
+  cell_face_used 8e-06 MB 4.76837e-07 B/cell
+  cell_list_sort_scratch 4.48256 MB 0.267181 B/cell
+  cell_offsets 67.1089 MB 4 B/cell
+  cell_owned_count 67.1089 MB 4 B/cell
+  cell_status 67.1089 MB 4 B/cell
+  cell_volume 134.218 MB 8 B/cell
+  cell_work 201.327 MB 12 B/cell
+  face_area 4076.86 MB 243 B/cell
+  face_centroid 4076.86 MB 243 B/cell
+  face_neighbour 679.477 MB 40.5 B/cell
+  particle_order 67.1089 MB 4 B/cell
+  positions 402.653 MB 24 B/cell
+  shell_stencil 0.002456 MB 0.000146389 B/cell
+  shell_stencil_bound2 0.002456 MB 0.000146389 B/cell
+  shell_stencil_ends 2.4e-05 MB 1.43051e-06 B/cell
+  shell_warp_next_cell 8e-06 MB 4.76837e-07 B/cell
+  slot_fine_keys 67.1089 MB 4 B/cell
+  slot_levels 16.7772 MB 1 B/cell
+  slot_positions 402.653 MB 24 B/cell
+== memory step halo 16777216
+# backend=Cuda n=16777216 distribution=halo box=1,1,1 displacement=0.1 steps=4
+start: clip_ms=1043.83 from_rings_ms=352.027 start_ms=1917.46 extra_vs_clip=0.836946 exact=1 rounds=2 bad_tets=24 patched_cells=393 tets=113480057 tets_checksum=8740373643256897457 per_cell=6.76394 ring_entries_per_cell=58.9219 rings_checksum=1256223946177761639 rings_topology=6529001097505970692
+memory: phase=positions_and_bench_start_kernels current_MB=402.653 peak_MB=27876.1 peak_bytes_per_cell=1661.54 gpu_used_MB=4026.6
+layout: curve=1 every=0 far=0 owner_faces=0 owner_bit=0
+mesh: build_ms=2413.7 resort_ms=0 geometry_ms=101.016 cells_ms=38.6557 total_ms=2514.71 faces=130257273 faces_per_cell=7.76394 cells_checksum=5549020873279510660
+memory: phase=start_and_prepare current_MB=31998 peak_MB=31998 peak_bytes_per_cell=1907.23 gpu_used_MB=35672.6
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  cell_centroid 402.653 MB 24 B/cell
+  cell_face 1074.62 MB 64.0525 B/cell
+  cell_face_cursor 67.1089 MB 4 B/cell
+  cell_face_start 67.1089 MB 4 B/cell
+  cell_volume 134.218 MB 8 B/cell
+  face_area 3223.87 MB 192.157 B/cell
+  face_centroid 3223.87 MB 192.157 B/cell
+  face_rings_counts 3.2e-05 MB 1.90735e-06 B/cell
+  face_rings_ids 671.639 MB 40.0328 B/cell
+  face_rings_listed 8e-06 MB 4.76837e-07 B/cell
+  face_rings_neighbour 537.311 MB 32.0262 B/cell
+  face_rings_numbered 127.665 MB 7.60943 B/cell
+  face_rings_owner 537.311 MB 32.0262 B/cell
+  face_rings_pool 8170.56 MB 487.004 B/cell
+  face_rings_ring_length 537.311 MB 32.0262 B/cell
+  face_rings_ring_start 537.311 MB 32.0262 B/cell
+  face_rings_start 510.66 MB 30.4377 B/cell
+  face_rows 0.000128 MB 7.62939e-06 B/cell
+  positions 939.524 MB 56 B/cell
+  tet_adjacent 2042.64 MB 121.751 B/cell
+  tet_centre 4085.28 MB 243.502 B/cell
+  tet_edges 127.665 MB 7.60943 B/cell
+  tet_repair_alive 127.665 MB 7.60943 B/cell
+  tet_repair_counters 4e-05 MB 2.38419e-06 B/cell
+  tet_repair_dirty 510.66 MB 30.4377 B/cell
+  tet_repair_free 7.98316 MB 0.475833 B/cell
+  tet_repair_freed 16.7813 MB 1.00024 B/cell
+  tet_repair_listed 510.66 MB 30.4377 B/cell
+  tet_repair_lock 1021.32 MB 60.8754 B/cell
+  tet_repair_plans 151.032 MB 9.0022 B/cell
+  tet_repair_point 268.435 MB 16 B/cell
+  tet_repair_stuck 33.5626 MB 2.00049 B/cell
+  tet_repair_touched 127.665 MB 7.60943 B/cell
+  tet_repair_touched_list 127.669 MB 7.60967 B/cell
+  tet_repair_work 33.5626 MB 2.00049 B/cell
+  tet_vertex 2042.64 MB 121.751 B/cell
+memory: phase=steps current_MB=31998.1 peak_MB=32400.7 peak_bytes_per_cell=1931.23 gpu_used_MB=35674.7
+  Kokkos::CudaSpace::TeamScratchMemory 0 MB 0 B/cell
+  Kokkos::InternalScratchSpace 0.120704 MB 0.00719452 B/cell
+  cell_centroid 402.653 MB 24 B/cell
+  cell_face 1074.62 MB 64.0525 B/cell
+  cell_face_cursor 67.1089 MB 4 B/cell
+  cell_face_start 67.1089 MB 4 B/cell
+  cell_volume 134.218 MB 8 B/cell
+  face_area 3223.87 MB 192.157 B/cell
+  face_centroid 3223.87 MB 192.157 B/cell
+  face_rings_counts 3.2e-05 MB 1.90735e-06 B/cell
+  face_rings_ids 671.639 MB 40.0328 B/cell
+  face_rings_listed 8e-06 MB 4.76837e-07 B/cell
+  face_rings_neighbour 537.311 MB 32.0262 B/cell
+  face_rings_numbered 127.665 MB 7.60943 B/cell
+  face_rings_owner 537.311 MB 32.0262 B/cell
+  face_rings_pool 8170.56 MB 487.004 B/cell
+  face_rings_ring_length 537.311 MB 32.0262 B/cell
+  face_rings_ring_start 537.311 MB 32.0262 B/cell
+  face_rings_start 510.66 MB 30.4377 B/cell
+  face_rows 0.000128 MB 7.62939e-06 B/cell
+  positions 1342.18 MB 80 B/cell
+  tet_adjacent 2042.64 MB 121.751 B/cell
+  tet_centre 4085.28 MB 243.502 B/cell
+  tet_edges 127.665 MB 7.60943 B/cell
+  tet_repair_alive 127.665 MB 7.60943 B/cell
+  tet_repair_counters 4e-05 MB 2.38419e-06 B/cell
+  tet_repair_dirty 510.66 MB 30.4377 B/cell
+  tet_repair_free 7.98316 MB 0.475833 B/cell
+  tet_repair_freed 16.7813 MB 1.00024 B/cell
+  tet_repair_listed 510.66 MB 30.4377 B/cell
+  tet_repair_lock 1021.32 MB 60.8754 B/cell
+  tet_repair_plans 151.032 MB 9.0022 B/cell
+  tet_repair_point 268.435 MB 16 B/cell
+  tet_repair_stuck 33.5626 MB 2.00049 B/cell
+  tet_repair_touched 127.665 MB 7.60943 B/cell
+  tet_repair_touched_list 127.669 MB 7.60967 B/cell
+  tet_repair_work 33.5626 MB 2.00049 B/cell
+  tet_vertex 2042.64 MB 121.751 B/cell
+final_rebuild: build_ms=2740.38 resort_ms=0 geometry_ms=100.901 cells_ms=37.8094 total_ms=2879.09 Mcells_s=5.82727
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  paper_stages
+Node list: ravg1061
+Job start: Sun Nov 15 07:37:22 CET 2026
+Job end:   Sun Nov 15 07:40:12 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-paper
+Command:   /raven/u/uli/voronoi-cpp-paper/paper/scripts/stages_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32362454      paper_stag      1            36                             00:02:50      0:0
+  
+Maximum memory per node: 5.644251 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 6.0 %
+CO2 footprint: 3.4527 g (estimate based on total cluster power and electricity mix)
+  
