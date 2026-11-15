@@ -278,8 +278,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
     const bool with_rings = out.with_rings(), with_faces = !out.without_faces();
 
     Kokkos::parallel_for(
-        "shell_voronoi::construct", cell_policy(exec, selection.count(n)),
-        KOKKOS_LAMBDA(int i) {
+        "shell_voronoi::construct", cell_policy(exec, selection.count(n)), KOKKOS_LAMBDA(int i) {
             const int t = selection.slot(i);
             const int id = grid.order(t);
             const int before = out.status(id);
@@ -448,7 +447,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         break;
                     }
                     // The plane shared with the next vertex bounds the face there.
-                    if (record) out.rings(ring_at + ring_used + 2 + length) = cell.id[cell.corner[current][(at + 2) % 3]];
+                    if (record)
+                        out.rings(ring_at + ring_used + 2 + length) = cell.id[cell.corner[current][(at + 2) % 3]];
                     ++length;
                     const int next = cell.adjacent[current][(at + 2) % 3];
                     const Vec3 x = cell.position(next, unit);
