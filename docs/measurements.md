@@ -60,6 +60,41 @@ A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under 
 with our warp rebuild as a same-GPU reference. Inputs: jobs 32225761 (generators) and 32234292 (blue noise, 100 Lloyd
 iterations). Oracle checks: job 32269164 and accuracy-main-login.jsonl (one core, login node).
 
+### Application inputs: cosmic web, fcc solid, surface (2026-11-15)
+
+The three application inputs of the Inputs table, 128³ and 256³ points (fcc solid: 2²⁰ and 2²³ atoms), point files from
+`bench/libraries/make_points_a100.sh` (job 32367403). voronoi-cpp 631af46 (main c42c230 + the generators), one A100 at
+1305 MHz, jobs 32367524, 32367883, 32367884; M cells/s, median of 3 (steps: of steps 2 to 10 at 0.03 spacings).
+
+| M cells/s | cosmic web 128³ / 256³ | surface 128³ | fcc solid 2²⁰ / 2²³ |
+|---|---|---|---|
+| warp rebuild (cell list + clipping) | 12.0 / 12.8 | 0.036, 476 cells refused | 30.6 / 32.4 |
+| exact start (`Mesh::update` + `update_cells`) | 5.1 / 4.9 | 0.026 | 12.9 / 9.5 |
+| moving step, 0.03 spacings | 201 | 139 | 188 |
+
+Peak device memory at 128³: 740 B/cell for the warp rebuild, 1869 B/cell for the exact start. Oracle checks (job
+32369335, 1000 sampled cells each): every cell present and a largest relative volume error of 2.3e-13 for the exact
+start, the moving steps, and the warp rebuild on cosmic web and fcc solid; the warp rebuild on the surface misses 476
+cells (sum of volumes − 1 = −1.1e-3). `voronoi_bench rebuild --check` (job 32367880) passes on cosmic web 128³ and the
+fcc solid (all certified, closure below 3e-16, volume sum within 5e-14); cosmic web 256³ fails only `faces=2*owned`,
+the known one-sided zero-area faces of clipping alone. `step --verify` passes all 10 steps on cosmic web at 64³ and on
+the fcc solid at 32³ unit cells.
+
+Surface: clipping refuses cells (status degenerate: 69 at 64³, 476 at 128³, and one at 32³ on the OpenMP backend) and
+runs about 300 times slower than on jittered points: its needle cells reach about 0.1 box into empty space, so each
+clips about 6000 neighbours instead of 75. The exact start inherits the cost, since it clips first. Issue
+[#60](https://github.com/Ulli1991/voronoi-cpp/issues/60), with a 953-point case. The mesh itself is right: Delaunay
+exact in every step (`failing=0`), volumes within 2.3e-13 of the oracle, moving steps at 139 M cells/s.
+
+The other libraries (`bench/libraries/results/summary.md`, section "Application inputs"; A100 chains 32367907 to
+32367911 and 32370411, CPU jobs 32367538 to 32367544): the kNN codes lose cells wherever a cell has more neighbours
+than K. On cosmic web VoroGPU K 190 misses 2.4 % of the cells (sum of volumes − 1 = −0.038), K 90 and Liu et al. 19 %,
+Basselin et al. (white-noise setting) 673 cells; on the surface they lose almost every cell. On the fcc solid every
+code is complete, the float codes with relative errors up to 4e-5. peclet-voro returns wrong volumes on the surface
+(sum − 1 = +31 to +62) and runs out of memory at 256³; votess fails on cosmic web and surface (A100: CUDA error 700;
+CPU: `std::length_error`); gDel3D's 8-spacing padding is too thin for the surface (82627 certificate violations, one
+sampled cell off by 1.3 %). The exact Delaunay codes (CGAL, geogram, Qhull, TetGen) and voro++ are right on all three.
+
 ### Long runs
 
 Job 31953232 (128³, 0.1 spacings per step): the step falls from 118 M cells/s at step 100 to 59 at step 500. Issue: https://github.com/Ulli1991/voronoi-cpp/issues/34. On Sedov the loss is at most 4.5 % over a run.

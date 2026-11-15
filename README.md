@@ -335,6 +335,8 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 - OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
 - The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, and 920 on the A100, 604 of them from 3e4 to 1.6e7 particles (113 above a million). Of those 604, 85 ran out of time (120 s, or 280 s from a million up): builds with large cells, a void or nearly coplanar points take minutes ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49)).
 
+- Points on closed surfaces (the `surface` input: shells and tori with thin normal noise): the clipping refuses some cells (69 at 64³, 476 at 128³, status degenerate) and runs about 300 times slower than on jittered points, 0.036 M cells/s at 128³ on one A100, since its needle cells reach far into empty space; the exact start inherits the cost. The mesh is right on it (volumes within 2.3e-13 of the oracle) and moving steps run at 139 M cells/s ([#60](https://github.com/Ulli1991/voronoi-cpp/issues/60)).
+
 Other limits:
 
 - Bit-reproducible moving runs cost 2.4 to 4.7 % on the mesh step alone.
