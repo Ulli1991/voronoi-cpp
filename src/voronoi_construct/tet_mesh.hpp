@@ -1550,7 +1550,9 @@ struct FaceGeometry {
             area = area * -1.0;
             projected = -projected;
         }
-        centroid = weight > 0 ? (first + weighted * (1.0 / weight)) * (1.0 / 3.0) : first;
+        // The last product rounded on its own: a caller adding to it must not fuse it (the stored bits).
+        const Vec3 sum = first + weighted * (1.0 / weight);
+        centroid = weight > 0 ? Vec3{R::mul(sum.x, 1.0 / 3.0), R::mul(sum.y, 1.0 / 3.0), R::mul(sum.z, 1.0 / 3.0)} : first;
         return projected;
     }
 };

@@ -58,8 +58,10 @@ mesh.update(x);          // x(i, a): positions in [0, side a), particle i = inde
 // ... move the particles ...
 voronoi::Report r = mesh.update(x);   // repairs the mesh; exact on return
 mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
-// Faces f < mesh.faces(): owner()(f) < neighbour()(f), area()(f, a) from
-// owner to neighbour, face_centroid()(f, a) relative to the owner.
+// Faces f < mesh.faces(): owner()(f) < neighbour()(f). Their geometry, in a kernel:
+const auto faces = mesh.face_geometry();   // copy into the kernel; valid until the next update
+//   Vec3 area, centroid; faces.face(f, area, centroid);   // area from owner to neighbour,
+//   centroid relative to the owner; or the stored rows area()(f, a), face_centroid()(f, a).
 // Cells i: volume()(i), centroid()(i, a) relative to the generator, faces
 // cell_face()(k) for k in [cell_face_start()(i), cell_face_start()(i + 1)).
 ```
@@ -70,7 +72,7 @@ What a caller can rely on:
 - Positions are snapped to the grid of the exact predicates, 2³⁰ steps across the longest side, the same step on every axis; topology and geometry both come from the snapped positions. A side that is not a whole number of steps is rounded to one (relative change below 2⁻³¹ longest / side; none for sides in power-of-two ratios such as 2 x 2 x 1/16). `sides()` gives the box used; `box()` is a cube's side.
 - Every cell must be certified within one periodic image: its radius must stay below 3/16 of the shortest tile side, and below 1/8 of it where a tile holds fewer than about 180 particles (32 in 2D). The box is cut into tiles of side / round(side / shortest side) along each axis; a cube is one tile. In practice that is about 6 or more particles across the shortest side (a 5³ lattice is refused, 6³ is not; a slab of 16 cells is fine). Otherwise `update()` throws, stating this rule ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)).
 - `update()` repairs the mesh; the first call, or a change of n, builds it. If the device repair leaves stuck triangles, it finishes on the host or rebuilds on the device, chosen by how many entries are stuck, not by a clock (`voronoi::Fallback`).
-- Faces are stored once, by the lower id, so a flux applied with opposite signs conserves exactly. Cell volumes after `update()` are summed with atomics. `update_cells()` sums volumes and centroids over each cell's faces in a fixed order, giving the same bits every run, and builds the per-cell face lists for gathers.
+- Faces are stored once, by the lower id, so a flux applied with opposite signs conserves exactly. `update()` does not store face geometry (3D, by default): `face_geometry().face(f, area, centroid)` computes face f from its ring of circumcentres where it is read, with the bits the stored rows would hold. `area()`, `face_centroid()` and, before `update_cells()`, `volume()` store every face on their first call after an update (cell volumes then summed with atomics); `Layout::stored_faces` makes `update()` store them, as before, and `FaceReal = float` always does. `update_cells()` sums volumes and centroids over each cell's faces in a fixed order, giving the same bits every run, and builds the per-cell face lists for gathers.
 - Faces are numbered 0 .. `faces()` − 1 after every update. In 3D a face keeps its number from one update to the next while no flip touches the tetrahedron that represents it; a new face takes a freed number, and an update with many flips (more than 1/16 of the tetrahedra created), a build or a re-sort numbers every face again ([#53](https://github.com/Ulli1991/voronoi-cpp/issues/53)). With `Layout::owner_faces` the numbers go by owner, as before.
 - `clip(x, cells)` rebuilds the listed cells by clipping, independent of the persistent mesh, and returns each face once (a local mode for substeps of active cells). It builds exact cells.
 - `rebuild(x)` builds the exact mesh from scratch. `scratch(bytes)` lends device memory between updates.
