@@ -580,11 +580,6 @@ struct Kernel {
                     certified = true;
                     break;
                 }
-                if constexpr (!filtered)
-                    if (clipped > budget) {
-                        status = deferred;
-                        break;
-                    }
                 // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
                 Cylinder bound{};
                 if constexpr (filtered) bound = cylinder(c, live);
@@ -692,6 +687,11 @@ struct Kernel {
                 break;
             }
             if (!adaptive || level == 2) break;
+            if constexpr (!filtered)
+                if (clipped > budget) {
+                    status = deferred;
+                    break;
+                }
             finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
             for (int a = 0; a < 3; ++a) home[a] >>= 1;
             --level;

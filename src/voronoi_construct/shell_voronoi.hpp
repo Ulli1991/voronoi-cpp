@@ -213,7 +213,8 @@ struct Candidate {
 // Which of the selected cells a pass builds: all, those not ok, or those
 // that overflowed the usual capacities.
 // Used by: construct_cells, construct_huge.
-enum class Pass { all, failed, overflowed };
+// deferred: the cells a walk left past the clip budget (#60), for the filtered kernel.
+enum class Pass { all, failed, overflowed, deferred };
 
 // A thread's cell: on its stack, the host's huge ones (over a megabyte) on
 // the heap, as an OpenMP thread may have little more than that.
@@ -242,8 +243,9 @@ struct Held<Cell, true> {
 // The per-thread kernel, with cells of type Cell (RoundedCell or
 // ExactCell): the walk (see Stencil), then the face walk that writes the
 // owned faces or rings and integrates the geometry.
-// Used by: construct_cells, construct_huge.
-template <class Cell, class ExecSpace>
+// filtered: the deferred cells, whose walk skips what the cell's Cylinder rules out (#60); otherwise a walk that passes
+// the clip budget stops at its next level as deferred. Used by: construct_cells, construct_huge.
+template <class Cell, bool filtered = false, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     const Stencil<typename ExecSpace::memory_space>& stencil,
                     const Cells<typename ExecSpace::memory_space>& out, Pass pass,
@@ -256,7 +258,6 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
     const auto positions = grid.positions;
     const bool with_closure = out.closure.extent(0) > 0;
     const bool with_rings = out.with_rings();
-    constexpr int budget = heavy_clips;
 
     Kokkos::parallel_for(
         "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(n)), KOKKOS_LAMBDA(int i) {
@@ -264,9 +265,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             const int id = grid.order(t);
             const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
-            if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
-                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow &&
-                 before != deferred))
+            if ((pass == Pass::failed && (before == ok || before == face_overflow || before == deferred)) ||
+                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow) ||
+                (pass == Pass::deferred && before != deferred))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
             ep::i64 self[3] = {0, 0, 0};
@@ -281,12 +282,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             bool certified = false;
             Candidate buffer[ring_buffer];
             int buffered = 0, batches = 0, clipped = 0, cuts = 0;
-            // Past the clip budget the walk skips what the cell's Cylinder rules out (#60).
-            const bool heavy = before == deferred;
-            // Heavy cells overflow the usual capacities (#60): they wait for the big pass.
-            if (heavy && Cell::planes_capacity == max_planes) return;
-            bool filtering = heavy;
-            Cylinder bound{};
+            [[maybe_unused]] Cylinder bound{};
 
             // Clip with the buffered particles nearest-first, until the rest are too far to cut.
             auto flush = [&]() {
@@ -312,7 +308,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     // Exact cuts break ties by particle id; rounded cells keep the slot until the walk is done (one
                     // load fewer per cut).
                     const int other = Cell::exact ? grid.order(c.slot) : c.slot;
-                    status = filtering ? clip<true>(cell, e, d, other, id) : clip(cell, e, d, other, id);
+                    status = clip<filtered>(cell, e, d, other, id);
                     ++clipped;
                     if (cell.planes == planes_before && cell.vertices == vertices_before) continue;
                     ++cuts;
@@ -331,8 +327,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
                     ++batches;
                     // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
-                    filtering = heavy || clipped > budget;
-                    if (filtering) bound = cylinder(cell, unit);
+                    if constexpr (filtered) bound = cylinder(cell, unit);
                     for (int e = first; e < Kokkos::min(first + ring_buffer, entries) && status == ok; ++e) {
                         if (double(stencil.bound2(e)) * width * width >= reach2) {
                             certified = true;
@@ -341,7 +336,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         int begin = 0, end = 0, packed = 0;
                         if (!stencil_cell(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end, packed))
                             continue;
-                        if (filtering && !admits(grid, bound, level, home, stencil.offsets(e), p)) continue;
+                        if constexpr (filtered)
+                            if (!admits(grid, bound, level, home, stencil.offsets(e), p)) continue;
                         const int shift[3] = {image(packed, 0), image(packed, 1), image(packed, 2)};
                         for (int q = begin; q < end; ++q) {
                             if (q == t) continue;
@@ -350,7 +346,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                             const double dz = positions(q, 2) + shift[2] * box.side[2] - p.z;
                             const double d2 = dx * dx + dy * dy + dz * dz;
                             if (!(d2 < reach2)) continue;  // never a non-finite distance
-                            if (filtering && !bound.admits(Vec3{dx, dy, dz}, d2)) continue;
+                            if constexpr (filtered)
+                                if (!bound.admits(Vec3{dx, dy, dz}, d2)) continue;
                             if (buffered == ring_buffer) flush();
                             using Image = std::int8_t;
                             buffer[buffered++] = {d2, q, {Image(shift[0]), Image(shift[1]), Image(shift[2])}};
@@ -365,6 +362,11 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     break;
                 }
                 if (level == 2) break;
+                if constexpr (!filtered)
+                    if (clipped > heavy_clips) {
+                        status = deferred;
+                        break;
+                    }
                 finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
                 for (int k = 0; k < 3; ++k) home[k] >>= 1;
                 --level;
@@ -486,8 +488,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             }
             if (status == ok && !(volume > 0)) status = degenerate;
 
-            // A heavy cell that overflowed stays deferred: the bigger passes filter it from the start too.
-            if (heavy && (status == plane_overflow || status == vertex_overflow) && Cell::planes_capacity < huge_planes)
+            // A deferred cell that overflows stays deferred, for the next capacity.
+            if (filtered && (status == plane_overflow || status == vertex_overflow) &&
+                Cell::planes_capacity < huge_planes)
                 status = deferred;
             out.status(id) = status;
             out.face_count(id) = status == ok ? faces : 0;
@@ -574,6 +577,7 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
     using Huge = ExactCell<huge_planes, huge_vertices>;
     if constexpr (std::is_same_v<Memory, HostMemory>) {
         construct_pass<Huge>(Host{}, grid, make_stencil(Host{}), out, Pass::overflowed, selection);
+        construct_pass<Huge, true>(Host{}, grid, make_stencil(Host{}), out, Pass::deferred, selection);
     } else {
         Grid<HostMemory> g;
         g.positions = host_copy<decltype(g.positions)>(grid.positions);
@@ -609,6 +613,7 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
         const Selection<HostMemory> s{host_copy<Kokkos::View<int*, HostMemory>>(selection.slots),
                                       host_copy<Kokkos::View<char*, HostMemory>>(selection.listed)};
         construct_pass<Huge>(Host{}, g, make_stencil(Host{}), c, Pass::overflowed, s);
+        construct_pass<Huge, true>(Host{}, g, make_stencil(Host{}), c, Pass::deferred, s);
         copy_back(c.status, out.status);
         copy_back(c.face_count, out.face_count);
         copy_back(c.owned_count, out.owned_count);
@@ -625,9 +630,9 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
     }
 }
 
-// Build the cells of `pass` with cells of kind Cell (RoundedCell or
-// ExactCell), then those that overflowed the usual capacities once more
-// with big ones, and exact cells that overflowed those with huge ones.
+// Build the cells of `pass` with cells of kind Cell (RoundedCell or ExactCell), then those that overflowed the usual
+// capacities once more with big ones, and exact cells that overflowed those with huge ones; deferred cells (#60) go
+// filtered from the big capacity on.
 // Used by: construct, tet_start::build.
 template <template <int, int> class Cell, class ExecSpace>
 void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
@@ -650,6 +655,7 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
     };
     if (!overflowed()) return;
     construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
+    construct_pass<Cell<big_planes, big_vertices>, true>(exec, grid, stencil, out, Pass::deferred, selection);
     if constexpr (Cell<big_planes, big_vertices>::exact)
         if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
 }
