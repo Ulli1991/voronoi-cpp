@@ -1023,12 +1023,13 @@ template <class ExecSpace>
 Kokkos::View<int*, typename ExecSpace::memory_space> heavy_slots(const ExecSpace& exec,
                                                                  const Grid<typename ExecSpace::memory_space>& grid,
                                                                  const Cells<typename ExecSpace::memory_space>& out,
-                                                                 bool levels) {
+                                                                 bool levels, bool overflows) {
     const auto status = out.status;
     const auto order = grid.order;
     auto heavy = KOKKOS_LAMBDA(int t) {
         const int s = status(order(t));
-        return s == deferred || (!levels && s == uncertified);
+        return s == deferred || (!levels && s == uncertified) ||
+               (overflows && (s == vertex_overflow || s == plane_overflow));
     };
     int count = 0;
     Kokkos::parallel_reduce(
@@ -1109,7 +1110,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     Kernel<Memory, false, o>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
             // the filtered kernel, over a list of their slots.
-            const auto list = detail::heavy_slots(exec, grid, out, off_base > 0);
+            const auto list = detail::heavy_slots(exec, grid, out, off_base > 0, true);
             if (list.extent(0) == 0) return;
             Kokkos::deep_copy(exec, next_cell, 0);
             if (cube && o != warp::Output::rings)
@@ -1121,7 +1122,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                                      Kernel<Memory, true, o, false, true>{grid, out, half_width, stencil, next_cell,
                                                                           unit, unit2, budget, list});
             // Those past 64 vertices or planes once more, with big_capacity slots.
-            const auto big = detail::heavy_slots(exec, grid, out, true);
+            const auto big = detail::heavy_slots(exec, grid, out, true, false);
             if (big.extent(0) == 0) return;
             Kokkos::deep_copy(exec, next_cell, 0);
             if (cube && o != warp::Output::rings)
