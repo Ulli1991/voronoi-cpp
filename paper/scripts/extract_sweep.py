@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""paper/data/weak_scaling.csv from the sweep's records (paper/data/raw/weak-<job>.jsonl, weak_scaling_a100.sh): per
+"""paper/data/throughput_vs_n.csv from the sweep's records (paper/data/raw/sweep-<job>.jsonl, throughput_vs_n_a100.sh): per
 commit, input, n, path (warp rebuild, exact start, step at s spacings) the median, min and max M cells/s (steps: frames
 2 to 10), peak B/cell, and the SM clock the job logged under load (paper/data/clocks/clock-<job>.csv)."""
 import csv
@@ -45,7 +45,7 @@ def main():
         if p is None or (p.startswith("step") and int(r["repeat"]) < 2):
             continue
         groups[(r["version"], r["input"], int(r["n"]), p)].append(r)
-    out = os.path.join(DATA, "weak_scaling.csv")
+    out = os.path.join(DATA, "throughput_vs_n.csv")
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["commit", "input", "n", "path", "Mcells_s_median", "Mcells_s_min", "Mcells_s_max", "runs",

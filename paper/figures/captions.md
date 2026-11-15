@@ -36,7 +36,7 @@ fill one A100 40 GB. Besides memory, the face-ring pool's 32-bit offsets overflo
 clipping over all periodic images, brute force per sampled cell; it includes only the C++ standard library and shares
 no code with the mesh (its driver shares the point-file reader). 1000 sampled cells per input.
 
-**weak_scaling, step_vs_displacement, resort, stages.** One A100 40 GB at 1305 MHz SM clock (every job's log), main
+**throughput_vs_n, step_vs_displacement, resort, stages.** One A100 40 GB at 1305 MHz SM clock (every job's log), main
 55cd6b1, double precision, periodic unit box. Rates are cells over wall time of the timed region, median of 5 runs
 (rebuild, exact start) or of steps 2 to 10 (steps: points moved by the bench's smooth flow, `update` + `update_cells`).
 Wave at 256³ runs out of the 40 GB in the step. Re-sort: 500 steps at 0.1 spacings, jittered, Hilbert order every 50
@@ -46,7 +46,7 @@ updates; the legend gives cells × steps over the summed step times, re-sorts in
 (median to max); completeness over all cells; total sampled volume |Σ V − box| (a tiling check, not accuracy).
 Neighbour-set agreement and closure are not shown: the benchmark runs stored volumes only.
 
-**Note for weak_scaling (b).** The exact start of jittered input slows from 128³ to 256³ (9.5 → 6.6 M cells/s) because
+**Note for throughput_vs_n (b).** The exact start of jittered input slows from 128³ to 256³ (9.5 → 6.6 M cells/s) because
 at 256³ its check finds 44 bad tetrahedra and patches 830 cells in a second round (job 32366447: clipping with rings
 455 ms, from_rings 378 ms, start 1333 ms in all, so about 500 ms, 30 ns a cell, for the second round); at 128³ the start
 has one round, no bad tetrahedra, and costs clipping 57 + from_rings 50 ≈ start 117 ms. Per cell, clipping (27 ns)

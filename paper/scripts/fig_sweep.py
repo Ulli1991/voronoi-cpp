@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Figures of the sweep (paper/data/weak_scaling.csv, extract_sweep.py): weak_scaling (rebuild, exact start, step at
+"""Figures of the sweep (paper/data/throughput_vs_n.csv, extract_sweep.py): throughput_vs_n (rebuild, exact start, step at
 0.1 spacings with update_cells, peak memory, against n per input) and step_vs_displacement (step rate at 128³ against
 the displacement per step). Usage: fig_sweep.py [commit] (default: the newest commit in the file)."""
 import csv
@@ -16,7 +16,7 @@ SIZE_LABEL = ["32³", "64³", "128³", "256³"]
 
 
 def load(commit=None):
-    rows = list(csv.DictReader(open(os.path.join(DATA, "weak_scaling.csv"))))
+    rows = list(csv.DictReader(open(os.path.join(DATA, "throughput_vs_n.csv"))))
     commit = commit or rows[-1]["commit"]
     table = defaultdict(dict)
     for r in rows:
@@ -30,7 +30,7 @@ def clock_text(clocks):
     return f"{clocks[0]} MHz" if len(clocks) == 1 else f"{clocks[0]}–{clocks[-1]} MHz" if clocks else "clock ?"
 
 
-def weak(commit, table, clocks):
+def throughput(commit, table, clocks):
     fig, axes = figure(DOUBLE, 120, nrows=2, ncols=2)
     panels = [(axes[0, 0], "rebuild", "Mcells_s_median", "(a) warp rebuild"),
               (axes[0, 1], "start", "Mcells_s_median", "(b) exact start (mesh + cells)"),
@@ -58,7 +58,7 @@ def weak(commit, table, clocks):
     axes[0, 0].text(0.97, 0.03, f"one A100, {clock_text(clocks)}, {commit}", transform=axes[0, 0].transAxes,
                     ha="right", va="bottom", fontsize=11)
     fig.tight_layout()
-    save(fig, "weak_scaling", DOUBLE)
+    save(fig, "throughput_vs_n", DOUBLE)
 
 
 def matplotlib_null():
@@ -93,7 +93,7 @@ def displacement(commit, table, clocks):
 
 def main():
     commit, table, clocks = load(sys.argv[1] if len(sys.argv) > 1 else None)
-    weak(commit, table, clocks)
+    throughput(commit, table, clocks)
     displacement(commit, table, clocks)
 
 

@@ -1,8 +1,8 @@
 #!/bin/bash
-# The paper's weak-scaling sweep on one A100: warp rebuild, exact start and moving steps (update + update_cells) per
+# The paper's sweep of throughput against problem size on one A100: warp rebuild, exact start and moving steps (update + update_cells) per
 # input and size, one JSON line per timed run (library_bench). Rerun after each speed merge; submit_sweep.sh splits it.
-#   sbatch -o paper/data/raw/weak-%j.jsonl -e paper/logs/weak-%j.err paper/scripts/weak_scaling_a100.sh <bin> <data>
-#SBATCH -J paper_weak
+#   sbatch -o paper/data/raw/sweep-%j.jsonl -e paper/logs/sweep-%j.err paper/scripts/throughput_vs_n_a100.sh <bin> <data>
+#SBATCH -J paper_sweep
 #SBATCH -p gpu1
 #SBATCH --gres=gpu:a100:1
 #SBATCH --ntasks=1

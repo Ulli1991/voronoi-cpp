@@ -23,7 +23,7 @@ def oracle_errors():
     return out
 
 
-def records(pattern_dir="raw", prefix="weak-"):
+def records(pattern_dir="raw", prefix="sweep-"):
     """All JSON records of paper/data/<dir>/<prefix>*.jsonl (Slurm epilogue lines skipped)."""
     out = []
     d = os.path.join(DATA, pattern_dir)
