@@ -200,8 +200,7 @@ int build(int argc, char** argv) {
     } else if (path == "warp-host-vo" || path == "warp-pinned-vo") {
         const bool pinned = path == "warp-pinned-vo";
         if (pinned)
-            s = setup("volumes and centroids only, host to host, pinned host buffers",
-                      "volumes centroids",
+            s = setup("volumes and centroids only, host to host, pinned host buffers", "volumes centroids",
                       "points in pinned host memory to volumes and centroids in pinned host memory: points copied "
                       "to the device, snap, cell list, grid, clipping without faces, the two arrays copied back");
         else
@@ -370,7 +369,8 @@ int main(int argc, char** argv) {
     if (mode == "step" && argc >= 3) return step(argc, argv);
     std::cerr << "usage: library_bench points <n> <distribution> <file>\n"
                  "       library_bench trajectory <n> <distribution> <spacings> <steps> <file>\n"
-                 "       library_bench build <points file> [--path=warp|warp-host|warp-host-vc|warp-vo|warp-host-vo|warp-pinned-vo|exact] [--repeats=3] "
+                 "       library_bench build <points file> "
+                 "[--path=warp|warp-host|warp-host-vc|warp-vo|warp-host-vo|warp-pinned-vo|exact] [--repeats=3] "
                  "[--volumes=file]\n"
                  "       library_bench step <trajectory file> [--volumes=file]\n"
                  "       library_bench lloyd <points file> <iterations> <file>\n";

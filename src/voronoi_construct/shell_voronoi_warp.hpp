@@ -860,13 +860,15 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if constexpr (o == warp::Output::rings)
                 Kokkos::parallel_for(label, policy, walk);
             else if (off_base > 0 && cube)
-                Kokkos::parallel_for(label, policy, Kernel<Memory, true, o, true>{grid, out, half_width, stencil,
-                                                                                  next_cell, unit, unit2});
+                Kokkos::parallel_for(
+                    label, policy,
+                    Kernel<Memory, true, o, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
             else if (off_base > 0)
                 Kokkos::parallel_for(label, policy, walk);
             else if (cube)
-                Kokkos::parallel_for(label, policy, Kernel<Memory, false, o, true>{grid, out, half_width, stencil,
-                                                                                   next_cell, unit, unit2});
+                Kokkos::parallel_for(
+                    label, policy,
+                    Kernel<Memory, false, o, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
             else
                 Kokkos::parallel_for(label, policy,
                                      Kernel<Memory, false, o>{grid, out, half_width, stencil, next_cell, unit, unit2});
@@ -905,8 +907,8 @@ void volumes_and_centroids(const ExecSpace& exec, const exact_predicates::Box& b
     neighbor_search::configure(list, n, box,
                                box.cubic() ? box.side[0] * std::cbrt(1.0 / n) : std::cbrt(box.volume() / n));
     {
-        Kokkos::View<double* [3], Memory> snapped(Kokkos::view_alloc(Kokkos::WithoutInitializing,
-                                                                     std::string("volumes_snapped")), n);
+        Kokkos::View<double* [3], Memory> snapped(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("volumes_snapped")), n);
         Kokkos::parallel_for(
             "shell_voronoi::volumes_snap", Kokkos::RangePolicy<ExecSpace>(exec, 0, n), KOKKOS_LAMBDA(int i) {
                 for (int a = 0; a < 3; ++a) snapped(i, a) = exact_predicates::snap(x(i, a), box, a) * box.step;
