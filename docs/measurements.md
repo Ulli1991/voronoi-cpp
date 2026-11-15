@@ -324,6 +324,23 @@ Bits (5 steps at 0.03, 0.1, 0.3, jittered and clustered, 128³): `geometry_check
 
 luna-cpp's mesh step on this branch before these changes, 23.8 ms against 6.75 on its pin 6ead543 (128³, `grad32`, 1410 MHz), was V1: on by default, its screen 3–4× slower. R14 was then off in practice, since luna-cpp reads `area()`, which stores the faces after the update.
 
+### Float face centroids (`Layout::float_centroids`, job 32373869)
+
+A stored face is owner (4 B), neighbour (4), area (24) and centroid (24), one array per field: 56 B. The library's index arrays are already 32-bit, with the owner bit in the cell lists (`Layout::owner_bit`), and the rows are already split by field, so the layout left to shrink is the centroid: float, relative to the owner, 12 B, 44 B a face. Areas stay double: cell closure, volumes and the topology keep their bits. One A100 40 GB at 1305 MHz, jittered, M cells/s of `update()` + `update_cells()` (head is the branch's default layout, same build):
+
+| | main | head | float centroids |
+|---|---|---|---|
+| 128³, 0.03 | 161.9 | 162.8 | 165.8 |
+| 128³, 0.1 | 98.8 | 98.6 | 99.7 |
+| 128³, 0.3 | 56.4 | 58.0 | 58.4 |
+| 256³, 0.03 | 218.3 | 220.2 | 224.3 |
+| 256³, 0.1 | 152.9 | 153.8 | 156.2 |
+| 256³, 0.3 | 85.3 | 84.9 | 86.0 |
+
+DRAM of step 3 (128³): 3300 → 3096 B/cell at 0.03 spacings and 5247 → 5036 at 0.1; `faces` writes 95 B/cell less, `cell_sums` reads 110 to 113 less. Per face, 415 → 389 B at 0.03. Peak memory of the steps 1979 → 1881 B/cell at 0.03 and 2010 → 1912 at 0.3. The build's geometry time is unchanged (12.9 ms at 128³).
+
+Geometry: `voronoi_mesh_test` (4096 cells) finds cell centroids within 7e-9 spacings of double and of clipping (double and clipping agree to 6e-16), volumes and areas bit for bit. At 128³ after 3 steps (`--dump-cells`), at 0.03 and 0.1 spacings: the same neighbours for every cell, volumes bit for bit, centroids within 8.1e-9 spacings (mean 1.8e-9). `lists_checksum` equals main's at all 30 checks; `geometry_checksum` and `faces_checksum` differ (centroids).
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
