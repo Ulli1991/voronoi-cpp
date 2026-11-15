@@ -401,10 +401,10 @@ public:
         // Its temporaries live in the spare ring pool (see scratch).
         const auto& spare = rings_.pool[1 - rings_.in_use];
         const std::size_t table = sizeof(int) * rings_.kept_ints;
-        const bool incremental =
-            lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
-            state_.touched_entries <= n_ / 5 &&
-            table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <= spare.extent(0) * sizeof(int);
+        const bool incremental = lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
+                                 state_.touched_entries <= n_ / 5 &&
+                                 table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <=
+                                     spare.extent(0) * sizeof(int);
         // The sums read the stored faces if there are, else compute each face from its ring (the same bits).
         auto lists = [&](const auto& geometry) {
             if (incremental)
@@ -450,9 +450,9 @@ public:
     // next update, like the views below.
     tet_mesh::FaceGeometry<Memory> face_geometry() const {
         if (!layout_.owner_faces) return tet_mesh::face_geometry(positions_, box_, tets_);
-        return tet_mesh::face_geometry(positions_, box_, tets_,
-                                       View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current],
-                                                                        std::make_pair(0, faces()))));
+        return tet_mesh::face_geometry(
+            positions_, box_, tets_,
+            View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current], std::make_pair(0, faces()))));
     }
     // Stored by update(), or with Layout::faces_on_read here on the first call after an update.
     Rows area() const {

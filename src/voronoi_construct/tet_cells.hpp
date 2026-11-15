@@ -228,12 +228,11 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
     using Memory = typename ExecSpace::memory_space;
     using Const = Kokkos::View<const int*, Memory>;
     using Ints = Kokkos::View<int*, Memory>;
-    using Lists =
-        CellLists<D, X, Faces, Ints, Const, Marks, Kokkos::View<double*, Memory>,
-                  Kokkos::View<double* [D], Kokkos::LayoutRight, Memory>, Renumber>;
+    using Lists = CellLists<D, X, Faces, Ints, Const, Marks, Kokkos::View<double*, Memory>,
+                            Kokkos::View<double* [D], Kokkos::LayoutRight, Memory>, Renumber>;
     const int n = static_cast<int>(out.volume.extent(0));
-    const Lists lists{x,         box,   geometry, out.start,  out.face,     old_start, old_face, renumber,
-                      owner,     neighbour, marked,   out.volume, out.centroid, n,         all};
+    const Lists lists{x,     box,       geometry, out.start,  out.face,     old_start, old_face, renumber,
+                      owner, neighbour, marked,   out.volume, out.centroid, n,         all};
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         using Sort = CellSortWarp<Ints, Others, Const, Marks>;
@@ -357,9 +356,9 @@ IncrementalLists<typename ExecSpace::memory_space> begin_incremental(
 template <int D, class ExecSpace, class X, class Faces, class Renumber, class Dirty>
 void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
                         const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
-                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour, const Faces& geometry,
-                        CellFaces<typename ExecSpace::memory_space, D>& out, const Renumber& renumber,
-                        const Dirty& dirty, int dirty_count,
+                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
+                        const Faces& geometry, CellFaces<typename ExecSpace::memory_space, D>& out,
+                        const Renumber& renumber, const Dirty& dirty, int dirty_count,
                         const IncrementalLists<typename ExecSpace::memory_space>& lists, bool bit = false) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
@@ -426,9 +425,8 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
                        const Mesh<typename ExecSpace::memory_space>& mesh,
                        const Kokkos::View<const char*, typename ExecSpace::memory_space>& alive,
                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& created,
-                       const FaceRings<typename ExecSpace::memory_space>& rings,
-                       const Faces& geometry, CellFaces<typename ExecSpace::memory_space, 3>& out, char* scratch,
-                       bool bit = false) {
+                       const FaceRings<typename ExecSpace::memory_space>& rings, const Faces& geometry,
+                       CellFaces<typename ExecSpace::memory_space, 3>& out, char* scratch, bool bit = false) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(out.volume.extent(0)), faces = static_cast<int>(owner.extent(0));
     const int old_faces = rings.renumbered;
