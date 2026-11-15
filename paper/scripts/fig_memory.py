@@ -94,12 +94,16 @@ def main():
         b.axvline(limit, color="#d62728", lw=1.4, ls="--")
         b.text(limit * 1.05, -1.5 + 0.55 * (k % 2), f"{name} below {limit:.0f}", color="#d62728", ha="left",
                va="center", fontsize=11, bbox=dict(fc="white", ec="none", pad=0.3))
+    from matplotlib.patches import Patch
+    b.legend(handles=[Patch(color="#000000", label="ours, lowest input"), Patch(color="#666666", label="ours, up to the highest"),
+                      Patch(color="#8a8a8a", label="others, lowest input"), Patch(color="#cfcfcf", label="others, up to the highest")],
+             loc="lower right", fontsize=11, ncol=2, columnspacing=0.8, handlelength=1.2)
     b.set_xscale("log")
     b.set_xlim(60, 30000)
     b.set_yticks(range(len(rows)), [r[0] for r in rows], fontsize=11)
-    b.set_ylim(len(rows) - 0.4, -1.9)
+    b.set_ylim(len(rows) + 1.6, -1.9)
     b.set_xlabel("device B/cell at the peak, 128³")
-    b.text(0.98, 0.02, "(b)", transform=b.transAxes, ha="right", va="bottom")
+    b.text(0.02, 0.98, "(b)", transform=b.transAxes, ha="left", va="top")
     figstyle.decorate(b)
     b.tick_params(axis="y", which="both", left=False, right=False)
     b.yaxis.set_minor_locator(plt.NullLocator())
