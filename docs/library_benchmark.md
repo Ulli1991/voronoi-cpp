@@ -1,119 +1,200 @@
 # Library benchmark: methods and results
 
-voronoi-cpp against public Voronoi and Delaunay libraries on the same points, the same box, the same outputs and the
-same hardware, with every number regenerated from raw records by one script. This file is the methods section; the
-README carries the headline table and the figure. Tables in full: [bench/libraries/results/summary.md](../bench/libraries/results/summary.md).
+voronoi-cpp against the public Voronoi and Delaunay codes we could build on Raven: the same point files, the same
+periodic box, the same outputs and the same hardware, each code in the configuration its own paper or README gives,
+and every number regenerated from raw records by one script (`scripts/library_benchmark.py`). The README has the
+headline table and the figure; every row and every setting is in
+[bench/libraries/results/summary.md](../bench/libraries/results/summary.md).
 
-## Results in brief
+## Results
 
-The README's table and figure (section "Against other libraries") show the 128³ build rates. This section adds 256³ and
-the observations behind the numbers; every number is in [summary.md](../bench/libraries/results/summary.md).
+Rates are M cells/s (input cells per second; images not counted), median of 3 timed runs at 2,097,152 cells (128³)
+unless stated, on one A100 (node `ravg1002`: every GPU row ran there, SM clock 1095 MHz under load in all these jobs;
+our earlier rows on other nodes ran at 1305 MHz and are about 15 % faster) or one 72-core CPU node.
 
-RESULTS_DETAIL
+**Basselin et al. 2021, run as its README says.** With its blue-noise setting (K 20, P 25, V 30) on our blue noise it
+builds 9.4 M cells/s at 128³ and 10.2 at 256³, host to host (padding with images, copy in, kNN, clipping, copy out of
+volumes and barycentres). Its own pass timers put the device part (kNN and clipping, relaunches included) at 0.12 s
+for 2.4M padded points: 17.5 M original cells/s (19.5 at 256³). The paper's 34.5 M cells/s (V100, 10M blue-noise
+seeds, Fig. 10) is 1.8 to 2 times that; our runs add images (+15 %), a 1095 MHz clock and our own blue noise, and the
+paper does not say what its bar includes. In the same jobs our warp rebuild runs at 29.6 (128³) and 29.3 (256³)
+M cells/s device to device, 1.5 to 1.7 times Basselin's device part, while it also builds the faces, areas and
+neighbours Basselin does not return. With the same outputs taken back to the host (volumes and centroids; the faces
+stay on the device) ours runs at 16.3 and 16.2: 1.7 and 1.6 times Basselin's 9.4 and 10.2. Off blue noise Basselin
+runs at its other settings' rates (perturbed-grid setting on jittered 6.1, white-noise setting on uniform 2.0,
+clustered 1.4, halo 0.9 M cells/s) and leaves cells unbuilt on halo input (2023 cells with the white-noise setting
+after its relaunches; 28,055 with the blue-noise setting). Like for like: same points (images added for its box),
+double, same A100 jobs. Not matched: no exact predicates, no faces returned, host-to-host scope.
+
+**Full cells (volumes, centroids, faces with areas and neighbours): the headline.** On the A100 the warp rebuild runs at
+33.7 / 29.6 / 16.5 / 14.0 / 11.8 M cells/s on jittered / blue noise / uniform / clustered / halo input (35.0 / 29.3 /
+15.5 / 14.4 / 12.0 at 256³), device to device, 671 B/cell. The exact start (Delaunay tetrahedra and cells) runs at
+8.4 / 9.8 / 5.6 / 5.1 / 6.1. The fastest other GPU code with full cells, peclet-voro (periodic, double,
+floating-point clipping, no cell centroids), runs at 8.2 / 4.6 / 1.5 / 0.47 / 0.21 on the same node: the warp rebuild
+is 4 to 55 times faster, more so the less uniform the input; peclet-voro runs out of the A100's 40 GB at 256³ and
+leaves 33,819 halo cells unbuilt. Delaunay or neighbour codes with our faces step timed in: gDel3D 0.61–0.84, Paragram
+(float) 0.71–1.1, votess 0.16–0.40 M cells/s. Host to host (the whole face pool copied back) the warp rebuild runs at
+3.8–4.7.
+
+**Volumes and barycentres only.** The float kNN codes in their README setting per input: on blue noise Liu et al.
+(tet-centric, K 35) 18.7 and VoroGPU (K 35) 15.7 M cells/s host to host at 128³, 22.9 and 19.3 at 256³. On blue noise,
+host to host, they match or beat our path with the same outputs (16.3 and 16.2), in float, with relative volume errors
+of 4e-6 (median) to 3e-5. On the other inputs they are 2.6 to 10 times slower than that path, and in their README
+setting they lose cells: VoroGPU (K 190) 164 clustered and 21,471 halo cells, Liu et al. (K 90) 26,088 and 103,092;
+with the blue-noise setting K 35 both lose 70 % of the cells of uniform, clustered and halo input.
+
+**One CPU node, full cells.** The same voronoi-cpp code built for OpenMP (not tuned for CPUs) runs at 2.6 / 2.2 / 1.7
+/ 1.4 / 1.3 M cells/s on 72 cores. Multithreaded voro++ (Lu et al. 2023) is faster on blue noise and uniform input
+(2.7 and 2.0), slower on jittered (2.3), clustered (0.37) and halo input (0.085); geogram's periodic Delaunay with its
+Voronoi cells runs at 0.65–0.88 (1.2 at 256³), CGAL's parallel Delaunay with our faces at 0.35–0.67, peclet-voro at
+0.15–1.3, votess with our faces at 0.13–0.42. On one core: voronoi-cpp 0.035–0.076, voro++ 0.036–0.046 (it exits on
+clustered and halo input: two points closer than 1e-5), TetGen + faces 0.048–0.071, CGAL periodic + faces 0.027–0.030,
+Qhull + faces 0.014–0.021.
+
+**Moving mesh, 0.03 spacings per step, with full cells.** voronoi-cpp 144 M cells/s on the A100 (median of steps 2 to
+10, at 1095 MHz), 8.5 on 72 cores; peclet-voro 7.0 on the A100 and 2.6 on 72 cores; CGAL's periodic triangulation 0.029
+per step rebuilt and 0.008 moving each point, on one core.
+
+**Accuracy.** voronoi-cpp: no cell missing in any run, every sampled volume within 1.6e-13 of the oracle on the GPU and
+2e-15 on the CPU, the volume sum within 1e-16 of the box. Our faces step on CGAL, TetGen, Qhull, geogram (PDEL) and
+gDel3D tetrahedra: within 2e-15. geogram's own periodic cells (exact predicates, double constructions): 650 to 850 of
+1000 sampled cells off by more than 1e-12, up to 3.6e-9. voro++: within 6e-14. votess + our faces: within 4e-13; its
+GPU path crashes on blue noise (illegal address) and cannot run 256³. Paragram + our faces: within 3e-15, 1 or 2 cells
+open per input. peclet-voro: 33,819 (A100) and 61,887 (CPU) halo cells and 49 clustered (CPU) without a volume.
 
 ## Inputs
 
 Points are written once by `library_bench points` ([src/bench/library_bench.cpp](../src/bench/library_bench.cpp)) from
-the generators of `src/test/support.hpp` (fixed seed 20261029) and read by every library from the same file
-(`bench/libraries/make_points_a100.sh`, job 32225761):
+the generators of `src/test/support.hpp` (fixed seed 20261029) and read by every code from the same file
+(`bench/libraries/make_points_a100.sh`, job 32225761; blue noise `make_bluenoise_a100.sh`, job 32234292):
 
 | file | points | SHA-256 (first 16 hex) |
 |---|---|---|
 | jittered_2097152.pts | 128³ lattice, each point moved up to ±0.1 spacing per axis | f7fc0e00d13844c4 |
+| bluenoise_2097152.pts | the uniform points after 100 Lloyd iterations (centroidal Voronoi tessellation) | 1c977749703db620 |
 | uniform_2097152.pts | independent uniform | d65cd75f4e20157a |
 | clustered_2097152.pts | 8 Gaussian blobs (σ 0.04) with 80 %, 20 % uniform; about 1:500 in density | 10c91b377f64b790 |
 | halo_2097152.pts | 4 halos ρ ∝ 1/(r² + c²), c = 0.002, 90 %, 10 % uniform; about 1:10⁴ | cf81db50496a43f7 |
-| *_16777216.pts | the same at 256³ | d902c5b8…, 033d9416…, dcb3094c…, a6ed08e4… |
+| *_16777216.pts | the same at 256³ (blue noise 7c5ba32ceab239f4) | d902c5b8…, 033d9416…, dcb3094c…, a6ed08e4… |
 | jittered_2097152_step0.03.trj | jittered 128³ in cell-list (slot) order, and 10 steps of the bench flow, each moving the points 0.03 mean spacings | 2cb9d68fe4e2e940 |
 
+Blue noise as in Ray et al. 2018 and Basselin et al. 2021 (who use Ray et al.'s three distributions: blue noise,
+perturbed grid, white noise). Nearest-neighbour distance in mean spacings, mean / minimum / standard deviation: our
+blue noise 1.005 / 0.831 / 0.037 against 1.025 / 0.798 / 0.040 for the 100K blue-noise file shipped with Basselin et
+al.'s code; our uniform 0.554 / 0.011 / 0.202 against 0.557 / 0.014 / 0.205 for their white noise. Our jittered lattice
+(0.899 / 0.802 / 0.042) is far more regular than their perturbed grid (0.641 / 0.057 / 0.180); the tables use the
+perturbed-grid setting for it as the closest class.
+
 Format (`bench/libraries/libbench.hpp`): uint64 n, uint64 frames, then frames × n × 3 doubles. Positions are in the
-periodic unit box [0, 1)³ on the grid of 2⁻³⁰ that voronoi-cpp snaps to, so every library gets the identical doubles
-voronoi-cpp computes on. The files (4.6 GB) are not in the repository: the generator and seed are.
+periodic unit box [0, 1)³ on the grid of 2⁻³⁰ that voronoi-cpp snaps to, so every code gets the doubles voronoi-cpp
+computes on. The files (5.6 GB) are not in the repository: the generators and seeds are.
+
+## Outputs and groups
+
+Rows are grouped by what the code returns, because a hydro code (and, for example, LAMMPS's neighbour output) needs
+the faces:
+
+- **full cells**: volumes, centroids, and per face the neighbour and the area (vector). voronoi-cpp, voro++ (areas and
+  unit normals), geogram's periodic cells (scalar areas) and peclet-voro (area vectors, no cell centroids) return them.
+  Codes that return Delaunay tetrahedra (CGAL, TetGen, Qhull, geogram PDEL, gDel3D) or neighbour lists (Paragram,
+  votess) get "+ faces (ours)", timed in: `bench/libraries/dual_cells.hpp` builds the cells from the tetrahedra (per
+  original point, the signed simplices (point, edge midpoint, face circumcentre, tetrahedron circumcentre); OpenMP, as
+  many threads as the code), `bench/libraries/clip_cells.hpp` from neighbour lists (a cube cut by the bisector of each
+  listed neighbour, in double; OpenMP on the CPU, a CUDA kernel for Paragram). Both are checked: area vectors close to
+  2e-16 of their sum, volumes match the oracle.
+- **volumes and barycentres**: Basselin et al., VoroGPU (Ray et al.) and Liu et al. clip each cell but return only its
+  integrals.
+- **topology**: the Delaunay or neighbour-list step of the codes above, alone.
+
+The variant "warp clipping rebuild, host to host, volumes and centroids copied out" gives voronoi-cpp the scope and
+outputs of the volumes-only codes (its faces are still built on the device, not copied back).
 
 ## What is timed
 
-The clock (`std::chrono::steady_clock`, wall time) runs from the points in the library's natural memory (host for CPU
-codes, device for GPU codes unless the API takes host points, as stated per row) to the library's output in its own
-memory: cell volumes, and faces with areas where the library gives them. No file I/O, no copy of the result back. A
-library that only builds a Delaunay tetrahedralization is timed twice: the Delaunay alone, and the Delaunay plus cell
-volumes from it by our own dual computation (`images_dual.hpp` on the CPU, a CUDA kernel for gDel3D); both rows are
-shown. Rates are M cells/s: the n cells of the input (images not counted) per second.
+The clock (`std::chrono::steady_clock`, wall time) runs from the points in the code's natural memory to all of the
+row's outputs in memory: for CPU codes host memory; for GPU codes device memory where the API allows (voronoi-cpp's
+device rows, peclet-voro, Paragram), otherwise host to host including the copies (gDel3D, VoroGPU, Liu et al.,
+Basselin et al., votess: marked "host↔device copies timed"). No file I/O. Padding with images, neighbour search, grids,
+allocation and our faces step are inside the clock; destruction is outside.
 
 Protocol (`run_protocol` in `libbench.hpp`): one untimed run that measures the peak memory and writes the volumes for
-the accuracy check, untimed warm-up runs until 2 s have passed (the A100's clock ramps up from 210 MHz; a 2M build of
-60 ms is otherwise timed cold), then 3 timed runs. Tables give the median and the min–max of the 3. Moving-mesh steps:
+the accuracy check, untimed warm-up runs until 2 s have passed (the A100's clock ramps up from 210 MHz), then 3 timed
+runs. Tables give the median and the min–max of the timed runs (6 for our 128³ A100 rows: two jobs). Moving-mesh steps:
 each of the 10 trajectory steps is timed; the tables give the median and range of steps 2 to 10.
 
 Peak memory, in B/cell of the n input cells: on the host the resident set's high-water mark above the resident set at
-the start of the run (`/proc/self/clear_refs` reset, `VmHWM`); on the GPU the device use (`cudaMemGetInfo`, total
-minus free) sampled every 200 µs on a second thread, above the use at the start of the run. Both count everything the
-process allocates during the build, including library pools and, for padded codes, the images. For voronoi-cpp the
-Kokkos arrays alone are recorded as well (Kokkos Tools callbacks; side records in summary.md).
+the start of the run (`/proc/self/clear_refs` reset, `VmHWM`); on the GPU the device use (`cudaMemGetInfo`, total minus
+free) sampled every 200 µs on a second thread. A "+" row reports at least its base row's peak (the second variant of a
+process starts with the allocator's memory of the first). Basselin et al.'s OpenCL allocations appear small (about 160
+B/cell) and may be under-sampled.
 
 ## Like for like, and what cannot be matched
 
-- Same points, same box: native periodic unit box where the library supports it (voronoi-cpp, voro++, CGAL
-  `Periodic_3_Delaunay_triangulation_3`, geogram `PeriodicDelaunay3d`, peclet-voro). The others are padded with periodic
-  images in a shell around the box (width per input in each row's `periodic` field), wide enough that every original
-  cell is exact; the accuracy check confirms it. The time includes building and triangulating the images.
-- Same outputs: volumes for every row; faces with areas where the library gives them (`outputs` per row). Delaunay-only
-  codes get our dual volumes, timed separately.
-- Same precision: double everywhere a library allows it. Ray et al.'s VoroGPU and Liu et al.'s code compute in float
-  (cells, volumes) and Paragram's adjacency is float32; they are run in float and marked so.
-- Same hardware: GPU codes on one A100-SXM4-40GB (Raven `gpu1`, 18 host cores of the node allotted, SM clock logged
-  before and after each run: 1305 MHz under load, 1410 MHz maximum); CPU codes on one full Raven node (2× Xeon
-  Platinum 8360Y, 72 cores, `--exclusive`), at 72 threads (parallel codes) and at 1 thread. OpenMP codes run with
-  `OMP_PROC_BIND=spread OMP_PLACES=cores`; geogram runs unbound (its thread pool is otherwise pinned to one core,
-  job 32226520).
-- Robustness differs and is part of the result: voronoi-cpp's predicates are exact on the 2⁻³⁰ grid; CGAL and geogram
-  use exact (filtered) predicates; voro++, peclet-voro, VoroGPU, Liu et al. and Paragram use floating-point tests.
-- Not matched: library tuning beyond documented defaults (block counts, neighbour counts K and similar are listed per
-  row); GPU codes that take host input include the upload; published numbers are on other hardware and points.
+- Same points: the files above for every code. Same box: periodic where the code supports it (voronoi-cpp, voro++,
+  CGAL `Periodic_3_Delaunay_triangulation_3`, geogram `PeriodicDelaunay3d`, peclet-voro); the others get every periodic
+  image within a shell around the box (3 to 8 mean spacings per input, 24 for Paragram's halo at 256³), checked per
+  cell (the circumspheres, or twice the reach, of every original cell inside the padded box).
+- Same outputs: the groups above; "+ faces (ours)" where a code returns topology only.
+- Same precision: double, except Paragram's adjacency (float32, `-use_fast_math`, its default build) and the cells of
+  VoroGPU and Liu et al. (float, as their code is written). Exact predicates: voronoi-cpp (on the 2⁻³⁰ grid), CGAL
+  (Epick), geogram (PCK), TetGen (Shewchuk) and gDel3D (exact/SoS with a CPU fix-up); the rest use floating-point
+  tests.
+- Same hardware: every GPU code in chained jobs on one A100 node (`bench/libraries/run_chain_a100.sh`); each job also
+  ran our warp rebuild as a reference, so its ratios are free of node differences (section "Same GPU" of summary.md).
+  CPU codes on one full node each (2× Xeon Platinum 8360Y, 72 cores, `--exclusive`), at 72 threads for parallel codes
+  and at 1 thread at 128³. OpenMP codes run with `OMP_PROC_BIND=spread OMP_PLACES=cores`; geogram, CGAL (TBB) and votess
+  run unbound (binding pins their own thread pools to one core: jobs 32226520, 32230805).
+- Best configuration: each code's documented defaults, and for the kNN codes the README's setting per input class
+  (blue noise: blue-noise setting; jittered: perturbed grid; the rest: white noise). Every setting on every input is in
+  summary.md. VoroGPU's white-noise K 190 overflows its int indices at 256³, so K 90 there. Basselin et al.'s `--grid`
+  is the paper's restriction domain (a tetrahedral mesh), not an acceleration; the unrestricted diagram ("no clipping"
+  in its Fig. 10) is what is run.
+- Not matched: gDel3D fails at 256³ (27-bit tetrahedron index) and peclet-voro runs out of memory there; votess's GPU
+  path fails at 256³ (int buffer sizes) and on blue noise; single-core runs only at 128³; published numbers are on
+  other hardware and points.
 
 ## Accuracy
 
-`bench/libraries/oracle_check.cpp` compares each library's volumes with the brute-force oracle of
-`src/test/oracle.hpp` (exact 128-bit predicates and long-double clipping against all periodic images; it shares no
-code with voronoi-cpp) on 1000 cells drawn with a fixed seed from each point file, and checks all n cells for missing or
-non-positive volumes and the sum against the box. Oracle cost: 60 s at 2.1M and 500 s at 16.8M on 72 cores (job
-32225958).
+`bench/libraries/oracle_check.cpp` compares each code's volumes with the brute-force oracle of `src/test/oracle.hpp`
+(exact 128-bit predicates and long-double clipping against all periodic images; it shares no code with voronoi-cpp) on
+1000 cells drawn with a fixed seed from each point file, and checks all n cells for missing or non-positive volumes and
+the sum against the box (`bench/libraries/oracle_cpu.sh`; jobs 32269164 and 32360840; oracle cost 60 s at 2.1M and
+500 s at 16.8M on 72 cores, jobs 32225958 and 32234618).
 
 ## Reproducing
 
 ```
-# inputs (one A100 job), then each library: build script, then run script (Slurm; see each script's header)
 sbatch -o <log> bench/libraries/make_points_a100.sh <voronoi-cpp CUDA build> <data dir>
-sbatch -o bench/libraries/results/<lib>-<device>-%j.jsonl bench/libraries/run_<lib>_<device>.sh ...
-sbatch -o bench/libraries/results/accuracy-<lib>-%j.jsonl bench/libraries/oracle_cpu.sh <data dir> <volumes>...
-python3 scripts/library_benchmark.py   # summary.md and docs/figures/library_benchmark.png from the records
+sbatch -o <log> bench/libraries/make_bluenoise_a100.sh <voronoi-cpp CUDA build> <data dir>
+JOBS=2 bash bench/libraries/build_<lib>.sh        # or sbatch; sources fetched outside the repository
+sbatch -o bench/libraries/results/chain-a100-%j.jsonl bench/libraries/run_chain_a100.sh <data> <build> "run_<lib>_a100.sh SIZES=..." ...
+sbatch -o bench/libraries/results/<lib>-cpu-%j.jsonl bench/libraries/run_<lib>_cpu.sh ...
+sbatch --wrap "bash bench/libraries/oracle_cpu.sh <data> <volumes>..." -o bench/libraries/results/accuracy-<name>-%j.jsonl
+python3 scripts/library_benchmark.py   # summary.md and docs/figures/library_benchmark.png
 ```
 
-Third-party sources are fetched by the build scripts into a directory outside the repository, at the versions in the
-provenance table; local patches needed to build the older GPU codes with current CUDA are in `bench/libraries/*.patch`.
+Raw records: `bench/libraries/results/*.jsonl` (one JSON line per timed run; the Slurm epilogue that follows is
+ignored). Earlier rounds are kept under `results/superseded/` (round 1: volumes only, before blue noise and the faces
+step; round 2: pieces replaced by later fixes, each file named for the reason).
 
 ## Provenance
 
-Versions and builds (the build scripts `bench/libraries/build_<lib>.sh` fetch and build each exactly so; every record
-carries its version, threads, host and job id):
-
-| library | version | build | runs (jobs) |
+| code | version | build | jobs |
 |---|---|---|---|
-| voronoi-cpp (A100 rows) | 09d31d0 = main 9e9ec03 + this benchmark | Kokkos 5.0.99 CUDA (AMPERE80), gcc 14, CUDA 13.0, nvcc_wrapper, Release | 32232716 |
-| voronoi-cpp (CPU rows) | 799bc38 = main 45db7fa + this benchmark (the step kernels of 9e9ec03 are GPU-only tuning) | Kokkos OpenMP (gcc 15), `-march=icelake-server`, Release | 32226238 |
-| voro++ | master b0dac57; multithreaded: dev 61099f6 (Lu, Lazar and Rycroft 2023) | gcc 14 `-O3 -march=native` (dev `-fopenmp`) | 32230277, 32230747, 32230748 |
-| CGAL | 6.2.1, Boost 1.74, oneTBB 2023.2; Epick kernel | gcc 14 `-O3 -march=native -DNDEBUG`, C++20 | 32226051, 32226052 |
-| geogram | 8d4b20af24b1 | its Release flags (`-O3 -fopenmp -ffp-contract=off`), gcc 14 | 32230300, 32230303 |
-| Qhull | 2020.2 (v8.0.2, 613debe), `qh_new_qhull("d Qbb Qz Qt")` | CMake Release `-O3 -march=native`, gcc 14 | 32230279 |
-| TetGen | 1.6.0 (535f9c4), `tetrahedralize("Qz")` | `-O3 -march=native` (predicates as its makefile), gcc 14 | 32230278 |
-| gDel3D | a429be8 + `gdel3d.patch` (build fixes for current CUDA), double, star splaying on | `-O3`, sm_80, gcc 13, CUDA 12.6 | 32230284 |
-| VoroGPU (Ray et al.) | f4d7e7e + `vorogpu.patch`; K 190 (PRESET 0) and K 90 (PRESET 1), float as upstream | `-O3`, sm_80, gcc 13, CUDA 12.6 | 32230285, 32230286 |
-| Liu et al. | b2c64f5 + `voronoi-gpu-liu.patch`; K 90, float | `-O3`, sm_80, gcc 13, CUDA 12.6 | 32230287, 32230288 |
-| Basselin et al. | 196e7d7, OpenCL on the NVIDIA driver; K 70, P 30, V 40 (README settings), relaunch × 1.5 | gcc 13 `-O3`, CUDA 12.6 runtime | 32230958, 32230959 |
-| peclet-voro | v1.0.4-1-gd7371c9, Kokkos 5.1.1 (CUDA AMPERE80; OpenMP) | its CMake Release, gcc 14, CUDA 13.0 | 32230289, 32230290, 32230291 |
-| Paragram | 4f36b1f (0.1.0), torch 2.11 + cu128, its default build (`-use_fast_math`) | lazily built CUDA extension, sm_80, gcc 14, CUDA 12.8 | 32230794, 32230795, 32230957 |
-| votess | f0f805f; A100: AdaptiveCpp v25.02.0 (generic SSCP, clang 18.1.8, CUDA 12.2); CPU: icpx 2025.3 `-fsycl` | `-O3` | 32231706; 32231009, 32231211, 32231821, 32231822 |
+| voronoi-cpp (tables) | ad62997 = main b2faee8 + this benchmark | Kokkos 5.0.99 CUDA (AMPERE80), gcc 14, CUDA 13.0, Release; OpenMP: Kokkos (gcc 15), `-march=icelake-server` | A100 32272549, 32272550, 32319068; CPU 32272650 |
+| voronoi-cpp (same-job references) | 8e2a2d2, 3fae29a, 88b7b6f, 79c4889, eacac81 (main 9e9ec03 + this benchmark; the warp rebuild of b2faee8 is 10 to 15 % faster) | as above | the other A100 chains |
+| voro++ | master b0dac57; multithreaded: dev 61099f6 (Lu, Lazar and Rycroft 2023) | gcc 14 `-O3 -march=native` (dev `-fopenmp`) | 32236019 |
+| CGAL | 6.2.1, Boost 1.74, oneTBB 2023.2; Epick | gcc 14 `-O3 -march=native -DNDEBUG -fopenmp`, C++20 | 32236472, 32236474 |
+| geogram | 8d4b20af24b1 | its Release flags (`-O3 -fopenmp -ffp-contract=off`), gcc 14 | 32236473, 32236475 |
+| Qhull | 2020.2 (v8.0.2, 613debe), `qh_new_qhull("d Qbb Qz Qt")` | CMake Release `-O3 -march=native`, gcc 14 | 32236471 |
+| TetGen | 1.6.0 (535f9c4), `tetrahedralize("Qz")` | `-O3 -march=native`, gcc 14 | 32236470 |
+| gDel3D | a429be8 + `gdel3d.patch`; double, star splaying on | `-O3`, sm_80, gcc 13, CUDA 12.6 | 32236623 |
+| VoroGPU (Ray et al.) | f4d7e7e + `vorogpu.patch`; PRESET 0/1/2 = K 190/90/35, float | `-O3`, sm_80, gcc 13, CUDA 12.6 | 32236003, 32236006 |
+| Liu et al. | b2c64f5 + `voronoi-gpu-liu.patch`; PRESET 0/1/2 = K 90/90/35, float | `-O3`, sm_80, gcc 13, CUDA 12.6 | 32236003, 32236007 |
+| Basselin et al. | 196e7d7, OpenCL (NVIDIA ICD); K/P/V 20/25/30, 50/30/40, 70/30/40 | gcc 13 `-O3`, CUDA 12.6 headers | 32236004, 32236232, 32272549, 32272550, 32319068 |
+| peclet-voro | v1.0.4-1-gd7371c9, Kokkos 5.1.1 (CUDA AMPERE80; OpenMP) | its CMake Release, gcc 14, CUDA 13.0 | 32236001, 32236005, 32236020 |
+| Paragram | 4f36b1f (0.1.0), torch 2.11 + cu128, its default build | lazily built extension, sm_80, gcc 14, CUDA 12.8 | 32237857, 32237858, 32237859 |
+| votess | f0f805f; A100: AdaptiveCpp v25.02.0 (clang 18.1.8, CUDA 12.2); CPU: icpx 2025.3 `-fsycl` | `-O3` | 32236002; 32236021 |
 
-Inputs: job 32225761. Oracle caches: job 32225958. Accuracy checks: the `accuracy-*.jsonl` files. The first runs of
-voronoi-cpp (timed without warm-up, and on the code before 9e9ec03) are kept in `bench/libraries/results/superseded/`.
-GPU clocks: our A100 jobs ran at 1305 MHz under load; the other libraries' A100 jobs at 1095 or 1305 MHz (logged per
-run in `/raven/u/uli/libbench-data/logs`, the SM clock of each job's node is not ours to set).
+Published numbers (labelled as such in the figure) and full references: `bench/libraries/published.csv`,
+`bench/libraries/references.bib`.
