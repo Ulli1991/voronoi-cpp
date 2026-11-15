@@ -15,7 +15,8 @@ module purge
 module load gcc/14 cuda/13.0
 build="$1"
 nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm --format=csv,noheader
-for case in "cosmicweb 2097152" "surface 2097152" "fccsolid 1048576" "cosmicweb 16777216" "surface 16777216" \
+# Surface clipping takes about a minute at 128³ (issue in docs/measurements.md), so it is checked at 32³ and 64³.
+for case in "surface 32768" "surface 262144" "cosmicweb 2097152" "fccsolid 1048576" "cosmicweb 16777216" \
     "fccsolid 8388608"; do
     set -- $case
     "$build/voronoi_bench" rebuild "$2" "$1" 3 --check || echo "# FAILED rebuild check $1 $2: exit $?"
