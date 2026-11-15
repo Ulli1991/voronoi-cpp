@@ -174,22 +174,39 @@ Report check(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::mem
     const bool some = partial.redone.extent(0) > 0;
     const auto redone = partial.redone;
     const auto changed = partial.changed;
+    // Incremental: every tetrahedron marks its particles used, and those redone or next to one are listed.
+    Kokkos::View<int*, Memory> listed(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_start_listed")),
+                                      some ? count : 0);
+    int checked = count;
+    if (some) {
+        Kokkos::parallel_scan(
+            "tet_start::near_redone", Range(exec, 0, count),
+            KOKKOS_LAMBDA(int t, int& at, bool last) {
+                bool look = redone(t);
+                for (int k = 0; k < 4; ++k) {
+                    if (last) used(vertex(t, k)) = 1;
+                    const int u = adjacent(t, k);
+                    look |= u >= 0 && redone(u);
+                }
+                if (!look) return;
+                if (last) listed(at) = t;
+                ++at;
+            },
+            checked);
+    }
     // Most tetrahedra are decided by the double filters; the rest go to `undecided` and the exact predicates.
     Kokkos::View<int*, Memory> undecided(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_start_undecided")),
-                                         count);
+                                         checked);
     Kokkos::View<int, Memory> undecided_count("tet_start_undecided_count");
     Report report;
     Kokkos::parallel_reduce(
-        "tet_start::check", Range(exec, 0, count),
-        KOKKOS_LAMBDA(int t, long long& bad, double& volume) {
+        "tet_start::check", Range(exec, 0, checked),
+        KOKKOS_LAMBDA(int i, long long& bad, double& volume) {
+            const int t = some ? listed(i) : i;
             int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
             int adj[4] = {adjacent(t, 0), adjacent(t, 1), adjacent(t, 2), adjacent(t, 3)};
-            for (int k = 0; k < 4; ++k) used(v[k]) = 1;
-            if (some) {
-                bool look = redone(t);
-                for (int k = 0; k < 4; ++k) look |= adj[k] >= 0 && redone(adj[k]);
-                if (!look) return;
-            }
+            if (!some)
+                for (int k = 0; k < 4; ++k) used(v[k]) = 1;
             ep::Offset o[4];
             const double size = detail::volume(point, v, unit3, o);
             if (!some || changed(v[0])) volume += size;
