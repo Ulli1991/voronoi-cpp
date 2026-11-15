@@ -22,8 +22,8 @@ README = {"basselin": {"bluenoise": "blue", "jittered": "grid"}, "vorogpu": {"bl
 WHITE = {"basselin": "white", "vorogpu": "k190", "liu": "p0"}
 # (label, volumes prefix with {s} for the README setting, library, variant prefix, device, threads, colour)
 CODES = [
-    ("voronoi-cpp, rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "#000000"),
-    ("voronoi-cpp, exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555"),
+    ("ours, rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "#000000"),
+    ("ours, exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555"),
     ("peclet-voro", "peclet-voro-a100", "peclet-voro", "cold build", "A100", 1, "#ff7f0e"),
     ("gDel3D + faces", "gdel3d-a100", "gDel3D", "Delaunay + faces", "A100", 1, "#2ca02c"),
     ("Paragram + faces", "paragram-a100", "Paragram", "voronoi_diagram + faces", "A100", 1, "#d62728"),
@@ -31,10 +31,10 @@ CODES = [
     ("Basselin et al.", "basselin-{s}-a100", "Basselin", "", "A100", 1, "#8c564b"),
     ("Ray et al. (float)", "vorogpu-{s}-a100", "VoroGPU", "", "A100", 1, "#e377c2"),
     ("Liu et al. (float)", "voronoi-gpu-liu-tet-{s}-a100", "Liu et al.", "tet-centric", "A100", 1, "#bcbd22"),
-    ("voro++ mt (CPU)", "voropp-mt-cpu", "voro++", "multithreaded", "2x Xeon", 72, "#1f77b4"),
-    ("CGAL + faces (CPU)", "cgal-dt3-par-cpu", "CGAL Delaunay_triangulation_3", "Delaunay + faces", "2x Xeon", 72,
+    ("voro++ (72 cores)", "voropp-mt-cpu", "voro++", "multithreaded", "2x Xeon", 72, "#1f77b4"),
+    ("CGAL + faces (72 cores)", "cgal-dt3-par-cpu", "CGAL Delaunay_triangulation_3", "Delaunay + faces", "2x Xeon", 72,
      "#17becf"),
-    ("geogram periodic (CPU)", "geogram-pdel-cpu", "geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72,
+    ("geogram (72 cores)", "geogram-pdel-cpu", "geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72,
      "#e6ab02"),
 ]
 FLOOR = 1e-17
@@ -107,10 +107,10 @@ def main():
     for r in data:
         seen.setdefault(r["label"], r["colour"])
     a.legend([plt.Line2D([], [], color=v, marker="o", ls="none", ms=7) for v in seen.values()], list(seen),
-             loc="upper center", fontsize=11, ncol=4, columnspacing=0.8, handletextpad=0.1)
+             loc="upper center", fontsize=11, ncol=4)
     b.legend([plt.Line2D([], [], color="0.4", marker=MARKER[k], ls="none", ms=7) for k in INPUTS],
              ["jittered", "blue noise", "white noise", "clustered", "halo"], loc="upper right", fontsize=11,
-             bbox_to_anchor=(1.0, 0.9), title="input", title_fontsize=11)
+             bbox_to_anchor=(0.98, 0.9), title="input", title_fontsize=11)
     fig.subplots_adjust(left=0.09, right=0.98, top=0.98, bottom=0.08)
     save(fig, "quality", DOUBLE)
 

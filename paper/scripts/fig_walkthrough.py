@@ -31,6 +31,7 @@ WORDS = {
         "is an exact test on these integer positions;",
     "exact_predicates.hpp: snap\nvoronoi_mesh_2d.hpp: Mesh::snap": "exact_predicates.hpp, voronoi_mesh_2d.hpp (quantisation)",
     "Two on one grid point: refused.": "Two at one integer position: refused.",
+    "4 (16²) in the patch, 3 (8²) around.": "4 (16², dark blue) in the patch, 3 (8², light blue) around.",
 }
 
 
@@ -74,6 +75,9 @@ def save(self, name):
     if name != "overview_step":
         return
     name = "walkthrough"
+    for ax in self.fig.axes:  # panel 2's level key sits on the drawing; the caption names the levels instead
+        if ax.get_legend():
+            ax.get_legend().remove()
     buf = io.BytesIO()
     self.fig.savefig(buf, format="pdf")
     page = PdfReader(buf).pages[0]

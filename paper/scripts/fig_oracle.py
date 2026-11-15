@@ -14,10 +14,10 @@ ZERO = 2.2e-19  # errors of exactly 0: their own bin left of an axis break, labe
 FLOOR = 1e-18  # nonzero errors below this go into the first log bin
 BINS = np.concatenate([[1.2e-19, 4e-19], np.logspace(-18, -2, 65)])  # [4e-19, 1e-18) stays empty: the break
 OTHERS = [  # (volumes prefix, label, colour); halo 2,097,152, the hardest input
-    ("voronoi-cpp-warp-a100", "voronoi-cpp", "#000000"),
+    ("voronoi-cpp-warp-a100", "ours", "#000000"),
     ("voropp-mt-cpu", "voro++", "#1f77b4"),
     ("cgal-dt3-par-cpu", "CGAL + faces", "#2ca02c"),
-    ("geogram-pdel-cpu", "geogram periodic", "#9467bd"),
+    ("geogram-pdel-cpu", "geogram", "#9467bd"),
     ("peclet-voro-a100", "peclet-voro", "#ff7f0e"),
     ("basselin-white-a100", "Basselin et al.", "#8c564b"),
     ("vorogpu-k190-a100", "Ray et al. (float)", "#d62728"),
@@ -58,8 +58,8 @@ def main():
         ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(numticks=30))
         ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     axes[0].set_ylabel("fraction of sampled cells")
-    axes[0].legend(loc="upper left", fontsize=11, bbox_to_anchor=(0.0, 0.9))
-    axes[2].legend(loc="upper right", fontsize=11, bbox_to_anchor=(1.0, 0.9))
+    axes[0].legend(loc="upper left", fontsize=11, bbox_to_anchor=(0.02, 0.9))
+    axes[2].legend(loc="upper right", fontsize=11, bbox_to_anchor=(0.98, 0.9))
     fig.subplots_adjust(wspace=0.28)
     save(fig, "oracle_errors", DOUBLE)
 

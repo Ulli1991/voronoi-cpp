@@ -37,7 +37,7 @@ def main():
                     ax.barh(y, per[n], left=left, color=c, height=0.55, zorder=3, label=short.get(n, n))
                 left += per[n]
             edge = max(left, TARGET / (5 * base * 1e6))
-            ax.text(edge + 0.02 * xmax, y, f"{left:,.0f}", va="center")
+            ax.text(edge + 0.03 * xmax, y, f"{left:,.0f}", va="center")  # right of the bar and its lines
             for mult, ls in ((5, "-"), (10, "--")):
                 b = TARGET / (mult * base * 1e6)
                 ax.plot([b, b], [y - 0.4, y + 0.4], color="k", lw=2.2, ls=ls, zorder=4,
@@ -54,8 +54,7 @@ def main():
         seen = {}
         for h, lab in zip(*ax.get_legend_handles_labels()):
             seen.setdefault(lab, h)
-        ax.legend(list(seen.values()), list(seen.keys()), loc="upper right", fontsize=11, ncol=2, columnspacing=0.8, bbox_to_anchor=(1.0, 0.9),
-                  handlelength=1.5)
+        ax.legend(list(seen.values()), list(seen.keys()), loc="upper right", fontsize=11, ncol=2, bbox_to_anchor=(1.0, 0.9))
     fig.tight_layout()
     save(fig, "ceiling", DOUBLE)
 

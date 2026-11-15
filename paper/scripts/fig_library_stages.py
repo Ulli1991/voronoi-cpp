@@ -72,7 +72,7 @@ def find(plain, staged, lib, var, inp, gpu):
 
 def main():
     plain, staged = load()
-    fig, axes = figure(DOUBLE, 120, nrows=2, ncols=2, sharex=True,
+    fig, axes = figure(DOUBLE, 110, nrows=2, ncols=2, sharex=True,
                        gridspec_kw=dict(height_ratios=[len(GPU), len(CPU)]))
     for row, (codes, device) in enumerate(((GPU, "one A100"), (CPU, "72 cores"))):
         for col, (inp, name) in enumerate(INPUTS):
@@ -94,8 +94,8 @@ def main():
             ax.set_yticks(range(len(codes)), [c[2] for c in codes] if col == 0 else [])
             ax.set_ylim(len(codes) - 0.5, -0.5)
             ax.set_xscale("log")
-            ax.set_xlim(0.1, 2e4)
-            ax.set_xticks([0.1, 1, 10, 100, 1e3, 1e4], ["0.1", "1", "10", "100", "10³", "10⁴"])
+            ax.set_xlim(0.1, 2e5)  # room on the right of the A100 panels for the legend
+            ax.set_xticks([0.1, 1, 10, 100, 1e3, 1e4, 1e5], ["0.1", "1", "10", "100", "10³", "10⁴", "10⁵"])
             figstyle.decorate(ax)
             ax.tick_params(axis="y", which="both", left=False, right=False)
             ax.grid(False, axis="y")
@@ -105,9 +105,9 @@ def main():
     handles = [plt.Line2D([], [], marker=m, color=c, ls="none", ms=7, mec=c if m == "x" else "white",
                           mew=1.6 if m == "x" else 0.5) for _, _, m, c in GROUPS]
     handles.append(plt.Rectangle((0, 0), 1, 1, fc="0.9", ec="0.6", lw=0.5))
-    fig.legend(handles, [g[0] for g in GROUPS] + ["total (plain runs)"], loc="lower center", ncol=4, fontsize=11,
-               frameon=False, columnspacing=1.2, handletextpad=0.3)
-    fig.subplots_adjust(left=0.24, right=0.99, top=0.96, bottom=0.17, hspace=0.25, wspace=0.05)
+    # One shared legend inside the panel with the most room: right of the bars in jittered, one A100.
+    axes[0, 0].legend(handles, [g[0] for g in GROUPS] + ["total (plain runs)"], loc="upper right", fontsize=10)
+    fig.subplots_adjust(left=0.24, right=0.99, top=0.96, bottom=0.08, hspace=0.18, wspace=0.05)
     save(fig, "library_stages", DOUBLE)
 
 

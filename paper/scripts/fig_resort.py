@@ -43,7 +43,7 @@ def main():
     ax.set_ylabel("step + update_cells, M cells/s")
     ax.set_xlim(0, 500)
     lo, hi = ax.get_ylim()
-    ax.set_ylim(0, hi * 1.45)
+    ax.set_ylim(0, hi * 1.6)  # headroom: the legend clears the curves
     ax.legend(loc="upper right", fontsize=11, title="over the run, M cells/s", title_fontsize=11)
     figstyle.decorate(ax)
     fig.tight_layout()

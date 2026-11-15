@@ -34,9 +34,23 @@ MARKER = {"jittered": "o", "bluenoise": "D", "uniform": "s", "clustered": "^", "
           "wave": "X", "slab": "h", "cosmicweb": "*", "fccsolid": "p", "surface": "d"}
 
 
+# Compact legends, the paper's rule (PLAN.md): inside the axes, tight handles and spacing, an opaque white box without
+# an edge so no grid or data line crosses the text.
+LEGEND = {"legend.frameon": True, "legend.facecolor": "white", "legend.edgecolor": "none", "legend.framealpha": 1.0,
+          "legend.fancybox": False, "legend.handlelength": 1.3, "legend.handletextpad": 0.4,
+          "legend.columnspacing": 0.9, "legend.labelspacing": 0.25, "legend.borderpad": 0.2,
+          "legend.borderaxespad": 0.4}
+
+
+def style():
+    """LUNA's figstyle (unchanged), then the compact legend settings."""
+    figstyle.apply_style()
+    plt.rcParams.update(LEGEND)
+
+
 def figure(width_mm, height_mm, **kw):
     """A figure of the given print size, drawn at design size (print / SCALE)."""
-    figstyle.apply_style()
+    style()
     return plt.subplots(figsize=(width_mm * MM / SCALE, height_mm * MM / SCALE), **kw)
 
 

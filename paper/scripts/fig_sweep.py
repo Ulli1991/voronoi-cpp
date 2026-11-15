@@ -32,10 +32,10 @@ def clock_text(clocks):
 
 def throughput(commit, table, clocks):
     fig, axes = figure(DOUBLE, 120, nrows=2, ncols=2)
-    panels = [(axes[0, 0], "rebuild", "Mcells_s_median", "(a) warp rebuild"),
-              (axes[0, 1], "start", "Mcells_s_median", "(b) exact start (mesh + cells)"),
-              (axes[1, 0], "step 0.1", "Mcells_s_median", "(c) step, 0.1 spacings, + update_cells"),
-              (axes[1, 1], "start", "bytes_per_cell", "(d) peak device memory, exact start")]
+    panels = [(axes[0, 0], "rebuild", "Mcells_s_median", "(a) rebuild"),
+              (axes[0, 1], "start", "Mcells_s_median", "(b) exact start"),
+              (axes[1, 0], "step 0.1", "Mcells_s_median", "(c) moving step"),
+              (axes[1, 1], "start", "bytes_per_cell", "(d) peak memory, exact start")]
     for ax, path, col, text in panels:
         top = 0
         for kind in INPUTS:
@@ -46,17 +46,14 @@ def throughput(commit, table, clocks):
                 top = max(top, max(y for _, y in pts))
         ax.set_xticks(range(len(SIZES)), SIZE_LABEL)
         ax.set_xlim(-0.3, len(SIZES) - 0.7)
-        ax.set_ylim(0, (1.45 if ax is axes[0, 0] else 1.2) * top if top else 1)
+        ax.set_ylim(0, (1.55 if ax is axes[0, 0] else 1.2) * top if top else 1)  # headroom for the legend in (a)
         ax.text(0.03, 0.96, text, transform=ax.transAxes, va="top")
         ax.set_ylabel("B/cell" if col == "bytes_per_cell" else "M cells/s")
         figstyle.decorate(ax)
         ax.xaxis.set_minor_locator(matplotlib_null())
     for ax in axes[1]:
         ax.set_xlabel("cells n")
-    axes[0, 0].legend(loc="upper right", ncol=4, fontsize=11, columnspacing=0.8, handlelength=1.5,
-                      bbox_to_anchor=(1.0, 0.88))
-    axes[0, 0].text(0.97, 0.03, f"one A100, {clock_text(clocks)}, {commit}", transform=axes[0, 0].transAxes,
-                    ha="right", va="bottom", fontsize=11)
+    axes[0, 0].legend(loc="upper right", ncol=4, fontsize=11, bbox_to_anchor=(1.0, 0.9))
     fig.tight_layout()
     save(fig, "throughput_vs_n", DOUBLE)
 
@@ -82,10 +79,8 @@ def displacement(commit, table, clocks):
     ax.set_yscale("log")
     ax.set_xlabel("displacement per step, mean spacings")
     ax.set_ylabel("step + update_cells, M cells/s")
-    ax.text(0.97, 0.97, f"128³, one A100, {clock_text(clocks)}", transform=ax.transAxes, ha="right", va="top",
-            fontsize=11)
     ax.set_ylim(min(starts) * 0.8 if starts else None, 450)
-    ax.legend(loc="lower left", ncol=2, fontsize=11, columnspacing=0.8, handlelength=1.5, bbox_to_anchor=(0.0, 0.34))
+    ax.legend(loc="lower left", ncol=2, fontsize=11, bbox_to_anchor=(0.0, 0.34))
     figstyle.decorate(ax)
     fig.tight_layout()
     save(fig, "step_vs_displacement", SINGLE)

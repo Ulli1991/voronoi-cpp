@@ -74,7 +74,7 @@ def main():
     b.set_ylim(8.6, -0.6)
     b.set_xlim(0, 22)
     b.set_xlabel("kernel time, ns per cell")
-    b.legend(loc="lower right", fontsize=11, handlelength=1.2)
+    b.legend(loc="lower right", fontsize=11)
     b.text(0.98, 0.98, "(b) jittered", transform=b.transAxes, ha="right", va="top", fontsize=11)
     for ax in (a, b):
         figstyle.decorate(ax)

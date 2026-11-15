@@ -54,7 +54,7 @@ def by_role():
 
 def main():
     data = by_role()
-    fig, (a, b) = figure(DOUBLE, 92, ncols=2, gridspec_kw=dict(width_ratios=[0.75, 1.25]))
+    fig, (a, b) = figure(DOUBLE, 82, ncols=2, gridspec_kw=dict(width_ratios=[1.0, 1.25]))
     phases = ("rebuild", "exact start", "moving step")
     for i, p in enumerate(phases):
         left = 0.0
@@ -65,12 +65,11 @@ def main():
         big = sum(data[16777216, p].values())
         a.text(i, left + 25, f"{left:.0f}", ha="center", va="bottom", fontsize=11)
     a.set_xticks(range(3), ["rebuild", "exact\nstart", "moving\nstep"])
-    a.set_xlim(-0.6, 2.6)
+    a.set_xlim(-0.6, 4.4)  # room right of the bars for the legend
     a.set_ylim(0, 2200)
     a.set_ylabel("device B/cell at the peak, 128³")
     handles, labels = a.get_legend_handles_labels()  # outside on the right, top role first as in the stack
-    a.legend(handles[::-1], labels[::-1], loc="center left", fontsize=11, handlelength=1.2, bbox_to_anchor=(1.01, 0.5),
-             frameon=False)
+    a.legend(handles[::-1], labels[::-1], loc="center right", fontsize=11)
     a.text(0.03, 0.98, "(a)", transform=a.transAxes, ha="left", va="top")
     figstyle.decorate(a)
     a.xaxis.set_minor_locator(plt.NullLocator())
@@ -97,13 +96,13 @@ def main():
         b.axvline(limit, color="#d62728", lw=1.4, ls="--", zorder=1)
         b.text(limit * 1.05, -1.5 + 0.55 * (k % 2), f"{name} below {limit:.0f}", color="#d62728", ha="left",
                va="center", fontsize=11, bbox=dict(fc="white", ec="none", pad=0.3))
+    from matplotlib.legend_handler import HandlerTuple
     from matplotlib.patches import Patch
-    b.legend(handles=[Patch(color="#000000", label="ours, lowest input"), Patch(color="#666666", label="ours, up to the highest"),
-                      Patch(color="#8a8a8a", label="others, lowest input"), Patch(color="#cfcfcf", label="others, up to the highest")],
-             loc="upper center", bbox_to_anchor=(0.4, -0.15), fontsize=11, ncol=2, columnspacing=0.8, handlelength=1.2,
-             frameon=False)
+    b.legend([(Patch(color="#000000"), Patch(color="#8a8a8a")), (Patch(color="#666666"), Patch(color="#cfcfcf"))],
+             ["lowest input", "up to the highest"], handler_map={tuple: HandlerTuple(ndivide=None, pad=0)},
+             handlelength=2.0, loc="lower right", fontsize=11)  # dark: ours, grey: others (caption)
     b.set_xscale("log")
-    b.set_xlim(60, 30000)
+    b.set_xlim(60, 1.5e5)
     b.set_yticks(range(len(rows)), [r[0] for r in rows], fontsize=11)
     b.set_ylim(len(rows) - 0.4, -1.9)
     b.set_xlabel("device B/cell at the peak, 128³")

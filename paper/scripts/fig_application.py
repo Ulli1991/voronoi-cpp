@@ -25,9 +25,9 @@ SETTING = {"basselin": {"fccsolid": "grid"}, "vorogpu": {"fccsolid": "k90"}, "li
 WHITE = {"basselin": "white", "vorogpu": "k190", "liu": "p0"}
 # (label, volumes prefix with {s} for the README setting, library, variant prefix, device, threads, colour, marker)
 CODES = [
-    ("voronoi-cpp, rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1,
+    ("ours, rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1,
      "#000000", "o"),
-    ("voronoi-cpp, exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555", "s"),
+    ("ours, exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555", "o"),
     ("peclet-voro", "peclet-voro-a100", "peclet-voro", "cold build", "A100", 1, "#ff7f0e", "o"),
     ("gDel3D + faces", "gdel3d-a100", "gDel3D", "Delaunay + faces", "A100", 1, "#2ca02c", "o"),
     ("Paragram + faces", "paragram-a100", "Paragram", "voronoi_diagram + faces", "A100", 1, "#d62728", "o"),
@@ -38,14 +38,14 @@ CODES = [
     ("voro++ (72 cores)", "voropp-mt-cpu", "voro++", "multithreaded", "2x Xeon", 72, "#1f77b4", "D"),
     ("CGAL + faces (72 cores)", "cgal-dt3-par-cpu", "CGAL Delaunay_triangulation_3", "Delaunay + faces", "2x Xeon", 72,
      "#17becf", "D"),
-    ("geogram periodic (72 cores)", "geogram-pdel-cpu", "geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72,
+    ("geogram (72 cores)", "geogram-pdel-cpu", "geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72,
      "#e6ab02", "D"),
     ("votess + faces (72 cores)", "votess-cpu", "votess", "tesellate + faces", "2x Xeon", 72, "#9467bd", "D"),
 ]
 # Runs that end without volumes (docs/measurements.md, "Application inputs"): no rate, no record; listed in the panel.
 CRASHED = {("votess + faces", "cosmicweb"): "CUDA error 700", ("votess + faces", "surface"): "CUDA error 700",
            ("votess + faces (72 cores)", "surface"): "length_error"}
-ISSUE_60 = ("voronoi-cpp, rebuild", "voronoi-cpp, exact start")  # surface: cells refused, about 300x slower (#60 open)
+ISSUE_60 = ("ours, rebuild", "ours, exact start")  # surface: cells refused, about 300x slower (#60 open)
 
 
 def accuracy():
@@ -92,10 +92,10 @@ def rows():
 
 
 # Level of each complete code in the band (steps of 25 %), chosen so codes of similar rate sit at least two levels apart.
-LEVEL = {"voronoi-cpp, rebuild": 6, "voronoi-cpp, exact start": 1, "peclet-voro": 11, "gDel3D + faces": 0,
+LEVEL = {"ours, rebuild": 6, "ours, exact start": 1, "peclet-voro": 11, "gDel3D + faces": 0,
          "Paragram + faces": 8, "votess + faces": 7, "Basselin et al.": 4, "Ray et al. (float)": 9,
          "Liu et al. (float)": 6, "voro++ (72 cores)": 5, "CGAL + faces (72 cores)": 12,
-         "geogram periodic (72 cores)": 3, "votess + faces (72 cores)": 10}
+         "geogram (72 cores)": 3, "votess + faces (72 cores)": 10}
 
 
 def height(r):
@@ -105,7 +105,7 @@ def height(r):
 
 def main():
     data = rows()
-    fig, axes = figure(DOUBLE, 80, ncols=3, sharey=True)
+    fig, axes = figure(DOUBLE, 80, ncols=3, sharey=True, gridspec_kw=dict(width_ratios=[1, 1.3, 1]))
     for ax, (kind, n, title) in zip(axes, PANELS):
         here = [r for r in data if r["kind"] == kind]
         ax.axhspan(1e-8, 2.5e-7, color="0.92", zorder=0)
@@ -125,27 +125,32 @@ def main():
             ax.text(0.046, 2.5e-6, "#60 open", fontsize=11, ha="left", va="center")
         crashed = [f"{r['label']}" for r in here if r["state"] == "crashed"]
         if crashed:
-            ax.text(0.97, 0.62, "crashed:\n" + "\n".join(crashed), transform=ax.transAxes, ha="right", va="top",
+            ax.text(0.95, 0.5, "crashed:\n" + "\n".join(crashed), transform=ax.transAxes, ha="right", va="top",
                     fontsize=10, color="0.25")
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlim(0.01, 80)
         ax.set_xticks([0.01, 0.1, 1, 10], ["0.01", "0.1", "1", "10"])
-        ax.set_ylim(1e-8, 3)
+        ax.set_ylim(1e-8, 1e7)  # headroom above 1 for the legend
+        ax.set_yticks([1e-8, 1e-6, 1e-4, 1e-2, 1])
         ax.set_xlabel("build rate, M cells/s")
         ax.set_title(title, fontsize=13)
         figstyle.decorate(ax)
         ax.text(0.97, 3e-7, "band: no cell missing", fontsize=10, va="bottom", ha="right", color="0.3",
                 transform=ax.get_yaxis_transform())
     axes[0].set_ylabel("fraction of cells missing")
+    # One shared legend inside the panel with the most room (fcc solid: every code complete, the top is empty): one
+    # entry per code (colour), then the keys for marker shape (where it ran) and open markers (wrong volumes).
     seen = {}
     for r in data:
-        seen.setdefault(r["label"], (r["colour"], r["marker"]))
-    handles = [plt.Line2D([], [], color=c, marker=m, ls="none", ms=8, mec="white", mew=0.5) for c, m in seen.values()]
-    handles.append(plt.Line2D([], [], color="0.3", marker="o", ls="none", ms=9, mfc="white", mew=1.8))
-    fig.legend(handles, list(seen) + ["open: wrong volumes"], loc="lower center", ncol=5, fontsize=11,
-               columnspacing=1.0, handletextpad=0.2, frameon=False)
-    fig.subplots_adjust(left=0.07, right=0.99, top=0.93, bottom=0.34, wspace=0.08)
+        seen.setdefault(r["label"].replace(" (72 cores)", ""), r["colour"])
+    handles = [plt.Line2D([], [], color=c, marker="o", ls="none", ms=8, mec="white", mew=0.5) for c in seen.values()]
+    handles += [plt.Line2D([], [], color="0.3", marker="o", ls="none", ms=8),
+                plt.Line2D([], [], color="0.3", marker="D", ls="none", ms=7),
+                plt.Line2D([], [], color="0.3", marker="o", ls="none", ms=9, mfc="none", mew=1.8)]
+    axes[1].legend(handles, list(seen) + ["one A100", "72 cores", "wrong volumes"], loc="upper center", ncol=2,
+                   fontsize=11, handletextpad=0.2, columnspacing=0.6)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.93, bottom=0.14, wspace=0.08)
     save(fig, "application", DOUBLE)
     for r in data:
         print(r["kind"], r["label"], r["state"], f"{r.get('rate', 0):.3g}", f"{r.get('missing', 0):.2e}",

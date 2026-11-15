@@ -40,8 +40,7 @@ def main():
         figstyle.decorate(ax)
         ax.xaxis.set_minor_locator(__import__("matplotlib").ticker.NullLocator())
     axes[0].legend(loc="lower left", fontsize=11)
-    axes[1].text(0.97, 0.95, "3D Yee vortex, HLLC, MC limiter", transform=axes[1].transAxes, ha="right", va="top",
-                 fontsize=11)
+    # the test and solver (3D Yee vortex, HLLC, MC limiter) are in the caption
     fig.tight_layout()
     save(fig, "luna_vortex", DOUBLE)
 

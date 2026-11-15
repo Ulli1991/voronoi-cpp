@@ -9,6 +9,14 @@ in `paper/scripts/` from stored data, so it can be redrawn after each speed merg
 Curves 2.2 pt at design size, legends inside, no dark versions. Sizes powers of two or 3 × 2^k; M cells/s, B/cell;
 captions state the A100's SM clock. Figures draw measured rows only (every code on the same points and hardware); published rates of other codes go into the captions' table with citations and hardware.
 
+**Layout rule for every figure (owner, 2026-11-15).** Legends always inside the axes, in clear empty space next to
+related data; room is made by axis limits (headroom on a log axis), by columns, or by moving long details (missing
+counts, hardware, clocks, commits) into the caption. A multi-panel figure with repeated entries has one shared legend,
+inside the panel with the most room. Legends are compact (`paperfig.LEGEND`: short entries such as "ours", tight
+handles and spacing, an opaque white box without an edge so no grid or data line crosses their text). Nothing crosses
+text and nothing touches the frame (value labels get a white box where lines pass behind them). Panel titles are short
+("(a) rebuild"); details go into the caption. Text at print size is at least 7 pt (fontsize 11 at design size).
+
 ## Part 1: the library (6–7 figures)
 
 **Owner's 7-figure plan (2026-11-15).** 1 `walkthrough` (done, one full page); 2 `inputs`; 3 speed against the

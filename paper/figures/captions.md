@@ -41,8 +41,8 @@ but for the volumes-only codes (Basselin et al., Ray et al., Liu et al.; their R
 quality figure: white noise for cosmic web and surface, perturbed grid for the fcc solid; Ray et al. = VoroGPU, K = 190
 on cosmic web and surface, K = 90 on the fcc solid; Liu et al. tet-centric, K 90 (PRESET 0 and 1); Basselin et al.
 K = 70 and 50). Completeness: cells missing or with non-positive
-volume, of all n; band: no cell missing. Complete codes are spread over the band, each at a fixed height, so that none hides another. Open markers: wrong
-volumes, i.e. a sampled cell that has a volume is off by
+volume, of all n; band: no cell missing. Colour: the code; circles: one A100, diamonds: 72 cores (votess runs on both). Complete codes are spread over the band,
+each at a fixed height, so that none hides another. Open markers: wrong volumes, i.e. a sampled cell that has a volume is off by
 more than 1 % from the exact reference (1000 sampled cells), or the cells cover more than the box (Σ V − box > 10⁻³):
 peclet-voro on the surface (Σ V − box = +54), Paragram + faces on the surface (22 sampled cells off by more than 1 %,
 up to 76 %), gDel3D + faces on the surface (its padding of 8 spacings is too thin: one sampled cell off by 1.3 %), Liu
@@ -145,3 +145,9 @@ between laps (0.9); it has no copies because it is timed from points on the devi
 
 Basselin et al.'s 34.5 matches their cell kernel alone (docs/library_benchmark.md, Stages: 38.4 M cells/s on our A100,
 33.3 scaled to a V100), not the full build host to host (10.4 on our A100).
+
+**luna_vortex.** 3D Yee vortex, HLLC Riemann solver, MC limiter; L1 errors of density and velocity against n_x
+(n_x³ cells). See PLAN.md (Fig. 13) for the runs.
+
+**memory (b), legend.** Dark bars: voronoi-cpp, grey: the other codes; the darker part is the lowest of the five inputs,
+the lighter part up to the highest.
