@@ -545,8 +545,10 @@ void closure(const Mesh& mesh, int s, double spacing) {
     {
         const Phase phase("s" + std::to_string(s) + "_closure");
         mesh.for_each_face(KOKKOS_LAMBDA(int, int i, int j, const tet_mesh::Vec3& a, const tet_mesh::Vec3&) {
-            Kokkos::atomic_add(&sum(i, 0), a.x), Kokkos::atomic_add(&sum(i, 1), a.y), Kokkos::atomic_add(&sum(i, 2), a.z);
-            Kokkos::atomic_sub(&sum(j, 0), a.x), Kokkos::atomic_sub(&sum(j, 1), a.y), Kokkos::atomic_sub(&sum(j, 2), a.z);
+            Kokkos::atomic_add(&sum(i, 0), a.x), Kokkos::atomic_add(&sum(i, 1), a.y),
+                Kokkos::atomic_add(&sum(i, 2), a.z);
+            Kokkos::atomic_sub(&sum(j, 0), a.x), Kokkos::atomic_sub(&sum(j, 1), a.y),
+                Kokkos::atomic_sub(&sum(j, 2), a.z);
         });
         Kokkos::fence();
     }
@@ -744,8 +746,10 @@ int chunks(const std::vector<std::string>& args, const Box& box) {
     };
     auto whole = [&] {
         const Phase phase("whole");
-        Kokkos::parallel_for("chunks::pass1", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int i) { pass1(i, sum); });
-        Kokkos::parallel_for("chunks::pass2", Kokkos::RangePolicy<Exec>(exec, 0, faces), KOKKOS_LAMBDA(int f) { pass2(f, sum, out); });
+        Kokkos::parallel_for(
+            "chunks::pass1", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int i) { pass1(i, sum); });
+        Kokkos::parallel_for(
+            "chunks::pass2", Kokkos::RangePolicy<Exec>(exec, 0, faces), KOKKOS_LAMBDA(int f) { pass2(f, sum, out); });
         exec.fence();
     };
     const double whole_ms = median_ms(repeats, whole);
@@ -788,10 +792,12 @@ int chunks(const std::vector<std::string>& args, const Box& box) {
             const Phase phase("chunk_" + std::to_string(C));
             for (int c = 0; c < count; ++c) {
                 const int f0 = h_owned(c * C), f1 = h_owned(std::min(n, (c + 1) * C));
-                Kokkos::parallel_for("chunks::chunk_pass1", Kokkos::RangePolicy<Exec>(exec, cell_start[c], cell_start[c + 1]),
-                                     KOKKOS_LAMBDA(int k) { pass1(chunk_cells(k), sum_c); });
-                Kokkos::parallel_for("chunks::chunk_pass2", Kokkos::RangePolicy<Exec>(exec, f0, f1),
-                                     KOKKOS_LAMBDA(int f) { pass2(f, sum_c, out_c); });
+                Kokkos::parallel_for(
+                    "chunks::chunk_pass1", Kokkos::RangePolicy<Exec>(exec, cell_start[c], cell_start[c + 1]),
+                    KOKKOS_LAMBDA(int k) { pass1(chunk_cells(k), sum_c); });
+                Kokkos::parallel_for(
+                    "chunks::chunk_pass2", Kokkos::RangePolicy<Exec>(exec, f0, f1),
+                    KOKKOS_LAMBDA(int f) { pass2(f, sum_c, out_c); });
             }
             exec.fence();
         };
@@ -800,9 +806,9 @@ int chunks(const std::vector<std::string>& args, const Box& box) {
         Kokkos::parallel_reduce(
             "chunks::compare", Kokkos::RangePolicy<Exec>(exec, 0, faces),
             KOKKOS_LAMBDA(int f, long long& d) { d += out(f) != out_c(f) || (f < n && sum(f) != sum_c(f)); }, differ);
-        std::cout << "chunks: C=" << C << " chunks=" << count << " launches=" << 2 * count << " halo1_per_cell="
-                  << double(halo1) / n << " halo2_per_cell=" << double(halo2) / n << " chunk_ms=" << chunk_ms
-                  << " whole_ms=" << whole_ms << " differ=" << differ << "\n";
+        std::cout << "chunks: C=" << C << " chunks=" << count << " launches=" << 2 * count
+                  << " halo1_per_cell=" << double(halo1) / n << " halo2_per_cell=" << double(halo2) / n
+                  << " chunk_ms=" << chunk_ms << " whole_ms=" << whole_ms << " differ=" << differ << "\n";
     }
     return 0;
 }
@@ -825,15 +831,16 @@ int main(int argc, char** argv) {
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--measure"), static_cast<int>(flag_value(argc, argv, "--order", 0)),
                     layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", "")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [repeats] [--no-check] [--memory]\n"
-                 "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
-                 "       voronoi_bench chunks <n> <distribution> [repeats]\n"
-                 "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
-                 "                          [--memory] [--kernels] [--measure] [--order=every]\n"
-                 "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] [--closure] "
-                 "[--dump-cells=path]\n"
-                 "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
-                 "       both: [--box=Lx,Ly,Lz]\n";
+    std::cerr
+        << "usage: voronoi_bench rebuild <n> <distribution> [repeats] [--no-check] [--memory]\n"
+           "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
+           "       voronoi_bench chunks <n> <distribution> [repeats]\n"
+           "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
+           "                          [--memory] [--kernels] [--measure] [--order=every]\n"
+           "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
+           "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] [--closure] "
+           "[--dump-cells=path]\n"
+           "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
+           "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }
