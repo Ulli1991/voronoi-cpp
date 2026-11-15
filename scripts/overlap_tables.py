@@ -2,7 +2,6 @@
 """GPU busy and idle time per NVTX phase of voronoi_bench runs traced by scripts/overlap_a100.sh (or any nsys sqlite).
 
   python3 scripts/overlap_tables.py <job dir> [--kernels]       one row per run and phase
-  python3 scripts/overlap_tables.py --luna <file.sqlite>         luna-cpp: per hydro step, split at hydro::cell_step
 
 Busy: the union of kernels, copies and memsets on the GPU. Idle: the rest of the phase. Each idle interval is split by
 what the issuing host thread did meanwhile: in a launch call, in a synchronising call, in a copy call, in an allocation
@@ -15,7 +14,7 @@ import statistics
 import sys
 from collections import defaultdict
 
-FUNC = re.compile(r"\b((?:shell_voronoi|tet_start|tet_mesh|tet_repair|tet_flips|tet_cells|mesh_order|neighbor_search|voronoi|hydro|"
+FUNC = re.compile(r"\b((?:shell_voronoi|tet_start|tet_mesh|tet_repair|tet_flips|tet_cells|mesh_order|neighbor_search|voronoi|"
                   r"warp|exact_predicates)(?:::[A-Za-z_][A-Za-z_0-9]*)+)")
 
 
@@ -218,33 +217,8 @@ def report(path, kernels):
             print(f"   pcie {label}: {len(sel)} copies of >=16 MB at {sum(by for _, by in sel) / sum(d for d, _ in sel):.2f} GB/s")
 
 
-def luna(path):
-    """luna-cpp: steps split at each hydro::cell_step reduction (one per time_step); the middle steps' medians."""
-    t = Trace(path)
-    marks = sorted(x for x, y, f in t.kernels if f.startswith("hydro::") and "CellStep" in f)
-    if len(marks) < 3:
-        marks = sorted(x for x, y, f in t.kernels if "cell_step" in f or "CellStep" in f)
-    # A step runs from the launch call before one cell_step to the one before the next.
-    rs = []
-    for a, b in zip(marks[1:-1], marks[2:]):
-        rs.append(t.phase(a, b))
-    if not rs:
-        print("no steps found; kernel functions:", sorted({f for _, _, f in t.kernels})[:40])
-        return
-    r = merged(rs)
-    row(f"luna:{os.path.basename(path)}:step", r, f" steps={len(rs)}")
-    g = r["gaps"][:8]
-    print("   largest gaps: " + "; ".join(f"{ms(d):.3f} ms before {t.next_kernel(y)} after {t.prev_api(x)}" for d, x, y in g))
-    top = sorted(r["kernels"].items(), key=lambda kv: -kv[1])[:16]
-    print("   kernels: " + "; ".join(f"{f} {ms(v):.3f}" for f, v in top))
-
-
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if "--luna" in sys.argv:
-        for p in args:
-            luna(p)
-        sys.exit(0)
     for d in args:
         for f in sorted(os.listdir(d)) if os.path.isdir(d) else [d]:
             p = os.path.join(d, f) if os.path.isdir(d) else f
