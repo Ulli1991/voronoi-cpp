@@ -24,7 +24,7 @@ SCALE = 0.633  # print / design: figstyle's 12 pt ticks print at 7.6 pt
 LW = 2.2  # curves, design pt
 # one colour and marker per input, the same in every figure
 INPUTS = ["jittered", "bluenoise", "uniform", "clustered", "halo", "lattice", "wave"]
-LABEL = {"jittered": "jittered", "bluenoise": "blue noise", "uniform": "uniform", "clustered": "clustered",
+LABEL = {"jittered": "jittered", "bluenoise": "blue noise", "uniform": "white noise", "clustered": "clustered",
          "halo": "halo", "lattice": "lattice", "wave": "wave", "slab": "slab"}
 COLOR = {"jittered": "#1f77b4", "bluenoise": "#17becf", "uniform": "#2ca02c", "clustered": "#ff7f0e",
          "halo": "#d62728", "lattice": "#9467bd", "wave": "#8c564b", "slab": "#7f7f7f"}

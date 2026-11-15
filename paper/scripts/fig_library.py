@@ -14,7 +14,7 @@ from paperfig import DATA, DOUBLE, LW, REPO, SINGLE, figstyle, figure, save
 sys.path.insert(0, os.path.join(REPO, "scripts"))
 import library_benchmark as lb  # noqa: E402
 
-LABELS = ["jittered", "blue\nnoise", "uniform", "clus-\ntered", "halo"]
+LABELS = ["jittered", "blue\nnoise", "white\nnoise", "clus-\ntered", "halo"]
 OURS = "#000000"
 OTHERS = ["#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#1f77b4", "#17becf", "#e377c2", "#7f7f7f", "#bcbd22"]
 MARKERS = "^vPXsDh<>p*"
@@ -91,8 +91,13 @@ def axes_inputs(ax, k, x0, short=False, width=None):
     width = 0.3 * max(k - 1, 0) if width is None else width
     ax.axvspan(x0 - 0.45, x0 + width + 0.45, color="0.93", zorder=0)
     ax.set_xticks(list(range(len(lb.INPUTS))) + ([x0 + width / 2] if k else []),
-                  (["jit.", "blue", "unif.", "clus.", "halo"] if short else LABELS) + ((["publ."] if short else ["pub-\nlished"]) if k else []))
+                  (["jittered", "blue noise", "white noise", "clustered", "halo"] if short else LABELS) + ((["publ."] if short else ["pub-\nlished"]) if k else []))
     ax.set_xlim(-0.4, x0 + width + 0.5 if k else len(lb.INPUTS) - 0.6)
+    if short:
+        ax.tick_params(axis="x", labelrotation=35)
+        for t in ax.get_xticklabels():
+            t.set_ha("right")
+            t.set_rotation_mode("anchor")
     ax.set_yscale("log")
     figstyle.decorate(ax)
     ax.minorticks_off()

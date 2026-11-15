@@ -7,7 +7,7 @@ import glob, json, os, subprocess, sys
 DATA = os.environ.get("LIBBENCH_DATA", "/raven/u/uli/libbench-data")
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-OUT = os.path.join(REPO, "paper", "data", "oracle_errors.csv")
+OUT = os.path.join(REPO, "paper", "data", os.environ.get("ORACLE_OUT", "oracle_errors.csv"))
 
 
 def points_of(volumes):

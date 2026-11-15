@@ -109,7 +109,7 @@ def main():
     a.legend([plt.Line2D([], [], color=v, marker="o", ls="none", ms=7) for v in seen.values()], list(seen),
              loc="upper center", fontsize=11, ncol=4, columnspacing=0.8, handletextpad=0.1)
     b.legend([plt.Line2D([], [], color="0.4", marker=MARKER[k], ls="none", ms=7) for k in INPUTS],
-             ["jittered", "blue noise", "uniform", "clustered", "halo"], loc="upper right", fontsize=11,
+             ["jittered", "blue noise", "white noise", "clustered", "halo"], loc="upper right", fontsize=11,
              bbox_to_anchor=(1.0, 0.9), title="input", title_fontsize=11)
     fig.subplots_adjust(left=0.09, right=0.98, top=0.98, bottom=0.08)
     save(fig, "quality", DOUBLE)
