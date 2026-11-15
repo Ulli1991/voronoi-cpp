@@ -79,7 +79,12 @@ struct Cells {
         return c;
     }
 
+    // Cells that keep status, volumes and centroids only: no face counts, faces or rings.
+    static Cells volumes_only(int n) { return Cells(n, Counts{false}); }
+
     bool with_rings() const { return ring_used.extent(0) > 0; }
+    // Neither faces nor rings are recorded (volumes_only, or a default Cells).
+    KOKKOS_INLINE_FUNCTION bool without_faces() const { return face_used.extent(0) == 0 && ring_used.extent(0) == 0; }
 
     // Entries of the pool in use (faces or ring entries) the last build
     // needed: every chunk as large as the fullest.
@@ -113,10 +118,13 @@ private:
     static auto uninitialized(const char* label) {
         return Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label));
     }
-    explicit Cells(int n)
+    struct Counts {
+        bool kept;
+    };
+    explicit Cells(int n, Counts counts = {true})
         : status("cell_status", n),
-          face_count("cell_face_count", n),
-          owned_count("cell_owned_count", n),
+          face_count("cell_face_count", counts.kept ? n : 0),
+          owned_count("cell_owned_count", counts.kept ? n : 0),
           volume("cell_volume", n),
           centroid("cell_centroid", n) {}
 };
@@ -256,7 +264,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         throw std::invalid_argument("shell_voronoi::construct: invalid grid or output size");
     const auto positions = grid.positions;
     const bool with_closure = out.closure.extent(0) > 0;
-    const bool with_rings = out.with_rings();
+    const bool with_rings = out.with_rings(), with_faces = !out.without_faces();
 
     Kokkos::parallel_for(
         "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(n)),
@@ -369,8 +377,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             // per vertex each.
             long long ring_at = 0;
             int face_at = 0;
-            if (status == ok) {
-                compact_planes(cell);
+            if (status == ok) compact_planes(cell);
+            if (status == ok && with_faces) {
                 int need = 0;
                 for (int plane = box_planes; plane < cell.planes; ++plane)
                     need += (with_rings ? 2 : 1) * selection.owns(id, cell.id[plane]);
@@ -457,7 +465,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     out.rings(ring_at + ring_used) = neighbour;
                     out.rings(ring_at + ring_used + 1) = length;
                     ring_used += 2 + length;
-                } else {
+                } else if (with_faces) {
                     // A sliver face has no meaningful centroid; use a vertex.
                     const Vec3 c = weight > 0 ? face_moment * (1.0 / weight) : first;
                     const int f = face_at + owned;
@@ -474,8 +482,10 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if (status == ok && !(volume > 0)) status = degenerate;
 
             out.status(id) = status;
-            out.face_count(id) = status == ok ? faces : 0;
-            out.owned_count(id) = status == ok ? owned : 0;
+            if (with_faces) {
+                out.face_count(id) = status == ok ? faces : 0;
+                out.owned_count(id) = status == ok ? owned : 0;
+            }
             out.volume(id) = status == ok ? volume : 0.0;
             const Vec3 c = status == ok ? moment * (1.0 / volume) : Vec3{0, 0, 0};
             out.centroid(id, 0) = c.x;
