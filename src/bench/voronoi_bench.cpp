@@ -190,8 +190,9 @@ std::vector<std::string> positional(int argc, char** argv) {
 }
 
 // A checksum of a clipping build, per cell by particle id: status, counts, the bits of volume and centroid, then the
-// owned faces as stored (neighbour, area, centroid bits) or the ring entries. Used by: rebuild, step (start line).
-std::uint64_t clip_checksum(const shell_voronoi::Cells<Memory>& cells) {
+// owned faces as stored (neighbour, area, centroid bits) or the ring entries; with `topology`, no bits of geometry.
+// Used by: rebuild, step (start line).
+std::uint64_t clip_checksum(const shell_voronoi::Cells<Memory>& cells, bool topology = false) {
     const auto status = to_host(cells.status);
     const auto owned = to_host(cells.owned_count);
     const auto face_count = to_host(cells.face_count);
@@ -207,6 +208,7 @@ std::uint64_t clip_checksum(const shell_voronoi::Cells<Memory>& cells) {
     const int n = static_cast<int>(status.extent(0));
     for (int i = 0; i < n; ++i) {
         mix(static_cast<std::uint64_t>(status(i)) << 48 | static_cast<std::uint64_t>(face_count(i)) << 24 | owned(i));
+        if (topology) continue;
         mix(bits(volume(i)));
         for (int a = 0; a < 3; ++a) mix(bits(centroid(i, a)));
     }
@@ -225,7 +227,8 @@ std::uint64_t clip_checksum(const shell_voronoi::Cells<Memory>& cells) {
     for (int i = 0; i < n; ++i)
         for (int f = start(i); status(i) == 0 && f < start(i) + owned(i); ++f) {
             mix(static_cast<std::uint64_t>(neighbour(f)));
-            for (int a = 0; a < 3; ++a) mix(bits(area(f, a)) ^ bits(face_centroid(f, a)) << 1);
+            if (!topology)
+                for (int a = 0; a < 3; ++a) mix(bits(area(f, a)) ^ bits(face_centroid(f, a)) << 1);
         }
     return h;
 }
@@ -262,8 +265,25 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
               << " construct_Mcells_s=" << n / construct_ms / 1e3
               << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
+    if (shell_voronoi::Listing::from_environment().k > 0) {
+        const auto& s = shell_voronoi::listing_stats;
+        std::cout << "listed: list_ms=" << s.list_ms << " clip_ms=" << s.clip_ms << " relist_ms=" << s.relist_ms
+                  << " reclip_ms=" << s.reclip_ms << " walk_ms=" << s.walk_ms << " rest_ms=" << s.rest_ms
+                  << " relisted=" << s.relisted << " walked=" << s.walked
+                  << " list_reads_per_cell=" << double(s.list_reads) / n
+                  << " relist_reads_per_cell=" << double(s.relist_reads) / n << "\n";
+    }
     if (check) {
-        std::cout << "clip_checksum=" << clip_checksum(cells) << "\n";
+        // Work per cell: batches (listed: entries loaded), clips, cuts; mean and p99.
+        const auto work = to_host(cells.work);
+        for (int k = 0; k < 3; ++k) {
+            std::vector<int> v(n);
+            double total = 0;
+            for (int i = 0; i < n; ++i) total += v[i] = work(i, k);
+            std::sort(v.begin(), v.end());
+            std::cout << "work" << k << ": mean=" << total / n << " p99=" << v[std::size_t(0.99 * (n - 1))] << "\n";
+        }
+        std::cout << "clip_checksum=" << clip_checksum(cells) << " clip_topology=" << clip_checksum(cells, true) << "\n";
         failures += check_cells(cells, x, std::cout, box);
     }
     DeviceMemory<Memory>::phase("warp", n);
@@ -545,7 +565,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         tet_mesh::Mesh<Memory> mesh;
         tet_start::Stats start;
         const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
-        const std::uint64_t rings_checksum = clip_checksum(cells);
+        const std::uint64_t rings_checksum = clip_checksum(cells), rings_topology = clip_checksum(cells, true);
         const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
         const double start_ms = median_ms(repeats, [&] {
             shell_voronoi::construct_warp(exec, grid, cells);
@@ -556,7 +576,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
                   << " rounds=" << start.rounds << " bad_tets=" << start.bad_tets << " patched_cells=" << start.patched
                   << " tets=" << tets << " tets_checksum=" << tets_checksum(mesh) << " per_cell=" << double(tets) / n
-                  << " ring_entries_per_cell=" << double(cells.needed()) / n << " rings_checksum=" << rings_checksum
+                  << " ring_entries_per_cell=" << double(cells.needed()) / n << " rings_checksum=" << rings_checksum << " rings_topology=" << rings_topology
                   << "\n";
     }
 
