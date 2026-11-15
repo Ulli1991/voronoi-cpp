@@ -326,7 +326,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 const int reach = level_reach(level, grid.fewest), entries = stencil.ends(reach);
                 for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
                     ++batches;
-                    if constexpr (!filtered)
+                    // Rounded cells check the budget every batch, exact ones (the start's patches) at level changes.
+                    if constexpr (!filtered && !Cell::exact)
                         if (clipped > heavy_clips) {
                             status = deferred;
                             break;
@@ -367,6 +368,11 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     break;
                 }
                 if (level == 2) break;
+                if constexpr (!filtered && Cell::exact)
+                    if (clipped > heavy_clips) {
+                        status = deferred;
+                        break;
+                    }
                 finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
                 for (int k = 0; k < 3; ++k) home[k] >>= 1;
                 --level;
