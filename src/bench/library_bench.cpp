@@ -1,9 +1,5 @@
 // voronoi-cpp in the library benchmark (docs/library_benchmark.md), and the writer of its shared inputs.
-//   library_bench points <n> <distribution> <file>                         the generator's points, in its order
-//   library_bench trajectory <n> <distribution> <spacings> <steps> <file>  slot-ordered points and `steps` moves
-//   library_bench build <points file> [--path=warp|warp-host|warp-host-vc|exact] [--repeats=3] [--volumes=file]
-//   library_bench step <trajectory file> [--volumes=file]
-//   library_bench lloyd <points file> <iterations> <file>                  blue noise: Lloyd-relaxed points
+// Modes: points, trajectory, build, step, lloyd (blue noise); usage() lists their arguments.
 // File formats and the record of each timed run: bench/libraries/libbench.hpp.
 
 #include "../../bench/libraries/libbench.hpp"
@@ -164,8 +160,8 @@ int build(int argc, char** argv) {
             timed_body();
             return libbench::now() - t0;
         });
-    std::cout << "{\"library\":\"voronoi-cpp\",\"variant\":\"" << s.variant << "\",\"kokkos_arrays_peak_bytes\":"
-              << kokkos_peak << ",\"n\":" << n << "}" << std::endl;
+    std::cout << "{\"library\":\"voronoi-cpp\",\"variant\":\"" << s.variant
+              << "\",\"kokkos_arrays_peak_bytes\":" << kokkos_peak << ",\"n\":" << n << "}" << std::endl;
     return 0;
 }
 
@@ -175,8 +171,9 @@ int step(int argc, char** argv) {
     const auto frames = libbench::read_frames(file);
     const std::uint64_t n = frames.n;
     const Exec exec;
-    auto s = setup("moving-mesh step (Mesh::update + update_cells)", "Delaunay tetrahedra, volumes faces areas centroids",
-                   "positions on the device to repaired mesh and cells on the device, per step");
+    auto s =
+        setup("moving-mesh step (Mesh::update + update_cells)", "Delaunay tetrahedra, volumes faces areas centroids",
+              "positions on the device to repaired mesh and cells on the device, per step");
     Mesh mesh(exec, Box{});
     std::vector<int> label(n);
     std::iota(label.begin(), label.end(), 0);
@@ -214,8 +211,7 @@ int step(int argc, char** argv) {
         libbench::record(s, file, libbench::input_name(file), n, "step", static_cast<int>(f), seconds, -1, extra.str());
     }
     std::cout << "{\"library\":\"voronoi-cpp\",\"variant\":\"" << s.variant
-              << "\",\"start_and_steps_peak_bytes\":" << peak.stop()
-              << ",\"kokkos_arrays_after_start_bytes\":" << built
+              << "\",\"start_and_steps_peak_bytes\":" << peak.stop() << ",\"kokkos_arrays_after_start_bytes\":" << built
               << ",\"kokkos_arrays_step_peak_bytes\":" << DeviceMemory<Memory>::peak << ",\"n\":" << n << "}"
               << std::endl;
     const auto v = to_host(mesh.volume());
@@ -293,7 +289,8 @@ int main(int argc, char** argv) {
     if (mode == "step" && argc >= 3) return step(argc, argv);
     std::cerr << "usage: library_bench points <n> <distribution> <file>\n"
                  "       library_bench trajectory <n> <distribution> <spacings> <steps> <file>\n"
-                 "       library_bench build <points file> [--path=warp|warp-host|warp-host-vc|exact] [--repeats=3] [--volumes=file]\n"
+                 "       library_bench build <points file> [--path=warp|warp-host|warp-host-vc|exact] [--repeats=3] "
+                 "[--volumes=file]\n"
                  "       library_bench step <trajectory file> [--volumes=file]\n"
                  "       library_bench lloyd <points file> <iterations> <file>\n";
     return 2;
