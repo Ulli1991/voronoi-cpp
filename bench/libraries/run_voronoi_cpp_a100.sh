@@ -1,7 +1,7 @@
 #!/bin/bash
 # voronoi-cpp in the library benchmark on one A100: warp rebuild (device to device and host to host) and exact start on
-# every point file (env SIZES, KINDS select a subset; SKIP_STEP=1 skips the trajectory), 1 untimed run
-# (peak memory, volumes) + 3 timed; then the moving-mesh trajectory. Records (JSON lines) on stdout.
+# every point file (env SIZES, KINDS select a subset; SKIP_STEP=1 skips the trajectories, STEP_KINDS picks them),
+# 1 untimed run (peak memory, volumes) + 3 timed; then the moving-mesh trajectories. Records (JSON lines) on stdout.
 #   sbatch -o bench/libraries/results/voronoi-cpp-a100-%j.jsonl bench/libraries/run_voronoi_cpp_a100.sh <build> <data>
 #SBATCH -J libbench_vcpp
 #SBATCH -p gpu1
@@ -30,7 +30,11 @@ for n in ${SIZES:-2097152 16777216}; do
     done
 done
 if [ -z "${SKIP_STEP:-}" ]; then
-    "$build/library_bench" step "$data/points/jittered_2097152_step0.03.trj" \
-        --volumes="$data/volumes/voronoi-cpp-step-a100_jittered_2097152_step10.f64"
+    for kind in ${STEP_KINDS:-jittered}; do
+        n=2097152
+        [ "$kind" = fccsolid ] && n=1048576
+        "$build/library_bench" step "$data/points/${kind}_${n}_step0.03.trj" \
+            --volumes="$data/volumes/voronoi-cpp-step-a100_${kind}_${n}_step10.f64"
+    done
 fi
 clocks

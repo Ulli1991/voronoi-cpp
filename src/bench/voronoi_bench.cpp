@@ -258,10 +258,12 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
               << list.tiles[2] << " grid=" << (1 << list.levels) << "^3_per_tile repeats=" << repeats << "\n";
     int failures = 0;
     shell_voronoi::Cells<Memory> cells(n, true);
+    KernelTimes::total.clear();
     const double construct_ms = median_ms(repeats, [&] {
         const Phase phase("clip");
         shell_voronoi::construct_warp(exec, grid, cells);
     });
+    KernelTimes::report(repeats + 1, n);  // with --kernels: per label, the warm-up included
     std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
               << " construct_Mcells_s=" << n / construct_ms / 1e3
               << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
@@ -559,10 +561,13 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         const double clip_ms = median_ms(repeats, [&] { shell_voronoi::construct_warp(exec, grid, cells); });
         const std::uint64_t rings_checksum = clip_checksum(cells), rings_topology = clip_checksum(cells, true);
         const double from_rings_ms = median_ms(repeats, [&] { tet_mesh::from_rings(exec, cells, mesh); });
+        KernelTimes::total.clear();
         const double start_ms = median_ms(repeats, [&] {
             shell_voronoi::construct_warp(exec, grid, cells);
             start = tet_start::build(exec, grid, cells, mesh);
         });
+        KernelTimes::report(repeats + 1, n);  // with --kernels: the start's kernels, the warm-up included
+        KernelTimes::total.clear();
         const int tets = static_cast<int>(mesh.vertex.extent(0));
         std::cout << "start: clip_ms=" << clip_ms << " from_rings_ms=" << from_rings_ms << " start_ms=" << start_ms
                   << " extra_vs_clip=" << (start_ms - clip_ms) / clip_ms << " exact=" << start.exact
@@ -688,8 +693,8 @@ int main(int argc, char** argv) {
         return step(args, box_flag(argc, argv), has_flag(argc, argv, "--verify"), has_flag(argc, argv, "--checksum"),
                     has_flag(argc, argv, "--measure"), static_cast<int>(flag_value(argc, argv, "--order", 0)),
                     layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", "")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution> [repeats] [--no-check] [--memory]\n"
-                 "                          [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
+    std::cerr << "usage: voronoi_bench rebuild <n> <distribution|file.pts> [repeats] [--no-check] [--kernels]\n"
+                 "                          [--memory] [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"

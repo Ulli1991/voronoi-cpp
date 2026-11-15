@@ -20,16 +20,19 @@ bin=/raven/u/uli/libbench-src/peclet-voro/install/bin/peclet_voro_openmp
 export PECLET_VORO_VERSION="v1.0.4-1-gd7371c9 (d7371c9), Kokkos 5.1.1" OMP_PROC_BIND=spread OMP_PLACES=cores
 lscpu | grep "Model name" >&2
 export OMP_NUM_THREADS=72
-for n in 2097152 16777216; do
+for n in ${SIZES:-2097152 16777216}; do
     for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         "$bin" build "$data/points/${kind}_${n}.pts" --variant=plain --repeats=3 \
             --volumes="$data/volumes/peclet-voro-cpu_${kind}_${n}.f64" || echo "# FAILED plain $kind $n" >&2
         "$bin" build "$data/points/${kind}_${n}.pts" --variant=resident --repeats=3 || echo "# FAILED resident $kind $n" >&2
     done
 done
-"$bin" step "$data/points/jittered_2097152_step0.03.trj" \
-    --volumes="$data/volumes/peclet-voro-cpu_jittered_2097152_step10.f64" || echo "# FAILED step" >&2
+if [ -z "${SKIP_STEP:-}" ]; then
+    "$bin" step "$data/points/jittered_2097152_step0.03.trj" \
+        --volumes="$data/volumes/peclet-voro-cpu_jittered_2097152_step10.f64" || echo "# FAILED step" >&2
+fi
 export OMP_NUM_THREADS=1
 for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
+    [ -f "$data/points/${kind}_2097152.pts" ] || continue
     "$bin" build "$data/points/${kind}_2097152.pts" --variant=plain --repeats=3 || echo "# FAILED 1 thread $kind" >&2
 done

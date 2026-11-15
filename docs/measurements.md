@@ -11,6 +11,7 @@ One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates are mill
 | Moving-mesh update, update plus `update_cells()`, 128³ and 256³ | 32269165, 32237516 (interleaved with main 9e9ec03; [fewer bytes per step](#fewer-bytes-per-step-incremental-face-numbers-e-and-the-ring-re-walk-k2-2026-11-12)) | `step-bytes` (the ring re-walk commit) |
 | `update_cells()` alone | 32231679 ([step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
 | Full rebuilds at 2.1M and 16.8M, exact start at 2.1M | 32269868, 32269874, 32269869 ([lean cut](#canonical-rings-and-a-lean-cut-2026-11-13)) | `clip-canonical` |
+| Full rebuilds, uniform, clustered and halo, at 2.1M and 16.8M | 32366435, 32366438 ([hard cells](#hard-cells-on-clustered-and-halo-input-and-49-2026-11-15)) | `clustered-build` |
 | Exact start, the sum row, at 2.1M | 31701509 | 2311937 |
 | The 256³ column, except the moving-mesh rows | 31694457 | f32c909 (older than the current code, which is faster there) |
 | Moving-mesh rows (also in research_notes/mesh_speed_2026-11-04.md) | 31886231, 31886232 | |
@@ -33,6 +34,9 @@ All in the periodic unit box, generated in `src/test/support.hpp`.
 | halo | 4 halos with ρ ∝ 1/(r² + c²) to r = 0.2, c = 0.002, 90 % of the points, 10 % background | density contrast about 1:10⁴ (core to edge) |
 | lattice | perfect cubic lattice | fully degenerate: 8 points on every circumsphere |
 | wave (moved lattice) | the lattice with every point moved by up to 1e-5 spacing | nearly degenerate: ties broken only by tiny offsets |
+| cosmic web | Zel'dovich approximation x = q + D ψ(q) from a cubic lattice: Gaussian random field with the BBKS CDM spectrum (Bardeen et al. 1986; Γ = 0.21, n_s = 0.96), σ₈ = 0.8 at D = 1, 100 Mpc/h box, all modes below the Nyquist number of the lattice; growth factor D = 0.5 (rms displacement 4.3 spacings at 128³) | filaments, walls and voids: density contrast about 1:40 on a 2-spacing grid, 4 % of that grid empty; weakly deformed lattice in the voids |
+| fcc solid | fcc lattice of l³ unit cells (4 l³ atoms; l = 64, 128: 2²⁰, 2²³), each atom moved by an independent Gaussian of rms 0.0499 lattice constants per axis: the measured rms of the LAMMPS Lennard-Jones solid at ρ* = 1.05, T* = 1.0 near melting (MSD 0.018 σ², Lindemann ratio 0.12; research_notes/lammps_voronoi_2026-11-12.md on branch lammps-scout) | an MD crystal: near-ties of the rhombic dodecahedra broken by thermal noise |
+| surface | 16 spherical shells of radius 0.2 on a bcc lattice of side 0.5 (8 cross the box faces), each around a torus of radii 0.1 and 0.05; uniform in area, moved along the normal by a Gaussian of rms 0.1 surface spacings √(area / n) | points on closed surfaces: thin needle cells reaching about 0.1 box into empty space, the graphics-benchmark case |
 
 ### Non-cubic box
 
@@ -102,6 +106,45 @@ and 99.8 / 99.6 at 0.1; clip, tetrahedra, ring, geometry, face and list checksum
 face numbers and differs between any two runs, as before). A100 `ctest` 22 of 22 (job 32368083); CI's host steps (gcc 15,
 host Kokkos 5.0.99 OpenMP at 2 threads, sanitizers off and on): 22 of 22 each, clang-tidy stops on `mesh_fuzz_test.cpp`
 as on main (#56) (job 32367277).
+
+### Application inputs: cosmic web, fcc solid, surface (2026-11-15)
+
+The three application inputs of the Inputs table, 128³ and 256³ points (fcc solid: 2²⁰ and 2²³ atoms), point files from
+`bench/libraries/make_points_a100.sh` (job 32367403). voronoi-cpp 631af46 (main c42c230 + the generators), one A100 at
+1305 MHz, jobs 32367524, 32367883, 32367884; M cells/s, median of 3 (steps: of steps 2 to 10 at 0.03 spacings).
+
+| M cells/s | cosmic web 128³ / 256³ | surface 128³ | fcc solid 2²⁰ / 2²³ |
+|---|---|---|---|
+| warp rebuild (cell list + clipping) | 12.0 / 12.8 | 0.036, 476 cells refused | 30.6 / 32.4 |
+| exact start (`Mesh::update` + `update_cells`) | 5.1 / 4.9 | 0.026 | 12.9 / 9.5 |
+| moving step, 0.03 spacings | 201 | 139 | 188 |
+
+Peak device memory at 128³: 740 B/cell for the warp rebuild, 1869 B/cell for the exact start. Oracle checks (job
+32369335, 1000 sampled cells each): every cell present and a largest relative volume error of 2.3e-13 for the exact
+start, the moving steps, and the warp rebuild on cosmic web and fcc solid; the warp rebuild on the surface misses 476
+cells (sum of volumes − 1 = −1.1e-3). `voronoi_bench rebuild --check` (job 32367880) passes on cosmic web 128³ and the
+fcc solid (all certified, closure below 3e-16, volume sum within 5e-14); cosmic web 256³ fails only `faces=2*owned`,
+the known one-sided zero-area faces of clipping alone. `step --verify` passes all 10 steps on cosmic web at 64³ and on
+the fcc solid at 32³ unit cells.
+
+Surface: clipping refuses cells (status degenerate: 69 at 64³, 476 at 128³, and one at 32³ on the OpenMP backend) and
+runs about 300 times slower than on jittered points: its needle cells reach about 0.1 box into empty space, so each
+clips about 6000 neighbours instead of 75. The exact start inherits the cost, since it clips first. Issue
+[#60](https://github.com/Ulli1991/voronoi-cpp/issues/60), with a 953-point case. The mesh itself is right: Delaunay
+exact in every step (`failing=0`), volumes within 2.3e-13 of the oracle, moving steps at 139 M cells/s.
+
+The other libraries (`bench/libraries/results/summary.md`, section "Application inputs"; A100 chains 32367907 to
+32367911 and 32370411, CPU jobs 32367538 to 32367544): the kNN codes lose cells wherever a cell has more neighbours
+than K. On cosmic web VoroGPU K 190 misses 2.4 % of the cells (sum of volumes − 1 = −0.038), K 90 and Liu et al. 19 %,
+Basselin et al. (white-noise setting) 673 cells; on the surface they lose almost every cell. On the fcc solid every
+code is complete, the float codes with relative errors up to 4e-5. peclet-voro returns wrong volumes on the surface
+(sum − 1 = +31 to +62) and runs out of memory at 256³; votess fails on cosmic web and surface (A100: CUDA error 700;
+CPU: `std::length_error`); gDel3D's 8-spacing padding is too thin for the surface (82627 certificate violations, one
+sampled cell off by 1.3 %); Paragram leaves 647 surface cells without a volume (22 of 1000 sampled cells off by more
+than 1 %) and 5 at cosmic web 256³. The exact Delaunay codes (CGAL, geogram, Qhull, TetGen) and voro++ are right on
+all three (oracle jobs 32369335 and 32370726). Fastest full cells besides ours, cosmic web 128³: gDel3D + our faces 0.87
+and voro++ (72 cores) 0.83 M cells/s; surface 128³: geogram (72 cores) 0.69, gDel3D 0.68 (too thin padding); fcc solid
+2²⁰: peclet-voro 3.7 (A100).
 
 ### Long runs
 
@@ -277,6 +320,39 @@ Fallbacks at 256³ are the same shares as at 128³ (k = 24: 14.3, 95.2, 95.2, 95
 **Mesh.** After the build and two steps at 0.1 spacings (job 32319852, 128³) `tets_checksum`, `geometry_checksum`, `faces_checksum` and `lists_checksum` equal main's on all six inputs for the branch's walk, k = 32 with resume (with and without balls) and the walk with balls, with main's bad tetrahedra and patched cells. The rings' topology (`rings_topology`, the bench's ring checksum without geometry bits) is the same in all of them. `rings_checksum` and a plain rebuild's `clip_checksum` are main's for the walk with balls (the filter changes no cut); a kNN order cuts in another order, so the clipped volumes and centroids differ in the last bits (not the mesh's, which come from the tetrahedra).
 
 **What it says.** kNN-first is slower than the walk on every input at both sizes: 4 to 11 % on jittered and wave input in its best form (k = 32, resume), 16 to 22 % on unstructured input. Two reasons. (1) A list certifies a cell only when its last entry lies beyond 2R, as the walk's stop does; k = 32 does that for jittered, lattice and wave input, but on uniform, clustered and halo input 79 % of the cells need more (k = 48: 32 %, k = 64 at 64³: 8 %), so they are clipped twice or resumed. (2) A list clips the same particles as the walk: everything within 2R at its turn, nearest first. Its global order saves 8 to 16 % of the clips (uniform 48.0 to 44.3), and its cuts fall from 17.9 to 16.6 on unstructured input, but the clipping without any walk (45 ms jittered) is already 92 % of main's whole kernel (49 ms), so the gather the list replaces is worth at most 8 % there, less than the kNN pass costs (10 to 15 ms). A per-region choice changes nothing: the octree level does not tell which cells a list certifies. The vertex balls remove half the clips on unstructured input (48 to 24 uniform, 54 to 25 halo) and a quarter on jittered, with every cut and bit the same, but they save no time: a clip that cuts nothing is a side test and a ballot, about as dear as the filter's own test, and the cuts (16 to 20 a cell, about a face each) are the cost. The lower bound of about one cut per face is already met within 1 to 25 % (cuts against 15.9 faces), so no candidate order, list or bound can make the rebuild several times faster; that needs a cheaper cut (C, R16) or no clipping (D).
+
+### Hard cells on clustered and halo input, and #49 (2026-11-15)
+
+Branch `clustered-build` against main c42c230 (`ref`; the library of 55cd6b1), one A100 at 1305 MHz on `gpu1`, every comparison in one job. Script `scripts/clustered_build_a100.sh` (bench binaries in `build-jobs/bin`, blue noise the library benchmark's point file), tables by `scripts/clustered_build_tables.py`; logs in `build-jobs/` of the `voronoi-cpp-clustered` worktree on Raven. The bench's `--kernels` now also splits the rebuild and the start by kernel label (it fences every kernel).
+
+**Where the time of a clustered or halo rebuild goes** (128³, job 32362275; counters from the measurement build, job 32365230). Per kernel: the warp kernel takes 93.0 ms on uniform, 116.6 on clustered and 119.3 on halo input; the thread-kernel pass for the cells the warp gives up takes 3.1, 6.7 and 17.2 ms (12 % of a halo rebuild). Those cells are few: 33, 68 and 261 of 2.1M (more than 64 planes or 64 vertices; none on jittered, lattice, wave and blue noise). The tail of the warp kernel is thin: the slowest 0.1 % of cells hold 0.2, 0.3 and 0.8 % of its cycles and the slowest 1 % hold 1.8, 2.2 and 4.0 %, since persistent warps take cells from a counter and a slow cell holds only its own warp. Clips per cell, mean, p99 and max: uniform 48.0, 92, 188; clustered 50.7, 106, 448; halo 53.6, 210, 2096; blue noise 19.6, 36, 75 (jittered, lattice and wave as before). The clipping of every cell is the same in every variant below, so these counts hold for all of them.
+
+By grid level against the base (halo): level −1 is 8 % of the cells and 7 % of the cycles (clips mean 54.6, p99 267) and holds 170 of the 261 overflowing cells; the base level is 10 % of the cells, 13 % of the cycles (clips mean 91.4, p99 590) and 64 overflows; the finer levels are 82 % of the cells, 80 % of the cycles and 27 overflows. On clustered input the overflows are spread over all four levels (27, 5, 20, 16).
+
+**Lever 1, overflowed cells straight to big thread cells (kept).** Main rebuilt a cell the warp gave up first in a thread cell of 48 planes and 64 vertices and, when that overflowed too, in one of 128 and 256. A cell that overflows the warp's 64 planes or 64 vertices overflows the thread's 48 and 64 as well, so that first pass was wasted; uncertified cells still take it. A cell that fits gives the same bits at either capacity. Thread pass 17.2 → 10.2 ms on halo, 6.7 → 5.3 clustered, unchanged elsewhere (job 32366435).
+
+Rebuild (`construct_ms`, median of 5, M cells/s; 128³ two rounds, job 32366435; 256³ one round, job 32366438):
+
+| | jittered | uniform | clustered | halo | lattice | wave | blue noise |
+|---|---|---|---|---|---|---|---|
+| main, 128³ | 42.5 | 21.9 | 17.1 | 15.5 | 55.1 | 40.8 | 37.0 |
+| branch, 128³ | 42.5 (−0.1 %) | 22.2 (+1.2 %) | 17.3 (+1.2 %) | 16.3 (+5.3 %) | 55.0 (−0.1 %) | 40.8 (−0.1 %) | 36.9 (−0.1 %) |
+| main, 256³ | 42.8 | 22.4 | 18.6 | 17.9 | 57.7 | 41.0 | 37.0 |
+| branch, 256³ | 42.8 (0 %) | 22.5 (+0.3 %) | 18.6 (+0.3 %) | 18.0 (+0.7 %) | 57.7 (0 %) | 41.1 (0 %) | 37.1 (+0.2 %) |
+
+At 256³ the pass is the time of its slowest cell on one thread, much as at 128³, against an eight times longer warp kernel. Exact start (`start_ms`, median of 3, M cells/s, one round; jobs 32366435, 32366439): 128³ main 18.6, 8.9, 7.8, 10.3, 7.7, 4.4, 18.8 against 18.5, 9.0, 8.0, 10.7, 7.5, 4.2, 18.7 (jittered, uniform, clustered, halo, lattice, wave, blue noise); 256³ main 12.7, 9.0, 8.7, 8.7, 7.8, 4.4, 13.8 against 12.9, 8.9, 9.1, 8.3, 8.0, 4.4, 13.7, and again over three rounds (job 32367236) uniform 9.0 → 9.5, clustered 9.1 → 9.0, halo 8.3 → 8.8. The start varies by 5 to 8 % from run to run; lattice and wave, where no cell overflows, run the same kernels as main.
+
+**Lever 1, a queue of hard cells first (dropped).** The cells below the base level (halo 168k, clustered 379k) built first by their own launch of the warp kernel, the rest by a second launch on another stream that fills the SMs they free, and the big thread pass for the hard cells' overflows on a third stream while the rest is built (`VORONOI_HARD=2` in commit f6535fc, a level more with `=3`). Halo 136.6 ms against 128.6 with lever 1 alone, clustered 124.4 against 121.5 (job 32365816). The timeline (Nsight Systems, job 32366007) shows why: the second launch is a persistent kernel that keeps every SM slot until it ends, so the overlapped thread pass starts only after it (at 126 ms of 137); and a third of the halo overflows (91 of 261, 5.5 ms of thread pass) lie on finer levels the queue does not hold. A hard-first order cannot shorten the drain either, which is under 1 % of the cycles. The vertex balls (P1) and the R8 box were meant to pay in this queue; with the thread kernel for the hard cells they would only skip clips that cut nothing in a pass whose time is that of one cell, and a warp kernel of larger capacity would change bits (next paragraph).
+
+**Lever 2, balancing by expected work (not built).** The warp kernel's persistent warps already balance the load (above). A block or several warps per huge cell needs a warp kernel of larger capacity in place of the thread kernel for the cells that overflow, and the two kernels do not give the same bits: building every cell with the thread kernel (`VORONOI_HARD=9`, commit cdf04d4, job 32365528) gives other `clip_checksum` and `clip_topology` on jittered, uniform and halo input than the warp kernel. So the overflowing cells of uniform, clustered and halo input would change their last bits against main.
+
+**Lever 3, overflowing cells on the host (dropped).** The big rounded cells built on the host (Kokkos Serial, the arrays copied there and back; `VORONOI_HARD=8`, commit f6535fc) while nothing else runs: 276.7 ms against 122.9 on clustered and 283.4 against 135.2 on halo (job 32365816), and the host's rounding differs: `clip_checksum` changes on clustered and halo input, with the same topology. Run beside the warp kernel it would need the copies to overlap too, and it would still change bits. Exact huge cells were already built on the host; they now use every core (#49, below).
+
+**Adaptive levels.** A different level for a slot changes which particles share a batch of the walk and so the order of the cuts and the last bits of the cell; with the mesh held bit for bit to main, the level choice stays.
+
+**#49.** Seeds that ran out of time, with the passes timed (`VORONOI_TRACE` in commit f6535fc; jobs 32365817 to 32365819, Nsight Systems jobs 32362474 and 32362475). Seed 3000000000009 (156,273 particles, a Fibonacci sphere with a diamond lattice and clumps): per update the warp kernel 0.12 s, 42,543 rounded thread cells 0.7 s, 34,355 big ones 5.4 s, then the exact patch: 35,488 big exact cells 15.5 s and 5525 huge ones on the host, 408 s on one core, since the CUDA build's host space is Kokkos Serial. Seed 4000000000002 (1,551,620 particles, no background: a cusp, a spiral, polytopes): 97 % of the cells overflow the warp; the rounded thread pass took 40.6 s and the big one 412 s for 1,485,690 cells (3600 cells/s), then 1,416,857 exact cells 105 s. So two causes: (a) inputs where most cells have more than 64 faces send nearly every cell to the thread kernel, which builds big cells at a few thousand per second; (b) cells past 128 planes or 256 vertices go to the host one at a time. (b) is fixed: the host builds huge cells one at a time on every core the process may use, each thread with its own Serial instance, and gives the same bits as before. Seed 3000000000009 now ends in 110 s (job 32366437, 18 cores), with the right refusal (5 cells need more than 16000 planes); main was still in its first `update()` after 830 s. (a) is not fixed: lever 1 drops the 40.6 s of doomed small cells (16.8 s left for the uncertified ones), but the 412 s of big thread cells stay. It needs a warp kernel of larger capacity for such cells, which changes the warp kernel's output code and, on inputs with few overflowing cells, bits (above).
+
+**Mesh.** After the build and two steps at 0.1 spacings, `tets_checksum`, `rings_checksum`, `rings_topology`, the build's `cells_checksum`, `geometry_checksum`, `faces_checksum` and `lists_checksum`, and a plain rebuild's `clip_checksum` and `clip_topology` equal main's on all seven inputs at 128³ (job 32366436) and 256³ (jobs 32366440 to 32366442; wave at 256³ the start's and the rebuild's checksums, as its step runs out of memory on main too), with main's bad tetrahedra and patched cells. The step's `cells_checksum` differs between runs of main as well. Tests: A100 ctest 22 of 22 (job 32367231, with the fuzz smoke); CI's host steps with GCC 15 and the OpenMP Kokkos, sanitizers off and on, 22 of 22 each (jobs 32367232, 32367233; lint reports one clang-analyzer warning in `mesh_fuzz_test.cpp` that main has too). A100 fuzz, profile huge (1e6 to 4.5e6 particles, with its Gaussian, power-law and void families; jobs 32367234, 32367235): 18 cases, 8 exact, 7 refused correctly, 3 out of time (280 s), no WRONG or CRASH. The three (4000000000098, 105, 107: spirals, lines and coplanar sets, cause (a) of #49) run out of time alone with main as well (260 s; jobs 32367945, 32367946).
 
 ### Step kernels at today's bytes (2026-11-12)
 
