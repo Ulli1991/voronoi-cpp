@@ -15,11 +15,11 @@ module purge
 module load gcc/14 cuda/13.0
 bin="$1" data="$2"
 export LIBBENCH_COMMIT="$(basename "$bin")"
-mkdir -p "$data/points" "$data/clocks" "$data/tmp"
+mkdir -p "$data/points" "$data/tmp" "$SLURM_SUBMIT_DIR/paper/data/clocks"
 checks="$SLURM_SUBMIT_DIR/paper/data/raw/check-$SLURM_JOB_ID.txt"
 nvidia-smi -L >&2
 nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.applications.graphics,utilization.gpu,temperature.gpu,power.draw \
-    --format=csv,noheader -l 1 >"$data/clocks/clock-$SLURM_JOB_ID.csv" &
+    --format=csv,noheader -l 1 >"$SLURM_SUBMIT_DIR/paper/data/clocks/clock-$SLURM_JOB_ID.csv" &
 smi=$!
 trap 'kill $smi 2>/dev/null; rm -f "$data/tmp/"*"-$SLURM_JOB_ID.trj"' EXIT
 points() {  # points <kind> <n>: the point file, made once (blue noise: 100 Lloyd iterations from uniform)

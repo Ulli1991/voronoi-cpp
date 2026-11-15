@@ -1,6 +1,6 @@
 #!/bin/bash
 # Time per stage and per kernel (voronoi_bench --kernels), and long runs with and without re-sort, on one A100:
-#   sbatch -o paper/data/raw/stages-%j.txt paper/scripts/stages_a100.sh <bin> kernels|long128|long256
+#   sbatch -o paper/data/raw/<mode>-%j.txt paper/scripts/stages_a100.sh <bin> kernels|memory|long128|long256
 #SBATCH -J paper_stages
 #SBATCH -p gpu1
 #SBATCH --gres=gpu:a100:1
@@ -28,6 +28,16 @@ kernels)  # 128³, six inputs: rebuild kernels, and the step at three spacings w
         for d in 0.03 0.1 0.3; do
             echo "== step $kind 2097152 $d"
             "$bin/voronoi_bench" step 2097152 "$kind" "$d" 10 --kernels | grep -v "^verify"
+        done
+    done
+    ;;
+memory)  # arrays at the peak of a rebuild and of a moving step, 128³ and 256³, jittered and halo
+    for n in 2097152 16777216; do
+        for kind in jittered halo; do
+            echo "== memory rebuild $kind $n"
+            "$bin/voronoi_bench" rebuild "$n" "$kind" 1 --no-check --memory
+            echo "== memory step $kind $n"
+            "$bin/voronoi_bench" step "$n" "$kind" 0.1 4 --memory | grep -vE "^(gpuflips|verify)"
         done
     done
     ;;
