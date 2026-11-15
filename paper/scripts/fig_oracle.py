@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Figure: relative volume error against the exact reference (src/test/oracle.hpp; 1000 sampled cells per input), voronoi-cpp's warp
-rebuild and exact start on the A100 per input at 256³, and the codes of the library benchmark on halo input at 128³.
+rebuild and exact start on the A100 per input at 128³ (the paper's rerun, 55cd6b1), and the codes of the library benchmark on halo input at 128³.
 Data: paper/data/oracle_errors.csv (paper/scripts/extract_oracle.py)."""
 import matplotlib.ticker
 import numpy as np
@@ -35,10 +35,10 @@ def main():
     fig, axes = figure(DOUBLE, 72, ncols=3, gridspec_kw=dict(width_ratios=[1, 1, 1.45]))
     for ax, path, title in zip(axes[:2], ["warp", "exact"], ["warp rebuild (A100)", "exact start (A100)"]):
         for kind in INPUTS:
-            name = f"voronoi-cpp-{path}-a100_{kind}_16777216.f64"
+            name = f"voronoi-cpp-{path}-a100_{kind}_2097152.f64"
             if name in err:
                 curve(ax, err[name][2], COLOR[kind], LABEL[kind])
-        ax.text(0.04, 0.95, f"({'ab'[path == 'exact']}) {title}\n256³", transform=ax.transAxes, va="top")
+        ax.text(0.04, 0.95, f"({'ab'[path == 'exact']}) {title}\n128³", transform=ax.transAxes, va="top")
         ax.set_xlim(2e-19, 3e-12)
         ax.set_xticks([1e-17, 1e-15, 1e-13])
         ax.set_ylim(0, 0.62)

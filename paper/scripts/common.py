@@ -9,13 +9,17 @@ from paperfig import DATA
 
 
 def oracle_errors():
-    """{volumes file name: (n, missing cells of all n, errors of the 1000 sampled cells; inf = no volume)}."""
+    """{volumes file name: (n, missing cells of all n, errors of the 1000 sampled cells; inf = no volume)}; the paper's
+    rerun of voronoi-cpp (oracle_errors_vcpp_rerun.csv) replaces the benchmark's own rows of the same name."""
     out = {}
-    with open(os.path.join(DATA, "oracle_errors.csv")) as f:
-        rows = csv.DictReader(line for line in f if not line.startswith("#"))
-        for r in rows:
-            out[r["volumes"]] = (int(r["n"]), int(r["missing_or_nonpositive"]),
-                                 np.array(r["errors"].split(), dtype=float))
+    for name in ("oracle_errors.csv", "oracle_errors_vcpp_rerun.csv"):
+        path = os.path.join(DATA, name)
+        if not os.path.exists(path):
+            continue
+        with open(path) as f:
+            for r in csv.DictReader(line for line in f if not line.startswith("#")):
+                out[r["volumes"]] = (int(r["n"]), int(r["missing_or_nonpositive"]),
+                                     np.array(r["errors"].split(), dtype=float))
     return out
 
 

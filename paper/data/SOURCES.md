@@ -22,3 +22,8 @@ Binaries: `/ptmp/uli/voronoi-paper/bin/<commit>/` (built by `paper/scripts/build
 Kokkos 5.0.99 AMPERE80, Release).
 | `luna/yee_vortex_convergence.npz` | LUNA MC 3D Yee vortex convergence | `git show yee-vortex:luna/yee_vortex/yee_vortex_convergence.npz` in luna-reference-solutions (99a52d0) | its own `slurm_job_id`, `gpu_clock_mhz` fields |
 | `luna/vortex_norms.csv` | luna-cpp moving (two passes) and static vortex L1 | parsed from `voronoi-cpp/build-1ddiag/logs/{n-vortex-31920446,fin-norm-31922276}.out` (same regex as luna-cpp's `make_figures.py`) | jobs 31920446, 31922276 (library of early November) |
+
+| `raw/libbench-vcpp-32366449.jsonl` | voronoi-cpp rows of the library benchmark rerun at 1305 MHz (ravg1034), 128³, warp / host / host-vc / exact / step | `bench/libraries/run_voronoi_cpp_a100.sh` with binaries 55cd6b1, points of the benchmark; volumes in `/ptmp/uli/voronoi-paper/libbench/volumes` | job 32366449 |
+| `oracle_errors_vcpp_rerun.csv` | per-cell errors of those volumes against the exact reference (same sample and caches) | `ORACLE_OUT=... LIBBENCH_DATA=/ptmp/uli/voronoi-paper/libbench extract_oracle.py` | medians equal the benchmark's records |
+| `memory_by_array.csv` | Kokkos arrays at each phase's peak | `extract_memory.py` on `raw/memory-32362454.txt` | 55cd6b1, 1305 MHz |
+| `inputs.npz` | 64³ slabs, neighbour-distance histograms, density contrast | `extract_inputs.py` on `/ptmp/uli/voronoi-paper/points` | same generators and seed as the benchmark |

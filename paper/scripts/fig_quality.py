@@ -52,8 +52,8 @@ def totals():
 
 
 def rows():
-    records, _ = lb.load_records()
-    summary = lb.summarise([r for r in records if r["library"] != "voronoi-cpp" or r["version"] == lb.OURS])
+    from fig_library import load
+    summary = load()[0]
     err, tot = oracle_errors(), totals()
     out = []
     for label, prefix, lib, variant, device, threads, colour in CODES:

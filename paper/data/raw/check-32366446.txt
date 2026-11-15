@@ -1,0 +1,144 @@
+== check jittered 32768
+# backend=Cuda n=32768 distribution=jittered box=1,1,1 tiles=1x1x1 grid=32^3_per_tile repeats=3
+warp: build_ms=0.135738 construct_ms=1.0615 construct_Mcells_s=30.8695 pipeline_Mcells_s=27.3697
+work0: mean=4 p99=4
+work1: mean=21.8641 p99=25
+work2: mean=15.9658 p99=21
+clip_checksum=4984202249942357835 clip_topology=18390148036004953685
+  certified=32768/32768 statuses=32768,0,0,0,0,0, volume_error=4.44089e-16 min_volume=2.37401e-05 max_closure=1.47821e-16 faces_per_cell=15.9059 faces=2*owned:yes centroid_checks=66172 worst_centroid_error=1.35619e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.8641,15.9658  PASS
+== check uniform 32768
+# backend=Cuda n=32768 distribution=uniform box=1,1,1 tiles=1x1x1 grid=32^3_per_tile repeats=3
+warp: build_ms=0.132808 construct_ms=1.74936 construct_Mcells_s=18.7314 pipeline_Mcells_s=17.4097
+work0: mean=6.22491 p99=9
+work1: mean=48.0294 p99=91
+work2: mean=17.9136 p99=29
+clip_checksum=16202799551351443386 clip_topology=6742852234287906990
+  certified=32768/32768 statuses=32768,0,0,0,0,0, volume_error=1.55431e-15 min_volume=1.84408e-06 max_closure=1.90955e-16 faces_per_cell=15.5267 faces=2*owned:yes centroid_checks=63732 worst_centroid_error=4.07395e-14 violations=0 per_cell(rings,clipped,cuts)=6.22491,48.0294,17.9136  PASS
+== check clustered 32768
+# backend=Cuda n=32768 distribution=clustered box=1,1,1 tiles=1x1x1 grid=32^3_per_tile repeats=3
+warp: build_ms=0.129829 construct_ms=46.5054 construct_Mcells_s=0.704606 pipeline_Mcells_s=0.702644
+work0: mean=8.80981 p99=36
+work1: mean=94.0273 p99=827
+work2: mean=21.3456 p99=47
+clip_checksum=2626758408057183050 clip_topology=4030358259541709042
+  certified=32768/32768 statuses=32768,0,0,0,0,0, volume_error=2.44249e-15 min_volume=4.516e-08 max_closure=1.64364e-16 faces_per_cell=15.4484 faces=2*owned:yes centroid_checks=63464 worst_centroid_error=1.13397e-13 violations=0 per_cell(rings,clipped,cuts)=8.80981,94.0273,21.3456  PASS
+== check halo 32768
+# backend=Cuda n=32768 distribution=halo box=1,1,1 tiles=1x1x1 grid=32^3_per_tile repeats=3
+warp: build_ms=0.134585 construct_ms=21.4763 construct_Mcells_s=1.52578 pipeline_Mcells_s=1.51627
+work0: mean=8.80334 p99=36
+work1: mean=83.5276 p99=641
+work2: mean=20.9319 p99=42
+clip_checksum=8739785701731871395 clip_topology=14039833059798082367
+  certified=32768/32768 statuses=32768,0,0,0,0,0, volume_error=5.55112e-16 min_volume=6.83364e-10 max_closure=1.97974e-16 faces_per_cell=15.4568 faces=2*owned:yes centroid_checks=63382 worst_centroid_error=4.13841e-13 violations=0 per_cell(rings,clipped,cuts)=8.80334,83.5276,20.9319  PASS
+== check lattice 32768
+# backend=Cuda n=32768 distribution=lattice box=1,1,1 tiles=1x1x1 grid=32^3_per_tile repeats=3
+warp: build_ms=0.122323 construct_ms=0.808204 construct_Mcells_s=40.5442 pipeline_Mcells_s=35.2145
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=6 p99=6
+clip_checksum=13008999790903918090 clip_topology=7057509613001154187
+  certified=32768/32768 statuses=32768,0,0,0,0,0, volume_error=2.22045e-16 min_volume=3.05176e-05 max_closure=0 faces_per_cell=6 faces=2*owned:yes centroid_checks=25600 worst_centroid_error=4.44089e-16 violations=0 per_cell(rings,clipped,cuts)=4,26,6  PASS
+== check wave 32768
+# backend=Cuda n=32768 distribution=wave box=1,1,1 tiles=1x1x1 grid=32^3_per_tile repeats=3
+warp: build_ms=0.126931 construct_ms=1.07125 construct_Mcells_s=30.5887 pipeline_Mcells_s=27.3482
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=16.0886 p99=21
+clip_checksum=4150467614591739458 clip_topology=1410807940447388499
+  certified=32768/32768 statuses=32768,0,0,0,0,0, volume_error=4.66294e-15 min_volume=3.05168e-05 max_closure=1.3471e-16 faces_per_cell=16.0785 faces=2*owned:yes centroid_checks=66950 worst_centroid_error=1.37668e-14 violations=0 per_cell(rings,clipped,cuts)=4,26,16.0886  PASS
+== check jittered 262144
+# backend=Cuda n=262144 distribution=jittered box=1,1,1 tiles=1x1x1 grid=64^3_per_tile repeats=3
+warp: build_ms=0.195126 construct_ms=6.42497 construct_Mcells_s=40.8008 pipeline_Mcells_s=39.5982
+work0: mean=4 p99=4
+work1: mean=21.8834 p99=25
+work2: mean=15.9694 p99=21
+clip_checksum=12590586493661114021 clip_topology=13669845289676797867
+  certified=262144/262144 statuses=262144,0,0,0,0,0, volume_error=4.32987e-15 min_volume=2.9624e-06 max_closure=1.45383e-16 faces_per_cell=15.9095 faces=2*owned:yes centroid_checks=7599 worst_centroid_error=2.29784e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.8834,15.9694  PASS
+== check uniform 262144
+# backend=Cuda n=262144 distribution=uniform box=1,1,1 tiles=1x1x1 grid=64^3_per_tile repeats=3
+warp: build_ms=0.179652 construct_ms=14.2904 construct_Mcells_s=18.3441 pipeline_Mcells_s=18.1163
+work0: mean=6.21946 p99=9
+work1: mean=47.9981 p99=92
+work2: mean=17.949 p99=28
+clip_checksum=7480198985988324352 clip_topology=8073062506301336789
+  certified=262144/262144 statuses=262144,0,0,0,0,0, volume_error=1.88738e-14 min_volume=1.87791e-07 max_closure=2.00802e-16 faces_per_cell=15.5358 faces=2*owned:NO centroid_checks=7402 worst_centroid_error=7.06691e-14 violations=0 per_cell(rings,clipped,cuts)=6.21946,47.9981,17.949  FAIL
+== check clustered 262144
+# backend=Cuda n=262144 distribution=clustered box=1,1,1 tiles=1x1x1 grid=64^3_per_tile repeats=3
+warp: build_ms=0.182932 construct_ms=65.5603 construct_Mcells_s=3.99852 pipeline_Mcells_s=3.98739
+work0: mean=7.2343 p99=28
+work1: mean=56.7158 p99=183
+work2: mean=20.1451 p99=38
+clip_checksum=14009060308865627674 clip_topology=15970658137860939029
+  certified=262144/262144 statuses=262144,0,0,0,0,0, volume_error=2.62013e-14 min_volume=3.70707e-09 max_closure=1.853e-16 faces_per_cell=15.5108 faces=2*owned:yes centroid_checks=7564 worst_centroid_error=7.35848e-14 violations=0 per_cell(rings,clipped,cuts)=7.2343,56.7158,20.1451  PASS
+== check halo 262144
+# backend=Cuda n=262144 distribution=halo box=1,1,1 tiles=1x1x1 grid=64^3_per_tile repeats=3
+warp: build_ms=0.188885 construct_ms=33.4776 construct_Mcells_s=7.83043 pipeline_Mcells_s=7.7865
+work0: mean=7.65047 p99=28
+work1: mean=60.8239 p99=351
+work2: mean=19.8128 p99=37
+clip_checksum=16887486610624181452 clip_topology=14672432283484473129
+  certified=262144/262144 statuses=262144,0,0,0,0,0, volume_error=3.10862e-14 min_volume=4.4721e-11 max_closure=1.79499e-16 faces_per_cell=15.5077 faces=2*owned:yes centroid_checks=7432 worst_centroid_error=2.7716e-13 violations=0 per_cell(rings,clipped,cuts)=7.65047,60.8239,19.8128  PASS
+== check lattice 262144
+# backend=Cuda n=262144 distribution=lattice box=1,1,1 tiles=1x1x1 grid=64^3_per_tile repeats=3
+warp: build_ms=0.172499 construct_ms=4.804 construct_Mcells_s=54.5679 pipeline_Mcells_s=52.6764
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=6 p99=6
+clip_checksum=7001647258285116365 clip_topology=15333307995208264427
+  certified=262144/262144 statuses=262144,0,0,0,0,0, volume_error=1.11022e-16 min_volume=3.8147e-06 max_closure=0 faces_per_cell=6 faces=2*owned:yes centroid_checks=2868 worst_centroid_error=3.55271e-15 violations=0 per_cell(rings,clipped,cuts)=4,26,6  PASS
+== check wave 262144
+# backend=Cuda n=262144 distribution=wave box=1,1,1 tiles=1x1x1 grid=64^3_per_tile repeats=3
+warp: build_ms=0.156023 construct_ms=6.66585 construct_Mcells_s=39.3264 pipeline_Mcells_s=38.427
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=16.1078 p99=21
+clip_checksum=10381810791124529504 clip_topology=16761990552282294282
+  certified=262144/262144 statuses=262144,0,0,0,0,0, volume_error=8.88178e-15 min_volume=3.8146e-06 max_closure=1.50325e-16 faces_per_cell=16.0936 faces=2*owned:yes centroid_checks=7676 worst_centroid_error=2.19823e-14 violations=0 per_cell(rings,clipped,cuts)=4,26,16.1078  PASS
+== check jittered 2097152
+# backend=Cuda n=2097152 distribution=jittered box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=3
+warp: build_ms=0.692035 construct_ms=49.3576 construct_Mcells_s=42.4889 pipeline_Mcells_s=41.9014
+work0: mean=4 p99=4
+work1: mean=21.8912 p99=25
+work2: mean=15.968 p99=21
+clip_checksum=13686594205346499734 clip_topology=1112999687026462257
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0, volume_error=1.9762e-14 min_volume=3.60794e-07 max_closure=1.67152e-16 faces_per_cell=15.9078 faces=2*owned:yes centroid_checks=927 worst_centroid_error=4.27015e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.8912,15.968  PASS
+== check uniform 2097152
+# backend=Cuda n=2097152 distribution=uniform box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=3
+warp: build_ms=0.965466 construct_ms=95.6826 construct_Mcells_s=21.9178 pipeline_Mcells_s=21.6989
+work0: mean=6.22326 p99=9
+work1: mean=48.0463 p99=92
+work2: mean=17.9477 p99=28
+clip_checksum=15179076651470088669 clip_topology=7134825127752466419
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0, volume_error=1.45439e-14 min_volume=1.57005e-08 max_closure=2.27748e-16 faces_per_cell=15.5352 faces=2*owned:yes centroid_checks=971 worst_centroid_error=5.79413e-14 violations=0 per_cell(rings,clipped,cuts)=6.22326,48.0463,17.9477  PASS
+== check clustered 2097152
+# backend=Cuda n=2097152 distribution=clustered box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=3
+warp: build_ms=1.01053 construct_ms=122.96 construct_Mcells_s=17.0556 pipeline_Mcells_s=16.9165
+work0: mean=6.64466 p99=18
+work1: mean=50.6784 p99=106
+work2: mean=19.7602 p99=34
+clip_checksum=9122817361804560111 clip_topology=6010359692868318511
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0, volume_error=8.38218e-14 min_volume=2.41877e-10 max_closure=2.415e-16 faces_per_cell=15.5314 faces=2*owned:yes centroid_checks=908 worst_centroid_error=1.65662e-13 violations=0 per_cell(rings,clipped,cuts)=6.64466,50.6784,19.7602  PASS
+== check halo 2097152
+# backend=Cuda n=2097152 distribution=halo box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=3
+warp: build_ms=1.01991 construct_ms=136.107 construct_Mcells_s=15.4082 pipeline_Mcells_s=15.2936
+work0: mean=7.41044 p99=26
+work1: mean=53.6598 p99=211
+work2: mean=19.354 p99=34
+clip_checksum=2501324616489379695 clip_topology=5835486642139840928
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0, volume_error=6.66134e-15 min_volume=4.0723e-12 max_closure=2.26793e-16 faces_per_cell=15.5236 faces=2*owned:yes centroid_checks=938 worst_centroid_error=3.51502e-13 violations=0 per_cell(rings,clipped,cuts)=7.41044,53.6598,19.354  PASS
+== check lattice 2097152
+# backend=Cuda n=2097152 distribution=lattice box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=3
+warp: build_ms=0.638807 construct_ms=38.119 construct_Mcells_s=55.016 pipeline_Mcells_s=54.1092
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=6 p99=6
+clip_checksum=1906122470352873659 clip_topology=7609902227692907979
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0, volume_error=0 min_volume=4.76837e-07 max_closure=0 faces_per_cell=6 faces=2*owned:yes centroid_checks=360 worst_centroid_error=0 violations=0 per_cell(rings,clipped,cuts)=4,26,6  PASS
+== check wave 2097152
+# backend=Cuda n=2097152 distribution=wave box=1,1,1 tiles=1x1x1 grid=128^3_per_tile repeats=3
+warp: build_ms=0.661242 construct_ms=51.3921 construct_Mcells_s=40.8069 pipeline_Mcells_s=40.2885
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=16.1073 p99=21
+clip_checksum=3113362966098339236 clip_topology=14261300017572685180
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0, volume_error=4.84057e-14 min_volume=4.76824e-07 max_closure=1.87791e-16 faces_per_cell=16.0858 faces=2*owned:yes centroid_checks=940 worst_centroid_error=4.39647e-14 violations=0 per_cell(rings,clipped,cuts)=4,26,16.1073  PASS

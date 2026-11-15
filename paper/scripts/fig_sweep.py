@@ -46,7 +46,7 @@ def weak(commit, table, clocks):
                 top = max(top, max(y for _, y in pts))
         ax.set_xticks(range(len(SIZES)), SIZE_LABEL)
         ax.set_xlim(-0.3, len(SIZES) - 0.7)
-        ax.set_ylim(0, 1.45 * top if top else 1)
+        ax.set_ylim(0, (1.45 if ax is axes[0, 0] else 1.2) * top if top else 1)
         ax.text(0.03, 0.96, text, transform=ax.transAxes, va="top")
         ax.set_ylabel("B/cell" if col == "bytes_per_cell" else "M cells/s")
         figstyle.decorate(ax)

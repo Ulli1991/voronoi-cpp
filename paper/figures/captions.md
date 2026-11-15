@@ -17,9 +17,9 @@ distances in mean spacings (each strip scaled to its peak; dotted: one spacing).
 shown: an exact cubic lattice (every point cospherical with its neighbours) and the lattice shifted by 10⁻⁵ spacing
 ("wave").
 
-**Library headline (full cells) and library_more.** One A100 40 GB (node ravg1002, SM clock 1095 MHz under load in
-every job of these rows; voronoi-cpp rows are commit ad62997 = main b2faee8 + the benchmark, which runs 10–15 % slower
-than main 55cd6b1 at 1305 MHz), double precision, 2,097,152 cells (128³), periodic unit box, median of 3 timed runs
+**Library headline (full cells) and library_more.** One A100 40 GB. voronoi-cpp: main 55cd6b1 (library code as on main
+c42c230), 1305 MHz SM clock under load, node ravg1034, job 32366449. Other GPU codes: node ravg1002 at 1095 MHz (the
+benchmark's jobs, docs/library_benchmark.md); their rates at 1305 MHz would be up to about 15 % higher, double precision, 2,097,152 cells (128³), periodic unit box, median of 3 timed runs
 (steps: frames 2 to 10). "+ faces": the code's tetrahedra or neighbour lists turned into full cells by our faces step,
 timed in. Open markers: published rates on other hardware and points (peclet-voro; Basselin et al. 2021; Ray et al.
 2018; Paragram; votess; Voro++, Lu et al. 2023), cited per marker. To be regenerated when the close-gaps CPU rows and
@@ -35,3 +35,13 @@ fill one A100 40 GB. Besides memory, the face-ring pool's 32-bit offsets overflo
 **oracle_errors.** Against the exact reference `src/test/oracle.hpp`: 128-bit integer predicates and long-double
 clipping over all periodic images, brute force per sampled cell; it includes only the C++ standard library and shares
 no code with the mesh (its driver shares the point-file reader). 1000 sampled cells per input.
+
+**weak_scaling, step_vs_displacement, resort, stages.** One A100 40 GB at 1305 MHz SM clock (every job's log), main
+55cd6b1, double precision, periodic unit box. Rates are cells over wall time of the timed region, median of 5 runs
+(rebuild, exact start) or of steps 2 to 10 (steps: points moved by the bench's smooth flow, `update` + `update_cells`).
+Wave at 256³ runs out of the 40 GB in the step. Re-sort: 500 steps at 0.1 spacings, jittered, Hilbert order every 50
+updates; the legend gives cells × steps over the summed step times, re-sorts included.
+
+**quality.** Build rates at 128³ as in the library figures; error against the exact reference on 1000 sampled cells
+(median to max); completeness over all cells; total sampled volume |Σ V − box| (a tiling check, not accuracy).
+Neighbour-set agreement and closure are not shown: the benchmark runs stored volumes only.
