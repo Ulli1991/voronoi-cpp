@@ -150,6 +150,34 @@ KOKKOS_INLINE_FUNCTION bool live(const C& cell, int v) {
     return cell.corner[v][0] != C::removed;
 }
 
+// The Cylinder (shell_grid.hpp) of the live vertices of a cell, in box units.
+// Used by: construct_pass, once its walk passed the clip budget (#60).
+template <class C>
+KOKKOS_INLINE_FUNCTION Cylinder cylinder(const C& cell, double unit) {
+    int far = -1;
+    double most = -1;
+    for (int v = 0; v < cell.vertices; ++v) {
+        if (!live(cell, v)) continue;
+        const Vec3 x = cell.position(v, unit);
+        if (dot(x, x) > most) most = dot(x, x), far = v;
+    }
+    Cylinder z{};
+    const double r = Kokkos::sqrt(Kokkos::max(most, 0.0));
+    z.u = far >= 0 && r > 0 ? cell.position(far, unit) * (1.0 / r) : Vec3{1, 0, 0};
+    z.high = z.low = 0;
+    for (int v = 0; v < cell.vertices; ++v) {
+        if (!live(cell, v)) continue;
+        const Vec3 x = cell.position(v, unit);
+        const double along = dot(x, z.u);
+        const Vec3 off = x - z.u * along;
+        z.high = Kokkos::max(z.high, along);
+        z.low = Kokkos::min(z.low, along);
+        z.radius = Kokkos::max(z.radius, Kokkos::sqrt(dot(off, off)));
+    }
+    z.margin = 0x1p-24 * r;  // far above the rounding of the vertices and of the bound (a few eps R)
+    return z;
+}
+
 // The cube of half-width h (box units) around the generator, bounded by six
 // virtual particles at distance 2h (ids n..n+5). Corner order flips at
 // corners of odd parity, so that every face is walked the same way round.
@@ -227,7 +255,7 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
 // removes the cut vertices, closes the hole with a new face. Returns ok when the plane does not cut or after the cut;
 // after anything else the cell must not be read again.
 // Used by: the nearest-first loop in construct_pass.
-template <class C>
+template <bool checked = false, class C>
 KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int id, int self) {
     using Index = typename C::Index;
     constexpr int max_holes = C::vertices_capacity / 2;
@@ -263,6 +291,9 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             const Index u = cell.adjacent[w][k];
             if (cut[u]) continue;
             if (holes == max_holes) return vertex_overflow;
+            // The filter's bound needs new vertices between their ends: a kept end within the tolerance outside fails.
+            if constexpr (checked && !C::exact)
+                if (dot(d, cell.vertex[u]) - offset > 0) return degenerate;
             const Index* across = cell.adjacent[u];
             hole[holes++] = {cell.corner[w][k], cell.corner[w][(k + 1) % 3], u,
                              static_cast<Index>(across[0] == w   ? 0

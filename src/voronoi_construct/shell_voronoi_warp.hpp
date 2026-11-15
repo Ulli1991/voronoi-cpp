@@ -165,6 +165,7 @@ __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uin
 
 // Clip by the bisector with a particle at offset d (all lanes pass the same d). Returns ok when the plane does not
 // cut or after the cut is applied. `unit` scales the float normal (Kernel::unit). Used by: Kernel, once per candidate.
+template <bool checked = false>
 __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, double& radius2, Vec3 d, int neighbour,
                            double unit) {
     const int l = lane();
@@ -224,7 +225,7 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     // New vertex j lies on the edge from removed w to kept u, between planes a and b; the lane owning the j-th free slot
     // builds it there.
     const int low_free = lanes - __popc(half(live, 0));
-    bool made[per_lane] = {};
+    bool made[per_lane] = {}, past = false;
     int kept_end[per_lane], a[per_lane], b[per_lane];
     for (int k = 0; k < per_lane; ++k) {
         if (k > 0 && low_free >= created) break;
@@ -235,6 +236,7 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         const std::uint32_t edge = c.crossing[j];
         const int w = byte(edge, 0), u = byte(edge, 1);
         const double t = c.side[w] / (c.side[w] - c.side[u]);
+        if constexpr (checked) past |= !(c.side[u] <= 0);
         const double px = c.x[w] + (c.x[u] - c.x[w]) * t, py = c.y[w] + (c.y[u] - c.y[w]) * t,
                      pz = c.z[w] + (c.z[u] - c.z[w]) * t;
         c.x[s] = px;
@@ -253,6 +255,9 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         kept_end[k] = u;
     }
     const std::uint64_t made_slots = vertex_ballot(made);
+    // The filter's bound needs new vertices on their edges: a kept end within the tolerance outside puts one past it.
+    if constexpr (checked)
+        if (__any_sync(all_lanes, past)) return degenerate;
     __syncwarp(all_lanes);
     // Across (a, b) is u, across (b, plane) the new vertex whose hole edge starts at b, across (plane, a) the one whose
     // hole edge ends at a.
@@ -289,6 +294,41 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
             packed_image = take ? other_image : packed_image;
         }
     }
+}
+
+// The Cylinder of the live vertices of c, with all lanes.
+__device__ inline Cylinder cylinder(const Polyhedron& c, std::uint64_t live) {
+    const int l = lane();
+    int far = -1;
+    double mine = -1;
+    for (int k = 0; k < per_lane; ++k) {
+        const int w = l + k * lanes;
+        const double r2 = c.x[w] * c.x[w] + c.y[w] * c.y[w] + c.z[w] * c.z[w];
+        if (live >> w & 1 && r2 > mine) mine = r2, far = w;
+    }
+    const double most = warp_max(mine);
+    const unsigned holders = __ballot_sync(all_lanes, far >= 0 && mine == most);
+    far = __shfl_sync(all_lanes, far, holders ? __ffs(holders) - 1 : 0);
+    Cylinder z;
+    const double r = Kokkos::sqrt(Kokkos::max(most, 0.0));
+    z.u = far >= 0 && r > 0 ? Vec3{c.x[far], c.y[far], c.z[far]} * (1.0 / r) : Vec3{1, 0, 0};
+    double high = -1e300, low = -1e300, across = 0;  // low holds the negated minimum
+    for (int k = 0; k < per_lane; ++k) {
+        const int w = l + k * lanes;
+        if (!(live >> w & 1)) continue;
+        const Vec3 v{c.x[w], c.y[w], c.z[w]};
+        const double along = dot(v, z.u);
+        const Vec3 off = v - z.u * along;
+        high = larger(high, along);
+        low = larger(low, -along);
+        across = larger(across, dot(off, off));
+    }
+    z.high = warp_max(high);
+    z.low = -warp_max(low);
+    z.radius = Kokkos::sqrt(warp_max_nonnegative(across));
+    // Far above the rounding of the vertices and of the bound (a few eps R).
+    z.margin = 0x1p-24 * r;
+    return z;
 }
 
 #if defined(VORONOI_MEASURE)
@@ -356,9 +396,9 @@ __device__ inline bool box_meets_a_ball(const Polyhedron& c, std::uint64_t live,
 #if defined(KOKKOS_ENABLE_CUDA)
 // Adaptive: walk each cell at its level (CellList::level), else only at the base level and leave
 // uncertified cells to the thread kernel. with_rings: record face rings instead of face geometry.
-// cubic: the grid is one cube (Grid::cube()).
+// cubic: the grid is one cube (Grid::cube()). filtered: build the slots of `list` and skip what cannot cut (#60).
 // Used by: construct_warp.
-template <class MemorySpace, bool adaptive, bool with_rings, bool cubic = false>
+template <class MemorySpace, bool adaptive, bool with_rings, bool cubic = false, bool filtered = false>
 struct Kernel {
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -370,6 +410,10 @@ struct Kernel {
     // A power of two near 1 / the narrowest tile width: float keys and normals are in these units, so they neither
     // overflow nor underflow in any box (#26), and scaling by a power of two keeps their bits and order.
     double unit = 1, unit2 = 1;  // unit2 = unit^2
+    // A walk that clips more than `budget` candidates stops as `deferred` (unfiltered kernel); the filtered kernel
+    // builds the cells of `list`.
+    int budget = heavy_clips;
+    Kokkos::View<const int*, MemorySpace> list;
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
@@ -381,8 +425,13 @@ struct Kernel {
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
             const int t = __shfl_sync(all_lanes, taken, 0);
-            if (t >= grid.n) return;
-            build(c, t);
+            if constexpr (filtered) {
+                if (t >= static_cast<int>(list.extent(0))) return;
+                build(c, list(t));
+            } else {
+                if (t >= grid.n) return;
+                build(c, t);
+            }
         }
 #else
         (void)member;
@@ -456,7 +505,7 @@ struct Kernel {
                 }
 #endif
                 const int before = planes;
-                status = clip(c, planes, live, radius2, d, q, unit);
+                status = clip<filtered>(c, planes, live, radius2, d, q, unit);
                 ++clipped;
                 cuts += planes > before;
                 if (planes > before) reach = 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f;
@@ -480,6 +529,14 @@ struct Kernel {
                     certified = true;
                     break;
                 }
+                if constexpr (!filtered)
+                    if (clipped > budget) {
+                        status = deferred;
+                        break;
+                    }
+                // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
+                Cylinder bound{};
+                if constexpr (filtered) bound = cylinder(c, live);
                 ++rings;
                 const int e = first + l;
                 int begin = 0, end = 0, packed = 0;
@@ -487,6 +544,8 @@ struct Kernel {
                 if (e < entries)
                     stencil_cell<adaptive, cubic>(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end,
                                                   packed);
+                if constexpr (filtered)
+                    if (begin < end && !admits<cubic>(grid, bound, level, home, stencil.offsets(e), p)) begin = end;
 #if defined(VORONOI_MEASURE)
                 if (measuring) {
                     bool cell_outside = false, p1 = false, r8 = false;
@@ -540,6 +599,7 @@ struct Kernel {
                         const double ddz = positions(q, 2) + image(packed, 2) * side[2] - p.z;
                         d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                         take = d2 < 4.0 * radius2;
+                        if constexpr (filtered) take = take && bound.admits(Vec3{ddx, ddy, ddz}, d2);
 #if defined(VORONOI_MEASURE)
                         outside = balls && !in_a_ball(c, live, ddx, ddy, ddz);
 #endif
@@ -833,28 +893,60 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         Kokkos::parallel_reduce(
             "shell_voronoi::off_base_levels", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
             KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
+        const int budget = detail::heavy_budget();
+        const auto status = out.status;
+        const auto order = grid.order;
         detail::until_pool_fits(exec, out, [&] {
             Kokkos::deep_copy(exec, next_cell, 0);
             if (rings)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp_rings", policy,
-                    warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
+                    warp::Kernel<Memory, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget});
             else if (off_base > 0 && cube)
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Memory, true, false, true>{grid, out, half_width, stencil, next_cell,
+                                                                             unit, unit2, budget});
             else if (off_base > 0)
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, unit, unit2});
+                    warp::Kernel<Memory, true, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget});
             else if (cube)
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, false, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2});
+                Kokkos::parallel_for("shell_voronoi::construct_warp", policy,
+                                     warp::Kernel<Memory, false, false, true>{grid, out, half_width, stencil, next_cell,
+                                                                              unit, unit2, budget});
             else
                 Kokkos::parallel_for(
                     "shell_voronoi::construct_warp", policy,
-                    warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2});
+                    warp::Kernel<Memory, false, false>{grid, out, half_width, stencil, next_cell, unit, unit2, budget});
+            // Cells past the budget (needles into empty space, #60): the filtered kernel, over a list of their slots.
+            int deferred_count = 0;
+            Kokkos::parallel_reduce(
+                "shell_voronoi::count_deferred", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+                KOKKOS_LAMBDA(int t, int& sum) { sum += status(order(t)) == deferred; }, deferred_count);
+            if (deferred_count > 0) {
+                Kokkos::View<int*, Memory> list(Kokkos::view_alloc(Kokkos::WithoutInitializing, "shell_warp_heavy"),
+                                                deferred_count);
+                Kokkos::parallel_scan(
+                    "shell_voronoi::list_deferred", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+                    KOKKOS_LAMBDA(int t, int& at, bool last) {
+                        if (status(order(t)) != deferred) return;
+                        if (last) list(at) = t;
+                        ++at;
+                    });
+                Kokkos::deep_copy(exec, next_cell, 0);
+                if (rings)
+                    Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
+                                         warp::Kernel<Memory, true, true, false, true>{
+                                             grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
+                else if (cube)
+                    Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
+                                         warp::Kernel<Memory, true, false, true, true>{
+                                             grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
+                else
+                    Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
+                                         warp::Kernel<Memory, true, false, false, true>{
+                                             grid, out, half_width, stencil, next_cell, unit, unit2, budget, list});
+            }
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::failed);
             detail::exact_where_failed(exec, grid, stencil, out);
         });

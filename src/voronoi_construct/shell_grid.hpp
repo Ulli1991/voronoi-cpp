@@ -42,6 +42,35 @@ KOKKOS_INLINE_FUNCTION double dot(Vec2 a, Vec2 b) { return a.x * b.x + a.y * b.y
 template <int D>
 using VecN = std::conditional_t<D == 2, Vec2, Vec3>;
 
+// A cylinder around the cell, for the filtered walks (#60): axis u through the generator and the farthest vertex,
+// extent [low, high] along u, radius `radius` about it. A particle at d can cut only if d.d / 2 < bound(d).
+struct Cylinder {
+    Vec3 u;
+    double low, high, radius, margin;  // margin: room for the rounding of vertices cut later
+    // Largest x.d over the cylinder, plus the margin.
+    KOKKOS_INLINE_FUNCTION double bound(double along, double across, double length) const {
+        return Kokkos::max(high * along, low * along) + radius * across + margin * length;
+    }
+    // Whether a particle at offset d (d2 = d.d) may cut the cell.
+    KOKKOS_INLINE_FUNCTION bool admits(Vec3 d, double d2) const {
+        const double along = dot(d, u);
+        const Vec3 across = d - u * along;
+        return 0.5 * d2 < bound(along, Kokkos::sqrt(dot(across, across)), Kokkos::sqrt(d2));
+    }
+    // Whether some particle in the box [lo, lo + width] (offsets) may cut the cell; gap2: its squared distance.
+    KOKKOS_INLINE_FUNCTION bool admits(const double (&lo)[3], const double (&width)[3], double gap2) const {
+        const double e[3] = {0.5 * width[0], 0.5 * width[1], 0.5 * width[2]};
+        const Vec3 centre{lo[0] + e[0], lo[1] + e[1], lo[2] + e[2]};
+        const double along = dot(centre, u), spread = e[0] * Kokkos::abs(u.x) + e[1] * Kokkos::abs(u.y) +
+                                                      e[2] * Kokkos::abs(u.z);
+        const Vec3 across = centre - u * along;
+        const double half = Kokkos::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+        const double most = Kokkos::max(bound(along + spread, 0, 0), bound(along - spread, 0, 0));
+        return 0.5 * gap2 < most + radius * (Kokkos::sqrt(dot(across, across)) + half) +
+                                margin * (Kokkos::sqrt(dot(centre, centre)) + half);
+    }
+};
+
 // Read-only inputs, all in slot order, from a built neighbor_search::CellList.
 // Used by: every walk below (construct_pass, warp kernel).
 template <class MemorySpace>
@@ -246,6 +275,25 @@ KOKKOS_INLINE_FUNCTION bool stencil_cell(const Grid<MemorySpace>& grid, int leve
         end = grid.cell_offsets(key + 1);
     }
     return begin < end;
+}
+
+// Whether grid cell `code` of the walk at `level` around generator p in cell `home` may hold a particle that cuts a cell
+// inside `bound`; the grid cell is widened by more than the rounding of the cell list.
+// Used by: construct_pass and the filtered warp kernel, past the clip budget (#60).
+template <bool cubic = false, class MemorySpace>
+KOKKOS_INLINE_FUNCTION bool admits(const Grid<MemorySpace>& grid, const Cylinder& bound, int level,
+                                   const int (&home)[3], int code, const Vec3& p) {
+    const double q[3] = {p.x, p.y, p.z};
+    double lo[3], wide[3], gap2 = 0;
+    for (int a = 0; a < 3; ++a) {
+        const double w = (cubic ? grid.width[0] : grid.width[a]) / (1 << level);
+        const double slack = 64 * Kokkos::Experimental::epsilon_v<double> * grid.box.side[cubic ? 0 : a];
+        lo[a] = (home[a] + ((code >> (4 * a)) & 15) - 8) * w - q[a] - slack;
+        wide[a] = w + 2 * slack;
+        const double g = Kokkos::max(0.0, Kokkos::max(lo[a], -(lo[a] + wide[a])));
+        gap2 += g * g;
+    }
+    return bound.admits(lo, wide, gap2);
 }
 
 }  // namespace shell_voronoi

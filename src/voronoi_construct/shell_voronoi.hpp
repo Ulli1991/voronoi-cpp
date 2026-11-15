@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -203,6 +204,12 @@ KOKKOS_INLINE_FUNCTION void sort_by_id(const C& cell, std::int16_t* planes, int 
     }
 }
 
+// The walks' clip budget: heavy_clips, or VORONOI_HEAVY_CLIPS for measurements.
+inline int heavy_budget() {
+    const char* v = std::getenv("VORONOI_HEAVY_CLIPS");
+    return v != nullptr ? std::atoi(v) : heavy_clips;
+}
+
 // A particle that may cut the cell, sorted by distance.
 // Used by: construct_pass.
 struct Candidate {
@@ -257,6 +264,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
     const auto positions = grid.positions;
     const bool with_closure = out.closure.extent(0) > 0;
     const bool with_rings = out.with_rings();
+    const int budget = heavy_budget();
 
     Kokkos::parallel_for(
         "shell_voronoi::construct", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(n)),
@@ -281,6 +289,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             bool certified = false;
             Candidate buffer[ring_buffer];
             int buffered = 0, batches = 0, clipped = 0, cuts = 0;
+            // Past the clip budget the walk skips what the cell's Cylinder rules out (#60).
+            bool filtering = false;
+            Cylinder bound{};
 
             // Clip with the buffered particles nearest-first, until the rest are too far to cut.
             auto flush = [&]() {
@@ -305,7 +316,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     const int planes_before = cell.planes, vertices_before = cell.vertices;
                     // Exact cuts break ties by particle id; rounded cells keep the slot until the walk is done (one
                     // load fewer per cut).
-                    status = clip(cell, e, d, Cell::exact ? grid.order(c.slot) : c.slot, id);
+                    const int other = Cell::exact ? grid.order(c.slot) : c.slot;
+                    status = filtering ? clip<true>(cell, e, d, other, id) : clip(cell, e, d, other, id);
                     ++clipped;
                     if (cell.planes == planes_before && cell.vertices == vertices_before) continue;
                     ++cuts;
@@ -323,6 +335,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 const int reach = level_reach(level, grid.fewest), entries = stencil.ends(reach);
                 for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
                     ++batches;
+                    // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
+                    filtering = clipped > budget;
+                    if (filtering) bound = cylinder(cell, unit);
                     for (int e = first; e < Kokkos::min(first + ring_buffer, entries) && status == ok; ++e) {
                         if (double(stencil.bound2(e)) * width * width >= reach2) {
                             certified = true;
@@ -331,6 +346,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         int begin = 0, end = 0, packed = 0;
                         if (!stencil_cell(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end, packed))
                             continue;
+                        if (filtering && !admits(grid, bound, level, home, stencil.offsets(e), p)) continue;
                         const int shift[3] = {image(packed, 0), image(packed, 1), image(packed, 2)};
                         for (int q = begin; q < end; ++q) {
                             if (q == t) continue;
@@ -339,6 +355,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                             const double dz = positions(q, 2) + shift[2] * box.side[2] - p.z;
                             const double d2 = dx * dx + dy * dy + dz * dz;
                             if (!(d2 < reach2)) continue;  // never a non-finite distance
+                            if (filtering && !bound.admits(Vec3{dx, dy, dz}, d2)) continue;
                             if (buffered == ring_buffer) flush();
                             using Image = std::int8_t;
                             buffer[buffered++] = {d2, q, {Image(shift[0]), Image(shift[1]), Image(shift[2])}};

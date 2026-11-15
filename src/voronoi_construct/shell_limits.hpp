@@ -13,13 +13,16 @@ enum Status : int {
     vertex_overflow = 3,
     face_overflow = 4,  // the cell's chunk of the face or ring pool is full
     degenerate = 5,
+    deferred = 6,  // the warp kernel's walk passed heavy_clips: built again by the filtered kernel, never an output
 };
-constexpr int status_count = 6;
+constexpr int status_count = 7;
 
 constexpr int max_planes = 48;                             // cutting planes, including the 6 box planes
 constexpr int max_vertices = 64;                           // one 64-bit mask marks vertices to remove
 constexpr int big_planes = 128, big_vertices = 256;        // for the rare cells that overflow those
 constexpr int huge_planes = 16000, huge_vertices = 32000;  // exact, on the host: the few that overflow those
+// A warp kernel walk that clips more candidates than this stops; the filtered kernel builds the cell (#60).
+constexpr int heavy_clips = 4096;
 constexpr int ring_buffer = 32;
 constexpr int box_planes = 6;
 constexpr int face_block = 256;  // face pool entries a warp claims at a time (shell_voronoi_warp.hpp)
