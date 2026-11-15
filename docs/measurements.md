@@ -126,6 +126,12 @@ device memory in the step bench in both builds; its rebuild and start rates and 
 Rates, ref → new, rebuild at 128³ / 256³: −0.06 to −0.30 % / −0.07 to −0.46 %; exact start within the ±3 % noise of
 its repeats (lattice and wave within 1 %). Blue noise through the library bench: within 0.5 %.
 
+Tests: A100 ctest 22 of 22 (job 32375356), with the 953-point case of the issue (thread and warp kernels against the
+exact one) and the surface input at 64³ (32³ on the host) in `clipping_test`; OpenMP `clipping_test` passes on the login
+node. Fuzz on the A100 (job 32375357, profile huge, seeds 4e12 + 101 to 108): one exact, five refused for causes the
+inputs have (coincident particles, reach), two out of time at 280 s; those two (105, 107) also run past 13 minutes on ref
+(jobs 32376473, 32376490), so they are #49, not this change.
+
 Not adopted, the owner's call: a clip budget of 256 instead of 4096 makes the surface 1.6 times faster at 128³ (0.16),
 but changes the bits of the halo and cosmic-web tail cells (p99 210 to 268 clips), which restart filtered, and slows
 those inputs by 5 to 6 % (rebuild) and 4 to 11 % (exact start).
