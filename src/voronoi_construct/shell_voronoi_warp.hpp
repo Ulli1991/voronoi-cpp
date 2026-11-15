@@ -24,33 +24,36 @@ constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
 constexpr int min_blocks_per_sm = 5;
 constexpr std::uint8_t none = 255;
-static_assert(max_planes <= max_vertices, "Polyhedron::crossing is the scratch of the least next neighbour per plane");
-static_assert(max_vertices * sizeof(double) >= 2 * max_planes * sizeof(std::uint32_t),
-              "Polyhedron::side is the ring order's scratch");
+// The filtered kernel's second capacity (#60): needle cells past 64 live vertices, as many planes.
+constexpr int big_capacity = 128;
 
-// One warp's polyhedron. Corners and adjacency hold three 8-bit indices each: corner k is a plane,
-// adjacency k the vertex across the edge from corner k to k + 1. A 64-bit register mask marks the slots
-// in use; a cut puts its new vertices in the lowest free ones.
+// One warp's polyhedron of V vertices and V planes (64, or big_capacity). Corners and adjacency hold three 8-bit
+// indices each: corner k is a plane, adjacency k the vertex across the edge from corner k to k + 1. A register mask
+// of V bits marks the slots in use; a cut puts its new vertices in the lowest free ones.
 // Used by: Kernel::build, start_cube, clip.
-struct alignas(16) Polyhedron {
+template <int V = max_vertices>
+struct alignas(16) PolyhedronOf {
+    static_assert(V % lanes == 0 && V < none, "slots per lane, and byte-sized indices");
+    static constexpr int capacity = V;
     // Plane normals only weight the face centroids, so float is enough.
-    float nx[max_planes], ny[max_planes], nz[max_planes];
-    int neighbour[max_planes];
-    double x[max_vertices], y[max_vertices], z[max_vertices];
-    double side[max_vertices];  // signed distance to the cutting plane
-    std::uint32_t corner[max_vertices];
-    std::uint32_t adjacent[max_vertices];
+    float nx[V], ny[V], nz[V];
+    int neighbour[V];
+    double x[V], y[V], z[V];
+    double side[V];  // signed distance to the cutting plane
+    std::uint32_t corner[V];
+    std::uint32_t adjacent[V];
     // Edges a cut crosses (removed, kept vertex, planes a, b); after the cuts, scratch for `first` (Kernel::build).
-    std::uint32_t crossing[max_vertices];
-    std::uint8_t starts[max_planes];  // new vertex whose hole edge starts at a plane
-    std::uint8_t ends[max_planes];    // ... and ends at a plane
-    std::uint8_t first[max_planes];   // a vertex on each face, for the face walk
+    std::uint32_t crossing[V];
+    std::uint8_t starts[V];  // new vertex whose hole edge starts at a plane
+    std::uint8_t ends[V];    // ... and ends at a plane
+    std::uint8_t first[V];   // a vertex on each face, for the face walk
     float candidate_distance2[lanes];
     int candidate_slot[lanes];
     int candidate_image[lanes];
     // Owned faces without rings: the warp claims face_block pool entries at a time; its block is [face_at, face_end).
     long long face_at, face_end;
 };
+using Polyhedron = PolyhedronOf<>;
 
 // Used by: the Polyhedron accessors in clip.
 KOKKOS_INLINE_FUNCTION int byte(std::uint32_t packed, int k) { return (packed >> (8 * k)) & 255; }
@@ -74,6 +77,25 @@ KOKKOS_INLINE_FUNCTION std::uint32_t half(std::uint64_t mask, int k) {
 KOKKOS_INLINE_FUNCTION bool bit(std::uint32_t low, std::uint32_t high, int v) {
     return ((v < 32 ? low : high) >> (v & 31)) & 1;
 }
+// The vertex mask of a big polyhedron: bit v in word v / 64. Mask<V> is the mask type of V slots.
+struct Mask128 {
+    std::uint64_t word[2];
+};
+template <int V>
+using Mask = std::conditional_t<V == 64, std::uint64_t, Mask128>;
+KOKKOS_INLINE_FUNCTION std::uint32_t half(const Mask128& mask, int k) { return half(mask.word[k >> 1], k & 1); }
+// Bit v of a mask. Used by: the kernel's loops over a lane's slots.
+KOKKOS_INLINE_FUNCTION bool test(std::uint64_t mask, int v) { return mask >> v & 1; }
+KOKKOS_INLINE_FUNCTION bool test(const Mask128& mask, int v) { return mask.word[v >> 6] >> (v & 63) & 1; }
+KOKKOS_INLINE_FUNCTION bool empty(std::uint64_t mask) { return mask == 0; }
+KOKKOS_INLINE_FUNCTION bool empty(const Mask128& mask) { return (mask.word[0] | mask.word[1]) == 0; }
+// (live without removed) with made. Used by: clip.
+KOKKOS_INLINE_FUNCTION std::uint64_t replace(std::uint64_t live, std::uint64_t removed, std::uint64_t made) {
+    return (live & ~removed) | made;
+}
+KOKKOS_INLINE_FUNCTION Mask128 replace(const Mask128& live, const Mask128& removed, const Mask128& made) {
+    return {{(live.word[0] & ~removed.word[0]) | made.word[0], (live.word[1] & ~removed.word[1]) | made.word[1]}};
+}
 
 #if defined(__CUDA_ARCH__)
 // The warp building a cell is the team's vector range: lane l is threadIdx.x.
@@ -86,6 +108,15 @@ __device__ inline std::uint64_t vertex_ballot(const bool (&out)[per_lane]) {
     for (int k = 0; k < per_lane; ++k) bits |= std::uint64_t(__ballot_sync(all_lanes, out[k])) << (k * lanes);
     return bits;
 }
+__device__ inline Mask128 vertex_ballot(const bool (&out)[big_capacity / lanes]) {
+    Mask128 bits{{0, 0}};
+    for (int k = 0; k < big_capacity / lanes; ++k)
+        bits.word[k >> 1] |= std::uint64_t(__ballot_sync(all_lanes, out[k])) << ((k & 1) * lanes);
+    return bits;
+}
+// Live slots. Used by: clip, the kernel's counts.
+__device__ inline int population(std::uint64_t mask) { return __popcll(mask); }
+__device__ inline int population(const Mask128& mask) { return __popcll(mask.word[0]) + __popcll(mask.word[1]); }
 
 // Maximum of v over all lanes of the warp (xor-shuffle butterfly); every lane gets the result.
 // Used by: build (the longest per-lane work list).
@@ -134,7 +165,8 @@ __device__ inline void store_byte(std::uint32_t& packed, int k, int value) {
 
 // The starting cube of half-width h around the generator; sets planes and the live-vertex mask.
 // Used by: Kernel (cell setup).
-__device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uint64_t& live) {
+template <int V>
+__device__ inline void start_cube(PolyhedronOf<V>& c, double h, int& planes, Mask<V>& live) {
     __syncwarp(all_lanes);  // the previous cell's face walks read these slots (#46)
     const int l = lane();
     if (l < box_planes) {
@@ -157,53 +189,65 @@ __device__ inline void start_cube(Polyhedron& c, double h, int& planes, std::uin
     c.x[l] = l >= 8 ? 0.0 : sx ? -h : h;
     c.y[l] = l >= 8 ? 0.0 : sy ? -h : h;
     c.z[l] = l >= 8 ? 0.0 : sz ? -h : h;
-    c.x[l + lanes] = c.y[l + lanes] = c.z[l + lanes] = 0.0;
+    for (int k = 1; k < V / lanes; ++k) c.x[l + k * lanes] = c.y[l + k * lanes] = c.z[l + k * lanes] = 0.0;
     __syncwarp(all_lanes);
     planes = box_planes;
-    live = 0xff;
+    if constexpr (V == 64)
+        live = 0xff;
+    else
+        live = Mask128{{0xff, 0}};
 }
 
 // Drops the planes no live vertex uses and renumbers the rest (box planes keep theirs); false if none is free.
 // Used by: clip in the filtered kernel, whose needle cells (#60) collect planes that stopped being faces.
-__device__ inline bool compact_planes(Polyhedron& c, int& planes, std::uint64_t live) {
+template <int V>
+__device__ inline bool compact_planes(PolyhedronOf<V>& c, int& planes, const Mask<V>& live) {
+    constexpr int per = V / lanes;
     const int l = lane();
-    std::uint64_t used = (std::uint64_t(1) << box_planes) - 1;
-    for (int k = 0; k < per_lane; ++k) {
+    Mask128 used{{(std::uint64_t(1) << box_planes) - 1, 0}};
+    for (int k = 0; k < per; ++k) {
         const int w = l + k * lanes;
-        if (!(live >> w & 1)) continue;
-        for (int e = 0; e < 3; ++e) used |= std::uint64_t(1) << byte(c.corner[w], e);
+        if (!test(live, w)) continue;
+        for (int e = 0; e < 3; ++e)
+            used.word[byte(c.corner[w], e) >> 6] |= std::uint64_t(1) << (byte(c.corner[w], e) & 63);
     }
-    used = __reduce_or_sync(all_lanes, static_cast<unsigned>(used)) |
-           std::uint64_t(__reduce_or_sync(all_lanes, static_cast<unsigned>(used >> 32))) << 32;
-    if (__popcll(used) == planes) return false;
-    auto renumber = [&](int p) { return __popcll(used & ((std::uint64_t(1) << p) - 1)); };
-    float x[per_lane], y[per_lane], z[per_lane];
-    int neighbour[per_lane], to[per_lane];
-    for (int k = 0; k < per_lane; ++k) {
+    for (auto& word : used.word)
+        word = __reduce_or_sync(all_lanes, static_cast<unsigned>(word)) |
+               std::uint64_t(__reduce_or_sync(all_lanes, static_cast<unsigned>(word >> 32))) << 32;
+    const int count = population(used);
+    if (count == planes) return false;
+    auto renumber = [&](int p) {
+        const int below = __popcll(used.word[p >> 6] & ((std::uint64_t(1) << (p & 63)) - 1));
+        return p >= 64 ? __popcll(used.word[0]) + below : below;
+    };
+    float x[per], y[per], z[per];
+    int neighbour[per], to[per];
+    for (int k = 0; k < per; ++k) {
         const int p = l + k * lanes;
-        to[k] = p < planes && used >> p & 1 ? renumber(p) : -1;
+        to[k] = p < planes && test(used, p) ? renumber(p) : -1;
         if (to[k] < 0) continue;
         x[k] = c.nx[p], y[k] = c.ny[p], z[k] = c.nz[p], neighbour[k] = c.neighbour[p];
     }
     __syncwarp(all_lanes);
-    for (int k = 0; k < per_lane; ++k)
+    for (int k = 0; k < per; ++k)
         if (to[k] >= 0) c.nx[to[k]] = x[k], c.ny[to[k]] = y[k], c.nz[to[k]] = z[k], c.neighbour[to[k]] = neighbour[k];
-    for (int k = 0; k < per_lane; ++k) {
+    for (int k = 0; k < per; ++k) {
         const int w = l + k * lanes;
-        if (!(live >> w & 1)) continue;
+        if (!test(live, w)) continue;
         const std::uint32_t corner = c.corner[w];
         c.corner[w] = pack(renumber(byte(corner, 0)), renumber(byte(corner, 1)), renumber(byte(corner, 2)));
     }
     __syncwarp(all_lanes);
-    planes = __popcll(used);
+    planes = count;
     return true;
 }
 
 // Clip by the bisector with a particle at offset d (all lanes pass the same d). Returns ok when the plane does not
 // cut or after the cut is applied. `unit` scales the float normal (Kernel::unit). Used by: Kernel, once per candidate.
-template <bool checked = false>
-__device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, double& radius2, Vec3 d, int neighbour,
+template <bool checked = false, int V>
+__device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, double& radius2, Vec3 d, int neighbour,
                            double unit) {
+    constexpr int per_lane = V / lanes, max_planes = V, max_vertices = V;
     const int l = lane();
     const double offset = 0.5 * dot(d, d);
     // A vertex is cut off when side > 64 eps |d| R, compared in squares.
@@ -223,17 +267,17 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         const double r2 = in_use && !out[k] ? x * x + y * y + z * z : 0.0;
         radius = larger(radius, r2);
     }
-    const std::uint64_t removed = vertex_ballot(out);
-    if (removed == 0) return ok;
+    const Mask<V> removed = vertex_ballot(out);
+    if (empty(removed)) return ok;
     if (planes == max_planes) {
         if constexpr (!checked) return plane_overflow;
-        if (!compact_planes(c, planes, live)) return plane_overflow;
+        if (!compact_planes<V>(c, planes, live)) return plane_overflow;
     }
     __syncwarp(all_lanes);
 
     // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers them.
     const unsigned below = (1u << l) - 1;
-    const std::uint32_t removed_low = half(removed, 0), removed_high = half(removed, 1);
+    [[maybe_unused]] const std::uint32_t removed_low = half(removed, 0), removed_high = half(removed, 1);
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
         if (half(removed, k) == 0) continue;
@@ -245,7 +289,11 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         }
         for (int e = 0; e < 3; ++e) {
             const int u = byte(adjacent, e);
-            const bool crossing = out[k] && !bit(removed_low, removed_high, u);
+            bool crossing;
+            if constexpr (V == 64)
+                crossing = out[k] && !bit(removed_low, removed_high, u);
+            else
+                crossing = out[k] && !test(removed, u);
             const unsigned crossings = __ballot_sync(all_lanes, crossing);
             const int number = created + __popc(crossings & below);
             if (crossing && number < max_vertices)
@@ -253,8 +301,8 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
             created += __popc(crossings);
         }
     }
-    const int in_use = __popcll(live);
-    const int kept = in_use - __popcll(removed);
+    const int in_use = population(live);
+    const int kept = in_use - population(removed);
     // New vertices take slots that were free before the cut.
     if (in_use + created > max_vertices) return vertex_overflow;
     if (kept + created < 4) return degenerate;
@@ -266,10 +314,16 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     const int low_free = lanes - __popc(half(live, 0));
     bool made[per_lane] = {}, past = false;
     int kept_end[per_lane], a[per_lane], b[per_lane];
+    int free_before = 0;  // free slots in the lanes' earlier rounds (V > 64)
     for (int k = 0; k < per_lane; ++k) {
-        if (k > 0 && low_free >= created) break;
+        if constexpr (V > 64) {
+            if (k > 0) free_before += lanes - __popc(half(live, k - 1));
+            if (k > 0 && free_before >= created) break;
+        } else if (k > 0 && low_free >= created) {
+            break;
+        }
         const std::uint32_t free = ~half(live, k);
-        const int s = l + k * lanes, j = (k > 0 ? low_free : 0) + __popc(free & below);
+        const int s = l + k * lanes, j = (V > 64 ? free_before : k > 0 ? low_free : 0) + __popc(free & below);
         if (!(free >> l & 1) || j >= created) continue;
         made[k] = true;
         const std::uint32_t edge = c.crossing[j];
@@ -293,7 +347,7 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
         c.ends[b[k]] = s;
         kept_end[k] = u;
     }
-    const std::uint64_t made_slots = vertex_ballot(made);
+    const Mask<V> made_slots = vertex_ballot(made);
     // The filter's bound needs new vertices on their edges: a kept end within the tolerance outside puts one past it.
     if constexpr (checked)
         if (__any_sync(all_lanes, past)) return degenerate;
@@ -302,7 +356,7 @@ __device__ inline int clip(Polyhedron& c, int& planes, std::uint64_t& live, doub
     // hole edge ends at a.
     for (int k = 0; k < per_lane; ++k)
         if (made[k]) c.adjacent[l + k * lanes] = pack(kept_end[k], c.starts[b[k]], c.ends[a[k]]);
-    live = (live & ~removed) | made_slots;
+    live = replace(live, removed, made_slots);
     if (l == 0) {
         c.nx[plane] = static_cast<float>(d.x * unit);
         c.ny[plane] = static_cast<float>(d.y * unit);
@@ -338,25 +392,34 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
 
 // Whether a particle at offset d (d2 = d.d) lies in the ball of a live vertex, short of `margin` |d| (the vertex ball
 // test of #60): one particle per lane, every lane through every live vertex.
-__device__ inline bool in_vertex_ball(const Polyhedron& c, std::uint64_t live, Vec3 d, double d2, double margin) {
+template <int V>
+__device__ inline bool in_vertex_ball(const PolyhedronOf<V>& c, const Mask<V>& live, Vec3 d, double d2, double margin) {
     const double half = 0.5 * d2 - margin * Kokkos::sqrt(d2);
     bool in = false;
-    for (std::uint64_t m = live; m != 0; m &= m - 1) {
-        const int w = __ffsll(static_cast<long long>(m)) - 1;
-        in |= d.x * c.x[w] + d.y * c.y[w] + d.z * c.z[w] > half;
+    for (int k = 0; k < V / 64; ++k) {
+        std::uint64_t m;
+        if constexpr (V == 64)
+            m = live;
+        else
+            m = live.word[k];
+        for (; m != 0; m &= m - 1) {
+            const int w = 64 * k + __ffsll(static_cast<long long>(m)) - 1;
+            in |= d.x * c.x[w] + d.y * c.y[w] + d.z * c.z[w] > half;
+        }
     }
     return in;
 }
 
 // The Cylinder of the live vertices of c, with all lanes.
-__device__ inline Cylinder cylinder(const Polyhedron& c, std::uint64_t live) {
+template <int V>
+__device__ inline Cylinder cylinder(const PolyhedronOf<V>& c, const Mask<V>& live) {
     const int l = lane();
     int far = -1;
     double mine = -1;
-    for (int k = 0; k < per_lane; ++k) {
+    for (int k = 0; k < V / lanes; ++k) {
         const int w = l + k * lanes;
         const double r2 = c.x[w] * c.x[w] + c.y[w] * c.y[w] + c.z[w] * c.z[w];
-        if (live >> w & 1 && r2 > mine) mine = r2, far = w;
+        if (test(live, w) && r2 > mine) mine = r2, far = w;
     }
     const double most = warp_max(mine);
     const unsigned holders = __ballot_sync(all_lanes, far >= 0 && mine == most);
@@ -365,9 +428,9 @@ __device__ inline Cylinder cylinder(const Polyhedron& c, std::uint64_t live) {
     const double r = Kokkos::sqrt(Kokkos::max(most, 0.0));
     z.u = far >= 0 && r > 0 ? Vec3{c.x[far], c.y[far], c.z[far]} * (1.0 / r) : Vec3{1, 0, 0};
     double high = -1e300, low = -1e300, across = 0;  // low holds the negated minimum
-    for (int k = 0; k < per_lane; ++k) {
+    for (int k = 0; k < V / lanes; ++k) {
         const int w = l + k * lanes;
-        if (!(live >> w & 1)) continue;
+        if (!test(live, w)) continue;
         const Vec3 v{c.x[w], c.y[w], c.z[w]};
         const double along = dot(v, z.u);
         const Vec3 off = v - z.u * along;
@@ -384,10 +447,14 @@ __device__ inline Cylinder cylinder(const Polyhedron& c, std::uint64_t live) {
 }
 
 #if defined(VORONOI_MEASURE)
+// Measurement only: the first 64 slots of a mask (the measured kernel has 64).
+KOKKOS_INLINE_FUNCTION std::uint64_t first_word(std::uint64_t mask) { return mask; }
+KOKKOS_INLINE_FUNCTION std::uint64_t first_word(const Mask128& mask) { return mask.word[0]; }
 // Measurement only: whether the box [lo, hi] comes within margin2 of the ball of some live vertex (plume P1).
-__device__ inline bool meets_a_ball(const Polyhedron& c, std::uint64_t live, const double (&lo)[3],
+template <int V>
+__device__ inline bool meets_a_ball(const PolyhedronOf<V>& c, const Mask<V>& live, const double (&lo)[3],
                                     const double (&hi)[3], double margin2) {
-    for (std::uint64_t m = live; m != 0; m &= m - 1) {
+    for (std::uint64_t m = first_word(live); m != 0; m &= m - 1) {
         const int w = __ffsll(static_cast<long long>(m)) - 1;
         const double v[3] = {c.x[w], c.y[w], c.z[w]};
         double gap2 = 0;
@@ -400,12 +467,13 @@ __device__ inline bool meets_a_ball(const Polyhedron& c, std::uint64_t live, con
     return false;
 }
 // Measurement only: the bounding box of the live vertices (with_balls: of their balls), over the warp (R8).
-__device__ inline void warp_bounds(const Polyhedron& c, std::uint64_t live, bool with_balls, double (&lo)[3],
+template <int V>
+__device__ inline void warp_bounds(const PolyhedronOf<V>& c, const Mask<V>& live, bool with_balls, double (&lo)[3],
                                    double (&hi)[3]) {
     for (int a = 0; a < 3; ++a) lo[a] = hi[a] = -1e300;  // lo holds the negated minimum
-    for (int k = 0; k < per_lane; ++k) {
+    for (int k = 0; k < V / lanes; ++k) {
         const int w = lane() + k * lanes;
-        if (!(live >> w & 1)) continue;
+        if (!test(live, w)) continue;
         const double v[3] = {c.x[w], c.y[w], c.z[w]};
         const double r = with_balls ? Kokkos::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) : 0.0;
         for (int a = 0; a < 3; ++a) {
@@ -419,18 +487,20 @@ __device__ inline void warp_bounds(const Polyhedron& c, std::uint64_t live, bool
     }
 }
 // Measurement only: whether a particle at offset d lies in the ball of some live vertex (it would cut that vertex).
-__device__ inline bool in_a_ball(const Polyhedron& c, std::uint64_t live, double dx, double dy, double dz) {
+template <int V>
+__device__ inline bool in_a_ball(const PolyhedronOf<V>& c, const Mask<V>& live, double dx, double dy, double dz) {
     const double half = 0.5 * (dx * dx + dy * dy + dz * dz);
-    for (std::uint64_t m = live; m != 0; m &= m - 1) {
+    for (std::uint64_t m = first_word(live); m != 0; m &= m - 1) {
         const int w = __ffsll(static_cast<long long>(m)) - 1;
         if (dx * c.x[w] + dy * c.y[w] + dz * c.z[w] > half) return true;
     }
     return false;
 }
 // Measurement only: whether the box [lo, hi] (relative to the generator) meets the ball of some live vertex.
-__device__ inline bool box_meets_a_ball(const Polyhedron& c, std::uint64_t live, const double (&lo)[3],
+template <int V>
+__device__ inline bool box_meets_a_ball(const PolyhedronOf<V>& c, const Mask<V>& live, const double (&lo)[3],
                                         const double (&hi)[3]) {
-    for (std::uint64_t m = live; m != 0; m &= m - 1) {
+    for (std::uint64_t m = first_word(live); m != 0; m &= m - 1) {
         const int w = __ffsll(static_cast<long long>(m)) - 1;
         const double v[3] = {c.x[w], c.y[w], c.z[w]};
         double gap2 = 0;
@@ -451,10 +521,13 @@ enum class Output { faces, rings, volumes };
 
 // Adaptive: walk each cell at its level (CellList::level), else only at the base level and leave
 // uncertified cells to the thread kernel. output: owned face geometry, face rings, or nothing more.
-// cubic: the grid is one cube (Grid::cube()). filtered: build the slots of `list` and skip what cannot cut (#60).
-// Used by: construct_warp.
-template <class MemorySpace, bool adaptive, Output output, bool cubic = false, bool filtered = false>
+// cubic: the grid is one cube (Grid::cube()). filtered: build the slots of `list` and skip what cannot cut (#60);
+// V: vertex and plane slots (big_capacity for filtered cells past 64). Used by: construct_warp.
+template <class MemorySpace, bool adaptive, Output output, bool cubic = false, bool filtered = false,
+          int V = max_vertices>
 struct Kernel {
+    using Cell = PolyhedronOf<V>;
+    static constexpr int per_lane = V / lanes;
     static constexpr bool with_rings = output == Output::rings, with_faces = output != Output::volumes;
     using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
     Grid<MemorySpace> grid;
@@ -473,8 +546,8 @@ struct Kernel {
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
 #if defined(__CUDA_ARCH__)
-        auto* base = static_cast<Polyhedron*>(member.team_shmem().get_shmem(cells_per_block * sizeof(Polyhedron)));
-        Polyhedron& c = base[member.team_rank()];
+        auto* base = static_cast<Cell*>(member.team_shmem().get_shmem(cells_per_block * sizeof(Cell)));
+        Cell& c = base[member.team_rank()];
         if (lane() == 0) c.face_at = c.face_end = 0;
         while (true) {
             int taken = 0;
@@ -495,7 +568,7 @@ struct Kernel {
 
 #if defined(__CUDA_ARCH__)
     // Build cell t (a slot) in polyhedron c, with all lanes of the warp.
-    __device__ __forceinline__ void build(Polyhedron& c, int t) const {
+    __device__ __forceinline__ void build(Cell& c, int t) const {
         const int l = lane();
         const auto& positions = grid.positions;
         const double* box = grid.box.side;
@@ -503,9 +576,9 @@ struct Kernel {
         const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
 
         int planes = 0;
-        std::uint64_t live = 0;
+        Mask<V> live{};
         double radius2 = 3 * half_width * half_width;
-        start_cube(c, half_width, planes, live);
+        start_cube<V>(c, half_width, planes, live);
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
 #if defined(VORONOI_MEASURE)
@@ -560,13 +633,13 @@ struct Kernel {
                 }
 #endif
                 const int before = planes;
-                status = clip<filtered>(c, planes, live, radius2, d, q, unit);
+                status = clip<filtered, V>(c, planes, live, radius2, d, q, unit);
                 ++clipped;
                 cuts += planes > before;
                 if (planes > before) reach = 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f;
 #if defined(VORONOI_MEASURE)
                 m[measure::vertices_peak] =
-                    Kokkos::max(m[measure::vertices_peak], static_cast<long long>(__popcll(live)));
+                    Kokkos::max(m[measure::vertices_peak], static_cast<long long>(population(live)));
 #endif
             }
             buffered = 0;
@@ -586,7 +659,7 @@ struct Kernel {
                 }
                 // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
                 Cylinder bound{};
-                if constexpr (filtered) bound = cylinder(c, live);
+                if constexpr (filtered) bound = cylinder<V>(c, live);
                 ++rings;
                 const int e = first + l;
                 int begin = 0, end = 0, packed = 0;
@@ -661,7 +734,7 @@ struct Kernel {
                     // The ball test loops over the live vertices with every lane, so it runs once all lanes are here.
                     if constexpr (filtered)
                         if (__any_sync(all_lanes, take))
-                            take = in_vertex_ball(c, live, offset, d2, bound.margin) && take;
+                            take = in_vertex_ball<V>(c, live, offset, d2, bound.margin) && take;
                     const unsigned taking = __ballot_sync(all_lanes, take);
 #if defined(VORONOI_MEASURE)
                     if (measuring) {
@@ -707,7 +780,7 @@ struct Kernel {
             bool touches = false;
             for (int k = 0; k < per_lane; ++k) {
                 const int v = l + k * lanes;
-                if (live >> v & 1)
+                if (test(live, v))
                     for (int e = 0; e < 3; ++e) touches |= byte(c.corner[v], e) < box_planes;
             }
             if (__any_sync(all_lanes, touches)) status = uncertified;
@@ -731,14 +804,14 @@ struct Kernel {
             }
         __syncwarp(all_lanes);
         for (int k = 0; k < per_lane; ++k)
-            if (live >> (l + k * lanes) & 1) {
+            if (test(live, l + k * lanes)) {
                 const std::uint32_t corner = c.corner[l + k * lanes];
                 for (int e = 0; e < 3; ++e)
                     atomicMin(&least[byte(corner, e)], std::uint32_t(c.neighbour[byte(corner, (e + 2) % 3)]));
             }
         __syncwarp(all_lanes);
         for (int k = 0; k < per_lane; ++k)
-            if (live >> (l + k * lanes) & 1) {
+            if (test(live, l + k * lanes)) {
                 const std::uint32_t corner = c.corner[l + k * lanes];
                 for (int e = 0; e < 3; ++e)
                     if (std::uint32_t(c.neighbour[byte(corner, (e + 2) % 3)]) == least[byte(corner, e)])
@@ -769,7 +842,7 @@ struct Kernel {
             int vertex = start, steps = 0;
             do {
                 const int at = find_byte(c.corner[vertex], plane);
-                if (at == 3 || ++steps > max_vertices) {
+                if (at == 3 || ++steps > V) {
                     broken = true;
                     break;
                 }
@@ -844,7 +917,7 @@ struct Kernel {
             // A face's ring follows those of the owned faces with smaller neighbours; a rounded cell can have two
             // faces toward one neighbour (#48), which go in lane order.
             auto* const face_neighbour = reinterpret_cast<std::uint32_t*>(c.side);
-            auto* const face_need = face_neighbour + max_planes;
+            auto* const face_need = face_neighbour + V;
             for (int m = 0; m < per_lane; ++m)
                 if (m < owned_here) {
                     face_neighbour[offset + m] = std::uint32_t(c.neighbour[owned_plane[m]]);
@@ -926,7 +999,7 @@ struct Kernel {
                 m[measure::clipped] = clipped;
                 m[measure::cuts] = cuts;
                 m[measure::batches] = rings;
-                m[measure::vertices_end] = __popcll(live);
+                m[measure::vertices_end] = population(live);
                 m[measure::warp_status] = status;
                 m[measure::cycles] = clock64() - started;
                 for (int k = 0; k < measure::count; ++k) out.measure(id, k) = m[k];
@@ -941,6 +1014,40 @@ struct Kernel {
 #endif  // KOKKOS_ENABLE_CUDA
 
 }  // namespace warp
+
+namespace detail {
+
+// The slots of the cells for the filtered warp kernel (#60): deferred ones, with `uncertified` too after a walk of the
+// base level alone (levels false). Used by: construct_warp.
+template <class ExecSpace>
+Kokkos::View<int*, typename ExecSpace::memory_space> heavy_slots(const ExecSpace& exec,
+                                                                 const Grid<typename ExecSpace::memory_space>& grid,
+                                                                 const Cells<typename ExecSpace::memory_space>& out,
+                                                                 bool levels) {
+    const auto status = out.status;
+    const auto order = grid.order;
+    auto heavy = KOKKOS_LAMBDA(int t) {
+        const int s = status(order(t));
+        return s == deferred || (!levels && s == uncertified);
+    };
+    int count = 0;
+    Kokkos::parallel_reduce(
+        "shell_voronoi::count_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+        KOKKOS_LAMBDA(int t, int& sum) { sum += heavy(t); }, count);
+    Kokkos::View<int*, typename ExecSpace::memory_space> list(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("shell_warp_heavy")), count);
+    if (count == 0) return list;
+    Kokkos::parallel_scan(
+        "shell_voronoi::list_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+        KOKKOS_LAMBDA(int t, int& at, bool last) {
+            if (!heavy(t)) return;
+            if (last) list(at) = t;
+            ++at;
+        });
+    return list;
+}
+
+}  // namespace detail
 
 // Build every cell with one warp per cell, then the needle cells with the filtered warp kernel (#60), then rebuild the
 // ones given up with the per-thread kernel (finish_failed), and those still failing exactly; with face rings if `out`
@@ -966,6 +1073,9 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                            Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
             policy(exec, blocks, warp::cells_per_block, warp::lanes);
         policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron)));
+        auto big_policy = policy;
+        big_policy.set_scratch_size(
+            0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::PolyhedronOf<warp::big_capacity>)));
         // Near-uniform input (every particle at the base level) takes the kernel without level changes.
         int off_base = 0;
         const auto level = grid.level;
@@ -974,8 +1084,6 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             "shell_voronoi::off_base_levels", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
             KOKKOS_LAMBDA(int t, int& count) { count += level(t) != base; }, off_base);
         constexpr int budget = heavy_clips;
-        const auto status = out.status;
-        const auto order = grid.order;
         auto run = [&](auto output) {
             constexpr warp::Output o = decltype(output)::value;
             using warp::Kernel;
@@ -999,36 +1107,29 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     Kernel<Memory, false, o>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
             // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
             // the filtered kernel, over a list of their slots.
-            const bool levels = off_base > 0;
-            auto heavy = KOKKOS_LAMBDA(int t) {
-                const int s = status(order(t));
-                return s == deferred || (!levels && s == uncertified);
-            };
-            int heavy_count = 0;
-            Kokkos::parallel_reduce(
-                "shell_voronoi::count_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-                KOKKOS_LAMBDA(int t, int& sum) { sum += heavy(t); }, heavy_count);
-            if (heavy_count == 0) return;
-            Kokkos::View<int*, Memory> list(Kokkos::view_alloc(Kokkos::WithoutInitializing, "shell_warp_heavy"),
-                                            heavy_count);
-            Kokkos::parallel_scan(
-                "shell_voronoi::list_heavy", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-                KOKKOS_LAMBDA(int t, int& at, bool last) {
-                    if (!heavy(t)) return;
-                    if (last) list(at) = t;
-                    ++at;
-                });
+            const auto list = detail::heavy_slots(exec, grid, out, off_base > 0);
+            if (list.extent(0) == 0) return;
             Kokkos::deep_copy(exec, next_cell, 0);
             if (cube && o != warp::Output::rings)
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp_filtered", policy,
-                    Kernel<Memory, true, o, true, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget,
-                                                        list});
+                Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
+                                     Kernel<Memory, true, o, true, true>{grid, out, half_width, stencil, next_cell,
+                                                                         unit, unit2, budget, list});
             else
-                Kokkos::parallel_for(
-                    "shell_voronoi::construct_warp_filtered", policy,
-                    Kernel<Memory, true, o, false, true>{grid, out, half_width, stencil, next_cell, unit, unit2, budget,
-                                                         list});
+                Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
+                                     Kernel<Memory, true, o, false, true>{grid, out, half_width, stencil, next_cell,
+                                                                          unit, unit2, budget, list});
+            // Those past 64 vertices or planes once more, with big_capacity slots.
+            const auto big = detail::heavy_slots(exec, grid, out, true);
+            if (big.extent(0) == 0) return;
+            Kokkos::deep_copy(exec, next_cell, 0);
+            if (cube && o != warp::Output::rings)
+                Kokkos::parallel_for("shell_voronoi::construct_warp_filtered_big", big_policy,
+                                     Kernel<Memory, true, o, true, true, warp::big_capacity>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, big});
+            else
+                Kokkos::parallel_for("shell_voronoi::construct_warp_filtered_big", big_policy,
+                                     Kernel<Memory, true, o, false, true, warp::big_capacity>{
+                                         grid, out, half_width, stencil, next_cell, unit, unit2, budget, big});
         };
         using Faces = std::integral_constant<warp::Output, warp::Output::faces>;
         using Rings = std::integral_constant<warp::Output, warp::Output::rings>;

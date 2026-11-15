@@ -289,7 +289,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             const bool overflow = before == vertex_overflow || before == plane_overflow;
             if ((pass == Pass::failed && (before == ok || before == face_overflow || before == deferred)) ||
                 (pass == Pass::overflowed && !overflow) ||
-                (pass == Pass::uncertain && (before == ok || before == face_overflow || overflow || before == deferred)) ||
+                (pass == Pass::uncertain &&
+                 (before == ok || before == face_overflow || overflow || before == deferred)) ||
                 (pass == Pass::deferred && before != deferred))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
