@@ -158,7 +158,7 @@ B/cell) and may be under-sampled.
 `bench/libraries/oracle_check.cpp` compares each code's volumes with the brute-force oracle of `src/test/oracle.hpp`
 (exact 128-bit predicates and long-double clipping against all periodic images; it shares no code with voronoi-cpp) on
 1000 cells drawn with a fixed seed from each point file, and checks all n cells for missing or non-positive volumes and
-the sum against the box (`bench/libraries/oracle_cpu.sh`; jobs 32269164 and 32360840; oracle cost 60 s at 2.1M and
+the sum against the box (`bench/libraries/oracle_cpu.sh`; job 32269164, and for the final rows a one-core run on the login node, `accuracy-main-login.jsonl`; oracle cost 60 s at 2.1M and
 500 s at 16.8M on 72 cores, jobs 32225958 and 32234618).
 
 ## Reproducing
