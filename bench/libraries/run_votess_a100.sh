@@ -29,7 +29,7 @@ clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temper
 nvidia-smi -L >&2
 "$V/install/acpp/bin/acpp-info" -l >&2
 clocks
-declare -A shell=([bluenoise]=4 [jittered]=4 [uniform]=4 [clustered]=8 [halo]=8)
+declare -A shell=([bluenoise]=4 [jittered]=4 [uniform]=4 [clustered]=8 [halo]=8 [cosmicweb]=8 [fccsolid]=4 [surface]=28)
 for n in ${SIZES:-2097152}; do
     for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
         "$V/install/bin/votess_acpp" "$data/points/${kind}_${n}.pts" --device=gpu --shell=${shell[$kind]} --repeats=3 \

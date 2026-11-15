@@ -31,10 +31,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS = os.path.join(ROOT, "bench", "libraries", "results")
 INPUTS = ["jittered", "bluenoise", "uniform", "clustered", "halo"]
 SIZES = [2097152, 16777216]
-SIZE_NAME = {2097152: "128³", 16777216: "256³"}
-# The voronoi-cpp commit of the tables (main b2faee8 + this benchmark); records of earlier commits serve only as the
-# same-GPU references of the other libraries' jobs (same_gpu_table).
-OURS = "ad62997"
+SIZE_NAME = {2097152: "128³", 16777216: "256³", 1048576: "2²⁰", 8388608: "2²³"}
+# The application inputs (docs/measurements.md, Inputs), in their own tables: the fcc solid has 4 l³ atoms, so it runs
+# at l = 64 and 128 unit cells (2²⁰ and 2²³ atoms) rather than 128³ and 256³.
+APPLICATION = [(2097152, "cosmicweb"), (16777216, "cosmicweb"), (2097152, "surface"), (16777216, "surface"),
+               (1048576, "fccsolid"), (8388608, "fccsolid")]
+# The voronoi-cpp commit of the tables (close-gaps: volumes-only output, parallel host sort, dynamic chunks); records of
+# earlier commits serve only as the same-GPU references of the other libraries' jobs (same_gpu_table).
+OURS = "77055a4"
+OURS_APPLICATION = "631af46"  # main c42c230 + the application inputs: our rows of those inputs only
 
 
 def load_records():
@@ -115,7 +120,8 @@ def readme_choice(lib, variant, inp, n):
         variant = variant[variant.rfind("--K="):]
     for name, table in README_SETTING.items():
         if lib.startswith(name):
-            cls = inp if inp in ("bluenoise", "jittered") else ("white" if n == SIZES[0] else "white_256")
+            cls = {"fccsolid": "jittered"}.get(inp, inp)  # a thermal crystal is a perturbed grid
+            cls = cls if cls in ("bluenoise", "jittered") else ("white" if n == SIZES[0] else "white_256")
             return table[cls] in variant
     return True
 
@@ -154,9 +160,10 @@ def rows_of(summary, phase, which):
                   key=lambda k: (not gpu(k), -k[3], k[0], k[1]))
 
 
-def rate_table(summary, phase, which, readme_only=False):
-    rows = rows_of(summary, phase, which)
-    cols = [(n, i) for n in SIZES for i in INPUTS
+def rate_table(summary, phase, which, readme_only=False, columns=None):
+    rows = [k for k in rows_of(summary, phase, which)
+            if any(g[0] == k and (g[3], g[2]) in (columns or [(n, i) for n in SIZES for i in INPUTS]) for g in summary)]
+    cols = [(n, i) for n, i in (columns or [(n, i) for n in SIZES for i in INPUTS])
             if any(g[1] == phase and g[2] == i and g[3] == n and group(s["record"]) == which for g, s in summary.items())]
     if not rows:
         return "(none)"
@@ -169,11 +176,17 @@ def rate_table(summary, phase, which, readme_only=False):
             if s and readme_only and not readme_choice(k[0], k[1], i, n):
                 s = None
             cells.append(fmt(s))
-        b = [summary[(k, phase, i, SIZES[0])]["bytes_per_cell"] for i in INPUTS
-             if (k, phase, i, SIZES[0]) in summary and summary[(k, phase, i, SIZES[0])]["bytes_per_cell"] is not None]
+        small = [(n, i) for n, i in cols if n <= SIZES[0]]
+        b = [summary[(k, phase, i, n)]["bytes_per_cell"] for n, i in small
+             if (k, phase, i, n) in summary and summary[(k, phase, i, n)]["bytes_per_cell"] is not None]
         bpc = f"{max(b):.0f}" if b else ""
         lines.append(f"| {k[0]} | {k[1]} | {k[2]} | {k[3]} | " + " | ".join(cells) + f" | {bpc} | {breaks(summary, k)} |")
     return "\n".join(lines)
+
+
+def order(inp):
+    names = INPUTS + [i for _, i in APPLICATION]
+    return names.index(inp) if inp in names else len(names)
 
 
 def same_gpu_table(records):
@@ -187,7 +200,7 @@ def same_gpu_table(records):
     lines = ["| job file | library | variant | input | n | M cells/s | voronoi-cpp warp, same job (commit) | ratio |",
              "|---|---|---|---|---|---|---|---|"]
     version = {r["file"]: r["version"] for r in records if r["library"] == "voronoi-cpp"}
-    for (f, k, i, n), m in sorted(med.items(), key=lambda e: (e[0][0], e[0][1], INPUTS.index(e[0][2]), e[0][3])):
+    for (f, k, i, n), m in sorted(med.items(), key=lambda e: (e[0][0], e[0][1], order(e[0][2]), e[0][3])):
         if k[0] == "voronoi-cpp" or group({"outputs": next(r["outputs"] for r in records if key(r) == k)}) == "topology":
             continue
         ref = [v for (f2, k2, i2, n2), v in med.items()
@@ -274,8 +287,9 @@ FIGURE_GPU_FULL = [
     ("votess", "tesellate + faces", "A100", 1, "votess + faces (ours)"),
 ]
 FIGURE_GPU_VOLUMES = [
-    ("voronoi-cpp", "warp clipping rebuild, host to host, volumes", "A100", 1,
-     "voronoi-cpp, host to host, volumes + centroids out"),
+    ("voronoi-cpp", "volumes and centroids only, host to host$", "A100", 1,
+     "voronoi-cpp, volumes only, host to host"),
+    ("voronoi-cpp", "volumes and centroids only (", "A100", 1, "voronoi-cpp, volumes only, device"),
     ("Basselin", "", "A100", 1, "Basselin et al. 2021"),
     ("Liu et al.", "tet-centric", "A100", 1, "Liu et al. 2022 (float)"),
     ("VoroGPU", "", "A100", 1, "Ray et al. 2018 (float)"),
@@ -318,7 +332,8 @@ def curve(summary, lib, variant, device, threads, n, phase="build"):
     got = {}
     for g, s in summary.items():
         k = g[0]
-        if g[1] == phase and g[3] == n and k[0].startswith(lib) and k[1].startswith(variant) and \
+        same = k[1] == variant[:-1] if variant.endswith("$") else k[1].startswith(variant)  # "$": whole variant
+        if g[1] == phase and g[3] == n and k[0].startswith(lib) and same and \
                 k[2].startswith(device) and k[3] == threads and readme_choice(k[0], k[1], g[2], n):
             got[g[2]] = s
     return got
@@ -397,7 +412,11 @@ def figure(summary, pub, path):
 
 def main():
     records, extra = load_records()
-    summary = summarise([r for r in records if r["library"] != "voronoi-cpp" or r["version"] == OURS])
+    app = {i for _, i in APPLICATION}
+    # Our application rows come from our own jobs; the same-job references in the chains count only in "Same GPU".
+    summary = summarise([r for r in records if r["library"] != "voronoi-cpp"
+                         or (r["version"] == OURS_APPLICATION and r["file"].startswith("voronoi-cpp-a100")
+                             if r["input"] in app else r["version"] == OURS)])
     pub = published()
     acc = accuracy_rows()
     text = ["# Library benchmark: tables generated by scripts/library_benchmark.py (do not edit)", "",
@@ -415,6 +434,12 @@ def main():
             "## Topology only (Delaunay tetrahedra or neighbour lists)", "",
             rate_table(summary, "build", "topology"), "",
             "## Moving-mesh step", "", rate_table(summary, "step", "full"), "",
+            "## Application inputs: cosmic web, surface, fcc solid (full cells; volumes only, README setting; "
+            "topology; moving-mesh step)", "",
+            rate_table(summary, "build", "full", columns=APPLICATION), "",
+            rate_table(summary, "build", "volumes", readme_only=True, columns=APPLICATION), "",
+            rate_table(summary, "build", "topology", columns=APPLICATION), "",
+            rate_table(summary, "step", "full", columns=APPLICATION), "",
             "## Same GPU: each A100 library against voronoi-cpp's warp rebuild in the same job", "",
             same_gpu_table(records), "",
             "## Setup per row", "", provenance_table(summary), "",

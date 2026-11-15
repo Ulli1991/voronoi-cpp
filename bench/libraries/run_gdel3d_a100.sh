@@ -24,8 +24,10 @@ clocks() { nvidia-smi --query-gpu=name,clocks.sm,clocks.max.sm,clocks.mem,temper
 nvidia-smi -L >&2
 clocks
 for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
-    "$bin" "$data/points/${kind}_2097152.pts" --repeats=3 --volumes="$data/volumes/gdel3d-a100_${kind}_2097152.f64" "$@" \
-        || echo "# gdel3d ${kind} 2097152 failed: exit $?" >&2
+    n=2097152
+    [ "$kind" = fccsolid ] && n=1048576  # 4 l³ atoms: l = 64
+    "$bin" "$data/points/${kind}_${n}.pts" --repeats=3 --volumes="$data/volumes/gdel3d-a100_${kind}_${n}.f64" "$@" \
+        || echo "# gdel3d ${kind} ${n} failed: exit $?" >&2
     clocks
 done
 if [ -z "${SKIP_16M:-}" ]; then

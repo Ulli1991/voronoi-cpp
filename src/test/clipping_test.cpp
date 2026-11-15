@@ -1,5 +1,6 @@
 // Full rebuild by clipping on jittered, random, lattice, clustered and halo points: certified cells that fill the box with
-// consistent faces; thread, warp and exact kernels agree. Exercises shell_voronoi::construct / construct_warp.
+// consistent faces; thread, warp and exact kernels agree; volumes_and_centroids gives the full rebuild's bits.
+// Exercises shell_voronoi::construct / construct_warp / volumes_and_centroids.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -87,6 +88,26 @@ int main(int argc, char** argv) {
                                           " kernel: NaN and infinite particles are never candidates (" +
                                           std::to_string(differ) + " cells differ)");
         }
+    }
+    // Volumes and centroids only (volumes_and_centroids): the bits of a full rebuild's volumes and centroids.
+    for (const std::string kind : {"jittered", "clustered", "halo"}) {
+        const int m = 32 * 32 * 32;
+        const Positions x = to_device(make_points(kind, m));
+        neighbor_search::CellList<Exec> list;
+        neighbor_search::configure(list, m, Box{}, std::cbrt(1.0 / m));
+        neighbor_search::build(exec, list, x);
+        shell_voronoi::Cells<Memory> full(m, false);
+        shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(list), full);
+        Kokkos::View<double*, Memory> volume("volume", m);
+        Kokkos::View<double* [3], Memory> centroid("centroid", m);
+        shell_voronoi::volumes_and_centroids(exec, Box{}, x, volume, centroid);
+        const auto v0 = to_host(full.volume), v1 = to_host(volume);
+        const auto c0 = to_host(full.centroid), c1 = to_host(centroid);
+        int differ = 0;
+        for (int i = 0; i < m; ++i)
+            differ += v0(i) != v1(i) || c0(i, 0) != c1(i, 0) || c0(i, 1) != c1(i, 1) || c0(i, 2) != c1(i, 2);
+        check.expect(differ == 0, kind + ": volumes and centroids only, bits of the full rebuild (" +
+                                      std::to_string(differ) + " of 32768 cells differ)");
     }
     return check.failed() != 0;
 }

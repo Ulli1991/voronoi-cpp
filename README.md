@@ -1,6 +1,6 @@
 # voronoi-cpp
 
-A C++ library that builds exact Voronoi meshes of moving particles on GPUs. You hand it particle positions in a periodic box and get back the faces, cell volumes and centroids a finite-volume code needs. When the particles move, it repairs the mesh instead of rebuilding it, and the result stays exact. It is written in Kokkos: CUDA (validated on an A100 40 GB), plus OpenMP and Serial builds that run the same code for checks. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
+A C++ library that builds exact Voronoi meshes, and their dual Delaunay triangulations, of static or moving particles on GPUs. You hand it particle positions in a periodic box and get back the cells: volumes, centroids, and faces with their neighbours, area vectors and centroids. When the particles move, it repairs the mesh instead of rebuilding it, and the result stays exact. It is written in Kokkos: CUDA (validated on an A100 40 GB), plus OpenMP and Serial builds that run the same code for checks. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
 
 The topology is exact, and so is the geometry up to rounding in every box tested, except for two fuzz cases not yet explained ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); see [Limitations](#limitations-and-open-items).
 
@@ -9,6 +9,30 @@ The finite-volume hydro is a separate code, [luna-cpp](https://github.com/Ulli19
 The library will be renamed **kikkou** (亀甲, kikkō, the tortoise-shell pattern), with the namespace `kikkou::`, once the open work has landed.
 
 BSD 3-Clause, see [LICENSE](LICENSE).
+
+## What it computes
+
+Every path takes positions in a periodic box, snaps them to a grid of 2³⁰ steps across the longest side and decides
+topology with exact predicates. Rates are on one A100 at 1305 MHz, double, jittered input, from the measured rows
+under [Measured performance](#measured-performance); B/cell is the peak GPU memory per cell.
+
+| Path (API) | Returns | Topology exact? | Rate, M cells/s; B/cell | For |
+|---|---|---|---|---|
+| Full rebuild: `voronoi::Mesh<3>::rebuild(x)`, or the first `update(x)` | per cell `volume()`, `centroid()` (after `update_cells()`), face list `cell_face_start()` / `cell_face()`; per face `owner()`, `neighbour()`, `area()` (vector), `face_centroid()`; the Delaunay tetrahedra (`tetrahedra()`, an internal accessor) | yes: clipping, then an exact check of every tetrahedron, exact rebuild where it fails | 25.3 (128³, the exact start: clipping with rings + tetrahedra); 1951 | a Voronoi or Delaunay mesh of a point set: mesh generation, neighbour graphs, geometry |
+| Clipping rebuild alone: `shell_voronoi::construct_warp` into `shell_voronoi::Cells` | per cell status, volume, centroid, face count; per owned face neighbour, area vector, centroid | certified cells (no particle within twice the cell's radius left uncut), rounded cuts; no exact check of the topology afterwards ([#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)) | 42.6 (128³); 701 | cells of a static point set when faces are wanted and no persistent mesh |
+| Moving step: `Mesh<3>::update(x)` + `update_cells()` | the same as the full rebuild, repaired by exact flips; face numbers kept where no flip touched them | yes | 161 at 0.03 mean spacings per step (128³); 1979 | moving meshes: particles that move a little each step (moving-mesh hydro such as [luna-cpp](https://github.com/Ulli1991/luna-cpp), Lagrangian particle methods) |
+| Volumes only: `shell_voronoi::volumes_and_centroids(exec, box, x, volume, centroid)` | per cell volume and centroid, bit-identical to the clipping rebuild's | certified cells, as the clipping rebuild | 43.1 (128³, device to device, cell list included); 101 | density estimates (1 / volume), Lloyd relaxation and centroidal Voronoi tessellations, molecular-dynamics and point-cloud analysis |
+| 2D: `voronoi::Mesh<2>` | the same as `Mesh<3>` on triangles (edges as faces, areas as volumes) | yes | build 100, step 765 (2²⁰ cells, 0.03 spacings); 537–574 | 2D meshes and particle sets |
+| 1D: `voronoi::Mesh<1>` | sorted cells: lengths, centroids, the two faces per cell | yes | 18,905 per moving step (2²⁰ cells, 1095 MHz, older code) | 1D tests and particle methods; periodic ends or walls (`voronoi::Ends`) |
+
+Faces cost most of the memory: a 3D cell has about 16 faces (15.9 measured; each stored once, 8 per cell), so when faces are not
+needed, `volumes_and_centroids` takes 101 B/cell against 671 for the clipping rebuild with faces, both measured
+with the cell list in the library benchmark.
+
+Not available yet: weighted (power, Laguerre) diagrams; non-periodic boxes in 2D and 3D (only periodic; 1D has walls);
+face velocities (the caller computes them from the motion); cells larger than the certification rule allows (about 6
+or more particles across the shortest side, see below). The fast warp kernel is CUDA only; other backends (OpenMP,
+Serial, HIP) run the per-thread kernel, the same cells.
 
 ## Install and build
 
@@ -74,6 +98,7 @@ What a caller can rely on:
 - Faces are numbered 0 .. `faces()` − 1 after every update. In 3D a face keeps its number from one update to the next while no flip touches the tetrahedron that represents it; a new face takes a freed number, and an update with many flips (more than 1/16 of the tetrahedra created), a build or a re-sort numbers every face again ([#53](https://github.com/Ulli1991/voronoi-cpp/issues/53)). With `Layout::owner_faces` the numbers go by owner, as before.
 - `clip(x, cells)` rebuilds the listed cells by clipping, independent of the persistent mesh, and returns each face once (a local mode for substeps of active cells). It builds exact cells.
 - `rebuild(x)` builds the exact mesh from scratch. `scratch(bytes)` lends device memory between updates.
+- Volumes and centroids only, without a mesh: `shell_voronoi::volumes_and_centroids(exec, box, x, volume, centroid)` (`shell_voronoi_warp.hpp`) fills `volume(i)` and `centroid(i, a)` (relative to particle i) for every particle of `x`, snapped to the box's grid as above. It is the clipping rebuild with no faces, face counts or rings recorded (`shell_voronoi::Cells::volumes_only(n)` for the arrays alone), with the same certification and fallbacks; it throws if a cell is left unbuilt. Its volumes and centroids are bit-identical to a full rebuild's, at 101 B/cell on the device instead of 671.
 - `set_layout(voronoi::Layout)` (3D, all off by default) keeps the memory order on long moving runs ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)). `every = k` re-sorts the cells along `curve` (Hilbert by default; Morton, Moore, Gray-coded Morton, row-major, reverse Cuthill-McKee) every k updates and at every build, the tetrahedra and faces after them; `far` re-sorts when that share of faces joins cells over 64 ids apart. A re-sort renumbers the cells: when `Report::resorted` is set, cell i is the particle the caller passed as `permutation()(i)`, and the caller renumbers every per-particle array it keeps, positions too, before the next update (`permute(view)` does it). Each particle keeps its neighbours; its geometry agrees to rounding (1e-14), not to the bit. `owner_faces` numbers the faces by owner (`owned_start()(i)` is cell i's first), `owner_bit` sets bit 31 in a list entry whose cell does not own the face (`Mesh::list_face(e)`, `Mesh::list_owned(e)`); neither changes a bit of the geometry. Together they make luna-cpp's hydro 16 % faster on moving Sedov 128³ and cost the mesh 2.3 ms a step and 168 B/cell: +1 % a whole step. `float_centroids` stores the face centroids as float (`face_centroid32()`, relative to the owner; `face_centroid()` is then empty): 44 instead of 56 B a face, about 200 B/cell less moved per step and 98 B/cell less memory at 128³; areas, volumes and topology keep their bits, cell centroids move by under 1e-8 spacings ([measurements](docs/measurements.md), Float face centroids).
 - The dimension is a template parameter, `voronoi::Mesh<D, Exec>` with `exact_predicates::BoxN<D>`; `Box` is `BoxN<3>` (research_notes/dimension_design_2026-11-02.md).
 - `voronoi::Mesh<2>` has the contract of `Mesh<3>` on triangles (`voronoi_mesh_2d.hpp`), with two differences. `volume()` is current after `update_cells()` only. There are always exactly 3n faces, numbered for good: a flip gives its face new particles, and a face can have zero length on a lattice. A repaired mesh equals a fresh build bit for bit.
@@ -161,23 +186,25 @@ Four points exactly on one circle: rounded arithmetic gives opposite answers in 
 
 ## Measured performance
 
-One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). Every change tried since 2026-11-12, with its measured effect and why it was kept or dropped, is in [docs/tried.md](docs/tried.md). The rebuild rows and the 128³ exact start are the lean cut of 2026-11-13 (1305 MHz, 128³ and 256³); the step rows, at 128³ and 256³, are the incremental face numbering and ring re-walk of 2026-11-12 (`step-bytes`, 1305 MHz). The 256³ exact start is the code just before the fixes of #29, #30, #35, #36 and #45, at 1095 MHz; the fixes cost moving steps 2 to 5 % and rebuilds nothing.
+One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Jobs, commits and further setup are in [docs/measurements.md](docs/measurements.md). Every change tried since 2026-11-12, with its measured effect and why it was kept or dropped, is in [docs/tried.md](docs/tried.md). The rebuild rows are the lean cut of 2026-11-13 (1305 MHz, 128³ and 256³), the uniform, clustered and halo rebuilds with the hard-cell change of 2026-11-15; the step rows, at 128³ and 256³, are the incremental face numbering and ring re-walk of 2026-11-12 (`step-bytes`, 1305 MHz); the exact start is `start-fast` of 2026-11-15 (1305 MHz, 128³ and 256³).
 
 | M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
 |---|---|---|
 | Full rebuild (warp clipping), jittered | 42.6 | 42.8 |
-| Full rebuild, uniform random | 22.0 | 22.4 |
-| Full rebuild, clustered (Gaussian blobs, ~1:500) | 17.0 | 18.5 |
-| Full rebuild, halo (1:10⁴ core to edge) | 15.5 | 17.9 |
+| Full rebuild, uniform random | 22.2 | 22.5 |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | 17.3 | 18.6 |
+| Full rebuild, halo (1:10⁴ core to edge) | 16.3 | 18.0 |
 | Full rebuild, lattice / wave | 55.1 / 40.9 | 57.7 / 41.0 |
-| Exact start (warp with rings + `tet_start::build`), jittered | 18.6 | 11.7 |
+| Exact start (warp with rings + `tet_start::build`), jittered / blue noise | 25.3 / 23.1 | 22.2 / 20.6 |
+| Exact start, uniform / clustered / halo | 12.3 / 10.3 / 11.9 | 12.6 / 12.5 / 12.1 |
+| Exact start, lattice / wave | 8.0 / 5.0 | 8.4 / 5.1 |
 | Moving-mesh update, 0.03 spacings per step | 223 | 318 (215 with `update_cells()`) |
 | Moving-mesh update, 0.1 spacings per step | 130 | 209 (151 with `update_cells()`) |
 | Moving-mesh update, 0.3 spacings per step | 65.9 | 110 (85.6 with `update_cells()`) |
 | `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 559 / 440 / 432 | |
 | Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | 161 / 99.3 / 57.2 | |
 
-Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) are described in the measurements file.
+Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) and the three application inputs of the library benchmark (cosmic web: Zel'dovich positions of a CDM field; fcc solid: a thermal crystal near melting; surface: points on closed shells and tori) are described in the measurements file.
 
 The step kernels of 2026-11-12 (register limits on `faces` and `screen`, warp-aggregated counters, a thread per edge in `dirty_faces`, one host wait per flip round) made the step 5.4 / 11.0 / 12.8 % faster at 0.03 / 0.1 / 0.3 spacings at 128³ (6.3 / 9.3 / 15.0 % at 256³) with the same bits and arrays. The step at 0.03 now runs at 47 % of what its memory traffic allows on the A100 (434 M cells/s with every kernel at 80 % of peak bandwidth; [measure_2026-11-12.md](docs/measure_2026-11-12.md)). Keeping the face numbers of faces whose tetrahedron no flip touched ([#53](https://github.com/Ulli1991/voronoi-cpp/issues/53)) and walking each changed face ring once then cut the step's memory traffic from 2717 to 2392 B/cell at 0.03 spacings (4292 to 4133 at 0.1) and made it 8.4 / 2.8 / 3.5 % faster at 0.03 / 0.1 / 0.3 spacings at 128³ (13.4 / 7.2 / 1.5 % at 256³), with the same geometry bits and a lower memory peak ([docs/measurements.md](docs/measurements.md)).
 
@@ -187,12 +214,17 @@ A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilt at the cube's rate bef
 
 The lean cut (2026-11-13) made the rebuild 10 to 15 % faster than main 6ead543 on all six inputs at 128³ and 256³, and the exact start 6 % on jittered input, with the same tetrahedra, volumes, centroids and per-cell lists. It needed canonical face rings, which cost under 1 %: a new vertex goes into the lowest free slot, built by the lane that owns it, without a stack of free slots; the starting cube is set by formula; the candidate sort and the side test have no branches. That is 7 to 8 % fewer warp instructions per cell (9611 to 8802 on jittered input, 15128 to 14020 on uniform). The kernel still waits on the latency of each cut and on instruction fetch, so a leaner cut is not enough ([measurements.md](docs/measurements.md#canonical-rings-and-a-lean-cut-2026-11-13)). Fewer clips are not enough either (2026-11-15): vertex balls halve the clips on unstructured input with the same cuts and the same time, and clipping by k-nearest lists (k = 24, 32, 48, and hybrids with the walk) is 4 to 55 % slower than the walk on all six inputs at 128³ and 256³, with the same mesh. The cuts, about one per face, are the cost; a several times faster rebuild needs a cheaper cut or no clipping ([measurements.md](docs/measurements.md#knn-first-clipping-hybrids-and-a-vertex-ball-filter-2026-11-15)).
 
+Clustered and halo input (2026-11-15) are slower than uniform input because of more clips per cell (50.7 and 53.6 against 48.0) and the few cells the warp kernel gives up (68 and 261 of 2.1M, more than 64 planes or vertices), not because of a tail of slow cells: persistent warps take cells from a counter, and the slowest 1 % of cells hold 2 to 4 % of the warp's cycles. Those few cells used to be built twice more on one thread each, first at the thread kernel's usual capacities, which they overflow again; they now go straight to its big cells. That made the halo rebuild 5.3 % faster at 128³ (clustered and uniform 1.2 %, 0 to 0.7 % at 256³) with the same bits. A queue of hard cells, cells on the host, and larger warp cells were measured or ruled out ([tried.md](docs/tried.md), [measurements.md](docs/measurements.md#hard-cells-on-clustered-and-halo-input-and-49-2026-11-15)).
+
+The exact start of 2026-11-15 (`start-fast`) builds the same arrays as main c42c230, entry for entry, 1.07 to 1.74× faster on all seven inputs at 128³ and 256³ (jittered 18.6 → 25.3 and 12.7 → 22.2 M cells/s; blue noise 18.6 → 23.1 and 13.6 → 20.6). `tet_start::build` alone, without the clipping, is 2.1× faster at 128³ and 2.8× at 256³ on jittered input. The assembly reads the clipping's ring blocks in place with one thread per ring slot, tetrahedron or face (main ran one per face and copied every ring first), the check decides by double filters and sends only undecided tetrahedra to the exact predicates, and the round after a partial re-clip, which most inputs need at 256³, looks up only around the re-clipped cells ([#59](https://github.com/Ulli1991/voronoi-cpp/issues/59)). The clipping, unchanged (with rings, and on lattice and wave the exact re-clip of every cell), is now 60 to 90 % of the start. The start's memory peak through `Mesh::update` is main's (1955 B/cell at 256³ jittered). Kernel by kernel: [measurements.md](docs/measurements.md#the-exact-start-assembly-from-the-ring-blocks-and-an-incremental-patch-round-2026-11-15).
+
 ### Against other libraries
 
 Every public Voronoi and Delaunay code we could build on Raven, on the same point files (our generators, plus blue
 noise made by Lloyd iterations as in Ray et al. 2018 and Basselin et al. 2021), in the periodic unit box (images for
 codes without one), double where the code allows it, each in the setting its own README gives per input. GPU codes all
-ran on one A100 node (1095 MHz under load), CPU codes on one 72-core node. M cells/s at 2,097,152 cells (128³), median
+ran on A100 nodes (the other codes' rows at 1095 MHz under load; voronoi-cpp's, marked, at 1305 MHz, about 15 % faster),
+CPU codes on one 72-core node. M cells/s at 2,097,152 cells (128³), median
 of 3 timed runs; the clock runs from the points in memory to all outputs in memory. Codes that return only Delaunay
 tetrahedra or neighbour lists get our faces step, timed in ("+ faces (ours)"). Missing: cells without a volume;
 error: largest relative volume error against our brute-force oracle on 1000 sampled cells per input. Methods, 256³,
@@ -201,14 +233,14 @@ every setting and the provenance: [docs/library_benchmark.md](docs/library_bench
 | M cells/s, 128³ | hardware | jittered | blue noise | uniform | clustered | halo | B/cell | missing; error | differs from the first row |
 |---|---|---|---|---|---|---|---|---|---|
 | **Full cells: volumes, centroids, faces with areas and neighbours** | | | | | | | | | |
-| **voronoi-cpp, warp rebuild** | A100 | **33.7** | **29.6** | **16.5** | **14.0** | **11.8** | 671 | 0; 1.6e-13 | |
-| voronoi-cpp, exact start (Delaunay and cells) | A100 | 8.4 | 9.8 | 5.6 | 5.1 | 6.1 | 1951 | 0; 1.5e-13 | |
+| **voronoi-cpp, warp rebuild** | A100 | **37.8** | **34.8** | **19.1** | **16.6** | **15.2** | 671 | 0; 1.6e-13 | 1305 MHz |
+| voronoi-cpp, exact start (Delaunay and cells) | A100 | 9.5 | 11.3 | 5.8 | 5.7 | 7.1 | 1951 | 0; 1.5e-13 | 1305 MHz |
 | peclet-voro (Peters 2026) | A100 | 8.2 | 4.6 | 1.5 | 0.47 | 0.21 | 2651 | 33,819 on halo | no exact predicates, no centroids |
 | Paragram (Taveira et al. 2026) + faces (ours) | A100 | 0.71 | 1.1 | 0.85 | 0.90 | 0.83 | 4551 | 0–2 | float adjacency, images |
 | gDel3D (Cao et al. 2014) + faces (ours) | A100 | 0.74 | 0.84 | 0.73 | 0.61 | 0.61 | 1580 | 0; 2e-15 | images, copies timed |
 | votess (Singh et al. 2024) + faces (ours) | A100 | 0.40 | fails | 0.26 | 0.21 | 0.16 | 3343 | 0; 4e-13 | images, copies timed |
-| voronoi-cpp, warp rebuild (OpenMP) | 72 cores | 2.6 | 2.2 | 1.7 | 1.4 | 1.3 | 494 | 0; 2e-15 | |
-| voro++ multithreaded (Lu et al. 2023) | 72 cores | 2.3 | 2.7 | 2.0 | 0.37 | 0.085 | 1700 | 0; 6e-14 | no exact predicates |
+| voronoi-cpp, warp rebuild (OpenMP) | 72 cores | **3.4** | **3.8** | **2.6** | **2.0** | **2.0** | 495 | 0; 2e-15 | |
+| voro++ multithreaded (Lu et al. 2023) | 72 cores | 2.4 | 2.6 | 1.9 | 0.38 | 0.085 | 1700 | 0; 6e-14 | no exact predicates |
 | geogram periodic Delaunay + its cells | 72 cores | 0.65 | 0.88 | 0.79 | 0.70 | 0.76 | 530 | 0; 3.6e-9 | scalar areas |
 | CGAL parallel Delaunay + faces (ours) | 72 cores | 0.67 | 0.63 | 0.62 | 0.44 | 0.35 | 1947 | 0; 2e-15 | images |
 | peclet-voro | 72 cores | 1.06 | 1.26 | 1.01 | 0.34 | 0.15 | 2479 | 61,887 on halo | no exact predicates, no centroids |
@@ -217,31 +249,33 @@ every setting and the provenance: [docs/library_benchmark.md](docs/library_bench
 | CGAL periodic Delaunay + faces (ours) | 1 core | 0.027 | 0.029 | 0.030 | 0.029 | 0.030 | 2938 | 0; 2e-15 | |
 | Qhull (Barber et al. 1996) + faces (ours) | 1 core | 0.021 | 0.019 | 0.017 | 0.015 | 0.014 | 5013 | 0; 2e-15 | images, no exact predicates |
 | **Volumes and barycentres only, host to host** | | | | | | | | | |
-| voronoi-cpp, warp rebuild, volumes and centroids copied out | A100 | 17.4 | 16.3 | 11.7 | 10.3 | 9.5 | 696 | 0; 1.6e-13 | |
-| Basselin et al. 2021, README setting per input | A100 | 6.3 | 9.0 | 2.3 | 1.4 | 0.89 | 160 | 2023 on halo | images, no exact predicates |
-| Liu et al. 2022, README setting per input | A100 | 6.8 | 18.7 | 3.6 | 2.6 | 2.2 | 638 | 3 to 103,092; 3e-5 | float, images |
-| VoroGPU (Ray et al. 2018), README setting per input | A100 | 6.5 | 15.7 | 1.9 | 1.2 | 0.96 | 1236 | 0 to 21,471; 2e-4 | float, images |
+| **voronoi-cpp, volumes and centroids only** (`volumes_and_centroids`) | A100 | **34.5** | **33.2** | **21.5** | **16.5** | **15.6** | 126 | 0; 1.6e-13 | 1305 MHz |
+| voronoi-cpp, the same, device to device | A100 | 43.1 | 40.4 | 24.3 | 16.7 | 17.0 | 101 | 0; 1.6e-13 | 1305 MHz, no copies |
+| Basselin et al. 2021, README setting per input | A100 | 6.3 | 9.4 | 2.3 | 1.4 | 0.89 | 160 | 2023 on halo | images, no exact predicates |
+| Liu et al. 2022, README setting per input | A100 | 6.8 | 18.4 | 3.6 | 2.6 | 2.2 | 638 | 3 to 103,092; 3e-5 | float, images |
+| VoroGPU (Ray et al. 2018), README setting per input | A100 | 6.5 | 16.7 | 1.9 | 1.2 | 0.96 | 1236 | 0 to 21,471; 2e-4 | float, images |
 | **Moving step, 0.03 spacings, with full cells** | | | | | | | | | |
-| **voronoi-cpp** (update + `update_cells()`) | A100 | **144** | | | | | | 0; 8e-15 | |
+| **voronoi-cpp** (update + `update_cells()`) | A100 | **163** | | | | | | 0; 8e-15 | |
 | peclet-voro (`MovingTessellation::step`) | A100 | 7.0 | | | | | | | |
 | voronoi-cpp | 72 cores | 8.5 | | | | | | | |
 | CGAL periodic, rebuild per step / `move_point` per point | 1 core | 0.029 / 0.008 | | | | | | | |
 
 With full cells on one A100 the warp rebuild is 4 to 55 times faster than peclet-voro, the fastest other GPU code that
 returns faces, the gap growing with the density contrast; the codes that need our faces step are 14 to 85 times
-slower. The closest competitor is Basselin et al. on blue noise, which returns volumes and barycentres only: in its
-blue-noise setting it builds 9.0 M cells/s host to host (17.5 device-only by its own timers; the paper gives 34.5 on a
-V100 for 10M blue-noise seeds), against 29.6 device-only and 16.3 host to host with the same outputs for the warp
-rebuild in the same jobs. On blue noise the float codes of Liu et al. (18.7) and Ray et al. (15.7) match or beat our
-host-to-host volumes path, with errors of 3e-5 and in float; on every other input they are 2.6 to 10 times slower
-and lose cells. On a CPU node the same code built for OpenMP is within 20 % of multithreaded voro++ on regular input and 3.7
-to 15 times faster on clustered and halo input. The moving step is 21 times peclet-voro's. Every voronoi-cpp volume
-agrees with the oracle to 1.6e-13 or better; geogram's own cells (double constructions) are off by up to 3.6e-9.
+slower. Volumes and centroids only (`volumes_and_centroids`, no faces built): on blue noise, in one job on one A100
+at 1305 MHz with the same points, host to host from pageable memory, voronoi-cpp builds 33.2 M cells/s at 128³ and
+32.5 at 256³, against Liu et al. 18.1 and 24.4, VoroGPU 18.1 and 19.7 (both float, K 35, their blue-noise setting) and
+Basselin et al. 10.4 and 11.6 (blue-noise setting): 1.8, 1.8 and 3.2 times faster at 128³, 1.3, 1.7 and 2.8 at
+256³ (job 32368078). On every other input the float codes are 5 to 16 times slower and lose cells. On one CPU node,
+in one job with multithreaded voro++, the same code built for OpenMP is 1.5 times faster on blue noise (3.8 against
+2.5), 1.4 on uniform (2.6 against 1.8), 1.4 on jittered input and 5 to 23 times on clustered and halo input (job
+32367276). The moving step is 23 times peclet-voro's. Every voronoi-cpp volume agrees with the oracle to 1.6e-13 or
+better; geogram's own cells (double constructions) are off by up to 3.6e-9.
 
 ![Build rate per input on one A100 (full cells; volumes only) and one CPU node, and the moving step](docs/figures/library_benchmark.png)
 
 *Build rate at 2,097,152 cells per input: one A100, full cells (left) and volumes and barycentres only (second; the
-first curve is voronoi-cpp host to host with volumes and centroids out); one CPU node, full cells (third; dashed 72
+first two curves are voronoi-cpp's volumes-only build, host to host and device to device); one CPU node, full cells (third; dashed 72
 cores, dotted one core); filled markers measured by us (median and range of 3 runs), open markers published by the
 authors on other hardware and points. Right: moving step at 0.03 mean spacings. Codes: voro++ (Rycroft 2009, Chaos 19,
 041111; multithreaded: Lu, Lazar and Rycroft 2023, CPC 291, 108832), CGAL periodic (Caroli and Teillaud 2009, ESA,
@@ -255,8 +289,10 @@ arXiv:2605.06408), votess (Singh, Byrohl and Nelson 2024, arXiv:2412.04514), pec
 Not matched: Paragram's adjacency and the cells of Liu et al. and VoroGPU are float; the codes without a periodic box
 get 7 to 53 % extra image points; gDel3D, VoroGPU, Liu et al., Basselin et al. and votess take host points, so their
 times include the copies (our device rows do not; the host-to-host rows do); gDel3D and votess (GPU) fail at 256³ and
-peclet-voro runs out of the A100's memory there; single-core runs only at 128³. These A100 rows ran at 1095 MHz; the
-rows above at 1305 MHz are about 15 % faster. The rebuild rows above time the clipping alone; this table adds the cell
+peclet-voro runs out of the A100's memory there; single-core runs only at 128³. The other codes' A100 rows ran at 1095
+MHz, voronoi-cpp's at 1305 MHz (about 15 % faster); the blue-noise volumes-only comparison above ran in one job at 1305
+MHz for all four codes. Our volumes and centroids are double (32 B/cell copied back); Liu et al. and VoroGPU copy back
+volumes only (8 B/cell). The rebuild rows above time the clipping alone; this table adds the cell
 list and the allocation.
 
 ### Long runs
@@ -273,7 +309,7 @@ Older code (see the measurements file) built with the OpenMP backend on one Rave
 | Moving-mesh update, 0.03 / 0.3 spacings | 11.5 / 1.7 | 202 / 57 | 17.5 / 33 |
 | `update_cells()` | 43 | 343 | 7.9 |
 
-Every phase gains more than the A100's 3.9 times the node's memory bandwidth. The CPU build is the generic Kokkos path with no hand vectorisation, so a CPU-tuned code would narrow the gap.
+Every phase gains more than the A100's 3.9 times the node's memory bandwidth. The CPU build is the generic Kokkos path with no hand vectorisation, so a CPU-tuned code would narrow the gap. Since 2026-11-15 the host cell list sorts with all threads (a stable radix sort; one thread's `std::sort` took about 400 of 1000 ms) and the thread kernel takes cells in dynamic chunks of 16: the rebuild with the cell list on 72 cores went from 2.2 to 3.8 M cells/s on blue noise and from 1.7 to 2.6 on uniform input, the same bits ([docs/library_benchmark.md](docs/library_benchmark.md)).
 
 ### 2D and 1D
 
@@ -319,12 +355,12 @@ sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A
 `voronoi_bench` (`src/bench/`) times and checks the pipeline:
 
 ```text
-voronoi_bench rebuild <n> <distribution> [repeats=5] [--no-check] [--memory] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
+voronoi_bench rebuild <n> <distribution> [repeats=5] [--no-check] [--memory] [--kernels] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
 voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--memory] [--kernels] [--checksum] [--box=Lx,Ly,Lz] [--nvtx | --nvtx=phases]
                     [--order=every] [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share] [--owner-faces] [--owner-bit] [--dump-cells=path]
 ```
 
-`rebuild` times the warp clipping. `--order=k` prints the memory order every k steps; `--curve`, `--every`, `--far`, `--owner-faces` and `--owner-bit` set the `Layout`, and the bench's points follow each re-sort; `--dump-cells` writes each particle's cell for `scripts/resort_bits.py`. `--box` (default 1,1,1) sets the periodic box; `--box=2,2,0.0625` with 4194304 jittered points is a 512 x 512 x 16 slab. Distributions: uniform, jittered, lattice, wave, clustered, halo, or `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`.
+`rebuild` times the warp clipping. `--order=k` prints the memory order every k steps; `--curve`, `--every`, `--far`, `--owner-faces` and `--owner-bit` set the `Layout`, and the bench's points follow each re-sort; `--dump-cells` writes each particle's cell for `scripts/resort_bits.py`. `--box` (default 1,1,1) sets the periodic box; `--box=2,2,0.0625` with 4194304 jittered points is a 512 x 512 x 16 slab. Distributions: uniform, jittered, lattice, wave, clustered, halo, `<sc|bcc|fcc|shells|planes|pairs>@<perturbation in spacings>`, or a library-benchmark point file (`*.pts`, e.g. blue noise; n is the file's). `--kernels` prints the time of each kernel label, of the rebuild's clipping and of `step`'s start and steps.
 
 ## Limitations and open items
 
@@ -333,7 +369,9 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 - Fixed, [#48](https://github.com/Ulli1991/voronoi-cpp/issues/48): a full build could number one face twice. A rounded clipping cell had two faces toward one neighbour, and the representatives of the edges were taken from those rings; the tetrahedra were right, the cells around the edge wrong (closure 0.02, total volume off by 1e-4). A build now represents each edge by the lowest-numbered tetrahedron around it, from the checked tetrahedra alone, and every `update()` checks the face count against Euler's formula on the torus (faces = cells + tetrahedra): a build that fails it is refused, a repair that fails it rebuilds (`Report::miscounted`).
 - Of the 24 fuzz cases of [#45](https://github.com/Ulli1991/voronoi-cpp/issues/45), 19 were rounding and are fixed (centres stored in grid steps, below); 3 were #48 and are fixed, and 2 are not explained: a repaired mesh 2.5 % off a fresh build in one cell (fresh_volume, hcp box), and a cell centroid 1e-3 of the cell off brute force in a unit cube.
 - OpenMP and CUDA can pick different valid tetrahedra on the same input; each backend is deterministic ([#38](https://github.com/Ulli1991/voronoi-cpp/issues/38)). In 2D a repaired mesh can differ from a fresh build in the last bits on some inputs ([#39](https://github.com/Ulli1991/voronoi-cpp/issues/39)).
-- The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, and 920 on the A100, 604 of them from 3e4 to 1.6e7 particles (113 above a million). Of those 604, 85 ran out of time (120 s, or 280 s from a million up): builds with large cells, a void or nearly coplanar points take minutes ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49)).
+- The fuzz campaign so far: about 116,000 3D, 2 million 1D and 31,000 2D cases on the CPU, and 920 on the A100, 604 of them from 3e4 to 1.6e7 particles (113 above a million). Of those 604, 85 ran out of time (120 s, or 280 s from a million up): builds with large cells, a void or nearly coplanar points take minutes ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49)). Two causes, measured on 2026-11-15: cells past 128 planes or 256 vertices were built on one host core (now on every core: a case with 5525 such cells went from over 830 s to 110 s on 18 cores), and inputs where most cells have more than 64 faces (points on curves and surfaces without background) send nearly every cell to the per-thread kernel, which builds a few thousand big cells per second (not fixed).
+
+- Points on closed surfaces (the `surface` input: shells and tori with thin normal noise): the clipping refuses some cells (69 at 64³, 476 at 128³, status degenerate) and runs about 300 times slower than on jittered points, 0.036 M cells/s at 128³ on one A100, since its needle cells reach far into empty space; the exact start inherits the cost. The mesh is right on it (volumes within 2.3e-13 of the oracle) and moving steps run at 139 M cells/s ([#60](https://github.com/Ulli1991/voronoi-cpp/issues/60)).
 
 Other limits:
 
@@ -342,7 +380,7 @@ Other limits:
 - Clipping alone is not watertight on uniform random input at 2.1M cells; the exact start makes the mesh exact.
 - Particles on one grid position (grid step box / 2³⁰) have no Voronoi cell. `update()` refuses them on every path with a `std::runtime_error` naming a pair by id, and does not merge them. Finding out takes a rebuild, so such a step costs one. After a refusal there is no mesh (no faces, no particles) and the next `update()` builds from scratch. Zero particles are a `std::invalid_argument` and change nothing.
 - `update()` does not look at its input: a NaN or infinite coordinate is snapped to some grid position, with no error.
-- A cell may hold up to 16000 planes and 32000 vertices during its exact clipping; past 128 planes or 256 vertices it is built on the host. Past those limits `update()` refuses, naming them. Particles around a void cost O(k²) at the start: about 1 s at k = 2000, 2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
+- A cell may hold up to 16000 planes and 32000 vertices during its exact clipping; past 128 planes or 256 vertices it is built on the host, one cell per core the process may use. Past those limits `update()` refuses, naming them. Particles around a void cost O(k²) at the start: about 1 s at k = 2000, 2 minutes at k = 20000 with a particle in the middle (8 CPU threads).
 - A step of order the box (random kicks of 0.6 box) can end the device repair with nothing stuck on a mesh that covers the torus many times. `update()` sees it in the total volume of the cells, off the box by more than 1e-6, and rebuilds (`Report::overlapped`). A second check counts the faces: on the torus there are cells + tetrahedra of them (Euler), so a face missing or numbered twice also rebuilds (`Report::miscounted`). A wrong mesh with the right volume and the right count would pass both.
 - `Fallback::cheapest` takes the host path only up to n / 200000 stuck entries (10 at 2.1M cells, none below 200000); the rest is a rebuild, which needs the memory of a start. The host path stops after 2²⁰ tetrahedra of local Delaunay builds (about a second on one core) and the step rebuilds instead ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)).
 - Geometry rounds with the positions: the relative volume of a cell h grid steps wide is good to about 4e-8 / h. Position differences are taken in whole grid steps (fixed in [#29](https://github.com/Ulli1991/voronoi-cpp/issues/29)), and circumcentres are computed and stored in grid steps, wrapped into the box, so equal centres of cospherical tetrahedra get equal bits whatever corner or periodic image they come from ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); a box whose step is not a power of two is then as good as any other. #29 costs moving steps 1 to 3.5 %, #45 another 1 to 2 %. It is exact down to clumps of 512 steps (error 8e-10), and particles one grid step apart are still exact.
@@ -358,11 +396,11 @@ Other limits:
 
 Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, the refusals above, a mesh fuzz driver, and the fixes of the silent volume errors ([#29](https://github.com/Ulli1991/voronoi-cpp/issues/29), [#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)), the 2D hang ([#36](https://github.com/Ulli1991/voronoi-cpp/issues/36)) and a bad read in the host fallback ([#35](https://github.com/Ulli1991/voronoi-cpp/issues/35)), the doubled face of a build ([#48](https://github.com/Ulli1991/voronoi-cpp/issues/48)), the reach rule ([#31](https://github.com/Ulli1991/voronoi-cpp/issues/31)), a bound on the host path ([#33](https://github.com/Ulli1991/voronoi-cpp/issues/33)), cgs-sized boxes on CUDA ([#26](https://github.com/Ulli1991/voronoi-cpp/issues/26)) and a stated box range ([#32](https://github.com/Ulli1991/voronoi-cpp/issues/32)).
 
-1. Bound the time of builds with large cells ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49)), and explain the last two cases of [#45](https://github.com/Ulli1991/voronoi-cpp/issues/45).
+1. Bound the time of builds where most cells are large ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49): a warp kernel of larger capacity), and explain the last two cases of [#45](https://github.com/Ulli1991/voronoi-cpp/issues/45).
 2. Mesh speed: done, the re-sort ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)) and faces numbered by owner (+16 % hydro on Sedov, but its numbering pass gives most of it back: +1 % a whole step); fewer clips measured and dropped (they do not save time); next the repair rounds and fixed cost per step.
 3. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
 4. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
-5. Clustered rebuild tuning.
+5. Clustered rebuild tuning: done, the cells the warp kernel gives up (+5 % halo, +1 % clustered at 128³); its tail is thin, and what is left changes bits (larger warp cells, other grid levels).
 6. Multi-GPU: overlapped against blocking communication across two nodes first.
 7. Refinement and derefinement in 3D.
 

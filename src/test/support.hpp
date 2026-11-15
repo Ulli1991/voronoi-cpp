@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <complex>
+#include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <stdexcept>
@@ -218,10 +221,182 @@ inline Points make_degenerate(const std::string& layout, double perturbation, in
     return points;
 }
 
-// Points in the unit box of the given `kind`: uniform, jittered, lattice, wave, clustered, halo or a degenerate layout.
+// In-place radix-2 FFT of a line of n (a power of two) values; sign -1 forward, +1 inverse (unnormalised).
+// Used by: fft3.
+inline void fft(std::complex<double>* a, int n, int sign) {
+    for (int i = 1, j = 0; i < n; ++i) {
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) std::swap(a[i], a[j]);
+    }
+    for (int len = 2; len <= n; len <<= 1) {
+        const double angle = sign * 2 * M_PI / len;
+        for (int k = 0; k < len / 2; ++k) {
+            const std::complex<double> w(std::cos(angle * k), std::sin(angle * k));
+            for (int i = k; i < n; i += len) {
+                const std::complex<double> u = a[i], v = a[i + len / 2] * w;
+                a[i] = u + v, a[i + len / 2] = u - v;
+            }
+        }
+    }
+}
+
+// The same along every axis of a g³ grid stored with index (i g + j) g + k. Used by: make_cosmic_web.
+inline void fft3(std::vector<std::complex<double>>& f, int g, int sign) {
+    std::vector<std::complex<double>> line(g);
+    const long long g2 = 1LL * g * g;
+    for (const long long stride : {1LL, 1LL * g, g2})
+        for (long long base = 0; base < g2 * g; ++base) {
+            if ((base / stride) % g != 0) continue;
+            for (int t = 0; t < g; ++t) line[t] = f[base + t * stride];
+            fft(line.data(), g, sign);
+            for (int t = 0; t < g; ++t) f[base + t * stride] = line[t];
+        }
+}
+
+// Cosmic web: Zel'dovich positions x = q + D psi(q) of a cubic lattice q at growth factor D = 0.5; psi from a Gaussian
+// field of the BBKS CDM spectrum (Bardeen et al. 1986; Gamma 0.21, n_s 0.96, sigma_8 0.8 at D = 1), 100 Mpc/h box, on
+// the next power-of-two grid (modes below Nyquist), interpolated to the lattice. Used by: make_points_off_grid.
+inline Points make_cosmic_web(int n, std::mt19937_64& rng) {
+    constexpr double box = 100.0, gamma = 0.21, ns = 0.96, sigma8 = 0.8, growth = 0.5;
+    const int m = lattice_sides(n, {1, 1, 1}, 1)[0];
+    int g = 1;
+    while (g < m) g *= 2;
+    auto shape = [&](double k) {  // the spectrum without its amplitude, k in h/Mpc
+        const double q = k / gamma;
+        const double t =
+            std::log(1 + 2.34 * q) / (2.34 * q) *
+            std::pow(1 + 3.89 * q + std::pow(16.1 * q, 2) + std::pow(5.46 * q, 3) + std::pow(6.71 * q, 4), -0.25);
+        return std::pow(k, ns) * t * t;
+    };
+    double s8 = 0;  // sigma_8² of the shape: top hat of 8 Mpc/h, sum over ln k from 1e-5 to 1e3 h/Mpc in steps of 1e-3
+    for (int step = 0; step < 18421; ++step) {
+        const double k = 1e-5 * std::exp(1e-3 * step), x = 8 * k, w = 3 * (std::sin(x) - x * std::cos(x)) / (x * x * x);
+        s8 += k * k * k * shape(k) * w * w * 1e-3 / (2 * M_PI * M_PI);
+    }
+    const long long g2 = 1LL * g * g, cells = g2 * g;
+    const double amplitude = growth * growth * sigma8 * sigma8 / s8, kf = 2 * M_PI / box;
+    std::normal_distribution<double> gauss(0.0, 1.0);
+    std::vector<std::complex<double>> white(cells);
+    for (auto& w : white) w = gauss(rng);
+    fft3(white, g, -1);
+    std::array<std::vector<double>, 3> psi;  // in box units
+    std::vector<std::complex<double>> f(cells);
+    for (int a = 0; a < 3; ++a) {
+        for (long long c = 0; c < cells; ++c) {
+            const long long idx[3] = {c / g2, c / g % g, c % g};
+            long long mode[3];
+            for (int b = 0; b < 3; ++b) mode[b] = idx[b] <= g / 2 ? idx[b] : idx[b] - g;
+            const long long m2 = mode[0] * mode[0] + mode[1] * mode[1] + mode[2] * mode[2];
+            f[c] = 0;
+            if (m2 == 0 || idx[0] == g / 2 || idx[1] == g / 2 || idx[2] == g / 2) continue;
+            const double k2 = kf * kf * double(m2);
+            // <|delta_k|²> = P / V, so that the unnormalised inverse transform is delta(x); psi_k = i k delta_k / k².
+            const double delta = std::sqrt(amplitude * shape(std::sqrt(k2)) / (box * box * box * double(cells)));
+            f[c] = std::complex<double>(0, kf * double(mode[a]) / k2 / box) * delta * white[c];
+        }
+        fft3(f, g, +1);
+        psi[a].resize(cells);
+        for (long long c = 0; c < cells; ++c) psi[a][c] = f[c].real();
+    }
+    Points points;  // lattice and grid points at cell centres: trilinear periodic interpolation, exact when m = g
+    points.reserve(1LL * m * m * m);
+    for (int i = 0; i < m; ++i)
+        for (int j = 0; j < m; ++j)
+            for (int k = 0; k < m; ++k) {
+                const Point q{(i + 0.5) / m, (j + 0.5) / m, (k + 0.5) / m};
+                int lo[3];
+                double t[3];
+                for (int a = 0; a < 3; ++a) {
+                    const double u = q[a] * g - 0.5;
+                    lo[a] = static_cast<int>(std::floor(u));
+                    t[a] = u - lo[a];
+                }
+                Point x = q;
+                for (int corner = 0; corner < 8; ++corner) {
+                    double weight = 1;
+                    long long c = 0;
+                    for (int a = 0; a < 3; ++a) {
+                        const int up = (corner >> a) & 1;
+                        weight *= up ? t[a] : 1 - t[a];
+                        c = c * g + ((lo[a] + up) % g + g) % g;
+                    }
+                    if (weight != 0)
+                        for (int a = 0; a < 3; ++a) x[a] += weight * psi[a][c];
+                }
+                points.push_back({wrap(x[0]), wrap(x[1]), wrap(x[2])});
+            }
+    return points;
+}
+
+// fcc solid near melting: 4 l³ atoms on an fcc lattice of l³ unit cells (l rounded), each moved by an independent
+// Gaussian of rms 0.0499 lattice constants per axis, as measured in the LAMMPS Lennard-Jones solid at rho* = 1.05,
+// T* = 1.0 (MSD 0.018 sigma², Lindemann ratio 0.12). Used by: make_points_off_grid.
+inline Points make_fcc_solid(int n, std::mt19937_64& rng) {
+    const int l = std::max(1, static_cast<int>(std::lround(std::cbrt(n / 4.0))));
+    std::normal_distribution<double> shift(0.0, 0.0499 / l);
+    Points points;
+    points.reserve(4LL * l * l * l);
+    for (int i = 0; i < l; ++i)
+        for (int j = 0; j < l; ++j)
+            for (int k = 0; k < l; ++k)
+                for (const Point& b : {Point{0, 0, 0}, Point{0.5, 0.5, 0}, Point{0.5, 0, 0.5}, Point{0, 0.5, 0.5}})
+                    points.push_back({wrap((i + b[0]) / l + shift(rng)), wrap((j + b[1]) / l + shift(rng)),
+                                      wrap((k + b[2]) / l + shift(rng))});
+    return points;
+}
+
+// Surface samples, uniform in area: 16 spherical shells of radius 0.2 centred on a bcc lattice of side 0.5 (8 cross
+// the box faces), each around a torus of radii 0.1 and 0.05 about z; each point moved along the normal by a Gaussian
+// of rms 0.1 mean surface spacings sqrt(area / n). Used by: make_points_off_grid.
+inline Points make_surface(int n, std::mt19937_64& rng) {
+    constexpr double radius = 0.2, major = 0.1, minor = 0.05;
+    const double shell = 4 * M_PI * radius * radius, torus = 4 * M_PI * M_PI * major * minor;
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::uniform_int_distribution<int> which(0, 15);
+    std::normal_distribution<double> gauss(0.0, 1.0), normal(0.0, 0.1 * std::sqrt(16 * (shell + torus) / n));
+    Points points;
+    points.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        const int c = which(rng);
+        const double offset = c & 8 ? 0.25 : 0.0, h = normal(rng);
+        const Point centre{(c & 1) * 0.5 + offset, (c >> 1 & 1) * 0.5 + offset, (c >> 2 & 1) * 0.5 + offset};
+        Point d{};
+        if (unit(rng) * (shell + torus) < shell) {
+            for (double& v : d) v = gauss(rng);
+            const double r = (radius + h) / std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            for (double& v : d) v *= r;
+        } else {  // the minor angle by rejection: density proportional to major + minor cos(theta)
+            double theta = 0;
+            do theta = 2 * M_PI * unit(rng);
+            while (unit(rng) * (major + minor) > major + minor * std::cos(theta));
+            const double phi = 2 * M_PI * unit(rng), r = major + (minor + h) * std::cos(theta);
+            d = {r * std::cos(phi), r * std::sin(phi), (minor + h) * std::sin(theta)};
+        }
+        points.push_back({wrap(centre[0] + d[0]), wrap(centre[1] + d[1]), wrap(centre[2] + d[2])});
+    }
+    return points;
+}
+
+// The first frame of a library-benchmark point file (bench/libraries: n, frames, then x y z doubles); n is the file's.
+// Used by: make_points_off_grid (kinds ending in .pts, e.g. blue noise).
+inline Points read_points(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::uint64_t head[2] = {};
+    if (!in.read(reinterpret_cast<char*>(head), sizeof head)) throw std::invalid_argument("cannot read " + path);
+    Points points(head[0]);
+    if (!in.read(reinterpret_cast<char*>(points.data()), static_cast<std::streamsize>(head[0] * sizeof(Point))))
+        throw std::invalid_argument("short point file " + path);
+    return points;
+}
+
+// Points in the unit box of the given `kind`: uniform, jittered, lattice, wave, clustered, halo, cosmicweb, fccsolid,
+// surface (fcc rounds n to 4 l³) or a degenerate layout.
 // Used by: make_points, scaled; directly by voronoi_mesh_test (off-grid, snapped by the mesh).
 // Lattices round n to a cube, or with `shape` to equal spacings once scaled to that box.
 inline Points make_points_off_grid(const std::string& kind, int n, const Shape& shape = {1, 1, 1}) {
+    if (kind.size() > 4 && kind.substr(kind.size() - 4) == ".pts") return read_points(kind);
     if (const auto at = kind.find('@'); at != std::string::npos)
         return make_degenerate(kind.substr(0, at), std::stod(kind.substr(at + 1)), n, shape);
     std::mt19937_64 rng(20261029);
@@ -243,7 +418,7 @@ inline Points make_points_off_grid(const std::string& kind, int n, const Shape& 
                                       wrap((j + 0.5) * spacing[1] + shift[1](rng)),
                                       wrap((k + 0.5) * spacing[2] + shift[2](rng))});
     } else if (kind == "clustered") {
-        // Eight Gaussian blobs over a uniform background: about 1:100 density.
+        // Eight Gaussian blobs over a uniform background: about 1:500 nominal, 1:10³ measured.
         std::normal_distribution<double> blob(0.0, 0.04);
         std::array<Point, 8> centres;
         for (auto& c : centres) c = {unit(rng), unit(rng), unit(rng)};
@@ -281,6 +456,12 @@ inline Points make_points_off_grid(const std::string& kind, int n, const Shape& 
         }
     } else if (kind == "uniform") {
         for (int i = 0; i < n; ++i) points.push_back({unit(rng), unit(rng), unit(rng)});
+    } else if (kind == "cosmicweb") {
+        points = make_cosmic_web(n, rng);
+    } else if (kind == "fccsolid") {
+        points = make_fcc_solid(n, rng);
+    } else if (kind == "surface") {
+        points = make_surface(n, rng);
     } else {
         throw std::invalid_argument("unknown distribution " + kind);
     }
