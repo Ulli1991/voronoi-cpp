@@ -39,9 +39,9 @@ flips), 9 (polygon edges for polygonal faces), 11 (an inverted triangle for an i
 **Terms (owner):** *exact reference* = the per-cell exact computation of `src/test/oracle.hpp`; only errors against it are accuracy. *Total sampled volume* = the sum of the cell volumes against the box: shows the tiling has no gaps or overlaps, not per-cell accuracy. *Closure* = the sum of each cell's area vectors: a per-cell consistency check.
 
 **Fig. 4: measurements needed per library and input, against the exact reference** (jittered, blue noise, uniform, clustered, halo; 128³,
-and 256³ where the code runs), against the brute-force oracle of `src/test/oracle.hpp`, the same way for every code:
+and 256³ where the code runs), against the exact reference (`src/test/oracle.hpp`), the same way for every code:
 1. completeness: cells missing or with non-positive volume, of all n (exists for volumes, `accuracy-*.jsonl`);
-2. exact neighbour sets: per sampled cell, the code's neighbour set against the oracle's (needs each code's faces or
+2. exact neighbour sets: per sampled cell, the code's neighbour set against the exact reference's (needs each code's faces or
    neighbour lists dumped; not applicable to volumes-only codes, said so in the figure);
 3. volume error: per-cell relative error on the 1000-cell sample (exists, `paper/data/oracle_errors.csv`);
 4. closure (consistency, not accuracy): per cell |Σ area vectors| / Σ |area| (codes with area vectors: voronoi-cpp, voro++, peclet-voro, our faces
