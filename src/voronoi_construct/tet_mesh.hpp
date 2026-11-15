@@ -73,6 +73,9 @@ struct Geometry {
     Areas area, centroid;
     Kokkos::View<double*, MemorySpace> volume;
     FaceRows<MemorySpace> rows;  // optional float copy of area and centroid
+    // Optional (Layout::float_centroids): face centroids as float, relative to the owner; `centroid` is then empty.
+    using Centroids32 = Kokkos::View<float* [D], Kokkos::LayoutRight, MemorySpace>;
+    Centroids32 centroid32;
 };
 
 // The corners of local edge k: (0,1) (0,2) (0,3) (1,2) (1,3) (2,3).
@@ -1574,6 +1577,7 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
            const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot = {}) {
     const bool with_volume = out.volume.extent(0) > 0;
     const bool with_rows = out.rows.extent(0) > 0;
+    const bool with_float = out.centroid32.extent(0) > 0;
     const auto geometry = face_geometry(x, box, mesh, slot);
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
     // At most 80 registers (78 unbounded): 6 blocks of 128 per SM, 7 % faster on the A100; 64 registers spill.
@@ -1585,9 +1589,15 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
             out.area(f, 0) = area.x;
             out.area(f, 1) = area.y;
             out.area(f, 2) = area.z;
-            out.centroid(f, 0) = centroid.x;
-            out.centroid(f, 1) = centroid.y;
-            out.centroid(f, 2) = centroid.z;
+            if (with_float) {
+                out.centroid32(f, 0) = static_cast<float>(centroid.x);
+                out.centroid32(f, 1) = static_cast<float>(centroid.y);
+                out.centroid32(f, 2) = static_cast<float>(centroid.z);
+            } else {
+                out.centroid(f, 0) = centroid.x;
+                out.centroid(f, 1) = centroid.y;
+                out.centroid(f, 2) = centroid.z;
+            }
             if (!with_rows && !with_volume) return;
             const int s = geometry.slot.data() ? geometry.slot(f) : f;
             const int i = mesh.owner(s), j = mesh.neighbour(s);

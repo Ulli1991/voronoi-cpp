@@ -173,6 +173,9 @@ struct Layout {
     // update() does not store face areas and centroids (R14, opt-in): computed where read (Mesh::face_geometry), stored
     // only when a caller asks for area(), face_centroid() or volume(). Off: update() stores them.
     bool faces_on_read = false;
+    // Face centroids stored as float (12 B a face, face_centroid32()), not double; areas stay double, so cells close
+    // as before; cell centroids are summed from the float rows. 3D, stored faces.
+    bool float_centroids = false;
     bool resorts() const { return every > 0 || far > 0; }
 };
 
@@ -310,8 +313,10 @@ public:
         rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
         using Areas = typename tet_mesh::Geometry<Memory>::Areas;
         const int stored = stores_faces() ? faces : 0;
-        geometry_ = {Areas("face_area", stored), Areas("face_centroid", stored), View<double*>("cell_volume", n_),
-                     tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0)};
+        const int halves = layout_.float_centroids ? stored : 0;
+        geometry_ = {Areas("face_area", stored), Areas("face_centroid", stored - halves),
+                     View<double*>("cell_volume", n_), tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0),
+                     typename tet_mesh::Geometry<Memory>::Centroids32("face_centroid32", halves)};
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, Areas("cell_centroid", n_)};
         lap(timer, timings, &Timings::build);
@@ -463,6 +468,11 @@ public:
         store_faces();
         return geometry_.centroid;
     }
+    // Layout::float_centroids: the face centroids as float (relative to the owner); face_centroid() is then empty.
+    Kokkos::View<const float* [3], Kokkos::LayoutRight, Memory> face_centroid32() const {
+        store_faces();
+        return geometry_.centroid32;
+    }
     // FaceReal = float: the float rows of the faces (tet_mesh::FaceRows); empty otherwise.
     FaceRows face_rows() const { return geometry_.rows; }
     // Cell volumes (see update_cells); after update_cells() also the
@@ -499,7 +509,10 @@ private:
         const int count = faces();
         if (count > static_cast<int>(geometry_.area.extent(0))) {
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, count + count / 32);
-            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, count + count / 32);
+            if (layout_.float_centroids)
+                Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid32, count + count / 32);
+            else
+                Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, count + count / 32);
             if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, count + count / 32);
         }
         auto out = geometry_;

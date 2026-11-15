@@ -178,6 +178,7 @@ voronoi::Layout layout_flags(int argc, char** argv) {
         layout.owner_faces |= std::string(argv[i]) == "--owner-faces";
         layout.owner_bit |= std::string(argv[i]) == "--owner-bit";
         layout.faces_on_read |= std::string(argv[i]) == "--faces-on-read";
+        layout.float_centroids |= std::string(argv[i]) == "--float-centroids";
     }
     return layout;
 }
@@ -491,6 +492,7 @@ std::uint64_t faces_checksum(const Mesh& mesh) {
     const auto neighbour = to_host(mesh.neighbour());
     const auto area = to_host(mesh.area());
     const auto centroid = to_host(mesh.face_centroid());
+    const auto centroid32 = to_host(mesh.face_centroid32());  // Layout::float_centroids
     std::vector<int> order(mesh.faces());
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](int a, int b) {
@@ -506,7 +508,8 @@ std::uint64_t faces_checksum(const Mesh& mesh) {
     for (const int f : order) {
         mix(static_cast<std::uint64_t>(owner(f)) << 32 | static_cast<std::uint32_t>(neighbour(f)));
         for (int a = 0; a < 3; ++a) mix(bits(area(f, a)));
-        for (int a = 0; a < 3; ++a) mix(bits(centroid(f, a)));
+        for (int a = 0; a < 3; ++a)
+            mix(centroid32.extent(0) > 0 ? bits(double(centroid32(f, a))) : bits(centroid(f, a)));
     }
     return h;
 }
@@ -694,7 +697,7 @@ int main(int argc, char** argv) {
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--dump-cells=path]\n"
+                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] [--dump-cells=path]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;

@@ -285,6 +285,35 @@ int main(int argc, char** argv) {
                                       std::to_string(faces) + " faces over 4 updates, " + std::to_string(differ) +
                                       " differ)");
     }
+    {  // Layout::float_centroids: float face centroids; areas and volumes keep their bits, centroids move by roundings
+        voronoi::Layout layout;
+        layout.float_centroids = true;
+        Mesh full(Exec{}, box), halves(Exec{}, box);
+        halves.set_layout(layout);
+        full.update(x);
+        halves.update(x);
+        full.update_cells();
+        halves.update_cells();
+        const auto list = cell_list(halves.positions(), box);
+        shell_voronoi::Cells<Memory> cells(n, false);
+        shell_voronoi::construct_warp(Exec{}, shell_voronoi::make_grid(list), cells);
+        const auto clipped = to_host(cells.centroid);
+        const auto c1 = to_host(full.centroid()), c2 = to_host(halves.centroid());
+        const auto v1 = to_host(full.volume()), v2 = to_host(halves.volume());
+        double to_double = 0, to_clipping = 0;
+        bool same_volumes = halves.face_centroid().extent(0) == 0;
+        for (int i = 0; i < n; ++i) {
+            same_volumes = same_volumes && v1(i) == v2(i);
+            for (int a = 0; a < 3; ++a) {
+                to_double = std::max(to_double, std::abs(c2(i, a) - c1(i, a)) / spacing);
+                to_clipping = std::max(to_clipping, std::abs(c2(i, a) - clipped(i, a)) / spacing);
+            }
+        }
+        const std::map<Face, Point> f1 = faces_of(full), f2 = faces_of(halves);
+        check.expect(same_volumes && f1 == f2 && to_double < 1e-7 && to_clipping < 1e-7,
+                     "Layout::float_centroids: areas and volumes as double; cell centroids within " + sci(to_double) +
+                         " spacings of double, " + sci(to_clipping) + " of clipping");
+    }
     {  // a box of three sides; a slab too thin for its particles
         const Box slab(2, 2, 0.25);
         const Box box123(1, 2, 3);

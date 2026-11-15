@@ -42,7 +42,10 @@ constexpr double pyramid_centroid = static_cast<double>(D) / (D + 1);
 template <class Memory, int D>
 KOKKOS_INLINE_FUNCTION void face_of(const Geometry<Memory, D>& g, int f, VecN<D>& A, VecN<D>& c) {
     A = row<D>(g.area, f);
-    c = row<D>(g.centroid, f);
+    if (g.centroid32.extent(0) > 0)
+        c = row<D>(g.centroid32, f);
+    else
+        c = row<D>(g.centroid, f);
 }
 // The same from the face's ring (Layout::faces_on_read). Used by: pyramid.
 template <class Memory, class X>
