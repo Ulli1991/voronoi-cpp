@@ -177,6 +177,7 @@ voronoi::Layout layout_flags(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         layout.owner_faces |= std::string(argv[i]) == "--owner-faces";
         layout.owner_bit |= std::string(argv[i]) == "--owner-bit";
+        layout.stored_faces |= std::string(argv[i]) == "--stored-faces";
     }
     return layout;
 }
@@ -693,7 +694,7 @@ int main(int argc, char** argv) {
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-                 "                          [--owner-faces] [--owner-bit] [--dump-cells=path]\n"
+                 "                          [--owner-faces] [--owner-bit] [--stored-faces] [--dump-cells=path]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
     return 2;

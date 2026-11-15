@@ -1510,55 +1510,84 @@ void circumcentres(const ExecSpace& exec, const X& x, const Box& box,
         });
 }
 
+// One face's geometry from its ring of circumcentres: area vector (owner to neighbour) and centroid (relative to the
+// owner), as faces() stores them; face f is slot `slot(f)` if given. Copy into kernels; valid until the next update.
+// Used by: faces, update_cells' sums (tet_cells.hpp) and callers, through Mesh<3>::face_geometry().
+template <class MemorySpace, class X = Points4<MemorySpace>>
+struct FaceGeometry {
+    using Ints = Kokkos::View<const int*, MemorySpace>;
+    X x;
+    Box box;
+    Kokkos::View<const double* [4], Kokkos::LayoutRight, MemorySpace> centre;
+    Ints owner, neighbour, ring_start, ring_length, ring, slot;
+
+    // Face f's area and centroid; returns area . (neighbour - owner), at least 0.
+    KOKKOS_INLINE_FUNCTION double face(int f, Vec3& area, Vec3& centroid) const {
+        const int s = slot.data() ? slot(f) : f;
+        const int i = owner(s), j = neighbour(s);
+        const int begin = ring_start(s), end = begin + ring_length(s);
+        const Vec3 p = row(x, i);
+        const GridPoint q(x, i, box);
+        auto vertex = [&](int m) { return from_point(centre, ring(m), q, box.step); };
+        const Vec3 dj = snapped_difference<3>(row(x, j) - p, box);
+        // Fan triangles (first, previous, v): twice the area vector and (previous + v) weighted by the triangle's
+        // area projected on dj, divided once per face (idea from Doug Rennehan's plume, commit 6cbb429).
+        const Vec3 first = vertex(begin);
+        Vec3 previous = vertex(begin + 1), twice_area{0, 0, 0}, weighted{0, 0, 0};
+        double weight = 0;
+        for (int m = begin + 2; m < end; ++m) {
+            const Vec3 v = vertex(m);
+            const Vec3 twice = cross(previous - first, v - first);
+            twice_area = twice_area + twice;
+            const double w = Kokkos::abs(dot(twice, dj));
+            weight += w;
+            weighted = weighted + (previous + v) * w;
+            previous = v;
+        }
+        area = twice_area * 0.5;
+        double projected = dot(area, dj);
+        if (projected < 0) {
+            area = area * -1.0;
+            projected = -projected;
+        }
+        centroid = weight > 0 ? (first + weighted * (1.0 / weight)) * (1.0 / 3.0) : first;
+        return projected;
+    }
+};
+
+// The FaceGeometry of the mesh's faces, numbered through `slot` if given.
+template <class MemorySpace, class X>
+FaceGeometry<MemorySpace, X> face_geometry(const X& x, const Box& box, const Mesh<MemorySpace>& mesh,
+                                           const Kokkos::View<const int*, MemorySpace>& slot = {}) {
+    return {x, box, mesh.centre, mesh.owner, mesh.neighbour, mesh.ring_start, mesh.ring_length, mesh.ring, slot};
+}
+
 // 2. Face area vectors (owner to neighbour), centroids (relative to the owner) and, if out.volume is allocated,
 // cell volumes (summed by atomics), one thread per owned face; face f is slot `slot(f)` of the mesh's faces if given.
-// Used by: Mesh<3>::geometry, after update_face_rings (and number_by_owner).
+// Used by: Mesh<3>::geometry and the stored faces of Mesh<3> (area(), face_centroid()), after update_face_rings.
 template <class ExecSpace, class X>
 void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
            const Geometry<typename ExecSpace::memory_space>& out,
            const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot = {}) {
     const bool with_volume = out.volume.extent(0) > 0;
     const bool with_rows = out.rows.extent(0) > 0;
-    const bool mapped = slot.data() != nullptr;
+    const auto geometry = face_geometry(x, box, mesh, slot);
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
     // At most 80 registers (78 unbounded): 6 blocks of 128 per SM, 7 % faster on the A100; 64 registers spill.
     Kokkos::parallel_for(
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 6>>(exec, 0, mesh.owner.extent(0)),
         KOKKOS_LAMBDA(int f) {
-            const int s = mapped ? slot(f) : f;
-            const int i = mesh.owner(s), j = mesh.neighbour(s);
-            const int begin = mesh.ring_start(s), end = begin + mesh.ring_length(s);
-            const Vec3 p = row(x, i);
-            const GridPoint q(x, i, box);
-            auto vertex = [&](int m) { return from_point(mesh.centre, mesh.ring(m), q, box.step); };
-            const Vec3 dj = snapped_difference<3>(row(x, j) - p, box);
-            // Fan triangles (first, previous, v): twice the area vector and (previous + v) weighted by the triangle's
-            // area projected on dj, divided once per face (idea from Doug Rennehan's plume, commit 6cbb429).
-            const Vec3 first = vertex(begin);
-            Vec3 previous = vertex(begin + 1), twice_area{0, 0, 0}, weighted{0, 0, 0};
-            double weight = 0;
-            for (int m = begin + 2; m < end; ++m) {
-                const Vec3 v = vertex(m);
-                const Vec3 twice = cross(previous - first, v - first);
-                twice_area = twice_area + twice;
-                const double w = Kokkos::abs(dot(twice, dj));
-                weight += w;
-                weighted = weighted + (previous + v) * w;
-                previous = v;
-            }
-            Vec3 area = twice_area * 0.5;
-            double projected = dot(area, dj);
-            if (projected < 0) {
-                area = area * -1.0;
-                projected = -projected;
-            }
-            const Vec3 centroid = weight > 0 ? (first + weighted * (1.0 / weight)) * (1.0 / 3.0) : first;
+            Vec3 area, centroid;
+            const double projected = geometry.face(f, area, centroid);
             out.area(f, 0) = area.x;
             out.area(f, 1) = area.y;
             out.area(f, 2) = area.z;
             out.centroid(f, 0) = centroid.x;
             out.centroid(f, 1) = centroid.y;
             out.centroid(f, 2) = centroid.z;
+            if (!with_rows && !with_volume) return;
+            const int s = geometry.slot.data() ? geometry.slot(f) : f;
+            const int i = mesh.owner(s), j = mesh.neighbour(s);
             if (with_rows) {
                 const float row[8] = {float(area.x),     float(area.y),     float(area.z),
                                       float(centroid.x), float(centroid.y), float(centroid.z),
@@ -1570,6 +1599,36 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
             Kokkos::atomic_add(&out.volume(i), pyramid);
             Kokkos::atomic_add(&out.volume(j), pyramid);
         });
+}
+
+// What the checks of an update need without the faces: the live tetrahedra of the first `count` slots, the sum of
+// their signed volumes (box units) and whether every circumradius is under a quarter of the shortest period: then each
+// edge and circumcentre is seen through its nearest image (else the cell volumes must decide, from faces()).
+// Used by: Mesh<3>::geometry when the faces are not stored.
+template <class ExecSpace, class X>
+double tet_volumes(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
+                   const Kokkos::View<const char*, typename ExecSpace::memory_space>& alive, int count, int& live,
+                   bool& small) {
+    double total = 0;
+    double largest = 0;
+    const double period = Kokkos::min(Kokkos::min(box.period[0], box.period[1]), box.period[2]);
+    const double limit = 0.24 * 0.24 * period * period, unit = box.step * box.step * box.step / 6;
+    Kokkos::parallel_reduce(
+        "tet_mesh::tet_volumes", Kokkos::RangePolicy<ExecSpace>(exec, 0, count),
+        KOKKOS_LAMBDA(int t, double& sum, int& tets, double& r2) {
+            if (!alive(t)) return;
+            const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
+            Vec3 d[3];
+            rounded_offsets(x, box, v, d);
+            sum += dot(d[0], cross(d[1], d[2])) * unit;
+            ++tets;
+            const Vec3 c = detail::circumcentre(d[0], d[1], d[2]);  // grid steps; a flat one's is infinite: too large
+            const double rr = dot(c, c);
+            r2 = Kokkos::fmax(r2, rr == rr ? rr : Kokkos::Experimental::infinity_v<double>);
+        },
+        total, live, Kokkos::Max<double>(largest));
+    small = largest < limit;
+    return total;
 }
 
 }  // namespace tet_mesh

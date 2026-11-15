@@ -38,14 +38,25 @@ constexpr double pyramid_volume = 1.0 / (2 * D);
 template <int D>
 constexpr double pyramid_centroid = static_cast<double>(D) / (D + 1);
 
+// Face f's area vector A and centroid c (relative to the owner): stored (Geometry) or from its ring (FaceGeometry).
+template <class Memory, int D>
+KOKKOS_INLINE_FUNCTION void face_of(const Geometry<Memory, D>& g, int f, VecN<D>& A, VecN<D>& c) {
+    A = row<D>(g.area, f);
+    c = row<D>(g.centroid, f);
+}
+template <class Memory, class X>
+KOKKOS_INLINE_FUNCTION void face_of(const FaceGeometry<Memory, X>& g, int f, Vec3& A, Vec3& c) {
+    g.face(f, A, c);
+}
+
 // Cell i's pyramid over face f (other particle j): 2D times its volume, |A.d| (A parallel to d up to rounding),
 // and the face centroid c relative to i (given relative to the owner, the lower id).
-template <int D, class X, class Area, class Centroid>
-KOKKOS_INLINE_FUNCTION double pyramid(const X& x, const exact_predicates::BoxN<D>& box, const Area& area,
-                                      const Centroid& centroid, int i, int j, int f, VecN<D>& c) {
+template <int D, class X, class Faces>
+KOKKOS_INLINE_FUNCTION double pyramid(const X& x, const exact_predicates::BoxN<D>& box, const Faces& faces, int i,
+                                      int j, int f, VecN<D>& c) {
     const VecN<D> d = snapped_difference<D>(row<D>(x, j) - row<D>(x, i), box);
-    const VecN<D> A = row<D>(area, f);
-    c = row<D>(centroid, f);
+    VecN<D> A;
+    face_of(faces, f, A, c);
     if (j < i) c = c + d;
     return Kokkos::abs(dot(A, d));
 }
@@ -71,11 +82,11 @@ KOKKOS_INLINE_FUNCTION void sort_list(const Ints& face, const Others& other, con
 // The sums of cells(), viewed through this: the lists of the `marked` cells
 // (all if `all`) are sorted and in `face`; an unmarked cell's list is its
 // old list (old_start, old_face) under new numbers (renumber), still sorted.
-template <int D, class X, class Areas, class Ints, class Const, class Marks, class Volume, class Centroids, class Map>
+template <int D, class X, class Faces, class Ints, class Const, class Marks, class Volume, class Centroids, class Map>
 struct CellLists {
     X x;
     exact_predicates::BoxN<D> box;
-    Areas area, centroid;
+    Faces faces;  // Geometry (stored) or FaceGeometry
     Ints start, face;
     Const old_start, old_face;
     Map renumber;  // old face -> new face (-1: none), a View or tet_mesh::Renumber
@@ -96,7 +107,7 @@ struct CellLists {
     }
     KOKKOS_INLINE_FUNCTION double side(int i, int entry, VecN<D>& c) const {
         const int f = list_face(entry);
-        return pyramid<D>(x, box, area, centroid, i, owner(f) ^ neighbour(f) ^ i, f, c);
+        return pyramid<D>(x, box, faces, i, owner(f) ^ neighbour(f) ^ i, f, c);
     }
     KOKKOS_INLINE_FUNCTION void finish(int i, double v, VecN<D> moment) const {
         volume(i) = v * pyramid_volume<D>;
@@ -204,10 +215,9 @@ struct CellSumsWarp {
 };
 #endif
 
-// Sort the `marked` lists (all if `all`), then sum every cell.
-template <int D, class ExecSpace, class X, class Others, class Marks, class Renumber>
-void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
-                  const Geometry<typename ExecSpace::memory_space, D>& geometry,
+// Sort the `marked` lists (all if `all`), then sum every cell over its faces (Geometry or FaceGeometry).
+template <int D, class ExecSpace, class X, class Faces, class Others, class Marks, class Renumber>
+void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box, const Faces& geometry,
                   const CellFaces<typename ExecSpace::memory_space, D>& out,
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& old_start,
                   const Kokkos::View<const int*, typename ExecSpace::memory_space>& old_face, const Renumber& renumber,
@@ -218,12 +228,11 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
     using Const = Kokkos::View<const int*, Memory>;
     using Ints = Kokkos::View<int*, Memory>;
     using Lists =
-        CellLists<D, X, typename Geometry<Memory, D>::Areas, Ints, Const, Marks, Kokkos::View<double*, Memory>,
+        CellLists<D, X, Faces, Ints, Const, Marks, Kokkos::View<double*, Memory>,
                   Kokkos::View<double* [D], Kokkos::LayoutRight, Memory>, Renumber>;
     const int n = static_cast<int>(out.volume.extent(0));
-    const Lists lists{x,        box,      geometry.area, geometry.centroid, out.start, out.face,   old_start,
-                      old_face, renumber, owner,         neighbour,         marked,    out.volume, out.centroid,
-                      n,        all};
+    const Lists lists{x,         box,   geometry, out.start,  out.face,     old_start, old_face, renumber,
+                      owner,     neighbour, marked,   out.volume, out.centroid, n,         all};
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         using Sort = CellSortWarp<Ints, Others, Const, Marks>;
@@ -252,17 +261,16 @@ void sort_and_sum(const ExecSpace& exec, const X& x, const exact_predicates::Box
 
 }  // namespace detail
 
-// 3. The cell face lists, volumes and centroids from the faces (owner, neighbour) and their geometry (area, centroid),
+// 3. The cell face lists, volumes and centroids from the faces (owner, neighbour) and their geometry (Geometry or FaceGeometry),
 // D = 2 or 3, x the positions the geometry came from; `scratch` holds cells_scratch_bytes(faces) bytes. Grows out.face when needed.
 // With `bit`, the neighbour's entry of each face carries not_owned.
 // One pass appends each face to both cells' lists; each cell then sorts its list by the other particle's id and sums its
 // pyramids in that order (detail::sort_and_sum): the same sums as faces(), in fixed order.
 // Used by: Mesh::update_cells (full path).
-template <class ExecSpace, class X, int D>
+template <class ExecSpace, class X, int D, class Faces>
 void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
            const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
-           const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
-           const Geometry<typename ExecSpace::memory_space, D>& geometry,
+           const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour, const Faces& geometry,
            CellFaces<typename ExecSpace::memory_space, D>& out, char* scratch, bool bit = false) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
@@ -345,11 +353,10 @@ IncrementalLists<typename ExecSpace::memory_space> begin_incremental(
 // The lists and sums from the old lists, D = 2 or 3; l.marked is set for every cell that may have lost or gained a face;
 // renumber(f) is the new number of old face f (-1: none), and ~f in dirty[0, dirty_count) names each new face without one once.
 // With `bit`, new faces get not_owned in the neighbour's entry; kept entries keep theirs.
-template <int D, class ExecSpace, class X, class Renumber, class Dirty>
+template <int D, class ExecSpace, class X, class Faces, class Renumber, class Dirty>
 void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& box,
                         const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
-                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
-                        const Geometry<typename ExecSpace::memory_space, D>& geometry,
+                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour, const Faces& geometry,
                         CellFaces<typename ExecSpace::memory_space, D>& out, const Renumber& renumber,
                         const Dirty& dirty, int dirty_count,
                         const IncrementalLists<typename ExecSpace::memory_space>& lists, bool bit = false) {
@@ -411,7 +418,7 @@ void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicate
 // 3'. cells() after a repair, from the last step's lists, bit for bit the same: only cells with a corner of a
 // tetrahedron created by a flip (list `created`) can change faces; the others renumber (`renumber`) and sum again.
 // Used by: Mesh<3>::update_cells (when few entries were touched).
-template <class ExecSpace, class X>
+template <class ExecSpace, class X, class Faces>
 void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& owner,
                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& neighbour,
@@ -419,8 +426,8 @@ void cells_incremental(const ExecSpace& exec, const X& x, const Box& box,
                        const Kokkos::View<const char*, typename ExecSpace::memory_space>& alive,
                        const Kokkos::View<const int*, typename ExecSpace::memory_space>& created,
                        const FaceRings<typename ExecSpace::memory_space>& rings,
-                       const Geometry<typename ExecSpace::memory_space, 3>& geometry,
-                       CellFaces<typename ExecSpace::memory_space, 3>& out, char* scratch, bool bit = false) {
+                       const Faces& geometry, CellFaces<typename ExecSpace::memory_space, 3>& out, char* scratch,
+                       bool bit = false) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(out.volume.extent(0)), faces = static_cast<int>(owner.extent(0));
     const int old_faces = rings.renumbered;

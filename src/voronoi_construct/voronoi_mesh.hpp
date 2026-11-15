@@ -170,6 +170,9 @@ struct Layout {
     double far = 0;
     bool owner_faces = false;  // faces numbered by owner (Mesh::owned_start), then by their slot
     bool owner_bit = false;    // cell_face entries of faces the cell does not own have bit 31 set (Mesh::list_face)
+    // update() stores every face's area and centroid (area(), face_centroid()); off: computed where read (R14), see
+    // Mesh::face_geometry, and stored only when a caller asks for area(), face_centroid() or volume() first.
+    bool stored_faces = false;
     bool resorts() const { return every > 0 || far > 0; }
 };
 
@@ -182,7 +185,8 @@ struct Layout {
 //   rebuild(x)       from scratch: snap -> index -> shell_voronoi clipping -> tet_start::build -> repair::prepare
 //                    -> geometry(). Throws std::runtime_error if the start is not exact.
 //   update_cells()   optional, after update/rebuild: per-cell face lists, volumes, centroids.
-//   accessors        faces(), owner(), neighbour(), area(), volume(), ... read the last update's result.
+//   accessors        faces(), owner(), neighbour(), face_geometry(), area(), volume(), ... read the last update's
+//                    result; area(), face_centroid() and (before update_cells) volume() store the faces on first use.
 //   clip(x, cells)   independent of the above: snap -> index -> clipping of the listed cells only.
 //
 // FaceReal = float adds one float row per face (face_rows()) for a reduced-precision solver.
@@ -305,7 +309,8 @@ public:
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
         rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
         using Areas = typename tet_mesh::Geometry<Memory>::Areas;
-        geometry_ = {Areas("face_area", faces), Areas("face_centroid", faces), View<double*>("cell_volume", n_),
+        const int stored = stores_faces() ? faces : 0;
+        geometry_ = {Areas("face_area", stored), Areas("face_centroid", stored), View<double*>("cell_volume", n_),
                      tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0)};
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, Areas("cell_centroid", n_)};
@@ -396,17 +401,25 @@ public:
         // Its temporaries live in the spare ring pool (see scratch).
         const auto& spare = rings_.pool[1 - rings_.in_use];
         const std::size_t table = sizeof(int) * rings_.kept_ints;
-        if (lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
+        const bool incremental =
+            lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
             state_.touched_entries <= n_ / 5 &&
-            table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <= spare.extent(0) * sizeof(int)) {
-            tet_mesh::cells_incremental(exec_, positions_, box_, owner(), neighbour(), tets_, state_.alive,
-                                        Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries)),
-                                        rings_, geometry_, cells_, reinterpret_cast<char*>(spare.data()),
-                                        layout_.owner_bit);
-        } else {
-            tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
-                            scratch(tet_mesh::cells_scratch_bytes(faces())).data(), layout_.owner_bit);
-        }
+            table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <= spare.extent(0) * sizeof(int);
+        // The sums read the stored faces if there are, else compute each face from its ring (the same bits).
+        auto lists = [&](const auto& geometry) {
+            if (incremental)
+                tet_mesh::cells_incremental(
+                    exec_, positions_, box_, owner(), neighbour(), tets_, state_.alive,
+                    Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries)), rings_, geometry,
+                    cells_, reinterpret_cast<char*>(spare.data()), layout_.owner_bit);
+            else
+                tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry, cells_,
+                                scratch(tet_mesh::cells_scratch_bytes(faces())).data(), layout_.owner_bit);
+        };
+        if (faces_stored_)
+            lists(geometry_);
+        else
+            lists(face_geometry());
         updates_since_lists_ = 0;
         cells_current_ = true;
         lap(timer, timings, &Timings::cells);
@@ -432,14 +445,33 @@ public:
     View<const int*> neighbour() const { return face_neighbour_; }
     // Layout::owner_faces: cell i owns faces owned_start(i) .. owned_start(i + 1) - 1; empty otherwise.
     View<const int*> owned_start() const { return layout_.owner_faces ? owner_faces_.owned_start : View<const int*>(); }
-    Rows area() const { return geometry_.area; }
-    Rows face_centroid() const { return geometry_.centroid; }
+    // Face f's area vector (owner to neighbour) and centroid (relative to the owner) in a kernel:
+    // face_geometry().face(f, area, centroid), from its ring; the bits area() and face_centroid() hold. Valid until the
+    // next update, like the views below.
+    tet_mesh::FaceGeometry<Memory> face_geometry() const {
+        if (!layout_.owner_faces) return tet_mesh::face_geometry(positions_, box_, tets_);
+        return tet_mesh::face_geometry(positions_, box_, tets_,
+                                       View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current],
+                                                                        std::make_pair(0, faces()))));
+    }
+    // Stored by update() with Layout::stored_faces, else here on the first call after an update.
+    Rows area() const {
+        store_faces();
+        return geometry_.area;
+    }
+    Rows face_centroid() const {
+        store_faces();
+        return geometry_.centroid;
+    }
     // FaceReal = float: the float rows of the faces (tet_mesh::FaceRows); empty otherwise.
     FaceRows face_rows() const { return geometry_.rows; }
     // Cell volumes (see update_cells); after update_cells() also the
     // centroids (relative to the generator) and the faces of cell i,
     // cell_face(cell_face_start(i)) .. cell_face(cell_face_start(i + 1) - 1).
-    View<const double*> volume() const { return geometry_.volume; }
+    View<const double*> volume() const {
+        if (!cells_current_) store_faces();
+        return geometry_.volume;
+    }
     Rows centroid() const { return cells_.centroid; }
     View<const int*> cell_face_start() const { return cells_.start; }
     View<const int*> cell_face() const { return cells_.face; }
@@ -458,6 +490,24 @@ public:
 
 private:
     bool built() const { return state_.alive.extent(0) > 0; }
+    bool stores_faces() const { return layout_.stored_faces || float_rows; }
+
+    // The face areas and centroids of the last update (tet_mesh::faces), and the cell volumes by atomics unless
+    // update_cells() summed them; nothing if stored. Used by: geometry, area, face_centroid, volume.
+    void store_faces() const {
+        if (faces_stored_ || !built()) return;
+        const int count = faces();
+        if (count > static_cast<int>(geometry_.area.extent(0))) {
+            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, count + count / 32);
+            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, count + count / 32);
+            if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, count + count / 32);
+        }
+        auto out = geometry_;
+        if (cells_current_) out.volume = {};
+        const auto slot = face_geometry().slot;
+        tet_mesh::faces(exec_, positions_, box_, tets_, out, slot);
+        faces_stored_ = true;
+    }
     // On the torus V - E + F - T = 0 and F = 2T: a mesh has cells + tetrahedra edges, each one face.
     // Used by: update, rebuild, after geometry.
     bool euler(int faces) const { return static_cast<long long>(faces) == static_cast<long long>(n_) + live_tets_; }
@@ -477,6 +527,7 @@ private:
         far_share_ = 0;
         n_ = 0;
         cells_current_ = false;
+        faces_stored_ = false;
         updates_since_lists_ = 1;
         lists_of_last_update_ = false;
     }
@@ -524,11 +575,6 @@ private:
             tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count, created);
         const int faces = tet_mesh::update_face_rings(exec_, tets_, state_.count, state_.touched, created, rings_,
                                                       View<const char*>(state_.alive));
-        if (faces > static_cast<int>(geometry_.area.extent(0))) {
-            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, faces + faces / 32);
-            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid, faces + faces / 32);
-            if (float_rows) Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.rows, faces + faces / 32);
-        }
         face_owner_ = tets_.owner;
         face_neighbour_ = tets_.neighbour;
         if (layout_.owner_faces) {
@@ -536,17 +582,23 @@ private:
             const auto used = std::make_pair(0, faces);
             face_owner_ = Kokkos::subview(owner_faces_.owner, used);
             face_neighbour_ = Kokkos::subview(owner_faces_.neighbour, used);
-            tet_mesh::faces(exec_, positions_, box_, tets_, geometry_,
-                            View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current], used)));
         } else {
             owner_faces_ = tet_mesh::OwnerFaces<Memory>{};
-            tet_mesh::faces(exec_, positions_, box_, tets_, geometry_);
+        }
+        cells_current_ = false;
+        faces_stored_ = false;
+        // The checks need the cell volumes only if a circumradius reaches a quarter of the box (or faces are stored).
+        bool small = false;
+        if (!stores_faces())
+            total_volume_ = tet_mesh::tet_volumes(exec_, positions_, box_, tets_, View<const char*>(state_.alive),
+                                                  state_.count, live_tets_, small);
+        if (!small) {
+            store_faces();
+            total_volume_ = detail::total_volume(exec_, geometry_.volume, state_.alive, state_.count, live_tets_);
         }
         if (layout_.far > 0 && since_sort_ % 16 == 0)
             far_share_ = mesh_order::far_share(exec_, face_owner_, face_neighbour_);
-        total_volume_ = detail::total_volume(exec_, geometry_.volume, state_.alive, state_.count, live_tets_);
         Kokkos::deep_copy(exec_, state_.touched, 0);
-        cells_current_ = false;
         lap(timer, timings, &Timings::geometry);
         return faces;
     }
@@ -599,7 +651,8 @@ private:
     tet_mesh::Mesh<Memory> tets_;
     tet_repair::State<Memory> state_;
     tet_mesh::FaceRings<Memory> rings_;
-    tet_mesh::Geometry<Memory> geometry_;
+    mutable tet_mesh::Geometry<Memory> geometry_;  // the stored faces; volume shared with cells_
+    mutable bool faces_stored_ = false;            // geometry_'s faces are the last update's
     tet_mesh::CellFaces<Memory> cells_;
     tet_mesh::OwnerFaces<Memory> owner_faces_;
     View<const int*> face_owner_, face_neighbour_;  // by face number: tets_'s, or owner_faces_'s
