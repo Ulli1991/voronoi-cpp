@@ -332,6 +332,8 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 
 | volumes (library-device_input_n) | sample | missing or ≤ 0 (of n) | sum − 1 | median rel. error | max rel. error | sampled cells > 1e-12 | > 1e-6 | > 1e-2 |
 |---|---|---|---|---|---|---|---|---|
+| basselin-blue-a100_bluenoise_16777216 | 1000 | 0 | -2.0e-17 | 1.8e-14 | 1.3e-13 | 0 | 0 | 0 |
+| basselin-blue-a100_bluenoise_2097152 | 1000 | 0 | -1.0e-16 | 1.0e-14 | 7.7e-14 | 0 | 0 | 0 |
 | basselin-blue-a100_clustered_16777216 | 1000 | 369 | -4.1e-05 | 5.2e-14 | 9.4e-13 | 0 | 0 | 0 |
 | basselin-blue-a100_clustered_2097152 | 1000 | 889 | -8.6e-04 | 3.0e-14 | inf | 1 | 1 | 1 |
 | basselin-blue-a100_halo_16777216 | 1000 | 108073 | -2.1e-02 | 5.0e-14 | inf | 14 | 9 | 9 |
@@ -340,6 +342,8 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | basselin-blue-a100_jittered_2097152 | 1000 | 0 | -1.0e-16 | 1.3e-14 | 7.2e-14 | 0 | 0 | 0 |
 | basselin-blue-a100_uniform_16777216 | 1000 | 75 | -8.6e-06 | 2.6e-14 | 2.5e-13 | 0 | 0 | 0 |
 | basselin-blue-a100_uniform_2097152 | 1000 | 19 | -1.9e-05 | 1.4e-14 | 1.3e-13 | 0 | 0 | 0 |
+| basselin-grid-a100_bluenoise_16777216 | 1000 | 0 | -2.0e-17 | 1.8e-14 | 1.3e-13 | 0 | 0 | 0 |
+| basselin-grid-a100_bluenoise_2097152 | 1000 | 0 | -1.0e-16 | 1.0e-14 | 7.7e-14 | 0 | 0 | 0 |
 | basselin-grid-a100_clustered_16777216 | 1000 | 0 | 8.0e-17 | 5.2e-14 | 9.4e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_clustered_2097152 | 1000 | 0 | 9.4e-17 | 3.0e-14 | 4.5e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_halo_16777216 | 1000 | 21101 | -4.6e-03 | 5.0e-14 | inf | 7 | 2 | 2 |
@@ -348,6 +352,8 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | basselin-grid-a100_jittered_2097152 | 1000 | 0 | -1.0e-16 | 1.3e-14 | 7.2e-14 | 0 | 0 | 0 |
 | basselin-grid-a100_uniform_16777216 | 1000 | 0 | -6.5e-17 | 2.6e-14 | 2.5e-13 | 0 | 0 | 0 |
 | basselin-grid-a100_uniform_2097152 | 1000 | 0 | 4.4e-17 | 1.4e-14 | 1.3e-13 | 0 | 0 | 0 |
+| basselin-white-a100_bluenoise_16777216 | 1000 | 0 | -2.0e-17 | 1.8e-14 | 1.3e-13 | 0 | 0 | 0 |
+| basselin-white-a100_bluenoise_2097152 | 1000 | 0 | -1.0e-16 | 1.0e-14 | 7.7e-14 | 0 | 0 | 0 |
 | basselin-white-a100_clustered_16777216 | 1000 | 0 | 8.0e-17 | 5.2e-14 | 9.4e-13 | 0 | 0 | 0 |
 | basselin-white-a100_clustered_2097152 | 1000 | 0 | 9.4e-17 | 3.0e-14 | 4.5e-13 | 0 | 0 | 0 |
 | basselin-white-a100_halo_16777216 | 1000 | 6637 | -1.5e-03 | 4.9e-14 | 1.3e-12 | 5 | 0 | 0 |
@@ -488,15 +494,15 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | voronoi-cpp-step-cpu1_jittered_2097152_step10 | 1000 | 0 | -3.4e-17 | 1.2e-15 | 7.5e-15 | 0 | 0 | 0 |
 | voronoi-cpp-step-cpu72_jittered_2097152_step10 | 1000 | 0 | -3.4e-17 | 1.2e-15 | 7.5e-15 | 0 | 0 | 0 |
 | voronoi-cpp-warp-a100_bluenoise_16777216 | 1000 | 0 | -9.7e-17 | 2.4e-15 | 1.5e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_bluenoise_2097152 | 1000 | 0 | -6.1e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_clustered_16777216 | 1000 | 0 | -7.0e-18 | 7.5e-15 | 9.8e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.4e-15 | 5.0e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_halo_16777216 | 1000 | 0 | -8.2e-17 | 6.3e-15 | 1.6e-13 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_halo_2097152 | 1000 | 0 | -8.3e-17 | 3.1e-15 | 7.6e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_jittered_16777216 | 1000 | 0 | -5.7e-17 | 5.0e-15 | 2.6e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_jittered_2097152 | 1000 | 0 | -7.3e-17 | 2.3e-15 | 1.4e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_uniform_16777216 | 1000 | 0 | -5.3e-17 | 3.6e-15 | 3.5e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-a100_uniform_2097152 | 1000 | 0 | -2.9e-17 | 1.7e-15 | 1.7e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_bluenoise_2097152 | 1000 | 0 | -6.2e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_clustered_16777216 | 1000 | 0 | -9.4e-18 | 7.3e-15 | 9.8e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.3e-15 | 5.0e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_halo_16777216 | 1000 | 0 | -8.3e-17 | 6.2e-15 | 1.6e-13 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_halo_2097152 | 1000 | 0 | -8.2e-17 | 3.1e-15 | 7.3e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_jittered_16777216 | 1000 | 0 | -5.6e-17 | 4.9e-15 | 2.6e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_jittered_2097152 | 1000 | 0 | -7.3e-17 | 2.2e-15 | 1.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_uniform_16777216 | 1000 | 0 | -4.5e-17 | 3.6e-15 | 3.5e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-a100_uniform_2097152 | 1000 | 0 | -3.2e-17 | 1.7e-15 | 1.7e-14 | 0 | 0 | 0 |
 | voronoi-cpp-warp-cpu1_bluenoise_2097152 | 1000 | 0 | -1.2e-17 | 2.1e-16 | 6.8e-16 | 0 | 0 | 0 |
 | voronoi-cpp-warp-cpu1_clustered_2097152 | 1000 | 0 | -8.7e-18 | 1.7e-16 | 1.2e-15 | 0 | 0 | 0 |
 | voronoi-cpp-warp-cpu1_halo_2097152 | 1000 | 0 | 1.7e-17 | 1.7e-16 | 8.6e-16 | 0 | 0 | 0 |
@@ -513,15 +519,25 @@ Median of 3 timed runs (min–max in brackets), M cells/s; steps: median (range)
 | voronoi-cpp-warp-cpu72_uniform_16777216 | 1000 | 0 | 1.7e-17 | 1.6e-16 | 9.7e-16 | 0 | 0 | 0 |
 | voronoi-cpp-warp-cpu72_uniform_2097152 | 1000 | 0 | 3.7e-17 | 1.7e-16 | 1.4e-15 | 0 | 0 | 0 |
 | voronoi-cpp-warp-host-a100_bluenoise_16777216 | 1000 | 0 | -9.7e-17 | 2.4e-15 | 1.5e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_bluenoise_2097152 | 1000 | 0 | -6.1e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_clustered_16777216 | 1000 | 0 | -7.0e-18 | 7.5e-15 | 9.8e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.4e-15 | 5.0e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_halo_16777216 | 1000 | 0 | -8.2e-17 | 6.3e-15 | 1.6e-13 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_halo_2097152 | 1000 | 0 | -8.3e-17 | 3.1e-15 | 7.6e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_jittered_16777216 | 1000 | 0 | -5.7e-17 | 5.0e-15 | 2.6e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_jittered_2097152 | 1000 | 0 | -7.3e-17 | 2.3e-15 | 1.4e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_uniform_16777216 | 1000 | 0 | -5.3e-17 | 3.6e-15 | 3.5e-14 | 0 | 0 | 0 |
-| voronoi-cpp-warp-host-a100_uniform_2097152 | 1000 | 0 | -2.9e-17 | 1.7e-15 | 1.7e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_bluenoise_2097152 | 1000 | 0 | -6.2e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_clustered_16777216 | 1000 | 0 | -9.4e-18 | 7.3e-15 | 9.8e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.3e-15 | 5.0e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_halo_16777216 | 1000 | 0 | -8.3e-17 | 6.2e-15 | 1.6e-13 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_halo_2097152 | 1000 | 0 | -8.2e-17 | 3.1e-15 | 7.3e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_jittered_16777216 | 1000 | 0 | -5.6e-17 | 4.9e-15 | 2.6e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_jittered_2097152 | 1000 | 0 | -7.3e-17 | 2.2e-15 | 1.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_uniform_16777216 | 1000 | 0 | -4.5e-17 | 3.6e-15 | 3.5e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-a100_uniform_2097152 | 1000 | 0 | -3.2e-17 | 1.7e-15 | 1.7e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_bluenoise_16777216 | 1000 | 0 | -9.7e-17 | 2.4e-15 | 1.5e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_bluenoise_2097152 | 1000 | 0 | -6.2e-17 | 1.3e-15 | 7.1e-15 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_clustered_16777216 | 1000 | 0 | -9.4e-18 | 7.3e-15 | 9.8e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_clustered_2097152 | 1000 | 0 | -1.0e-16 | 3.3e-15 | 5.0e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_halo_16777216 | 1000 | 0 | -8.3e-17 | 6.2e-15 | 1.6e-13 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_halo_2097152 | 1000 | 0 | -8.2e-17 | 3.1e-15 | 7.3e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_jittered_16777216 | 1000 | 0 | -5.6e-17 | 4.9e-15 | 2.6e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_jittered_2097152 | 1000 | 0 | -7.3e-17 | 2.2e-15 | 1.4e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_uniform_16777216 | 1000 | 0 | -4.5e-17 | 3.6e-15 | 3.5e-14 | 0 | 0 | 0 |
+| voronoi-cpp-warp-host-vc-a100_uniform_2097152 | 1000 | 0 | -3.2e-17 | 1.7e-15 | 1.7e-14 | 0 | 0 | 0 |
 | voronoi-gpu-liu-p0-a100_bluenoise_16777216 | 1000 | 0 | 1.8e-07 | 8.4e-06 | 5.5e-05 | 1000 | 913 | 0 |
 | voronoi-gpu-liu-p0-a100_bluenoise_2097152 | 1000 | 0 | -2.7e-09 | 4.2e-06 | 3.0e-05 | 1000 | 861 | 0 |
 | voronoi-gpu-liu-p0-a100_clustered_16777216 | 1000 | 180752 | -1.1e-02 | 6.2e-05 | inf | 1000 | 976 | 331 |

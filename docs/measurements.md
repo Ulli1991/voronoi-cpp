@@ -55,7 +55,7 @@ them by `scripts/library_benchmark.py` (`summary.md`). voronoi-cpp rows: ad62997
 A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under load), CPU job 32272650 (Kokkos OpenMP,
 72 cores and 1). Every other GPU code ran on the same node in chained jobs (`bench/libraries/run_chain_a100.sh`), each
 with our warp rebuild as a same-GPU reference. Inputs: jobs 32225761 (generators) and 32234292 (blue noise, 100 Lloyd
-iterations). Oracle checks: jobs 32269164 and 32360840.
+iterations). Oracle checks: job 32269164 and accuracy-main-login.jsonl (one core, login node).
 
 ### Long runs
 
