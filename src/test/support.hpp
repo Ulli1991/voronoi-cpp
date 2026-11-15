@@ -253,9 +253,9 @@ inline void fft3(std::vector<std::complex<double>>& f, int g, int sign) {
         }
 }
 
-// Cosmic web: Zel'dovich positions x = q + D psi(q) of a cubic lattice q at growth factor D = 0.5, psi from a Gaussian
-// field of the BBKS CDM spectrum (Bardeen et al. 1986; Gamma 0.21, n_s 0.96, sigma_8 0.8 at D = 1) in a 100 Mpc/h box,
-// on the next power-of-two grid (modes below its Nyquist number), interpolated to the lattice. Used by: make_points_off_grid.
+// Cosmic web: Zel'dovich positions x = q + D psi(q) of a cubic lattice q at growth factor D = 0.5; psi from a Gaussian
+// field of the BBKS CDM spectrum (Bardeen et al. 1986; Gamma 0.21, n_s 0.96, sigma_8 0.8 at D = 1), 100 Mpc/h box, on
+// the next power-of-two grid (modes below Nyquist), interpolated to the lattice. Used by: make_points_off_grid.
 inline Points make_cosmic_web(int n, std::mt19937_64& rng) {
     constexpr double box = 100.0, gamma = 0.21, ns = 0.96, sigma8 = 0.8, growth = 0.5;
     const int m = lattice_sides(n, {1, 1, 1}, 1)[0];
@@ -345,33 +345,34 @@ inline Points make_fcc_solid(int n, std::mt19937_64& rng) {
     return points;
 }
 
-// Surface samples, uniform in area: a torus (radii 0.3 and 0.1, about the z axis through the box centre), a spherical
-// shell of radius 0.15 at the centre and one of 0.1 around the box corner (wrapped), each point moved along the normal
-// by a Gaussian of rms 0.1 mean surface spacings sqrt(area / n). Used by: make_points_off_grid.
+// Surface samples, uniform in area: 16 spherical shells of radius 0.2 centred on a bcc lattice of side 0.5 (8 cross
+// the box faces), each around a torus of radii 0.1 and 0.05 about z; each point moved along the normal by a Gaussian
+// of rms 0.1 mean surface spacings sqrt(area / n). Used by: make_points_off_grid.
 inline Points make_surface(int n, std::mt19937_64& rng) {
-    constexpr double major = 0.3, minor = 0.1, inner = 0.15, corner = 0.1;
-    const double torus = 4 * M_PI * M_PI * major * minor, shell = 4 * M_PI * inner * inner,
-                 area = torus + shell + 4 * M_PI * corner * corner;
+    constexpr double radius = 0.2, major = 0.1, minor = 0.05;
+    const double shell = 4 * M_PI * radius * radius, torus = 4 * M_PI * M_PI * major * minor;
     std::uniform_real_distribution<double> unit(0.0, 1.0);
-    std::normal_distribution<double> gauss(0.0, 1.0), normal(0.0, 0.1 * std::sqrt(area / n));
+    std::uniform_int_distribution<int> which(0, 15);
+    std::normal_distribution<double> gauss(0.0, 1.0), normal(0.0, 0.1 * std::sqrt(16 * (shell + torus) / n));
     Points points;
     points.reserve(n);
     for (int i = 0; i < n; ++i) {
-        const double pick = unit(rng) * area, h = normal(rng);
-        if (pick < torus) {  // the minor angle by rejection: density proportional to major + minor cos(theta)
+        const int c = which(rng);
+        const double offset = c & 8 ? 0.25 : 0.0, h = normal(rng);
+        const Point centre{(c & 1) * 0.5 + offset, (c >> 1 & 1) * 0.5 + offset, (c >> 2 & 1) * 0.5 + offset};
+        Point d{};
+        if (unit(rng) * (shell + torus) < shell) {
+            for (double& v : d) v = gauss(rng);
+            const double r = (radius + h) / std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            for (double& v : d) v *= r;
+        } else {  // the minor angle by rejection: density proportional to major + minor cos(theta)
             double theta = 0;
             do theta = 2 * M_PI * unit(rng);
             while (unit(rng) * (major + minor) > major + minor * std::cos(theta));
             const double phi = 2 * M_PI * unit(rng), r = major + (minor + h) * std::cos(theta);
-            points.push_back({wrap(0.5 + r * std::cos(phi)), wrap(0.5 + r * std::sin(phi)),
-                              wrap(0.5 + (minor + h) * std::sin(theta))});
-            continue;
+            d = {r * std::cos(phi), r * std::sin(phi), (minor + h) * std::sin(theta)};
         }
-        const Point d{gauss(rng), gauss(rng), gauss(rng)};
-        const double norm = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-        const bool centre = pick < torus + shell;
-        const double r = (centre ? inner : corner) + h, c = centre ? 0.5 : 0.0;
-        points.push_back({wrap(c + r * d[0] / norm), wrap(c + r * d[1] / norm), wrap(c + r * d[2] / norm)});
+        points.push_back({wrap(centre[0] + d[0]), wrap(centre[1] + d[1]), wrap(centre[2] + d[2])});
     }
     return points;
 }
