@@ -241,6 +241,7 @@ public:
             } catch (const std::exception&) {
                 host.stuck = 1;
             }
+            tet_repair::forget_quiet(exec_, state_);
             report.host_flips = host.flips23 + host.flips32;
             report.host_rebuilds = host.rebuilt;
             stuck = host.stuck > 0;
@@ -307,6 +308,7 @@ public:
         const int entries = static_cast<int>(tets_.ring.extent(0));
         tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
+        state_.quiet_screen = quiet_screen_;
         rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
         using Areas = typename tet_mesh::Geometry<Memory>::Areas;
         const int stored = stores_faces() ? faces : 0;
@@ -427,6 +429,8 @@ public:
 
     bool cells_current() const { return cells_current_; }
     void set_fallback(Fallback f) { fallback_ = f; }
+    // Whether the screen skips the neighbour tests of certified quiet tetrahedra (V1, on by default).
+    void set_quiet_screen(bool on) { state_.quiet_screen = quiet_screen_ = on; }
     // The most rounds of the device repair in one update; for tests.
     void set_repair_rounds(int rounds) { repair_rounds_ = rounds; }
 
@@ -623,6 +627,7 @@ private:
         positions_ = moved;
         state_.point.view = points;
         mesh_order::order_tetrahedra(exec_, View<const int*>(rank), tets_, state_);
+        tet_repair::forget_quiet(exec_, state_);
         rings_.faces = -1;
         rings_.used = rings_.tets = rings_.dirty_count = 0;
         rings_.renumber_valid = false;
@@ -641,6 +646,7 @@ private:
     long long ring_entries_ = 0;  // ring pool size of the last start
     Fallback fallback_ = Fallback::cheapest;
     int repair_rounds_ = 1000;
+    bool quiet_screen_ = true;
     double total_volume_ = 0;  // of the cells, from the last geometry()
     int live_tets_ = 0;        // tetrahedra, from the last geometry()
     bool cells_current_ = false;

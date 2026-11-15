@@ -19,7 +19,7 @@ struct Packed;
 // dirty tetrahedra listed, free slots popped, new slots, flips of each kind, tetrahedra created this step.
 namespace counter {
 constexpr int work = 0, stuck = 1, freed = 2, listed = 3, pops = 4, growth = 5, flips23 = 6, flips32 = 7, created = 8,
-              count = 9;
+              motion = 9, skipped = 10, count = 11;
 }
 
 // A stuck entry (t, k) of State::stuck: the triangle of t opposite corner
@@ -37,6 +37,8 @@ struct State {
     // The tetrahedra flips created since the last move: touched_entries of them, -1 if more than fit.
     Kokkos::View<int*, MemorySpace> touched_list;
     Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
+    // Quiet tetrahedra (V1): 0x80 | the last step (mod 128) whose screening a certificate covers, 0 if none.
+    Kokkos::View<std::uint8_t*, MemorySpace> quiet;
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
     // Votes: round in the high 32 bits, a bijective hash of the plan index below, so earlier rounds always lose.
     Kokkos::View<unsigned long long*, MemorySpace> lock;
@@ -54,6 +56,12 @@ struct State {
     int touched_entries = 0;
     unsigned long long round = 0;
     bool screen_counts = false;  // host_counters hold move_screened's counts, which repair starts from
+    // V1: screens so far, and the most an edge may change per step (grid steps) that the certificates assume (0: none).
+    int step = 0;
+    double speed = 0;
+    bool quiet_screen = true;  // skip the neighbour tests of certified tetrahedra
+    int skipped = 0;           // tetrahedra the last screen skipped
+    int motion = 0;            // the most an edge changed in the last step, grid steps
 #if defined(VORONOI_MEASURE)
     int screened = 0;       // measurement build only: tetrahedra the screen listed, last repair
     long long checked = 0;  // failing triangles the rounds handled, last repair
@@ -281,6 +289,72 @@ KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& st
     }
 }
 
+// The largest motion `eps` (grid steps) of the points a[0..3], offsets from a fifth point that stays, under which the
+// sign of the in-sphere determinant P = det[a_k, |a_k|^2] provably stays; 0 if none. P's first-order change from the
+// cofactors, the rest bounded by Hadamard's inequality with the last column over L = max |a_k|; rounding of 1e-12 |P|.
+KOKKOS_INLINE_FUNCTION double certified_motion(const double (*a)[3]) {
+    double m[4][4], length[4], L = 0;
+    for (int k = 0; k < 4; ++k) {
+        const double q = a[k][0] * a[k][0] + a[k][1] * a[k][1] + a[k][2] * a[k][2];
+        m[k][0] = a[k][0], m[k][1] = a[k][1], m[k][2] = a[k][2], m[k][3] = q;
+        length[k] = Kokkos::sqrt(q);
+        L = Kokkos::fmax(L, length[k]);
+    }
+    // The adjugate by 2x2 minors of rows 0, 1 (s) and 2, 3 (c) (Eberly, "The Laplace expansion theorem").
+    const double s0 = m[0][0] * m[1][1] - m[1][0] * m[0][1], s1 = m[0][0] * m[1][2] - m[1][0] * m[0][2];
+    const double s2 = m[0][0] * m[1][3] - m[1][0] * m[0][3], s3 = m[0][1] * m[1][2] - m[1][1] * m[0][2];
+    const double s4 = m[0][1] * m[1][3] - m[1][1] * m[0][3], s5 = m[0][2] * m[1][3] - m[1][2] * m[0][3];
+    const double c5 = m[2][2] * m[3][3] - m[3][2] * m[2][3], c4 = m[2][1] * m[3][3] - m[3][1] * m[2][3];
+    const double c3 = m[2][1] * m[3][2] - m[3][1] * m[2][2], c2 = m[2][0] * m[3][3] - m[3][0] * m[2][3];
+    const double c1 = m[2][0] * m[3][2] - m[3][0] * m[2][2], c0 = m[2][0] * m[3][1] - m[3][0] * m[2][1];
+    const double P = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0;
+    // cofactor[k][j] of entry (k, j).
+    const double cofactor[4][4] = {
+        {m[1][1] * c5 - m[1][2] * c4 + m[1][3] * c3, -m[1][0] * c5 + m[1][2] * c2 - m[1][3] * c1,
+         m[1][0] * c4 - m[1][1] * c2 + m[1][3] * c0, -m[1][0] * c3 + m[1][1] * c1 - m[1][2] * c0},
+        {-m[0][1] * c5 + m[0][2] * c4 - m[0][3] * c3, m[0][0] * c5 - m[0][2] * c2 + m[0][3] * c1,
+         -m[0][0] * c4 + m[0][1] * c2 - m[0][3] * c0, m[0][0] * c3 - m[0][1] * c1 + m[0][2] * c0},
+        {m[3][1] * s5 - m[3][2] * s4 + m[3][3] * s3, -m[3][0] * s5 + m[3][2] * s2 - m[3][3] * s1,
+         m[3][0] * s4 - m[3][1] * s2 + m[3][3] * s0, -m[3][0] * s3 + m[3][1] * s1 - m[3][2] * s0},
+        {-m[2][1] * s5 + m[2][2] * s4 - m[2][3] * s3, m[2][0] * s5 - m[2][2] * s2 + m[2][3] * s1,
+         -m[2][0] * s4 + m[2][1] * s2 - m[2][3] * s0, m[2][0] * s3 - m[2][1] * s1 + m[2][2] * s0}};
+    double space[4], lift[4], g1 = 0, size = 0;
+    for (int k = 0; k < 4; ++k) {
+        space[k] = Kokkos::sqrt(cofactor[k][0] * cofactor[k][0] + cofactor[k][1] * cofactor[k][1] +
+                                cofactor[k][2] * cofactor[k][2]);
+        lift[k] = Kokkos::abs(cofactor[k][3]);
+        g1 += space[k] + 2 * length[k] * lift[k];
+        size += length[k] * space[k] + m[k][3] * lift[k];
+    }
+    const double room = Kokkos::abs(P) - 1e-12 * size;
+    if (!(room > 0) || !(g1 > 0)) return 0;
+    const double A = 1.4142135623730951 * L, B = 2.47;  // row norms of the scaled matrix and its change, eps <= L / 4
+    double eps = Kokkos::fmin(0.25 * L, room / (2 * g1 * (1 + 1e-12)));
+    for (int tries = 0; tries < 4; ++tries, eps *= 0.5) {
+        double first = 0;
+        for (int k = 0; k < 4; ++k) first += eps * (space[k] + lift[k] * (2 * length[k] + eps));
+        const double b = B * eps;
+        const double rest = L * (6 * A * A * b * b + 4 * A * b * b * b + b * b * b * b);
+        if ((first + rest) * (1 + 1e-12) < room) return eps;
+    }
+    return 0;
+}
+
+// The largest `value` of the calling threads to the counter (atomically, one atomic per group on CUDA).
+KOKKOS_INLINE_FUNCTION void largest(int* counter, int value) {
+#if defined(__CUDA_ARCH__)
+    namespace cg = cooperative_groups;
+    const cg::coalesced_group g = cg::coalesced_threads();
+    for (int d = 1; d < static_cast<int>(g.size()); d <<= 1) {  // prefix maxima, as tet_mesh::claim's sums
+        const int before = g.shfl_up(value, d);
+        if (static_cast<int>(g.thread_rank()) >= d) value = Kokkos::max(value, before);
+    }
+    if (g.thread_rank() == g.size() - 1) atomicMax(counter, value);
+#else
+    Kokkos::atomic_max(counter, value);
+#endif
+}
+
 // List t as dirty unless it already is. Used by: move_screened, repair, tet_flips::detail::mark_stuck/finish.
 template <class State>
 KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
@@ -300,6 +374,7 @@ void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity
     Kokkos::resize(s.alive, capacity);
     Kokkos::resize(s.touched, capacity);
     Kokkos::resize(s.dirty, capacity);
+    Kokkos::resize(s.quiet, capacity);
     Kokkos::resize(s.listed, capacity);
     Kokkos::resize(s.lock, capacity);
 }
@@ -319,6 +394,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
     s.alive = Kokkos::View<char*, Memory>("tet_repair_alive", 0);  // sized by reserve
     s.touched = Kokkos::View<char*, Memory>("tet_repair_touched", 0);
     s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", 0);
+    s.quiet = Kokkos::View<std::uint8_t*, Memory>("tet_repair_quiet", 0);
     s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", 0);
     s.lock = Kokkos::View<unsigned long long*, Memory>("tet_repair_lock", 0);
     s.free_slots = Kokkos::View<int*, Memory>("tet_repair_free", capacity / 64 + 1024);  // grows in repair
@@ -353,65 +429,133 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
     return s;
 }
 
-// New positions x: snaps them, computes the circumcentres (m.centre) of the live tetrahedra (slivers exactly in a
-// second pass) and lists those that may need repair: a neighbour's far vertex inside or near the circumsphere, or
-// badly shaped. The margin covers the snapping; repair decides exactly.
+// New positions x: computes the circumcentres (m.centre) of the live tetrahedra (slivers exactly in a second pass)
+// and lists those that may need repair: a neighbour's far vertex inside or near the circumsphere, or badly shaped.
+// The margin covers the snapping; repair decides exactly. Then snaps x into s.point.
+// Quiet tetrahedra (V1): a tetrahedron whose neighbour tests passed keeps a certificate for the next k steps: each of its
+// tested pairs keeps the sign of its in-sphere test while every point moves at most k * s.speed against a corner of
+// their shared triangle (certified_motion). Each step measures the most any edge changed (an edge of t or of u joins
+// that corner to every other point of the pair) and screens again without skipping if that exceeds s.speed.
 // Used by: voronoi::Mesh<3>::update, before repair.
 template <class ExecSpace, class X>
 void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
                    const tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
                    State<typename ExecSpace::memory_space>& s) {
-    ep::snap(exec, x, box, s.point);
-    Kokkos::deep_copy(exec, s.counters, 0);
     const auto& st = s;
     const auto vertex = m.vertex;
     const auto adjacent = m.adjacent;
     const auto centre = m.centre;
     const auto counters = s.counters;
+    const auto point = s.point;  // the last step's
+    const auto quiet = s.quiet;
     const auto slivers = s.freed;  // free until the repair starts; counter::freed counts them
     const double snap = box.step * 1.7320508075688772;  // largest move by snapping
-    // At most 64 registers (72 unbounded): 8 blocks of 128 per SM, 6 % faster on the A100.
-    Kokkos::parallel_for(
-        "tet_repair::screen", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 8>>(exec, 0, s.count),
-        KOKKOS_LAMBDA(int t) {
-            st.dirty(t) = 0;
-            if (!st.alive(t)) return;
-            auto from = [&](int v) {
-                return tet_mesh::from_point(centre, t, tet_mesh::GridPoint(x, v, box), box.step);
-            };
-            // Corners sorted by particle id and the centre in rounded arithmetic, as tet_mesh::stored_centre for
-            // created tetrahedra: the same bits whichever kernel and corner order computed it.
-            int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
-            const int parity = tet_mesh::sort_corners(v);
-            Vec3 d[3];
-            tet_mesh::rounded_offsets(x, box, v, d);
-            double volume6, shape;
-            // Slivers: suspect; their centres are computed exactly below.
-            if (tet_mesh::rounded_sliver(d, volume6, shape)) {
-                const int at = tet_mesh::claim(&counters(counter::freed), 1);
-                if (at < static_cast<int>(slivers.extent(0))) slivers(at) = t;
-                detail::mark(st, t);
-                return;
-            }
-            // Well shaped and clearly positive (in the stored corner order), else decide exactly.
-            bool suspect = !(parity * volume6 > 1e-3 * shape);
-            const Vec3 c = tet_mesh::rounded_circumcentre(d, volume6);
-            tet_mesh::store_centre(x, box, v[0], c, centre, t);
-            const double r2 = centre(t, 3);
-            const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
-            for (int k = 0; k < 4 && !suspect; ++k) {
-                const int u = adjacent(t, k);
-                // A triangle fails from both sides or from neither: the side with the lower index decides.
-                if (u < t) continue;
-                const int far = tet_mesh::far_vertex(m, t, u);
-                if (far < 0) continue;
-                const Vec3 e = from(far);
-                suspect = dot(e, e) < r2 + margin;
-            }
-            if (suspect) detail::mark(st, t);
-        });
-    Kokkos::deep_copy(exec, s.host_counters, counters);
-    exec.fence();
+    const int step = ++s.step;
+    auto screen = [&](bool skip, double speed) {
+        Kokkos::deep_copy(exec, s.counters, 0);
+        // At most 64 registers (72 unbounded): 8 blocks of 128 per SM, 6 % faster on the A100.
+        Kokkos::parallel_for(
+            "tet_repair::screen", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 8>>(exec, 0, st.count),
+            KOKKOS_LAMBDA(int t) {
+                st.dirty(t) = 0;
+                if (!st.alive(t)) return;
+                auto from = [&](int v) {
+                    return tet_mesh::from_point(centre, t, tet_mesh::GridPoint(x, v, box), box.step);
+                };
+                // Corners sorted by particle id and the centre in rounded arithmetic, as tet_mesh::stored_centre for
+                // created tetrahedra: the same bits whichever kernel and corner order computed it.
+                const int stored[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
+                int v[4] = {stored[0], stored[1], stored[2], stored[3]};
+                const int parity = tet_mesh::sort_corners(v);
+                // The most an edge changed since the last step, in grid steps.
+                long long now[4][3], moved[4][3];
+                for (int k = 0; k < 4; ++k)
+                    for (int a = 0; a < 3; ++a) {
+                        now[k][a] = ep::snap(x(v[k], a), box, a);
+                        moved[k][a] = ep::delta(point(v[k], a), now[k][a], box.period[a]);
+                    }
+                double edge2 = 0;
+                for (int k = 0; k < 4; ++k)
+                    for (int l = k + 1; l < 4; ++l) {
+                        double e2 = 0;
+                        for (int a = 0; a < 3; ++a) {
+                            const double e = static_cast<double>(moved[k][a] - moved[l][a]);
+                            e2 += e * e;
+                        }
+                        edge2 = Kokkos::fmax(edge2, e2);
+                    }
+                detail::largest(&counters(counter::motion), static_cast<int>(Kokkos::ceil(Kokkos::sqrt(edge2))) + 1);
+                Vec3 d[3];
+                tet_mesh::rounded_offsets(x, box, v, d);
+                double volume6, shape;
+                // Slivers: suspect; their centres are computed exactly below.
+                if (tet_mesh::rounded_sliver(d, volume6, shape)) {
+                    const int at = tet_mesh::claim(&counters(counter::freed), 1);
+                    if (at < static_cast<int>(slivers.extent(0))) slivers(at) = t;
+                    quiet(t) = 0;
+                    detail::mark(st, t);
+                    return;
+                }
+                // Well shaped and clearly positive (in the stored corner order), else decide exactly.
+                bool suspect = !(parity * volume6 > 1e-3 * shape);
+                const Vec3 c = tet_mesh::rounded_circumcentre(d, volume6);
+                tet_mesh::store_centre(x, box, v[0], c, centre, t);
+                const int q = quiet(t);
+                if (!suspect && skip && (q & 0x80) && ((q - step) & 127) < 64) {
+                    tet_mesh::claim(&counters(counter::skipped), 1);
+                    return;
+                }
+                const double r2 = centre(t, 3);
+                const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
+                double certified = 1e300;
+                for (int k = 0; k < 4 && !suspect; ++k) {
+                    const int u = adjacent(t, k);
+                    // A triangle fails from both sides or from neither: the side with the lower index decides.
+                    if (u < t) continue;
+                    const int far = tet_mesh::far_vertex(m, t, u);
+                    if (far < 0) continue;
+                    const Vec3 e = from(far);
+                    suspect = dot(e, e) < r2 + margin;
+                    if (suspect || speed <= 0) continue;
+                    // The pair's points from w, a corner of the shared triangle (opposite stored corner k).
+                    const int w = stored[(k + 1) & 3];
+                    long long at[3];
+                    for (int a = 0; a < 3; ++a) at[a] = ep::snap(x(w, a), box, a);
+                    double offsets[4][3];
+                    for (int j = 0, r = 0; j < 4; ++j) {
+                        if (v[j] == w) continue;
+                        for (int a = 0; a < 3; ++a)
+                            offsets[r][a] = static_cast<double>(ep::delta(at[a], now[j][a], box.period[a]));
+                        ++r;
+                    }
+                    for (int a = 0; a < 3; ++a)
+                        offsets[3][a] =
+                            static_cast<double>(ep::delta(at[a], ep::snap(x(far, a), box, a), box.period[a]));
+                    certified = Kokkos::fmin(certified, detail::certified_motion(offsets));
+                }
+                if (suspect) {
+                    quiet(t) = 0;
+                    detail::mark(st, t);
+                    return;
+                }
+                const double steps = speed > 0 ? Kokkos::fmin(50.0, Kokkos::floor(certified / speed)) : 0;
+                quiet(t) = steps >= 1 ? static_cast<std::uint8_t>(0x80 | ((step + static_cast<int>(steps)) & 127)) : 0;
+            });
+        Kokkos::deep_copy(exec, s.host_counters, counters);
+        exec.fence();
+    };
+    const bool skip = s.quiet_screen && s.speed > 0;
+    screen(skip, s.quiet_screen ? s.speed : 0);
+    s.motion = s.host_counters(counter::motion);
+    // An edge changed more than the certificates allow: screen again, every tetrahedron, at the new speed.
+    if (s.quiet_screen && s.motion > s.speed) {
+        s.speed = 1.5 * s.motion;
+        if (skip) screen(false, s.speed);
+    } else if (s.motion < 0.5 * s.speed) {
+        s.speed *= 0.75;  // lower is always safe: the certificates assumed more
+    }
+    s.skipped = s.host_counters(counter::skipped);
+    ep::snap(exec, x, box, s.point);
     s.screen_counts = true;
     const int sliver_count = s.host_counters(counter::freed);
     if (sliver_count > static_cast<int>(slivers.extent(0)))
@@ -420,6 +564,13 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
         tet_mesh::circumcentres(exec, x, box, m, -1,
                                 Kokkos::View<const int*, typename ExecSpace::memory_space>(
                                     Kokkos::subview(slivers, std::make_pair(0, sliver_count))));
+}
+
+// Certificates of quiet tetrahedra no longer hold (the host repaired or the tetrahedra were reordered).
+// Used by: voronoi::Mesh<3>::update and resort.
+template <class ExecSpace, class MemorySpace>
+void forget_quiet(const ExecSpace& exec, State<MemorySpace>& s) {
+    Kokkos::deep_copy(exec, s.quiet, std::uint8_t(0));
 }
 
 // Flip until no dirty tetrahedron fails or no plan can proceed; what is left
@@ -647,6 +798,7 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                         adjacent(slot[r], c) = -1;
                     }
                     alive(slot[r]) = 1;
+                    st.quiet(slot[r]) = 0;
                 }
                 // Connect faces: to the outside through the old outer faces, else to each other.
                 for (int r = 0; r < p.freshes; ++r) {
@@ -658,7 +810,10 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                             if (tet_mesh::same_face(key, outer_key[q])) {
                                 const int w = outer_tet[q];
                                 adjacent(slot[r], c) = w;
-                                if (w >= 0) adjacent(w, tet_mesh::opposite(m, w, key)) = slot[r];
+                                if (w >= 0) {
+                                    adjacent(w, tet_mesh::opposite(m, w, key)) = slot[r];
+                                    st.quiet(w) = 0;  // its neighbour changed
+                                }
                             }
                         for (int s2 = 0; s2 < p.freshes; ++s2) {
                             if (s2 == r) continue;
