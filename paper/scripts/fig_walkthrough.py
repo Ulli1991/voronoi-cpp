@@ -16,8 +16,29 @@ CAPTIONS = []  # (panel number, title, text, code) of every panel, for the capti
 _panel = of.Sheet.panel
 
 
+# The paper's terms (owner): positions are "quantised to integer coordinates on a 2^30 grid", then "quantised" or
+# "integer positions"; the word "snap" is not used, not even for the functions' names.
+WORDS = {
+    "Snap to the grid": "Quantise positions",
+    "Positions go down to an integer grid of 2³⁰ steps per side (inset: one grid cell, much enlarged). "
+    "Every later decision is an exact test on these integers;":
+        "Each coordinate is rounded down to an integer k in [0, 2³⁰), and the position is k × step: positions are "
+        "quantised to integer coordinates on a 2³⁰ grid (inset: one grid cell, much enlarged). Every later decision "
+        "is an exact test on these integer positions;",
+    "exact_predicates.hpp: snap\nvoronoi_mesh_2d.hpp: Mesh::snap": "exact_predicates.hpp, voronoi_mesh_2d.hpp (quantisation)",
+    "Two on one grid point: refused.": "Two at one integer position: refused.",
+}
+
+
+def words(text):
+    for old, new in WORDS.items():
+        text = text.replace(old, new)
+    return text
+
+
 def panel(self, row, col, number, title, where, body, code, window=(0, 1, 0, 1)):
     """Sheet.panel with the text and the code lines left to the caption: title and drawing only."""
+    title, body, code = words(title), words(body), words(code)
     CAPTIONS.append((number, title, body, code))
     return _panel(self, row, col, number, title, where, "", "", window)
 

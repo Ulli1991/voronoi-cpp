@@ -5,7 +5,7 @@
 
 **inputs.** The five benchmark inputs (top row and first panel of the bottom row) and the three application inputs
 (bottom row: cosmic web, fcc solid, surface), with the generators and seed 20261029 of the benchmarks
-(`src/test/support.hpp`, snapped to the 2⁻³⁰ grid; `library_bench points`), at 64³ = 262,144 points; the fcc solid at
+(`src/test/support.hpp`, positions quantised to integer coordinates on a 2³⁰ grid; `library_bench points`), at 64³ = 262,144 points; the fcc solid at
 32³ unit cells = 131,072 atoms (the generator rounds n to 4 l³, and 2¹⁸ atoms would need l = 40.3). The benchmarks run
 at 128³ and 256³ (fcc solid: 2²⁰ and 2²³ atoms). Each panel: the points of a slab one mean spacing thick, projected to
 x–y; jittered, blue noise, white noise and the fcc solid as a zoom of 16 × 16 mean spacings, the other four as the whole
