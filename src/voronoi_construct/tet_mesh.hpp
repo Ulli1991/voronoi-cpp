@@ -379,17 +379,28 @@ struct alignas(32) CellBlock {
     int faces, face, slot, tet;
 };
 
-// The first `size` entries of `store`, grown by 1/16 when too small (contents dropped). Used by: assemble.
+// The first `size` entries of `store`, grown by 1/64 when too small (contents dropped). Used by: assemble.
 template <class V>
 auto take(V& store, std::size_t size, const char* label) {
     if (store.extent(0) < size) {
         store = V();
-        store = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), size + size / 16);
+        store = V(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)), size + size / 64);
     }
     if constexpr (V::rank() == 1)
         return Kokkos::subview(store, std::make_pair(std::size_t(0), size));
     else
         return Kokkos::subview(store, std::make_pair(std::size_t(0), size), Kokkos::ALL);
+}
+
+// The last entry of the sorted `start` (count entries) at or below `value`: the face of a ring slot, the cell of a face.
+template <class Starts>
+KOKKOS_INLINE_FUNCTION int bisect(const Starts& start, int count, int value) {
+    int low = 0;
+    for (int high = count; high - low > 1;) {
+        const int middle = (low + high) / 2;
+        (start(middle) <= value ? low : high) = middle;
+    }
+    return low;
 }
 
 // Faces, ring slots and tetrahedra of an assembly.
@@ -406,11 +417,11 @@ struct AssemblyCounts {
 }  // namespace detail
 
 // What assemble keeps besides the mesh: per cell the faces, ring slots and tetrahedra before it (n + 1 each); per face
-// its first tetrahedron and the pool entry of its ring; per slot its face; per tetrahedron its emitting slot.
+// its first tetrahedron and the pool entry of its ring; per tetrahedron its emitting slot.
 // Used by: assemble, tet_start::build.
 template <class MemorySpace>
 struct Assembly {
-    Kokkos::View<int*, MemorySpace> face_start, slot_start, tet_start, first_tet, slot_face, tet_slot;
+    Kokkos::View<int*, MemorySpace> face_start, slot_start, tet_start, first_tet, tet_slot;
     Kokkos::View<long long*, MemorySpace> face_ring;
     Kokkos::View<detail::CellBlock*, MemorySpace> block;
     Kokkos::View<char*, MemorySpace> redone;    // incremental: per tetrahedron, adjacency looked up again
@@ -419,7 +430,7 @@ struct Assembly {
     // Storage kept from round to round (the views above and the mesh's are its first entries): freeing and
     // allocating gigabytes between rounds stalls cudaMalloc. Two sets of tetrahedra and slots for incremental rounds.
     struct Store {
-        Kokkos::View<int*, MemorySpace> owner, neighbour, length, ring_start, first_tet, slot_face, tet_slot, ring[2];
+        Kokkos::View<int*, MemorySpace> owner, neighbour, length, ring_start, first_tet, tet_slot, ring[2];
         Kokkos::View<long long*, MemorySpace> face_ring;
         Kokkos::View<char*, MemorySpace> redone;
         Quads<MemorySpace> vertex[2], adjacent[2];
@@ -523,17 +534,13 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
                ring_start = detail::take(store.ring_start, faces, "face_ring_start");
     a.first_tet = detail::take(store.first_tet, faces, "assemble_first_tet");
     a.face_ring = detail::take(store.face_ring, faces, "assemble_face_ring");
-    a.slot_face = detail::take(store.slot_face, slots, "assemble_slot_face");
-    const auto first_tet = a.first_tet, slot_face = a.slot_face;
+
+    const auto first_tet = a.first_tet;
     const auto face_ring = a.face_ring;
     // A thread per face, so the writes are coalesced: its owner by bisection, then the walk of the owner's block.
     Kokkos::parallel_for(
         "tet_mesh::faces_of_cells", Range(exec, 0, faces), KOKKOS_LAMBDA(int g) {
-            int t = 0;
-            for (int high = n; high - t > 1;) {
-                const int middle = (t + high) / 2;
-                (face_start(middle) <= g ? t : high) = middle;
-            }
+            const int t = detail::bisect(face_start, n, g);
             long long at = cell_ring(t);
             int slot = slot_start(t), tet = tet_start(t);
             for (int f = face_start(t); f < g; ++f) {
@@ -548,10 +555,6 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
             ring_start(g) = slot;
             first_tet(g) = tet;
             face_ring(g) = at + 2;
-        });
-    Kokkos::parallel_for(
-        "tet_mesh::slot_faces", Range(exec, 0, faces), KOKKOS_LAMBDA(int g) {
-            for (int s = ring_start(g), end = s + length(g); s < end; ++s) slot_face(s) = g;
         });
 
     // An incremental round writes the other set; the previous round's mesh views this one.
@@ -578,7 +581,8 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     // of its two smallest, read from that owner's ring block. A clean cell's lookups are its last ones, renumbered.
     Kokkos::parallel_for(
         "tet_mesh::emit", Range(exec, 0, slots), KOKKOS_LAMBDA(int s) {
-            const int g = slot_face(s), i = owner(g), j = neighbour(g), k = length(g), m = s - ring_start(g);
+            const int g = detail::bisect(ring_start, faces, s), i = owner(g), j = neighbour(g), k = length(g),
+                      m = s - ring_start(g);
             const long long base = face_ring(g);
             const int p = rings(base + m), q = rings(base + detail::after(m, k));
             if (emits(j, p, q)) {
@@ -629,7 +633,8 @@ void assemble(const ExecSpace& exec, const shell_voronoi::Cells<typename ExecSpa
     const auto redone = a.redone;
     Kokkos::parallel_for(
         "tet_mesh::adjacency", Range(exec, 0, tets), KOKKOS_LAMBDA(int e) {
-            const int s = tet_slot(e), g = slot_face(s), k = length(g), base = ring_start(g), m = s - base;
+            const int s = tet_slot(e), g = detail::bisect(ring_start, faces, s), k = length(g), base = ring_start(g),
+                      m = s - base;
             const int next = ring(base + detail::after(m, k)), prior = ring(base + (m == 0 ? k : m) - 1);
             adjacent(e, 2) = next;
             adjacent(e, 3) = prior;

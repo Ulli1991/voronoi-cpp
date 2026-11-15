@@ -289,6 +289,9 @@ Stats build(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace:
         const Partial<Memory> partial{assembly.redone, previous.changed, carried};
         previous = {};
         const int count = assembly.counts.tets;
+        // The check's lists use assembly storage idle until the next round (first_tet: faces > tetrahedra).
+        check_store.listed = assembly.store.first_tet;
+        check_store.undecided = assembly.store.tet_slot;
         const Report report = check(exec, mesh, point, count, marked, partial, &check_store);
         ++stats.rounds;
         if (round == 0) stats.bad_tets = report.bad_tets;

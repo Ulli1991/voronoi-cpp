@@ -5,7 +5,7 @@
 #SBATCH -p general
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=36
-#SBATCH --mem=120G
+#SBATCH --mem=110G
 #SBATCH --time=01:30:00
 set -uo pipefail
 source /etc/profile.d/modules.sh
