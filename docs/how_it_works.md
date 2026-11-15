@@ -65,7 +65,7 @@ The control flow of one `update()`, with its decisions:
 
 **What.** Each cell is built on its own. It starts as a big cube around the generator and is cut by the bisector of each nearby particle, nearest first, until no particle left can cut it.
 
-**In and out.** In: the cell list. Out, per cell: a status, and its faces. A rebuild records face rings: for each face it owns, the neighbour and the ring of particles whose bisectors bound the face. `clip()` records face geometry instead. A face belongs to the cell with the lower id.
+**In and out.** In: the cell list. Out, per cell: a status, and its faces. A rebuild records face rings: for each face it owns, the neighbour and the ring of particles whose bisectors bound the face. `clip()` records face geometry instead. `shell_voronoi::volumes_and_centroids` records neither: only each cell's status, volume and centroid, from the same walk, cuts and face sums (the same bits), for callers that need no faces. A face belongs to the cell with the lower id.
 
 **Why it stops.** Let R be the largest distance from the generator to a vertex of the current cell. A particle farther than 2R cannot cut it. The walk visits grid cells at the particle's level in rings of increasing distance from the home cell. It stops at the first grid cell lying 2R or more from the home cell, and the cell is then certified. If the stencil (at most 4 cells out) ends first, the walk goes one level coarser and skips the cells it has already covered.
 

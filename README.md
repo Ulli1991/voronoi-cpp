@@ -1,6 +1,6 @@
 # voronoi-cpp
 
-A C++ library that builds exact Voronoi meshes of moving particles on GPUs. You hand it particle positions in a periodic box and get back the faces, cell volumes and centroids a finite-volume code needs. When the particles move, it repairs the mesh instead of rebuilding it, and the result stays exact. It is written in Kokkos: CUDA (validated on an A100 40 GB), plus OpenMP and Serial builds that run the same code for checks. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
+A C++ library that builds exact Voronoi meshes, and their dual Delaunay triangulations, of static or moving particles on GPUs. You hand it particle positions in a periodic box and get back the cells: volumes, centroids, and faces with their neighbours, area vectors and centroids. When the particles move, it repairs the mesh instead of rebuilding it, and the result stays exact. It is written in Kokkos: CUDA (validated on an A100 40 GB), plus OpenMP and Serial builds that run the same code for checks. `voronoi::Mesh<D, Exec>` is complete for D = 3, 2 and 1.
 
 The topology is exact, and so is the geometry up to rounding in every box tested, except for two fuzz cases not yet explained ([#45](https://github.com/Ulli1991/voronoi-cpp/issues/45)); see [Limitations](#limitations-and-open-items).
 
@@ -9,6 +9,29 @@ The finite-volume hydro is a separate code, [luna-cpp](https://github.com/Ulli19
 The library will be renamed **kikkou** (亀甲, kikkō, the tortoise-shell pattern), with the namespace `kikkou::`, once the open work has landed.
 
 BSD 3-Clause, see [LICENSE](LICENSE).
+
+## What it computes
+
+Every path takes positions in a periodic box, snaps them to a grid of 2³⁰ steps across the longest side and decides
+topology with exact predicates. Rates are on one A100 at 1305 MHz, double, jittered input, from the measured rows
+under [Measured performance](#measured-performance); B/cell is the peak GPU memory per cell.
+
+| Path (API) | Returns | Topology exact? | Rate, M cells/s; B/cell | For |
+|---|---|---|---|---|
+| Full rebuild: `voronoi::Mesh<3>::rebuild(x)`, or the first `update(x)` | per cell `volume()`, `centroid()` (after `update_cells()`), face list `cell_face_start()` / `cell_face()`; per face `owner()`, `neighbour()`, `area()` (vector), `face_centroid()`; the Delaunay tetrahedra (`tetrahedra()`, an internal accessor) | yes: clipping, then an exact check of every tetrahedron, exact rebuild where it fails | 18.6 (128³, the exact start: clipping with rings + tetrahedra); 1951 | a Voronoi or Delaunay mesh of a point set: mesh generation, neighbour graphs, geometry |
+| Clipping rebuild alone: `shell_voronoi::construct_warp` into `shell_voronoi::Cells` | per cell status, volume, centroid, face count; per owned face neighbour, area vector, centroid | certified cells (no particle within twice the cell's radius left uncut), rounded cuts; no exact check of the topology afterwards ([#30](https://github.com/Ulli1991/voronoi-cpp/issues/30)) | 42.6 (128³); 701 | cells of a static point set when faces are wanted and no persistent mesh |
+| Moving step: `Mesh<3>::update(x)` + `update_cells()` | the same as the full rebuild, repaired by exact flips; face numbers kept where no flip touched them | yes | 161 at 0.03 mean spacings per step (128³); 1979 | moving meshes: particles that move a little each step (moving-mesh hydro such as [luna-cpp](https://github.com/Ulli1991/luna-cpp), Lagrangian particle methods) |
+| Volumes only: `shell_voronoi::volumes_and_centroids(exec, box, x, volume, centroid)` | per cell volume and centroid, bit-identical to the clipping rebuild's | certified cells, as the clipping rebuild | 43.1 (128³, device to device, cell list included); 101 | density estimates (1 / volume), Lloyd relaxation and centroidal Voronoi tessellations, molecular-dynamics and point-cloud analysis |
+| 2D: `voronoi::Mesh<2>` | the same as `Mesh<3>` on triangles (edges as faces, areas as volumes) | yes | build 100, step 765 (2²⁰ cells, 0.03 spacings); 537–574 | 2D meshes and particle sets |
+| 1D: `voronoi::Mesh<1>` | sorted cells: lengths, centroids, the two faces per cell | yes | 18,905 per moving step (2²⁰ cells, 1095 MHz, older code) | 1D tests and particle methods; periodic ends or walls (`voronoi::Ends`) |
+
+Faces cost most of the memory: a 3D cell has about 16 faces (15.9 measured; each stored once, 8 per cell), so when faces are not
+needed, `volumes_and_centroids` takes 101 B/cell against 701 for the clipping rebuild.
+
+Not available yet: weighted (power, Laguerre) diagrams; non-periodic boxes in 2D and 3D (only periodic; 1D has walls);
+face velocities (the caller computes them from the motion); cells larger than the certification rule allows (about 6
+or more particles across the shortest side, see below). The fast warp kernel is CUDA only; other backends (OpenMP,
+Serial, HIP) run the per-thread kernel, the same cells.
 
 ## Install and build
 
