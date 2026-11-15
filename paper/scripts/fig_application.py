@@ -35,18 +35,17 @@ CODES = [
     ("Basselin et al.", "basselin-{s}-a100", "Basselin", "", "A100", 1, "#8c564b", "o"),
     ("Ray et al. (float)", "vorogpu-{s}-a100", "VoroGPU", "", "A100", 1, "#e377c2", "o"),
     ("Liu et al. (float)", "voronoi-gpu-liu-tet-{s}-a100", "Liu et al.", "tet-centric", "A100", 1, "#bcbd22", "o"),
-    ("voro++ mt (CPU)", "voropp-mt-cpu", "voro++", "multithreaded", "2x Xeon", 72, "#1f77b4", "D"),
-    ("CGAL + faces (CPU)", "cgal-dt3-par-cpu", "CGAL Delaunay_triangulation_3", "Delaunay + faces", "2x Xeon", 72,
+    ("voro++ (72 cores)", "voropp-mt-cpu", "voro++", "multithreaded", "2x Xeon", 72, "#1f77b4", "D"),
+    ("CGAL + faces (72 cores)", "cgal-dt3-par-cpu", "CGAL Delaunay_triangulation_3", "Delaunay + faces", "2x Xeon", 72,
      "#17becf", "D"),
-    ("geogram periodic (CPU)", "geogram-pdel-cpu", "geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72,
+    ("geogram periodic (72 cores)", "geogram-pdel-cpu", "geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72,
      "#e6ab02", "D"),
-    ("votess + faces (CPU)", "votess-cpu", "votess", "tesellate + faces", "2x Xeon", 72, "#9467bd", "D"),
+    ("votess + faces (72 cores)", "votess-cpu", "votess", "tesellate + faces", "2x Xeon", 72, "#9467bd", "D"),
 ]
 # Runs that end without volumes (docs/measurements.md, "Application inputs"): no rate, no record; listed in the panel.
 CRASHED = {("votess + faces", "cosmicweb"): "CUDA error 700", ("votess + faces", "surface"): "CUDA error 700",
-           ("votess + faces (CPU)", "surface"): "length_error"}
+           ("votess + faces (72 cores)", "surface"): "length_error"}
 ISSUE_60 = ("voronoi-cpp, rebuild", "voronoi-cpp, exact start")  # surface: cells refused, about 300x slower (#60 open)
-NONE = 3e-8  # where "no cell missing" is drawn
 
 
 def accuracy():
@@ -92,23 +91,35 @@ def rows():
     return out
 
 
+# Level of each complete code in the band (steps of 25 %), chosen so codes of similar rate sit at least two levels apart.
+LEVEL = {"voronoi-cpp, rebuild": 6, "voronoi-cpp, exact start": 1, "peclet-voro": 11, "gDel3D + faces": 0,
+         "Paragram + faces": 8, "votess + faces": 7, "Basselin et al.": 4, "Ray et al. (float)": 9,
+         "Liu et al. (float)": 6, "voro++ (72 cores)": 5, "CGAL + faces (72 cores)": 12,
+         "geogram periodic (72 cores)": 3, "votess + faces (72 cores)": 10}
+
+
+def height(r):
+    """The fraction missing, or for a complete code its level in the band."""
+    return r["missing"] if r["missing"] > 0 else 1.7e-8 * 1.25 ** LEVEL[r["label"]]
+
+
 def main():
     data = rows()
     fig, axes = figure(DOUBLE, 80, ncols=3, sharey=True)
     for ax, (kind, n, title) in zip(axes, PANELS):
         here = [r for r in data if r["kind"] == kind]
-        ax.axhspan(1e-8, 1e-7, color="0.92", zorder=0)
+        ax.axhspan(1e-8, 2.5e-7, color="0.92", zorder=0)
         for r in here:
             if r["state"] == "crashed":
                 continue
-            y = max(r["missing"], NONE)
+            y = height(r)
             hollow = r["state"] == "wrong"  # open and on top, so a wrong code is never hidden behind a right one
             ax.plot(r["rate"], y, r["marker"], color=r["colour"], ms=9 if hollow else 8,
                     mfc="none" if hollow else r["colour"], mec=r["colour"] if hollow else "white",
                     mew=1.8 if hollow else 0.5, zorder=5 if hollow else 4)
         ours = [r for r in here if kind == "surface" and r["label"] in ISSUE_60]
         for r in ours:
-            ax.annotate("", (r["rate"], max(r["missing"], NONE)), xytext=(0.042, 2.5e-6), arrowprops=dict(
+            ax.annotate("", (r["rate"], height(r)), xytext=(0.042, 2.5e-6), arrowprops=dict(
                 arrowstyle="-", color="0.3", lw=0.8, shrinkA=0, shrinkB=5))
         if ours:
             ax.text(0.046, 2.5e-6, "#60 open", fontsize=11, ha="left", va="center")
@@ -124,7 +135,7 @@ def main():
         ax.set_xlabel("build rate, M cells/s")
         ax.set_title(title, fontsize=13)
         figstyle.decorate(ax)
-        ax.text(0.97, 1.25e-7, "band: no cell missing", fontsize=10, va="bottom", ha="right", color="0.3",
+        ax.text(0.97, 3e-7, "band: no cell missing", fontsize=10, va="bottom", ha="right", color="0.3",
                 transform=ax.get_yaxis_transform())
     axes[0].set_ylabel("fraction of cells missing")
     seen = {}

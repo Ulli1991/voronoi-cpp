@@ -22,7 +22,8 @@ SIZE = 3.0  # marker area, design pt²
 def contrast(c):
     if c < 1000:  # two significant digits
         return f"1 : {float(f'{c:.2g}'):.0f}"
-    return f"1 : {c / 10 ** np.floor(np.log10(c)):.0f}·10$^{{{int(np.log10(c))}}}$"
+    mantissa, power = c / 10 ** np.floor(np.log10(c)), int(np.log10(c))
+    return f"1 : 10$^{{{power}}}$" if round(mantissa) == 1 else f"1 : {mantissa:.0f}·10$^{{{power}}}$"
 
 
 def main():
