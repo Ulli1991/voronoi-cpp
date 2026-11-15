@@ -1073,7 +1073,9 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                            Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
             policy(exec, blocks, warp::cells_per_block, warp::lanes);
         policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron)));
-        auto big_policy = policy;
+        // Big polyhedra take twice the scratch: 4 blocks fit an SM.
+        Kokkos::TeamPolicy<Kokkos::Cuda, Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, 4>> big_policy(
+            exec, blocks, warp::cells_per_block, warp::lanes);
         big_policy.set_scratch_size(
             0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::PolyhedronOf<warp::big_capacity>)));
         // Near-uniform input (every particle at the base level) takes the kernel without level changes.
