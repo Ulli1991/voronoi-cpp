@@ -21,7 +21,8 @@ data="${1:-/raven/u/uli/libbench-data}"
 sizes="${2:-2097152}"  # serial: 128^3 only
 bin=/raven/u/uli/libbench-src/qhull/install/bin
 export OMP_NUM_THREADS=1 OMP_PROC_BIND=spread OMP_PLACES=cores
-declare -A width=([bluenoise]=${WIDTH_bluenoise:-3} [jittered]=${WIDTH_jittered:-3} [uniform]=${WIDTH_uniform:-4} [clustered]=${WIDTH_clustered:-8} [halo]=${WIDTH_halo:-8})
+declare -A width=([bluenoise]=${WIDTH_bluenoise:-3} [jittered]=${WIDTH_jittered:-3} [uniform]=${WIDTH_uniform:-4} [clustered]=${WIDTH_clustered:-8} [halo]=${WIDTH_halo:-8}
+    [cosmicweb]=${WIDTH_cosmicweb:-8} [fccsolid]=${WIDTH_fccsolid:-3} [surface]=${WIDTH_surface:-28})
 lscpu | grep -E 'Model name|^CPU\(s\)|MHz' >&2
 for n in $sizes; do
     for kind in ${KINDS:-jittered uniform clustered halo bluenoise}; do
