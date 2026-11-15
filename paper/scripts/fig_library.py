@@ -28,16 +28,16 @@ HEADLINE = [  # (library, variant prefix, device, threads, label)
 ]
 SHORT = {"voronoi-cpp, warp rebuild, host to host": "voronoi-cpp, host to host",
          "voronoi-cpp, host to host, volumes + centroids out": "voronoi-cpp, host to host",
-         "CGAL parallel + faces (ours)": "CGAL par. + faces", "geogram PDEL + faces (ours)": "geogram PDEL + faces",
+         "CGAL parallel + faces (ours)": "CGAL + faces", "geogram PDEL + faces (ours)": "geogram PDEL + faces",
          "geogram periodic + cells": "geogram periodic", "CGAL periodic + faces, 1 core": "CGAL, 1 core",
          "TetGen + faces, 1 core": "TetGen, 1 core", "Qhull + faces, 1 core": "Qhull, 1 core",
-         "voronoi-cpp, warp rebuild": "voronoi-cpp", "voro++ multithreaded": "voro++ mt",
+         "voronoi-cpp, warp rebuild": "voronoi-cpp", "voro++ multithreaded": "voro++",
          "votess + faces (ours)": "votess + faces", "peclet-voro (no centroids)": "peclet-voro",
          "Basselin et al. 2021": "Basselin et al.", "Liu et al. 2022 (float)": "Liu et al. (float)",
          "Ray et al. 2018 (float)": "Ray et al. (float)",
-         "voronoi-cpp, host to host, volumes + centroids out": "ours, host to host"}
+         "voronoi-cpp, host to host, volumes + centroids out": "ours, full cells, host to host"}
 SHORT["voronoi-cpp, warp rebuild"] = "ours"
-SHORT["voronoi-cpp, host to host, volumes + centroids out"] = "ours, host to host"
+SHORT["voronoi-cpp, host to host, volumes + centroids out"] = "ours, full cells, host to host"
 
 
 def load():
@@ -74,14 +74,15 @@ def published(ax, pub, tag, x0, annotate=False):
     for code, n, dist, where in lb.FIGURE_PUBLISHED:
         for p in pub if where == tag else []:
             if p["code"].startswith(code) and p["n"] == n and p["distribution"].startswith(dist):
-                name = p["code"].split(" (")[0].replace(" 2021", "").replace(" 2018", "")
+                name = p["code"].split(" (")[0].replace(" 2021", "").replace(" 2018", "").replace("Voro++", "voro++")
                 dist_s = p["distribution"].split(" (")[0].replace(" noise", "")
                 label = f"{name}{', ' + dist_s if 'Basselin' in name else ''}"
                 rate = float(p["rate_Mcells_s"])
                 ax.plot([x0 if annotate else x0 + 0.3 * k], [rate], marker="o^sDv"[k], mfc="white", mec="0.25",
-                        mew=1.6, ms=8, ls="none", zorder=5, label=None if annotate else label + " (publ.)")
+                        mew=1.6, ms=8, ls="none", zorder=5, label=None if annotate else label + " (published)")
                 if annotate:
-                    ax.text(x0 + 0.25, rate, label.replace(" et al.", ""), va="center", fontsize=11, color="0.25")
+                    ax.text(x0 + 0.25, rate, f"{label.replace(' et al.', '')}: {rate:.3g}", va="center", fontsize=10,
+                            color="0.25")
                 k += 1
                 break
     return k
@@ -135,11 +136,12 @@ def gaps():
 
 def more(summary, pub):
     g = gaps()
-    fig, axes = figure(DOUBLE, 80, ncols=3, gridspec_kw=dict(width_ratios=[1.3, 1, 1]))
+    fig, axes = figure(DOUBLE, 80, ncols=3, gridspec_kw=dict(width_ratios=[1.5, 0.95, 1.0]))
     a, b, c = axes
     x0 = len(lb.INPUTS) + 0.3
     curves(a, summary, lb.FIGURE_GPU_VOLUMES)
-    axes_inputs(a, published(a, pub, "gpu_volumes", x0, annotate=True), x0, short=True, width=2.7)
+    xa = x0 + 0.7  # room for the ratio note next to the star
+    axes_inputs(a, published(a, pub, "gpu_volumes", xa, annotate=True), xa, short=True, width=4.2)
     # Our volumes-only path, host to host like the three codes, from the job that ran them on blue noise.
     vol = next(v for k, v in g.items() if k[0][1] == "volumes and centroids only, host to host"  # pageable buffers
                and k[2] == "bluenoise" and k[3] == lb.SIZES[0])
@@ -147,8 +149,8 @@ def more(summary, pub):
               for lib, var in (("Basselin", ""), ("VoroGPU", ""), ("Liu et al.", "tet-centric"))]
     a.plot(1, vol["median"], "*", color=OURS, ms=15, mec="white", mew=0.5, zorder=6,
            label="ours, volumes only, host to host")
-    a.annotate("{:.1f}× Basselin, {:.1f}× Ray,\n{:.1f}× Liu (same job)".format(*(vol["median"] / o for o in others)),
-               (1, vol["median"]), xytext=(-0.3, vol["median"] * 2.2), fontsize=10, va="bottom", ha="left")
+    a.text(1.2, vol["median"] * 1.5, "{:.1f}× Basselin\n{:.1f}× Ray\n{:.1f}× Liu (same job)".format(
+        *(vol["median"] / o for o in others)), fontsize=10, va="center", ha="left")
     a.set_ylim(0.5, 5000)
     a.set_ylabel("M cells/s")
     a.text(0.03, 0.97, "(a) A100, volumes", transform=a.transAxes, va="top")
@@ -161,7 +163,7 @@ def more(summary, pub):
     curves(b, merged, cpu)
     summary = merged
     axes_inputs(b, published(b, pub, "cpu", x0), x0, short=True)
-    b.set_ylim(0.05, 1000)
+    b.set_ylim(0.05, 5000)
     b.text(0.03, 0.97, "(b) 72 cores, full cells", transform=b.transAxes, va="top")
     b.legend(loc="upper right", fontsize=11, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
     names = ["ours\nGPU", "peclet\nGPU", "ours\nCPU", "peclet\nCPU", "CGAL\n1 core"]
@@ -174,7 +176,7 @@ def more(summary, pub):
     c.set_yscale("log")
     c.set_ylim(0.01, 1000)
     c.set_xlim(-0.6, 4.6)
-    c.set_xticks(range(5), names)
+    c.set_xticks(range(5), names, fontsize=11)
     c.set_ylabel("moving step, M cells/s")
     c.text(0.96, 0.97, "(c)", transform=c.transAxes, ha="right", va="top")
     figstyle.decorate(c)

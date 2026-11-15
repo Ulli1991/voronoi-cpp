@@ -60,12 +60,14 @@ timed in. Open markers: published rates on other hardware and points (peclet-vor
 2018; Paragram; votess; Voro++, Lu et al. 2023), cited per marker. To be regenerated when the close-gaps CPU rows and
 our rerun at 1305 MHz exist.
 
-**library_more, additions (close-gaps, voronoi-cpp 77055a4).** (a) Star: our volumes-only path
+**library_more, additions (close-gaps, voronoi-cpp 77055a4).** (a) "ours, full cells, host to host": the warp rebuild with volumes and centroids copied out (faces stay on the
+device). Open markers in the published column: the rates the papers report on their own hardware and points, value
+printed next to each. Star: our volumes-only path
 (`shell_voronoi::volumes_and_centroids`), host to host with pageable buffers like the three volumes-only codes, blue
 noise only: 33.2 M cells/s in A100 job 32368078 (node ravg1004), which also ran Basselin et al. (10.4), Ray et al.
 (18.1) and Liu et al. (18.1) on blue noise in their README setting; the ratios printed are from that job alone (3.2×,
 1.8×, 1.8×). With pinned host buffers 36.1, on the device 40.2. The curves are the benchmark's rows as before.
-(b) voronoi-cpp's warp rebuild and voro++ multithreaded from one CPU job on one node (32367276, ravc4079, 72 threads,
+(b) voronoi-cpp's warp rebuild and voro++ (multithreaded, Lu, Lazar and Rycroft 2023) from one CPU job on one node (32367276, ravc4079, 72 threads,
 77055a4): ours 3.4 / 3.8 / 2.6 / 2.0 / 2.0 against voro++ 2.4 / 2.5 / 1.8 / 0.38 / 0.085 M cells/s on jittered, blue
 noise, white noise, clustered, halo; the other codes from the benchmark's CPU jobs (other nodes). (c) ours CPU: the
 moving step at 72 threads from the same job (8.5 M cells/s, jittered, 0.03 spacings).
@@ -113,3 +115,9 @@ runs' median total. kNN codes in their README setting (jittered: perturbed grid,
 own phase timers are inconsistent (init reads about 1.4·10⁵ s, star splaying about 1.9 s in runs of 0.5 to 1.4 s),
 so only its total is shown. One A100 at 1305 MHz, job 32368965 (node ravg1013; voronoi-cpp de57e65+local); one CPU
 node, 72 threads, job 32368966 (ravl1045; voronoi-cpp d06ddc4). Double precision but Ray et al. and Liu et al. (float).
+Our two rows split the cell list differently, so their neighbour searches do not compare: the rebuild calls the
+cell list itself and its lap holds the whole call (configure, Morton keys, radix sort, slots, levels: 114 ns per cell on
+72 cores, 0.6 ns on the A100), while inside `Mesh::update` only the cell-list kernels are labelled (keys, slots, levels,
+positions: 2.4 ns on 72 cores); the sort and the host work around them fall outside labelled kernels and are counted in
+the exact Delaunay start. Our rebuild's rest on the A100 (1.4 ns) is the cell arrays' allocation (0.5) and the time
+between laps (0.9); it has no copies because it is timed from points on the device to cells on the device.
