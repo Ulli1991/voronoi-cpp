@@ -54,7 +54,7 @@ def by_role():
 
 def main():
     data = by_role()
-    fig, (a, b) = figure(DOUBLE, 82, ncols=2, gridspec_kw=dict(width_ratios=[1.0, 1.25]))
+    fig, (a, b) = figure(DOUBLE, 92, ncols=2, gridspec_kw=dict(width_ratios=[0.75, 1.25]))
     phases = ("rebuild", "exact start", "moving step")
     for i, p in enumerate(phases):
         left = 0.0
@@ -65,11 +65,13 @@ def main():
         big = sum(data[16777216, p].values())
         a.text(i, left + 25, f"{left:.0f}", ha="center", va="bottom", fontsize=11)
     a.set_xticks(range(3), ["rebuild", "exact\nstart", "moving\nstep"])
-    a.set_xlim(-0.6, 5.0)
+    a.set_xlim(-0.6, 2.6)
     a.set_ylim(0, 2200)
     a.set_ylabel("device B/cell at the peak, 128³")
-    a.legend(loc="center right", fontsize=11, handlelength=1.2, bbox_to_anchor=(1.0, 0.45))
-    a.text(0.98, 0.98, "(a)", transform=a.transAxes, ha="right", va="top")
+    handles, labels = a.get_legend_handles_labels()  # outside on the right, top role first as in the stack
+    a.legend(handles[::-1], labels[::-1], loc="center left", fontsize=11, handlelength=1.2, bbox_to_anchor=(1.01, 0.5),
+             frameon=False)
+    a.text(0.03, 0.98, "(a)", transform=a.transAxes, ha="left", va="top")
     figstyle.decorate(a)
     a.xaxis.set_minor_locator(plt.NullLocator())
     a.tick_params(axis="x", which="both", top=False, bottom=False)
@@ -79,7 +81,7 @@ def main():
     rows = []
     for lib, variant, label in GPU_ROWS:
         got = lb.curve(summary, lib, variant, "A100", 1, lb.SIZES[0])
-        bpc = [s["bytes_per_cell"] for s in got.values() if s["bytes_per_cell"]]
+        bpc = [s["bytes_per_cell"] for i, s in got.items() if s["bytes_per_cell"] and i in lb.INPUTS]  # the five inputs
         if bpc:
             rows.append((label, min(bpc), max(bpc)))
     steps = [float(r["bytes_per_cell"]) for k, r in csv_rows() if k == "moving step"]
@@ -88,20 +90,22 @@ def main():
         ours = label.startswith("voronoi-cpp")
         b.barh(y, hi, color="#666666" if ours else "#cfcfcf", height=0.6)
         b.barh(y, lo, color="#000000" if ours else "#8a8a8a", height=0.6)
-        b.text(hi * 1.08, y, f"{lo:.0f}–{hi:.0f}" if hi > lo * 1.02 else f"{hi:.0f}", va="center", fontsize=11)
+        b.text(hi * 1.08, y, f"{lo:.0f}–{hi:.0f}" if hi > lo * 1.02 else f"{hi:.0f}", va="center", fontsize=11,
+               zorder=5, bbox=dict(fc="white", ec="none", pad=0.4))  # the size lines pass behind the values
     for k, (side, name) in enumerate(SIZES):
         limit = A100 / side ** 3
-        b.axvline(limit, color="#d62728", lw=1.4, ls="--")
+        b.axvline(limit, color="#d62728", lw=1.4, ls="--", zorder=1)
         b.text(limit * 1.05, -1.5 + 0.55 * (k % 2), f"{name} below {limit:.0f}", color="#d62728", ha="left",
                va="center", fontsize=11, bbox=dict(fc="white", ec="none", pad=0.3))
     from matplotlib.patches import Patch
     b.legend(handles=[Patch(color="#000000", label="ours, lowest input"), Patch(color="#666666", label="ours, up to the highest"),
                       Patch(color="#8a8a8a", label="others, lowest input"), Patch(color="#cfcfcf", label="others, up to the highest")],
-             loc="lower right", fontsize=11, ncol=2, columnspacing=0.8, handlelength=1.2)
+             loc="upper center", bbox_to_anchor=(0.4, -0.15), fontsize=11, ncol=2, columnspacing=0.8, handlelength=1.2,
+             frameon=False)
     b.set_xscale("log")
     b.set_xlim(60, 30000)
     b.set_yticks(range(len(rows)), [r[0] for r in rows], fontsize=11)
-    b.set_ylim(len(rows) + 1.6, -1.9)
+    b.set_ylim(len(rows) - 0.4, -1.9)
     b.set_xlabel("device B/cell at the peak, 128³")
     b.text(0.02, 0.98, "(b)", transform=b.transAxes, ha="left", va="top")
     figstyle.decorate(b)
