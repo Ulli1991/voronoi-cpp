@@ -268,9 +268,9 @@ inline Points make_cosmic_web(int n, std::mt19937_64& rng) {
             std::pow(1 + 3.89 * q + std::pow(16.1 * q, 2) + std::pow(5.46 * q, 3) + std::pow(6.71 * q, 4), -0.25);
         return std::pow(k, ns) * t * t;
     };
-    double s8 = 0;  // sigma_8² of the shape: top hat of 8 Mpc/h, midpoint rule in ln k
-    for (double lk = std::log(1e-5); lk < std::log(1e3); lk += 1e-3) {
-        const double k = std::exp(lk), x = 8 * k, w = 3 * (std::sin(x) - x * std::cos(x)) / (x * x * x);
+    double s8 = 0;  // sigma_8² of the shape: top hat of 8 Mpc/h, sum over ln k from 1e-5 to 1e3 h/Mpc in steps of 1e-3
+    for (int step = 0; step < 18421; ++step) {
+        const double k = 1e-5 * std::exp(1e-3 * step), x = 8 * k, w = 3 * (std::sin(x) - x * std::cos(x)) / (x * x * x);
         s8 += k * k * k * shape(k) * w * w * 1e-3 / (2 * M_PI * M_PI);
     }
     const long long g2 = 1LL * g * g, cells = g2 * g;
