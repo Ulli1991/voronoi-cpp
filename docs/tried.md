@@ -26,6 +26,19 @@ Reason gives the structural cause, not "method X is worse".
 | Delaunay-first: lattice plus motion through `update()` | jittered 3.5 against 17.4 (start); stuck on uniform, clustered, halo | dropped | lattice ties force a full re-triangulation; large shifts stall the repair | branch `delaunay-first`, research_notes/delaunay_first_2026-11-12.md |
 | Delaunay-first: batched insertion with exact flips | 0.38 when it finishes; falls back on most inputs | dropped | floored by flips: about 13.5 flips per cell at 17–21 M flips/s | same |
 
+| Volumes-only output (`volumes_and_centroids`: no face sums, face writes or pool) | device +16 % on blue noise (34.8 → 40.4), +12 to +27 % on jittered, uniform and halo, +1 % clustered; host to host 18.4 → 33.2 (blue noise, 128³); 671 → 101 B/cell; same bits | kept (new option) | the face rows were few bytes but the 1.1 GB face pool, its allocation and the host mirrors dominated host-to-host time; the walk and cuts are unchanged | measurements.md, "Volumes-only output and the CPU path"; jobs 32368078–80 |
+| Pinned host buffers for the volumes-only copies | 128³: within the run spread (31 to 37 against 33 to 35); 256³: +5 to +11 % | option in the bench only; tables use pageable memory | the copies are 56 B/cell, a few ms at 128³; pinned memory pays only once the copies are a larger share | same |
+
+## CPU path
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| Parallel stable radix sort of the host cell list (was `std::sort` on one thread) | cell list 370–450 → 11 ms; build 2.2 → 3.6 M cells/s on blue noise (72 cores); same slot order and bits | kept | the sort was serial while everything else used 72 threads | measurements.md, "Volumes-only output and the CPU path"; jobs 32361898, 32362120 |
+| Dynamic chunks of 16 cells in the host thread kernel | +7 % (blue noise) to +17 % (halo) | kept (host backends only; CUDA unchanged) | cell costs vary, static blocks leave threads idle at the end | same; job 32362198 |
+| Dynamic chunks of 128 | about equal to 16 | not chosen | load balance is already even at 16 | job 32362198 |
+| Close instead of spread binding | 0 to +3 % (within noise) | not changed | the kernel is not bound by where threads sit | same |
+| 144 hyperthreads instead of 72 cores | −18 % (blue noise) to 0 % | dropped | clipping is compute-bound per core; a second thread per core only competes for it | same |
+
 ## Moving step
 
 | Change | Effect | Kept? | Reason | Where |

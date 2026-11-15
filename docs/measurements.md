@@ -47,15 +47,61 @@ Job 31702953 (research_notes/box3_2026-10-31.md). Kelvin-Helmholtz-like slab, Lx
 
 The bench flow, stretched with the box, shears across the 16-cell thickness: 4x the flips per cell of the cube. Peak 2192 B/cell at 16.8M. The cubic case is bit-identical to the cubic-only code and within 0.3 to 0.7 % of its rebuild speed.
 
-### Against other libraries (2026-11-12 to 2026-11-14)
+### Against other libraries (2026-11-12 to 2026-11-15)
 
 The README's library table: methods, every setting, 256³ and the per-code versions, compilers and jobs in
 [library_benchmark.md](library_benchmark.md); raw records in `bench/libraries/results/` and the tables generated from
-them by `scripts/library_benchmark.py` (`summary.md`). voronoi-cpp rows: ad62997 (main b2faee8 plus the benchmark),
-A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under load), CPU job 32272650 (Kokkos OpenMP,
-72 cores and 1). Every other GPU code ran on the same node in chained jobs (`bench/libraries/run_chain_a100.sh`), each
+them by `scripts/library_benchmark.py` (`summary.md`). voronoi-cpp rows: 77055a4 (close-gaps, below), A100 jobs
+32368078, 32368079, 32368080 (gpu1, 1305 MHz), CPU job 32367276 (with voro++ in the same job); before that ad62997
+(main b2faee8 plus the benchmark), A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under
+load), CPU job 32272650 (Kokkos OpenMP, 72 cores and 1). Every other GPU code ran on the same node in chained jobs (`bench/libraries/run_chain_a100.sh`), each
 with our warp rebuild as a same-GPU reference. Inputs: jobs 32225761 (generators) and 32234292 (blue noise, 100 Lloyd
 iterations). Oracle checks: job 32269164 and accuracy-main-login.jsonl (one core, login node).
+
+### Volumes-only output and the CPU path (2026-11-15)
+
+Branch close-gaps, commit 77055a4 (main c42c230 plus the changes below). Library benchmark inputs and scripts
+([library_benchmark.md](library_benchmark.md)), 128³ unless stated, median of 3 timed runs, M cells/s.
+
+**Volumes and centroids only** (`shell_voronoi::volumes_and_centroids`, `Cells::volumes_only`): the warp kernel with
+`warp::Output::volumes` records status, volume and centroid and skips the face sums, face writes and pool claim; the
+walk, certification, canonical face starts (so the bits of the volume sums) and fallbacks are unchanged. Volumes and
+centroids are bit-identical to the full rebuild's on blue noise, jittered and halo input (`cmp` of the volume files,
+job 32361903); the oracle checks of every new file give at most 1.6e-13, no cell missing (job 32371853).
+
+| A100, 1305 MHz | jittered | blue noise | uniform | clustered | halo | B/cell |
+|---|---|---|---|---|---|---|
+| full warp rebuild, device | 37.8 | 34.8 | 19.1 | 16.6 | 15.2 | 671 |
+| volumes only, device | 43.1 | 40.4 | 24.3 | 16.7 | 17.0 | 101 |
+| full rebuild, host to host, volumes and centroids copied out (before) | 19.7 | 18.4 | 13.6 | 11.6 | 11.0 | 696 |
+| volumes only, host to host, pageable | 34.5 | 33.2 | 21.5 | 16.5 | 15.6 | 126 |
+| volumes only, host to host, pinned buffers | 31.4 | 34.4 | 22.4 | 17.9 | 16.1 | 126 |
+| volumes only, host to host, pageable, 256³ | 35.1 | 33.0 | 21.9 | 18.5 | 17.7 | |
+
+Jobs 32368079 (128³) and 32368080 (256³), and 32368078 (blue noise with Liu et al., VoroGPU and Basselin et al. in the
+same job: 18.1, 18.1 and 10.4 at 128³; 24.4, 19.7 and 11.6 at 256³). Pinned buffers are within the run-to-run spread of
+pageable ones at 128³ and 5 to 11 % faster at 256³.
+
+**CPU** (72 cores, 2x Xeon Platinum 8360Y, `OMP_PROC_BIND=spread OMP_PLACES=cores`, full cells with the cell list):
+
+| | jittered | blue noise | uniform | clustered | halo |
+|---|---|---|---|---|---|
+| before (ad62997, job 32272650) | 2.6 | 2.2 | 1.7 | 1.4 | 1.3 |
+| parallel radix sort of the host cell list (job 32362120) | 3.4 | 3.6 | 2.4 | 1.9 | 1.7 |
+| + dynamic chunks of 16 (77055a4, job 32367276) | 3.4 | 3.8 | 2.6 | 2.0 | 2.0 |
+| voro++ multithreaded, same job | 2.4 | 2.5 | 1.8 | 0.38 | 0.085 |
+
+Phases on blue noise before (job 32361898): cell list 370 to 450 ms (one thread's `std::sort` of 2.1M keys), clipping
+575 to 600 ms. The radix sort (8 bits a pass, per-chunk counts, stable, so the slot order is the same) takes 11 ms.
+Dynamic chunks of 16 or 128 cut the clipping by 7 % (blue noise) to 17 % (halo); close binding changes nothing; 144
+hyperthreads are 0 to 18 % slower (job 32362198). Volumes bit-identical to ad62997's on all five inputs.
+
+**Default paths unchanged** (job 32368117, main 55cd6b1 against close-gaps, alternating, 1305 MHz, 128³): rebuild
+42.6 / 21.9 M cells/s jittered / uniform on both; update + `update_cells()` 161.2 / 162.4 M cells/s at 0.03 spacings
+and 99.8 / 99.6 at 0.1; clip, tetrahedra, ring, geometry, face and list checksums identical (the cells checksum hashes
+face numbers and differs between any two runs, as before). A100 `ctest` 22 of 22 (job 32368083); CI's host steps (gcc 15,
+host Kokkos 5.0.99 OpenMP at 2 threads, sanitizers off and on): 22 of 22 each, clang-tidy stops on `mesh_fuzz_test.cpp`
+as on main (#56) (job 32367277).
 
 ### Long runs
 
