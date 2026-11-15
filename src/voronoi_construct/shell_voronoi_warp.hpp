@@ -77,22 +77,26 @@ KOKKOS_INLINE_FUNCTION std::uint32_t half(std::uint64_t mask, int k) {
 KOKKOS_INLINE_FUNCTION bool bit(std::uint32_t low, std::uint32_t high, int v) {
     return ((v < 32 ? low : high) >> (v & 31)) & 1;
 }
-// The vertex mask of a big polyhedron: bit v in word v / 64. Mask<V> is the mask type of V slots.
+// The vertex mask of a big polyhedron: bit v in word v / 64.
 struct Mask128 {
     std::uint64_t word[2];
 };
+// The mask type of V slots. Used by: clip, Kernel::build and their helpers.
 template <int V>
 using Mask = std::conditional_t<V == 64, std::uint64_t, Mask128>;
+// The same for a big mask.
 KOKKOS_INLINE_FUNCTION std::uint32_t half(const Mask128& mask, int k) { return half(mask.word[k >> 1], k & 1); }
 // Bit v of a mask. Used by: the kernel's loops over a lane's slots.
 KOKKOS_INLINE_FUNCTION bool test(std::uint64_t mask, int v) { return mask >> v & 1; }
 KOKKOS_INLINE_FUNCTION bool test(const Mask128& mask, int v) { return mask.word[v >> 6] >> (v & 63) & 1; }
+// Whether no bit is set. Used by: clip.
 KOKKOS_INLINE_FUNCTION bool empty(std::uint64_t mask) { return mask == 0; }
 KOKKOS_INLINE_FUNCTION bool empty(const Mask128& mask) { return (mask.word[0] | mask.word[1]) == 0; }
 // (live without removed) with made. Used by: clip.
 KOKKOS_INLINE_FUNCTION std::uint64_t replace(std::uint64_t live, std::uint64_t removed, std::uint64_t made) {
     return (live & ~removed) | made;
 }
+// The same for big masks.
 KOKKOS_INLINE_FUNCTION Mask128 replace(const Mask128& live, const Mask128& removed, const Mask128& made) {
     return {{(live.word[0] & ~removed.word[0]) | made.word[0], (live.word[1] & ~removed.word[1]) | made.word[1]}};
 }
@@ -523,9 +527,9 @@ enum class Output { faces, rings, volumes };
 // uncertified cells to the thread kernel. output: owned face geometry, face rings, or nothing more.
 // cubic: the grid is one cube (Grid::cube()). filtered: build the slots of `list` and skip what cannot cut (#60);
 // V: vertex and plane slots (big_capacity for filtered cells past 64). Used by: construct_warp.
-template <class MemorySpace, bool adaptive, Output output, bool cubic = false, bool filtered = false,
-          int V = max_vertices>
+template <class MemorySpace, bool adaptive, Output output, bool cubic = false, bool filtered = false, int V = 64>
 struct Kernel {
+    // The polyhedron in shared memory, and the slots (vertices and planes) each lane owns.
     using Cell = PolyhedronOf<V>;
     static constexpr int per_lane = V / lanes;
     static constexpr bool with_rings = output == Output::rings, with_faces = output != Output::volumes;
@@ -1017,8 +1021,8 @@ struct Kernel {
 
 namespace detail {
 
-// The slots of the cells for the filtered warp kernel (#60): deferred ones, with `uncertified` too after a walk of the
-// base level alone (levels false). Used by: construct_warp.
+// The slots of the cells for a filtered warp kernel (#60): deferred ones, `uncertified` too after a walk of the base
+// level alone (levels false), and the warp's overflows (overflows true). Used by: construct_warp.
 template <class ExecSpace>
 Kokkos::View<int*, typename ExecSpace::memory_space> heavy_slots(const ExecSpace& exec,
                                                                  const Grid<typename ExecSpace::memory_space>& grid,
@@ -1108,8 +1112,8 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 Kokkos::parallel_for(
                     label, policy,
                     Kernel<Memory, false, o>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
-            // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
-            // the filtered kernel, over a list of their slots.
+            // Cells past the budget or 64 vertices or planes, and those a walk of the base level alone left (needles
+            // into empty space, #60): the filtered kernel, over a list of their slots.
             const auto list = detail::heavy_slots(exec, grid, out, off_base > 0, true);
             if (list.extent(0) == 0) return;
             Kokkos::deep_copy(exec, next_cell, 0);
@@ -1121,7 +1125,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 Kokkos::parallel_for("shell_voronoi::construct_warp_filtered", policy,
                                      Kernel<Memory, true, o, false, true>{grid, out, half_width, stencil, next_cell,
                                                                           unit, unit2, budget, list});
-            // Those past 64 vertices or planes once more, with big_capacity slots.
+            // Those past 64 vertices or planes once more, with big_capacity slots; past those, the thread kernel.
             const auto big = detail::heavy_slots(exec, grid, out, true, false);
             if (big.extent(0) == 0) return;
             Kokkos::deep_copy(exec, next_cell, 0);
