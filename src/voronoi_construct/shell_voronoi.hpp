@@ -211,10 +211,10 @@ struct Candidate {
     std::int8_t image[3];  // periodic image of the slot, in box lengths
 };
 
-// Which of the selected cells a pass builds: all, those not ok, or those
-// that overflowed the usual capacities.
-// Used by: construct_cells, construct_huge.
-enum class Pass { all, failed, overflowed };
+// Which of the selected cells a pass builds: all, those not ok, those that overflowed the usual capacities, or
+// those not ok that did not overflow (uncertain).
+// Used by: construct_cells, construct_huge, finish_failed.
+enum class Pass { all, failed, overflowed, uncertain };
 
 // A thread's cell: on its stack, the host's huge ones (over a megabyte) on
 // the heap, as an OpenMP thread may have little more than that.
@@ -265,8 +265,10 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             const int id = grid.order(t);
             const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
+            const bool overflow = before == vertex_overflow || before == plane_overflow;
             if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
-                (pass == Pass::overflowed && before != vertex_overflow && before != plane_overflow))
+                (pass == Pass::overflowed && !overflow) ||
+                (pass == Pass::uncertain && (before == ok || before == face_overflow || overflow)))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
             ep::i64 self[3] = {0, 0, 0};
@@ -636,6 +638,23 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
     construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
     if constexpr (Cell<big_planes, big_vertices>::exact)
         if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
+}
+
+// The warp kernel's failures with rounded cells: uncertain cells with the usual capacities, then every overflowed
+// cell with big ones at once. The same cells as construct_cells(Pass::failed): a cell that fits gives the same bits
+// with either capacity. Used by: construct_warp.
+template <class ExecSpace>
+void finish_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                   const Stencil<typename ExecSpace::memory_space>& stencil,
+                   const Cells<typename ExecSpace::memory_space>& out) {
+    construct_pass<RoundedCell<max_planes, max_vertices>>(exec, grid, stencil, out, Pass::uncertain, {});
+    const auto status = out.status;
+    int count = 0;
+    Kokkos::parallel_reduce(
+        "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
+        KOKKOS_LAMBDA(int i, int& sum) { sum += status(i) == vertex_overflow || status(i) == plane_overflow; }, count);
+    if (count > 0)
+        construct_pass<RoundedCell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, {});
 }
 
 // Run build() on an empty pool; if the pool turned out too small (cells
