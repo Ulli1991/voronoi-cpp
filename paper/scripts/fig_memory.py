@@ -94,17 +94,17 @@ def main():
     for k, (side, name) in enumerate(SIZES):
         limit = A100 / side ** 3
         b.axvline(limit, color="#d62728", lw=1.4, ls="--", zorder=1)
-        b.text(limit * 1.05, -1.5 + 0.55 * (k % 2), f"{name} below {limit:.0f}", color="#d62728", ha="left",
+        b.text(limit * 1.05, -0.75 - 0.55 * k, f"{name} below {limit:.0f}", color="#d62728", ha="left",
                va="center", fontsize=11, bbox=dict(fc="white", ec="none", pad=0.3))
     from matplotlib.legend_handler import HandlerTuple
     from matplotlib.patches import Patch
     b.legend([(Patch(color="#000000"), Patch(color="#8a8a8a")), (Patch(color="#666666"), Patch(color="#cfcfcf"))],
              ["lowest input", "up to the highest"], handler_map={tuple: HandlerTuple(ndivide=None, pad=0)},
-             handlelength=2.0, loc="lower right", fontsize=11)  # dark: ours, grey: others (caption)
+             handlelength=2.0, loc="lower right", bbox_to_anchor=(1.0, 0.13), fontsize=11)  # above the Ray et al. row
     b.set_xscale("log")
-    b.set_xlim(60, 1.5e5)
+    b.set_xlim(60, 3e4)
     b.set_yticks(range(len(rows)), [r[0] for r in rows], fontsize=11)
-    b.set_ylim(len(rows) - 0.4, -1.9)
+    b.set_ylim(len(rows) - 0.4, -2.4)
     b.set_xlabel("device B/cell at the peak, 128³")
     b.text(0.02, 0.98, "(b)", transform=b.transAxes, ha="left", va="top")
     figstyle.decorate(b)
