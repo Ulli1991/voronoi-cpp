@@ -18,7 +18,7 @@ def runs(path):
         if line.startswith("== long"):
             n, flags = int(line.split()[2]), line.split("flags=")[1].strip() or "none"
             out[flags] = (n, [], [])
-        elif line.startswith("gpuflips:") and flags:
+        elif line.startswith("gpuflips:") and flags and "all_ms=" in line:
             f = dict(re.findall(r"(\w+)=([-\w.+]+)", line))
             out[flags][1].append(int(f["step"]))
             out[flags][2].append(float(f["all_ms"]))

@@ -2,12 +2,14 @@
 """Library benchmark (docs/library_benchmark.md) at 128³ from its raw records (bench/libraries/results/*.jsonl,
 published.csv) through scripts/library_benchmark.py's readers. library_headline: full cells on one A100, one marker per
 library, ours highlighted, published apart; library_more: volumes only, one CPU node, the moving step."""
+import glob
+import json
 import os
 import sys
 
 import numpy as np
 
-from paperfig import DOUBLE, LW, REPO, SINGLE, figstyle, figure, save
+from paperfig import DATA, DOUBLE, LW, REPO, SINGLE, figstyle, figure, save
 
 sys.path.insert(0, os.path.join(REPO, "scripts"))
 import library_benchmark as lb  # noqa: E402
@@ -39,8 +41,14 @@ SHORT["voronoi-cpp, host to host, volumes + centroids out"] = "ours, host to hos
 
 
 def load():
+    """The benchmark's records; voronoi-cpp's rows from the paper's rerun (paper/data/raw/libbench-vcpp-*.jsonl) when
+    it exists, else the benchmark's own (lb.OURS)."""
     records, _ = lb.load_records()
-    return lb.summarise([r for r in records if r["library"] != "voronoi-cpp" or r["version"] == lb.OURS]), lb.published()
+    ours = []
+    for path in sorted(glob.glob(os.path.join(DATA, "raw", "libbench-vcpp-*.jsonl"))):
+        ours += [json.loads(line) for line in open(path) if line.startswith("{") and '"phase"' in line]
+    keep = [r for r in records if r["library"] != "voronoi-cpp" or (not ours and r["version"] == lb.OURS)]
+    return lb.summarise(keep + ours), lb.published()
 
 
 def curves(ax, summary, rows, big=False):
