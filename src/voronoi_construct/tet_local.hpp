@@ -24,6 +24,7 @@ struct Stats {
     int attempts = 0;
     long long flips = 0;  // device flips of the checking repairs
     bool done = false;    // the mesh passed the device repair's exact check
+    double index_ms = 0, select_ms = 0, clip_ms = 0, stitch_ms = 0, check_ms = 0;  // all attempts (fenced; index: caller)
 };
 
 // Affected-set flags per particle: none, a seed (particle of a stuck entry), affected, or added by the pass running.
@@ -194,7 +195,14 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
     };
 
     for (int attempt = 0; attempt < 2 && !stats.done; ++attempt) {
-        stats = Stats{0, 0, 0, 0, attempt + 1, stats.flips, false};
+        stats.seeds = stats.cells = stats.removed = stats.created = 0;
+        stats.attempts = attempt + 1;
+        Kokkos::Timer timer;
+        auto lap = [&](double& ms) {
+            exec.fence();
+            ms += timer.seconds() * 1e3;
+            timer.reset();
+        };
         exact = attempt > 0;
         const int stuck = Kokkos::min(s.host_counters(tet_repair::counter::stuck), static_cast<int>(s.stuck.extent(0)));
         // Seeds: the particles of the stuck tetrahedra and of the ones across their stuck triangles.
@@ -219,6 +227,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         ring(flag::seed);
         if (attempt > 0) ring(flag::affected);  // wider: one more ring of old neighbours
         const int first_count = select(flag::affected, true);
+        lap(stats.select_ms);
         if (cells.capacity() < 160LL * first_count + 4096) cells.reallocate(256LL * first_count + 4096);
         clip(first_count);
         // A jumped particle's new neighbourhood (on the second attempt every cell's), then their cells.
@@ -233,6 +242,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
             Kokkos::deep_copy(exec, cells.ring_used, 0u);
             clip(count);
         }
+        lap(stats.clip_ms);
         if (failed(count) > 0) continue;
 
         // The tetrahedra the cells imply, numbered by cell, positively oriented.
@@ -407,10 +417,12 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
                 "tet_local::free", Range(exec, 0, dead), KOKKOS_LAMBDA(int d) { to_free(at + d) = old(created + d); });
             s.free_count += dead;
         }
+        lap(stats.stitch_ms);
         tet_flips::write_region(exec, m, s, rows, stuck);
         const tet_repair::Stats device = tet_repair::repair(exec, m, s);
         stats.flips += device.flips23 + device.flips32;
         stats.done = device.stuck == 0 && !device.unfinished;
+        lap(stats.check_ms);
         if (device.unfinished) break;
     }
     return stats;

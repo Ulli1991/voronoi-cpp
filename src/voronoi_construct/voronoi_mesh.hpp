@@ -245,8 +245,13 @@ public:
         const bool local = fallback_ == Fallback::local ||
                            (fallback_ == Fallback::cheapest && static_cast<long long>(device.stuck) * local_share <= n_);
         if (stuck && !device.unfinished && local) {
+            Kokkos::Timer clock;
             index(positions_);
-            const tet_local::Stats patch = tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_);
+            exec_.fence();
+            const double index_ms = clock.seconds() * 1e3;
+            local_ = tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_);
+            local_.index_ms = index_ms;
+            const tet_local::Stats& patch = local_;
             list_ = neighbor_search::CellList<ExecSpace>{};  // as after a rebuild: memory only while used
             report.local_cells = patch.cells;
             report.local_tets = patch.created;
@@ -402,10 +407,10 @@ public:
                 slots(i) = slot_of(cells(i));
                 listed(cells(i)) = 1;
             });
-        local_ = shell_voronoi::Cells<Memory>(n_, false, 10, count);
+        local_cells_ = shell_voronoi::Cells<Memory>(n_, false, 10, count);
         // Exact cells: nothing checks a rounded one here (#30).
-        shell_voronoi::construct(exec_, shell_voronoi::make_grid(list_), local_, {slots, listed}, true);
-        return local_;
+        shell_voronoi::construct(exec_, shell_voronoi::make_grid(list_), local_cells_, {slots, listed}, true);
+        return local_cells_;
     }
 
     // Scratch memory the caller may use between updates: the spare ring pool, grown to `bytes` if smaller.
@@ -537,6 +542,7 @@ public:
     // Internals, for tests and the benchmark.
     const tet_mesh::Mesh<Memory>& tetrahedra() const { return tets_; }
     const tet_repair::State<Memory>& repair_state() const { return state_; }
+    const tet_local::Stats& local_stats() const { return local_; }  // the last local repair's
 #if defined(VORONOI_MEASURE)
     const tet_mesh::FaceRings<Memory>& face_rings() const { return rings_; }  // measurement build only
 #endif
@@ -717,7 +723,8 @@ private:
     bool resorted_ = false;   // by the update running
     int since_sort_ = 0;      // updates since the last build or re-sort
     double far_share_ = 0;    // far_faces() at the last check
-    shell_voronoi::Cells<Memory> local_;
+    shell_voronoi::Cells<Memory> local_cells_;
+    tet_local::Stats local_;
 };
 
 }  // namespace voronoi
