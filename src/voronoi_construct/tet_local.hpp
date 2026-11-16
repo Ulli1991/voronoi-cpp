@@ -24,7 +24,8 @@ struct Stats {
     int attempts = 0;
     long long flips = 0;  // device flips of the checking repairs
     bool done = false;    // the mesh passed the device repair's exact check
-    double index_ms = 0, select_ms = 0, clip_ms = 0, stitch_ms = 0, check_ms = 0;  // all attempts (fenced; index: caller)
+    double index_ms = 0, select_ms = 0, clip_ms = 0, stitch_ms = 0,
+           check_ms = 0;  // all attempts (fenced; index: caller)
 };
 
 // Affected-set flags per particle: none, a seed (particle of a stuck entry), affected, or added by the pass running.
@@ -84,7 +85,8 @@ struct Table {
 // the positions); widened by a ring and all new neighbours on a second attempt. Used by: voronoi::Mesh<3>::update.
 template <class ExecSpace>
 Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
-             tet_mesh::Mesh<typename ExecSpace::memory_space>& m, tet_repair::State<typename ExecSpace::memory_space>& s) {
+             tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
+             tet_repair::State<typename ExecSpace::memory_space>& s) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     using Ints = Kokkos::View<int*, Memory>;

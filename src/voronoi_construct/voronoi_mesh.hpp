@@ -143,10 +143,10 @@ struct Report {
     bool miscounted = false;       // the repair's faces were not cells + tetrahedra (Euler, #48): rebuilt
     long long host_flips = 0;      // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
-    int local_cells = 0;           // cells the local repair clipped exactly (tet_local), 0 if it did not run
-    int local_tets = 0;            // tetrahedra it created
-    int local_attempts = 0;        // its attempts (2: widened once)
-    bool local_done = false;       // the local repair finished the mesh
+    int local_cells = 0;      // cells the local repair clipped exactly (tet_local), 0 if it did not run
+    int local_tets = 0;       // tetrahedra it created
+    int local_attempts = 0;   // its attempts (2: widened once)
+    bool local_done = false;  // the local repair finished the mesh
     int faces = 0;
     bool resorted = false;  // cell ids changed: cell i is the particle the caller passed as Mesh::permutation()(i)
 };
@@ -242,8 +242,8 @@ public:
         report.stuck = device.stuck;
         lap(timer, timings, &Timings::repair);
         bool stuck = device.stuck > 0 || device.unfinished;
-        const bool local = fallback_ == Fallback::local ||
-                           (fallback_ == Fallback::cheapest && static_cast<long long>(device.stuck) * local_share <= n_);
+        const bool local = fallback_ == Fallback::local || (fallback_ == Fallback::cheapest &&
+                                                            static_cast<long long>(device.stuck) * local_share <= n_);
         if (stuck && !device.unfinished && local) {
             Kokkos::Timer clock;
             index(positions_);

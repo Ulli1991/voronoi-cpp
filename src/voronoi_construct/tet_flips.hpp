@@ -447,8 +447,9 @@ void write_region(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memo
                     const int pa = tet_mesh::position(dm, u, a), pb = tet_mesh::position(dm, u, b);
                     if (pa >= 0 && pb >= 0) {
                         const auto bit = static_cast<std::uint8_t>(1 << tet_mesh::edge_index(pa, pb));
-                        const int before = u == lowest ? Kokkos::atomic_fetch_or(&edges(u), bit)
-                                                       : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
+                        const int before = u == lowest
+                                               ? Kokkos::atomic_fetch_or(&edges(u), bit)
+                                               : Kokkos::atomic_fetch_and(&edges(u), static_cast<std::uint8_t>(~bit));
                         if ((before & bit) != (u == lowest ? bit : 0)) touch(u);
                     }
                     const int next = tet_mesh::next_around_edge(dm, u, previous, a, b);

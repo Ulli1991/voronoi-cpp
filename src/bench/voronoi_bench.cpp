@@ -755,13 +755,16 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
                   << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
                   << " host_rebuilt=" << r.host_rebuilds << " local_ms=" << t.local << " local_cells=" << r.local_cells
-                  << " local_tets=" << r.local_tets << " local_attempts=" << r.local_attempts << " local_index_ms=" << mesh.local_stats().index_ms << " local_select_ms=" << mesh.local_stats().select_ms
-                  << " local_clip_ms=" << mesh.local_stats().clip_ms << " local_stitch_ms=" << mesh.local_stats().stitch_ms
-                  << " local_check_ms=" << mesh.local_stats().check_ms << " local_done=" << r.local_done << " rebuilt=" << r.rebuilt << " overlapped=" << r.overlapped
-                  << " miscounted=" << r.miscounted << " rebuild_ms=" << t.build
-                  << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
-                  << " cells_ms=" << t.cells << " resorted=" << r.resorted << " resort_ms=" << t.resort
-                  << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3
+                  << " local_tets=" << r.local_tets << " local_attempts=" << r.local_attempts
+                  << " local_index_ms=" << mesh.local_stats().index_ms
+                  << " local_select_ms=" << mesh.local_stats().select_ms
+                  << " local_clip_ms=" << mesh.local_stats().clip_ms
+                  << " local_stitch_ms=" << mesh.local_stats().stitch_ms
+                  << " local_check_ms=" << mesh.local_stats().check_ms << " local_done=" << r.local_done
+                  << " rebuilt=" << r.rebuilt << " overlapped=" << r.overlapped << " miscounted=" << r.miscounted
+                  << " rebuild_ms=" << t.build << " tets=" << mesh.repair_state().count << " faces=" << r.faces
+                  << " centres_faces_ms=" << t.geometry << " cells_ms=" << t.cells << " resorted=" << r.resorted
+                  << " resort_ms=" << t.resort << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3
                   << " all_ms=" << t.repair + t.fallback + t.local + t.build + t.resort + t.geometry + t.cells
                   << " advect_ms=" << advect_ms << " copy_ms=" << copy_ms << "\n";
         if (order_every > 0 && s % order_every == 0) report_order(mesh, s);
@@ -918,17 +921,18 @@ int main(int argc, char** argv) {
                     layout_flags(argc, argv), text_flag(argc, argv, "--dump-cells", ""),
                     flag_value(argc, argv, "--jump-share", 0), flag_value(argc, argv, "--jump-spacings", 4),
                     text_flag(argc, argv, "--fallback", "cheapest")) != 0;
-    std::cerr << "usage: voronoi_bench rebuild <n> <distribution|file.pts> [repeats] [--no-check] [--kernels]\n"
-                 "                          [--memory] [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
-                 "       voronoi_bench chunks <n> <distribution> [repeats]\n"
-                 "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
-                 "                          [--memory] [--kernels] [--measure] [--order=every]\n"
-                 "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-                 "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids]\n"
-                 "                          [--closure] [--dump-cells=path]\n"
-                 "                          [--jump-share=f --jump-spacings=d] [--fallback=cheapest|local|host|rebuild]\n"
-                 "                          [--no-start]\n"
-                 "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
-                 "       both: [--box=Lx,Ly,Lz]\n";
+    std::cerr
+        << "usage: voronoi_bench rebuild <n> <distribution|file.pts> [repeats] [--no-check] [--kernels]\n"
+           "                          [--memory] [--measure=every --dump=file.npy] (VORONOI_MEASURE builds)\n"
+           "       voronoi_bench chunks <n> <distribution> [repeats]\n"
+           "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
+           "                          [--memory] [--kernels] [--measure] [--order=every]\n"
+           "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
+           "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids]\n"
+           "                          [--closure] [--dump-cells=path]\n"
+           "                          [--jump-share=f --jump-spacings=d] [--fallback=cheapest|local|host|rebuild]\n"
+           "                          [--no-start]\n"
+           "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
+           "       both: [--box=Lx,Ly,Lz]\n";
     return 2;
 }

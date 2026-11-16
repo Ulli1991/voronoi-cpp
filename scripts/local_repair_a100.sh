@@ -1,7 +1,7 @@
 #!/bin/bash
 # Local repair (S2, tet_local) on one A100: main (ref) and the branch (new) in the same job.
 #   sbatch -o build-cuda/gpu-run/s2-<part>-%j.txt scripts/local_repair_a100.sh <bin dir> <part> [n]
-# <bin dir>/voronoi_bench_{ref,new} are copies of the binaries. Parts: verify, speed, crossover, smooth, surface.
+# <bin dir>/voronoi_bench_{ref,new} are copies of the binaries. Parts: verify, speed, crossover, often, smooth, surface.
 #SBATCH -J local_repair
 #SBATCH -p gpu1
 #SBATCH --gres=gpu:a100:1
@@ -65,6 +65,12 @@ smooth)  # the default path: checksums and rates, seven inputs, three spacings
             for tag in ref new ref new; do run "$tag" "smooth-$kind-$d" "$input" "$d" --checksum; done
         done
     done
+    ;;
+often)  # the inputs whose smooth flow sticks in a few steps: 30 steps under the default policy, every step verified
+    STEPS=${STEPS:-30}
+    steps=$STEPS
+    run new "flow-1-cheapest" cosmicweb 1 --verify
+    run new "flow-0.5-cheapest" clustered 0.5 --verify
     ;;
 surface)  # the surface input (the start takes long; 64³ is enough)
     STEPS=${STEPS:-6}
