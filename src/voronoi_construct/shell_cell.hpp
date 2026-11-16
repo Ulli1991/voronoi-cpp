@@ -113,14 +113,15 @@ KOKKOS_INLINE_FUNCTION bool set_vertex(C& cell, int v, int a, int b, int c) {
 // The vertex of a rounded cell where planes a, b, c meet; false if they do
 // not meet in one point.
 // Used by: clip (rounded cells).
-template <class C>
+template <class Ar = Fused, class C>
 KOKKOS_INLINE_FUNCTION bool intersect(const C& cell, int a, int b, int c, Vec3& x) {
-    const Vec3 bc = cross(cell.normal[b], cell.normal[c]);
-    const Vec3 ca = cross(cell.normal[c], cell.normal[a]);
-    const Vec3 ab = cross(cell.normal[a], cell.normal[b]);
-    const double det = dot(cell.normal[a], bc);
+    const Vec3 bc = Ar::cross(cell.normal[b], cell.normal[c]);
+    const Vec3 ca = Ar::cross(cell.normal[c], cell.normal[a]);
+    const Vec3 ab = Ar::cross(cell.normal[a], cell.normal[b]);
+    const double det = Ar::dot(cell.normal[a], bc);
     if (!(Kokkos::abs(det) > 0.0)) return false;
-    x = (bc * cell.offset[a] + ca * cell.offset[b] + ab * cell.offset[c]) * (1.0 / det);
+    x = Ar::mul(Ar::add(Ar::add(Ar::mul(bc, cell.offset[a]), Ar::mul(ca, cell.offset[b])), Ar::mul(ab, cell.offset[c])),
+                1.0 / det);
     return true;
 }
 
@@ -255,7 +256,8 @@ KOKKOS_INLINE_FUNCTION int compact_planes(C& cell) {
 // removes the cut vertices, closes the hole with a new face. Returns ok when the plane does not cut or after the cut;
 // after anything else the cell must not be read again.
 // Used by: the nearest-first loop in construct_pass.
-template <bool checked = false, class C>
+// Ar: the arithmetic of a rounded cell (Fused, or Rounded for the host's bits on a GPU).
+template <bool checked = false, class Ar = Fused, class C>
 KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int id, int self) {
     using Index = typename C::Index;
     constexpr int max_holes = C::vertices_capacity / 2;
@@ -263,15 +265,15 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
     int cuts = 0;
     double offset = 0, tolerance = 0;
     if constexpr (!C::exact) {
-        offset = 0.5 * dot(d, d);
-        tolerance = 64 * Kokkos::Experimental::epsilon_v<double> * Kokkos::sqrt(dot(d, d) * cell.radius2);
+        offset = Ar::mul(0.5, Ar::dot(d, d));
+        tolerance = 64 * Kokkos::Experimental::epsilon_v<double> * Kokkos::sqrt(Ar::mul(Ar::dot(d, d), cell.radius2));
     }
     // A removed vertex of a rounded cell sits at the generator, which no bisector cuts off.
     for (int v = 0; v < cell.vertices; ++v) {
         if constexpr (C::exact)
             cut[v] = live(cell, v) && inside(cell, v, e, id, self);
         else
-            cut[v] = dot(d, cell.vertex[v]) - offset > tolerance;
+            cut[v] = Ar::sub(Ar::dot(d, cell.vertex[v]), offset) > tolerance;
         cuts += cut[v];
     }
     if (cuts == 0) return ok;
@@ -293,7 +295,7 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             if (holes == max_holes) return vertex_overflow;
             // The filter's bound needs new vertices between their ends: a kept end within the tolerance outside fails.
             if constexpr (checked && !C::exact)
-                if (dot(d, cell.vertex[u]) - offset > 0) return degenerate;
+                if (Ar::sub(Ar::dot(d, cell.vertex[u]), offset) > 0) return degenerate;
             const Index* across = cell.adjacent[u];
             hole[holes++] = {cell.corner[w][k], cell.corner[w][(k + 1) % 3], u,
                              static_cast<Index>(across[0] == w   ? 0
@@ -327,7 +329,7 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
         if constexpr (C::exact)
             r2 = Kokkos::max(r2, cell.r2[w]);
         else
-            r2 = Kokkos::max(r2, dot(cell.vertex[w], cell.vertex[w]));
+            r2 = Kokkos::max(r2, Ar::dot(cell.vertex[w], cell.vertex[w]));
     }
 
     // New vertex (a, b, plane) on each hole edge, in a free slot; the edge back from u now ends at it.
@@ -339,12 +341,12 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             r2 = Kokkos::max(r2, cell.r2[s]);
         } else {
             Vec3 x;
-            if (!intersect(cell, a, b, plane, x)) return degenerate;
+            if (!intersect<Ar>(cell, a, b, plane, x)) return degenerate;
             cell.vertex[s] = x;
             cell.corner[s][0] = static_cast<Index>(a);
             cell.corner[s][1] = static_cast<Index>(b);
             cell.corner[s][2] = static_cast<Index>(plane);
-            r2 = Kokkos::max(r2, dot(x, x));
+            r2 = Kokkos::max(r2, Ar::dot(x, x));
         }
         cell.adjacent[u][hole[h].back] = static_cast<Index>(s);
         cell.adjacent[s][0] = static_cast<Index>(u);

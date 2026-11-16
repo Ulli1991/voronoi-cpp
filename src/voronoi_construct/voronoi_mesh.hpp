@@ -67,7 +67,8 @@ std::string coincident(const Positions& positions) {
     std::iota(id.begin(), id.end(), 0);
     const bool third = x.extent(1) > 2;  // D = 2 or 3
     auto key = [&](int i) { return std::array<double, 3>{x(i, 0), x(i, 1), third ? x(i, 2) : 0.0}; };
-    std::sort(id.begin(), id.end(), [&](int a, int b) { return std::make_pair(key(a), a) < std::make_pair(key(b), b); });
+    std::sort(id.begin(), id.end(),
+              [&](int a, int b) { return std::make_pair(key(a), a) < std::make_pair(key(b), b); });
     long long extra = 0;
     int first = -1, second = -1;
     for (std::size_t i = 1; i < id.size(); ++i) {
@@ -100,8 +101,8 @@ std::string not_exact(const Cells& cells, const Positions& positions) {
     const long long overflow = count[shell_voronoi::plane_overflow] + count[shell_voronoi::vertex_overflow];
     if (overflow > 0)
         return "voronoi::Mesh: " + std::to_string(overflow) + " cells need more than the clipping's " +
-               std::to_string(shell_voronoi::huge_planes) + " planes or " + std::to_string(shell_voronoi::huge_vertices) +
-               " vertices (too many particles around one cell)";
+               std::to_string(shell_voronoi::huge_planes) + " planes or " +
+               std::to_string(shell_voronoi::huge_vertices) + " vertices (too many particles around one cell)";
     return "voronoi::Mesh: the start is not exact (clipping statuses: " + std::to_string(count[0]) + " ok, " +
            std::to_string(count[shell_voronoi::face_overflow]) + " out of pool room, " +
            std::to_string(count[shell_voronoi::degenerate]) + " degenerate)";
@@ -133,14 +134,14 @@ exact_predicates::BoxN<D> usable(const exact_predicates::BoxN<D>& box, bool floa
 
 // What an update did: filled by update() and rebuild(), returned to the caller.
 struct Report {
-    bool rebuilt = false;          // built from scratch (first update, rebuild(), or the guard)
-    tet_start::Stats start;        // of that build
-    long long flips = 0;           // device flips
-    int rounds = 0;                // device repair rounds
-    int stuck = 0;                 // triangles the device repair could not repair
-    bool overlapped = false;       // the repair's mesh did not fill the box once: rebuilt
-    bool miscounted = false;       // the repair's faces were not cells + tetrahedra (Euler, #48): rebuilt
-    long long host_flips = 0;      // flips and local rebuilds of the host fallback
+    bool rebuilt = false;      // built from scratch (first update, rebuild(), or the guard)
+    tet_start::Stats start;    // of that build
+    long long flips = 0;       // device flips
+    int rounds = 0;            // device repair rounds
+    int stuck = 0;             // triangles the device repair could not repair
+    bool overlapped = false;   // the repair's mesh did not fill the box once: rebuilt
+    bool miscounted = false;   // the repair's faces were not cells + tetrahedra (Euler, #48): rebuilt
+    long long host_flips = 0;  // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
     int faces = 0;
     bool resorted = false;  // cell ids changed: cell i is the particle the caller passed as Mesh::permutation()(i)
@@ -176,6 +177,10 @@ struct Layout {
     // Face centroids stored as float (12 B a face, face_centroid32()), not double; areas stay double, so cells close
     // as before; cell centroids are summed from the float rows. 3D, stored faces.
     bool float_centroids = false;
+    // The geometry (faces, cell sums, the volume check) and the clipping's per-thread kernel round every operation on
+    // its own (tet_mesh::Rounded): a GPU gives the host's bits, at some cost in the step (TESTING.md, "Bits across
+    // backends"). Off: written arithmetic, which nvcc fuses (the fastest). voronoi::Engine turns it on for hybrid.
+    bool same_bits_as_host = false;
     bool resorts() const { return every > 0 || far > 0; }
 };
 
@@ -289,11 +294,11 @@ public:
             index(positions_);
             auto cells = shell_voronoi::Cells<Memory>::with_rings(n_, ring_entries_ > 0 ? ring_entries_ : 64LL * n_);
             const auto grid = shell_voronoi::make_grid(list_);
-            shell_voronoi::construct_warp(exec_, grid, cells);
+            shell_voronoi::construct_warp(exec_, grid, cells, layout_.same_bits_as_host);
             report.start = tet_start::build(exec_, grid, cells, tets_);
             if (!report.start.exact && cells.needed() > cells.capacity()) {
                 cells = shell_voronoi::Cells<Memory>::with_rings(n_, cells.needed() + cells.needed() / 16);
-                shell_voronoi::construct_warp(exec_, grid, cells);
+                shell_voronoi::construct_warp(exec_, grid, cells, layout_.same_bits_as_host);
                 report.start = tet_start::build(exec_, grid, cells, tets_);
             }
             ring_entries_ = cells.capacity();
@@ -340,6 +345,12 @@ public:
         cells_current_ = false;
     }
     const Layout& layout() const { return layout_; }
+    // Layout::same_bits_as_host alone, as Mesh<2> has it. Used by: voronoi::Engine.
+    void set_same_bits_as_host(bool on) {
+        Layout l = layout_;
+        l.same_bits_as_host = on;
+        set_layout(l);
+    }
 
     // After an update that re-sorted (Report::resorted): cell i is the particle the caller passed as permutation()(i).
     // The caller renumbers its per-particle arrays, positions too, before the next update (permute does it).
@@ -375,7 +386,8 @@ public:
         View<int*> slot_of(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("clip_slot_of")), n_);
         const auto order = list_.order;
         Kokkos::parallel_for(
-            "voronoi::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
+            "voronoi::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
+            KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
         Kokkos::parallel_for(
             "voronoi::listed", Kokkos::RangePolicy<ExecSpace>(exec_, 0, count), KOKKOS_LAMBDA(int i) {
                 slots(i) = slot_of(cells(i));
@@ -416,10 +428,11 @@ public:
                 tet_mesh::cells_incremental(
                     exec_, positions_, box_, owner(), neighbour(), tets_, state_.alive,
                     Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries)), rings_, geometry,
-                    cells_, reinterpret_cast<char*>(spare.data()), layout_.owner_bit);
+                    cells_, reinterpret_cast<char*>(spare.data()), layout_.owner_bit, layout_.same_bits_as_host);
             else
                 tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry, cells_,
-                                scratch(tet_mesh::cells_scratch_bytes(faces())).data(), layout_.owner_bit);
+                                scratch(tet_mesh::cells_scratch_bytes(faces())).data(), layout_.owner_bit,
+                                layout_.same_bits_as_host);
         };
         if (faces_stored_)
             lists(geometry_);
@@ -476,10 +489,13 @@ public:
     // face_geometry().face(f, area, centroid), from its ring; the bits area() and face_centroid() hold. Valid until the
     // next update, like the views below.
     tet_mesh::FaceGeometry<Memory> face_geometry() const {
-        if (!layout_.owner_faces) return tet_mesh::face_geometry(positions_, box_, tets_);
-        return tet_mesh::face_geometry(
-            positions_, box_, tets_,
-            View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current], std::make_pair(0, faces()))));
+        auto g = layout_.owner_faces
+                     ? tet_mesh::face_geometry(positions_, box_, tets_,
+                                               View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current],
+                                                                                std::make_pair(0, faces()))))
+                     : tet_mesh::face_geometry(positions_, box_, tets_);
+        g.rounded = layout_.same_bits_as_host;
+        return g;
     }
     // Stored by update(), or with Layout::faces_on_read here on the first call after an update.
     Rows area() const {
@@ -540,7 +556,7 @@ private:
         auto out = geometry_;
         if (cells_current_) out.volume = {};
         const auto slot = face_geometry().slot;
-        tet_mesh::faces(exec_, positions_, box_, tets_, out, slot);
+        tet_mesh::faces(exec_, positions_, box_, tets_, out, slot, layout_.same_bits_as_host);
         faces_stored_ = true;
     }
     // On the torus V - E + F - T = 0 and F = 2T: a mesh has cells + tetrahedra edges, each one face.
@@ -569,7 +585,7 @@ private:
 
     // With timings: fence, add the time since `timer` started to the phase `field`, restart the timer.
     // Used by: update, rebuild, update_cells, geometry.
-    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
+    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::* field) const {
         if (!timings) return;
         exec_.fence();
         timings->*field += timer.seconds() * 1e3;
@@ -589,8 +605,9 @@ private:
     // Used by: rebuild, clip.
     template <class P>
     void index(const P& p) {
-        if (list_.n != n_) neighbor_search::configure(list_, n_, box_, box_.cubic() ? box_.side[0] * std::cbrt(1.0 / n_)
-                                                                                   : std::cbrt(box_.volume() / n_));
+        if (list_.n != n_)
+            neighbor_search::configure(
+                list_, n_, box_, box_.cubic() ? box_.side[0] * std::cbrt(1.0 / n_) : std::cbrt(box_.volume() / n_));
         neighbor_search::build(exec_, list_, p);
     }
 
@@ -602,8 +619,9 @@ private:
         lists_of_last_update_ = updates_since_lists_ == 0;
         ++updates_since_lists_;
         const Kokkos::View<const int*, Memory> created =
-            state_.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
-                                       : Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries));
+            state_.touched_entries < 0
+                ? Kokkos::View<const int*, Memory>()
+                : Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries));
         if (rings_.faces < 0)
             tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count);
         else
@@ -626,7 +644,7 @@ private:
         bool small = false;
         if (!stores_faces())
             total_volume_ = tet_mesh::tet_volumes(exec_, positions_, box_, tets_, View<const char*>(state_.alive),
-                                                  state_.count, live_tets_, small);
+                                                  state_.count, live_tets_, small, layout_.same_bits_as_host);
         if (!small) {
             store_faces();
             total_volume_ = detail::total_volume(exec_, geometry_.volume, state_.alive, state_.count, live_tets_);
@@ -679,7 +697,7 @@ private:
     double total_volume_ = 0;  // of the cells, from the last geometry()
     int live_tets_ = 0;        // tetrahedra, from the last geometry()
     bool cells_current_ = false;
-    int updates_since_lists_ = 1;       // updates since the last update_cells()
+    int updates_since_lists_ = 1;        // updates since the last update_cells()
     bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last
     tet_mesh::Points4<Memory> positions_;
     neighbor_search::CellList<ExecSpace> list_;
@@ -700,5 +718,5 @@ private:
 };
 
 }  // namespace voronoi
-#include "sorted_mesh.hpp"  // Mesh<1>
+#include "sorted_mesh.hpp"      // Mesh<1>
 #include "voronoi_mesh_2d.hpp"  // Mesh<2>

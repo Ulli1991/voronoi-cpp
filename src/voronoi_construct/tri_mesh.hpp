@@ -16,7 +16,6 @@ namespace tri_mesh {
 
 namespace ep = exact_predicates;
 using tet_mesh::Vec2;
-namespace R = tet_mesh::rounded;
 
 // Row-major view of one 6-int row per triangle (corners and links).
 // Used by: Mesh<2>, tri_mesh::Mesh (corners, links).
@@ -34,7 +33,7 @@ struct Triangles {
     Sixes<MemorySpace> corners;
     // Row t: the triangle across the edge opposite corner k, then its face number (3 + k).
     Sixes<MemorySpace> links;
-    Rows2<MemorySpace> centre;  // circumcentre, unwrapped near corner 0
+    Rows2<MemorySpace> centre;                         // circumcentre, unwrapped near corner 0
     Kokkos::View<int*, MemorySpace> owner, neighbour;  // of face f, owner < neighbour
 
     int count() const { return static_cast<int>(corners.extent(0)); }
@@ -82,8 +81,8 @@ struct RingLookup {
 // rings do not close (never for exact rings on distinct points).
 // Used by: Mesh<2>::rebuild (start).
 template <class ExecSpace>
-Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
-                                                       const polygon_clip::Rings<typename ExecSpace::memory_space>& rings) {
+Triangles<typename ExecSpace::memory_space> from_rings(
+    const ExecSpace& exec, const polygon_clip::Rings<typename ExecSpace::memory_space>& rings) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(rings.degree.extent(0));
@@ -105,10 +104,13 @@ Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
         },
         total);
     if (total != 2 * n)
-        throw std::runtime_error("tri_mesh::from_rings: " + std::to_string(total) + " triangles of " + std::to_string(n) +
+        throw std::runtime_error("tri_mesh::from_rings: " + std::to_string(total) + " triangles of " +
+                                 std::to_string(n) +
                                  " particles (2n on a torus): too few particles across the box, or duplicates");
     Triangles<Memory> mesh;
-    const auto no_init = [](const char* label) { return Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)); };
+    const auto no_init = [](const char* label) {
+        return Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label));
+    };
     mesh.corners = Sixes<Memory>(no_init("tri_corners"), total);
     mesh.links = Sixes<Memory>(no_init("tri_links"), total);
     mesh.centre = Rows2<Memory>(no_init("tri_centre"), total);
@@ -175,21 +177,23 @@ Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
 // Products of a triangle with corners 1, 2 at offsets a, b from corner 0 (grid steps), shared by the centre and the
 // in-circle filter so every kernel gets the same bits.
 // Used by: centres in tri_repair, the screen, total_area, centre of each triangle.
-struct Circle {
+// In arithmetic A (tet_mesh::Fused, as main; tet_mesh::Rounded, the host's bits on every backend).
+template <class A>
+struct CircleAs {
     double la, lb, mx, my, det;
-    // Each operation rounded on its own (tet_mesh::rounded): the same bits on every backend.
-    KOKKOS_INLINE_FUNCTION Circle(double ax, double ay, double bx, double by)
-        : la(R::add(R::mul(ax, ax), R::mul(ay, ay))),
-          lb(R::add(R::mul(bx, bx), R::mul(by, by))),
-          mx(R::sub(R::mul(la, bx), R::mul(lb, ax))),
-          my(R::sub(R::mul(la, by), R::mul(lb, ay))),
-          det(R::sub(R::mul(ax, by), R::mul(ay, bx))) {}
+    KOKKOS_INLINE_FUNCTION CircleAs(double ax, double ay, double bx, double by)
+        : la(A::add(A::mul(ax, ax), A::mul(ay, ay))),
+          lb(A::add(A::mul(bx, bx), A::mul(by, by))),
+          mx(A::sub(A::mul(la, bx), A::mul(lb, ax))),
+          my(A::sub(A::mul(la, by), A::mul(lb, ay))),
+          det(A::sub(A::mul(ax, by), A::mul(ay, bx))) {}
     // The circumcentre of corner 0 at grid point (x0, y0), in box units.
     KOKKOS_INLINE_FUNCTION Vec2 centre(int x0, int y0, double step) const {
         const double scale = 0.5 / det;
-        return {R::mul(R::add(x0, R::mul(my, scale)), step), R::mul(R::sub(y0, R::mul(mx, scale)), step)};
+        return {A::mul(A::add(x0, A::mul(my, scale)), step), A::mul(A::sub(y0, A::mul(mx, scale)), step)};
     }
 };
+using Circle = CircleAs<tet_mesh::Fused>;
 
 // Offset from grid coordinate `from` to `to` on a period, to the nearest image.
 KOKKOS_INLINE_FUNCTION double steps(int from, int to, int period) {
@@ -202,10 +206,10 @@ KOKKOS_INLINE_FUNCTION double steps(int from, int to, int period) {
 // Face geometry, one thread per triangle: the area vector (owner to neighbour) is the edge between the two centres turned
 // a quarter, the centroid its midpoint, both relative to the owner. A face belongs to the side of the lower apex.
 // Used by: Mesh<2>::geometry.
-template <class ExecSpace, class X>
-void faces(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
-           const Triangles<typename ExecSpace::memory_space>& mesh,
-           const tet_mesh::Geometry<typename ExecSpace::memory_space, 2>& out) {
+template <class Ar, class ExecSpace, class X>
+void faces_as(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
+              const Triangles<typename ExecSpace::memory_space>& mesh,
+              const tet_mesh::Geometry<typename ExecSpace::memory_space, 2>& out) {
     const auto corners = mesh.corners, links = mesh.links;
     const auto centre = mesh.centre;
     const auto area = out.area, centroid = out.centroid;
@@ -217,20 +221,36 @@ void faces(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
             for (int k = 0; k < 3; ++k) {
                 if (corners(t, k) >= corners(t, 3 + k)) continue;
                 const int a = corners(t, (k + 1) % 3), b = corners(t, (k + 2) % 3), f = links(t, 3 + k);
-                const Vec2 e = tet_mesh::wrap(ct - tet_mesh::row<2>(centre, links(t, k)), box);
+                const Vec2 e = tet_mesh::wrap<Ar>(Ar::sub(ct, tet_mesh::row<2>(centre, links(t, k))), box);
                 const int o = a < b ? a : b, j = a < b ? b : a;
                 const double sign = a < b ? 1.0 : -1.0;
                 const Vec2 A{sign * e.y, -sign * e.x};
-                const Vec2 c = R::sub(tet_mesh::wrap(ct - tet_mesh::row<2>(x, o), box), R::mul(e, 0.5));
+                const Vec2 c = Ar::sub(tet_mesh::wrap<Ar>(Ar::sub(ct, tet_mesh::row<2>(x, o)), box), Ar::mul(e, 0.5));
                 tet_mesh::store(area, f, A);
                 tet_mesh::store(centroid, f, c);
                 if (with_rows) {
-                    const float row[8] = {float(A.x), float(A.y), 0, float(c.x), float(c.y), 0,
-                                          Kokkos::bit_cast<float>(o), Kokkos::bit_cast<float>(j)};
+                    const float row[8] = {float(A.x),
+                                          float(A.y),
+                                          0,
+                                          float(c.x),
+                                          float(c.y),
+                                          0,
+                                          Kokkos::bit_cast<float>(o),
+                                          Kokkos::bit_cast<float>(j)};
                     for (int s = 0; s < 8; ++s) rows(f, s) = row[s];
                 }
             }
         });
+}
+// The same in the arithmetic `rounded` picks (tet_mesh::Rounded, else Fused). Used by: Mesh<2>::geometry.
+template <class ExecSpace, class X>
+void faces(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
+           const Triangles<typename ExecSpace::memory_space>& mesh,
+           const tet_mesh::Geometry<typename ExecSpace::memory_space, 2>& out, bool rounded = false) {
+    if (rounded)
+        faces_as<tet_mesh::Rounded>(exec, x, box, mesh, out);
+    else
+        faces_as<tet_mesh::Fused>(exec, x, box, mesh, out);
 }
 
 }  // namespace tri_mesh

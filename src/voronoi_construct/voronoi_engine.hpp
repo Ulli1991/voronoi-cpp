@@ -14,8 +14,9 @@
 namespace voronoi {
 
 // Where the mesh runs. cpu: Kokkos::DefaultHostExecutionSpace (OpenMP in a build with both backends); gpu:
-// Kokkos::DefaultExecutionSpace; hybrid: gpu, with the host taking work as Options::tail says (until the hybrid tail
-// exists, hybrid runs as gpu).
+// Kokkos::DefaultExecutionSpace, fused arithmetic (the fastest); hybrid: gpu in
+// the host's bits (Layout::same_bits_as_host), with the host taking work as Options::tail says (until the hybrid tail
+// exists, hybrid runs as gpu in the host's bits).
 enum class Backend { cpu, gpu, hybrid };
 // What the host takes in hybrid: nothing, the clipping's tail, or the tail when the last build's count of tail cells
 // says so (a count, never a clock: the same input takes the same path).
@@ -58,7 +59,12 @@ public:
     using Box = exact_predicates::BoxN<D>;
 
     // A std::invalid_argument for gpu or hybrid in a build without a device space, or for negative host_threads.
-    Engine(const Box& box, const Options& options = {}) : options_(options), mesh_(make(box, options)) {}
+    Engine(const Box& box, const Options& options = {}) : options_(options), mesh_(make(box, options)) {
+        // hybrid: the GPU computes the geometry, and clips, in the host's bits (Layout::same_bits_as_host), so the
+        // host's share is indistinguishable; cpu and gpu keep their fastest arithmetic. 1D has nothing to fuse.
+        if constexpr (D > 1)
+            if (options.backend == Backend::hybrid) std::visit([](auto& m) { m.set_same_bits_as_host(true); }, mesh_);
+    }
     Engine(double side, const Options& options = {}) : Engine(Box(side), options) {}
 
     const Options& options() const { return options_; }

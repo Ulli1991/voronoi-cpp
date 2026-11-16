@@ -168,9 +168,11 @@ std::vector<double> volume_errors(const M& mesh, const Points& points) {
 template <class E>
 std::vector<std::pair<std::uint64_t, std::uint64_t>> run(Points points, double distance, int steps, const char* name,
                                                          std::vector<std::vector<double>>* errors,
-                                                         std::vector<std::vector<double>>* volumes) {
+                                                         std::vector<std::vector<double>>* volumes,
+                                                         bool same_bits = false) {
     E exec;
     voronoi::Mesh<3, E> mesh(exec, 1.0);
+    mesh.set_same_bits_as_host(same_bits);
     std::vector<int> label(points.size());
     std::iota(label.begin(), label.end(), 0);
     std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
@@ -271,6 +273,33 @@ void tail(const Points& points, int tail_count) {
             "clip_kernels: thread_device_vs_thread_host_differ=%lld (max rel %.3g) thread_device_vs_warp_device_differ="
             "%lld (max rel %.3g) of %d\n",
             thread_spaces, worst_spaces, kernels, worst_kernels, n);
+        // The same per-thread kernel on the device in Rounded arithmetic (hybrid), against the host; and the time of
+        // either arithmetic: the per-thread kernel on all cells, and the warp build whose tail it is.
+        shell_voronoi::Cells<Device::memory_space> rdev(n, false);
+        Kokkos::Timer r;
+        shell_voronoi::construct(Device{}, dgrid, rdev, {}, false, true);
+        Device{}.fence();
+        const double rounded_ms = r.seconds() * 1e3;
+        r.reset();
+        shell_voronoi::construct(Device{}, dgrid, tdev);
+        Device{}.fence();
+        const double fused_ms = r.seconds() * 1e3;
+        const auto rv = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, rdev.volume);
+        long long rounded_spaces = 0;
+        for (int i = 0; i < n; ++i) rounded_spaces += bits(rv(i)) != bits(hcells.volume(i));
+        double warp_ms[2] = {1e30, 1e30};
+        for (int rep = 0; rep < 3; ++rep)
+            for (int k = 0; k < 2; ++k) {
+                shell_voronoi::Cells<Device::memory_space> w(n, true);
+                r.reset();
+                shell_voronoi::construct_warp(Device{}, dgrid, w, k == 1);
+                Device{}.fence();
+                warp_ms[k] = std::min(warp_ms[k], r.seconds() * 1e3);
+            }
+        std::printf(
+            "clip_rounded: thread_device_rounded_vs_thread_host_differ=%lld of %d thread_device_ms fused=%.2f "
+            "rounded=%.2f warp_build_ms fused=%.2f rounded_tail=%.2f\n",
+            rounded_spaces, n, fused_ms, rounded_ms, warp_ms[0], warp_ms[1]);
     }
     // The tail: the `tail` cells with the most clips (the warp kernel's overflows are among them; their count is the
     // measurement build's warp_status), clipped alone on the host, timed.
@@ -316,11 +345,13 @@ int main(int argc, char** argv) {
     const int steps = std::stoi(argv[4]);
     std::printf("# n=%zu distribution=%s host_threads=%d\n", points.size(), argv[2], Host().concurrency());
     tail(points, std::stoi(argv[5]));
-    std::vector<std::vector<double>> he, de, hv, dv;
+    std::vector<std::vector<double>> he, de, hv, dv, ye, yv;
     const auto h = run<Host>(points, distance, steps, "openmp", &he, &hv);
     const auto d = run<Device>(points, distance, steps, "cuda", &de, &dv);
-    int topology = 0, all = 0;
-    for (std::size_t s = 0; s < h.size(); ++s) topology += h[s].first == d[s].first, all += h[s] == d[s];
+    const auto y = run<Device>(points, distance, steps, "cuda_same_bits", &ye, &yv, true);  // hybrid's arithmetic
+    int topology = 0, all = 0, hybrid_all = 0;
+    for (std::size_t s = 0; s < h.size(); ++s)
+        topology += h[s].first == d[s].first, all += h[s] == d[s], hybrid_all += h[s] == y[s];
     // Volume errors against the long-double reference (every 16th particle), each space, and the spaces' difference.
     auto stats = [](std::vector<double> v) {
         for (auto& x : v) x = std::abs(x);
@@ -344,7 +375,12 @@ int main(int argc, char** argv) {
                     stats(he[s]).c_str(), stats(de[s]).c_str(), stats(gap).c_str(), same, gap.size());
         std::printf("volume_apart step=%zu (cuda-openmp)/openmp, all cells: %s | bit-equal=%lld of %zu\n", s,
                     stats(apart).c_str(), equal, apart.size());
+        long long hybrid_equal = 0;
+        for (std::size_t i = 0; i < apart.size(); ++i) hybrid_equal += bits(yv[s][i]) == bits(hv[s][i]);
+        std::printf("volume_error step=%zu cuda_same_bits: %s | bit-equal to openmp=%lld of %zu\n", s,
+                    stats(ye[s]).c_str(), hybrid_equal, apart.size());
     }
-    std::printf("same: topology %d of %zu steps, all bits %d of %zu\n", topology, h.size(), all, h.size());
+    std::printf("same: topology %d of %zu steps, all bits %d of %zu; same_bits_as_host: all bits %d of %zu\n", topology,
+                h.size(), all, h.size(), hybrid_all, h.size());
     return 0;
 }

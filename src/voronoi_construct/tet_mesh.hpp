@@ -50,9 +50,9 @@ using Points4 = Kokkos::View<double* [4], Kokkos::LayoutRight, MemorySpace>;
 // Used by: voronoi_mesh::Mesh<3>, tet_start, tet_repair, tet_flips.
 template <class MemorySpace>
 struct Mesh {
-    Quads<MemorySpace> vertex;     // particles
-    Quads<MemorySpace> adjacent;   // tetrahedron across the face opposite vertex k, -1 if none
-    Points4<MemorySpace> centre;   // circumcentre in grid steps in [0, period), and squared radius in box units
+    Quads<MemorySpace> vertex;    // particles
+    Quads<MemorySpace> adjacent;  // tetrahedron across the face opposite vertex k, -1 if none
+    Points4<MemorySpace> centre;  // circumcentre in grid steps in [0, period), and squared radius in box units
     // Owned faces (owner < neighbour); face f's ring is ring[ring_start(f), ring_start(f) + ring_length(f)).
     Kokkos::View<int*, MemorySpace> owner, neighbour, ring_start, ring_length, ring;
     // Bit k: this tetrahedron represents its edge k (see edge_ends), the Voronoi face of that pair.
@@ -117,7 +117,9 @@ KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
 }
 
-KOKKOS_INLINE_FUNCTION bool same_face(const int* a, const int* b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
+KOKKOS_INLINE_FUNCTION bool same_face(const int* a, const int* b) {
+    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+}
 
 // The corner of tetrahedron t opposite its face f (sorted particles). Used by: tet_flips::finish.
 template <class M>
@@ -279,55 +281,26 @@ KOKKOS_INLINE_FUNCTION int sort_corners(int* v) {
     return parity;
 }
 
-// Operations rounded one by one, never fused into a multiply-add, so the mesh's geometry has the same bits wherever it
-// runs: in any kernel it is inlined into, on the host, and on a GPU whose compiler fuses a * b + c by default (nvcc
-// --fmad=true; TESTING.md, "Bits across backends"). The clipping keeps plain arithmetic, fused where the compiler likes.
-// Used by: every kernel that writes the mesh's geometry (circumcentres, faces, tet_cells, tri_mesh), tet_repair.
-namespace rounded {
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-KOKKOS_INLINE_FUNCTION double mul(double a, double b) { return __dmul_rn(a, b); }
-KOKKOS_INLINE_FUNCTION double add(double a, double b) { return __dadd_rn(a, b); }
-KOKKOS_INLINE_FUNCTION double sub(double a, double b) { return __dsub_rn(a, b); }
-#else
-// a * b, rounded. A host compiler fuses only where the target has FMA (__FP_FAST_FMA); there the product is stored.
-KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
-#if defined(__FP_FAST_FMA)
-    const volatile double r = a * b;
-    return r;
-#else
-    return a * b;
-#endif
-}
-KOKKOS_INLINE_FUNCTION double add(double a, double b) { return a + b; }
-KOKKOS_INLINE_FUNCTION double sub(double a, double b) { return a - b; }
-#endif
-// The vector operations of shell_grid.hpp, each component rounded on its own.
-KOKKOS_INLINE_FUNCTION Vec3 add(Vec3 a, Vec3 b) { return {add(a.x, b.x), add(a.y, b.y), add(a.z, b.z)}; }
-KOKKOS_INLINE_FUNCTION Vec3 sub(Vec3 a, Vec3 b) { return {sub(a.x, b.x), sub(a.y, b.y), sub(a.z, b.z)}; }
-KOKKOS_INLINE_FUNCTION Vec3 mul(Vec3 a, double s) { return {mul(a.x, s), mul(a.y, s), mul(a.z, s)}; }
-KOKKOS_INLINE_FUNCTION Vec2 add(Vec2 a, Vec2 b) { return {add(a.x, b.x), add(a.y, b.y)}; }
-KOKKOS_INLINE_FUNCTION Vec2 sub(Vec2 a, Vec2 b) { return {sub(a.x, b.x), sub(a.y, b.y)}; }
-KOKKOS_INLINE_FUNCTION Vec2 mul(Vec2 a, double s) { return {mul(a.x, s), mul(a.y, s)}; }
-// a x b and a . b, each operation rounded.
-KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
-    return {sub(mul(a.y, b.z), mul(a.z, b.y)), sub(mul(a.z, b.x), mul(a.x, b.z)), sub(mul(a.x, b.y), mul(a.y, b.x))};
-}
-KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x), mul(a.y, b.y)), mul(a.z, b.z)); }
-KOKKOS_INLINE_FUNCTION double dot(Vec2 a, Vec2 b) { return add(mul(a.x, b.x), mul(a.y, b.y)); }
-}  // namespace rounded
+// The arithmetic policies of the geometry (shell_grid.hpp): Fused, Rounded, and the rounded operations.
+namespace rounded = shell_voronoi::rounded;
+using shell_voronoi::Arithmetic;
+using shell_voronoi::Fused;
+using shell_voronoi::Rounded;
 
 using Box = exact_predicates::Box;
 
 // A coordinate difference in a periodic box, to the nearest image; multiplies by 1 / side, so it differs from a
 // division only if d is within an ulp of half a side.
+template <class A = Fused>
 KOKKOS_INLINE_FUNCTION double wrap(double d, double side, double inverse) {
-    return rounded::sub(d, rounded::mul(side, Kokkos::nearbyint(rounded::mul(d, inverse))));
+    return A::sub(d, A::mul(side, Kokkos::nearbyint(A::mul(d, inverse))));
 }
 
 // The 2D wrap of a vector d to the nearest image in `box`.
 // Used by: tri_mesh::faces.
+template <class A = Fused>
 KOKKOS_INLINE_FUNCTION Vec2 wrap(Vec2 d, const exact_predicates::BoxN<2>& box) {
-    return {wrap(d.x, box.side[0], box.inverse[0]), wrap(d.y, box.side[1], box.inverse[1])};
+    return {wrap<A>(d.x, box.side[0], box.inverse[0]), wrap<A>(d.y, box.side[1], box.inverse[1])};
 }
 
 // x_b - x_a of snapped positions, in the nearest image, as a whole number of grid steps times the step. Their plain
@@ -813,13 +786,13 @@ struct FaceRings {
     Ints counts;                                        // device counters of the renumbering (detail::renumber)
     Borrowed dirty;                                     // faces to walk this step, in the spare pool
     Kokkos::View<int, MemorySpace> listed;              // their number
-    int faces = -1;       // -1: none yet, every face is walked
-    int in_use = 0;       // pool[in_use] holds the rings
-    int used = 0;         // its entries in use, superseded rings included
-    int ids_used = 0;     // entries of ids in use, superseded blocks included
-    bool ids_identity = false;  // ids(s) == s (number_slots): lookups skip ids
-    int tets = 0;         // tetrahedra numbered by the last update
-    int dirty_count = 0;  // entries of `dirty`
+    int faces = -1;                                     // -1: none yet, every face is walked
+    int in_use = 0;                                     // pool[in_use] holds the rings
+    int used = 0;                                       // its entries in use, superseded rings included
+    int ids_used = 0;                                   // entries of ids in use, superseded blocks included
+    bool ids_identity = false;                          // ids(s) == s (number_slots): lookups skip ids
+    int tets = 0;                                       // tetrahedra numbered by the last update
+    int dirty_count = 0;                                // entries of `dirty`
     // Whether `renumber` maps the faces of the last update but one (`renumbered` of them) to the last update's; it
     // and `dirty` are the first `kept_ints` ints of the spare pool.
     bool renumber_valid = false;
@@ -1424,8 +1397,8 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
         rings.renumber_valid = false;
         int entries = 0;
         Kokkos::parallel_reduce(
-            "tet_mesh::ring_entries", Range(exec, 0, faces),
-            KOKKOS_LAMBDA(int f, int& sum) { sum += ring_length(f); }, entries);
+            "tet_mesh::ring_entries", Range(exec, 0, faces), KOKKOS_LAMBDA(int f, int& sum) { sum += ring_length(f); },
+            entries);
         {
             auto& spare = rings.pool[1 - rings.in_use];
             if (entries > static_cast<int>(spare.extent(0)))
@@ -1457,7 +1430,8 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
         const auto& pool = rings.pool[rings.in_use];
         if (spare.extent(0) < pool.extent(0)) {
             if (static_cast<std::size_t>(entries) + entries / 4 > spare.extent(0))
-                Kokkos::realloc(Kokkos::WithoutInitializing, spare, std::min<std::size_t>(entries + entries / 2, pool.extent(0)));
+                Kokkos::realloc(Kokkos::WithoutInitializing, spare,
+                                std::min<std::size_t>(entries + entries / 2, pool.extent(0)));
             Kokkos::deep_copy(exec, Kokkos::subview(spare, std::make_pair(0, entries)),
                               Kokkos::subview(pool, std::make_pair(0, entries)));
             rings.in_use = 1 - rings.in_use;
@@ -1579,7 +1553,6 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* 
     const double unit = box.step / (2 * double(det));
     return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
-
 
 // The pieces of a stored circumcentre (Mesh::centre), each operation rounded on its own (`rounded`).
 
@@ -1716,9 +1689,15 @@ struct FaceGeometry {
     Box box;
     Kokkos::View<const double* [4], Kokkos::LayoutRight, MemorySpace> centre;
     Ints owner, neighbour, ring_start, ring_length, ring, slot;
+    bool rounded = false;  // Rounded arithmetic (Layout::same_bits_as_host), else Fused
 
     // Face f's area and centroid; returns area . (neighbour - owner), at least 0.
     KOKKOS_INLINE_FUNCTION double face(int f, Vec3& area, Vec3& centroid) const {
+        return rounded ? face_as<Rounded>(f, area, centroid) : face_as<Fused>(f, area, centroid);
+    }
+    // The same in arithmetic A (Fused or Rounded).
+    template <class A>
+    KOKKOS_INLINE_FUNCTION double face_as(int f, Vec3& area, Vec3& centroid) const {
         const int s = slot.data() ? slot(f) : f;
         const int i = owner(s), j = neighbour(s);
         const int begin = ring_start(s), end = begin + ring_length(s);
@@ -1731,23 +1710,25 @@ struct FaceGeometry {
         const Vec3 first = vertex(begin);
         Vec3 previous = vertex(begin + 1), twice_area{0, 0, 0}, weighted{0, 0, 0};
         double weight = 0;
-        // Every operation rounded on its own (`rounded`): the same bits on every backend.
         for (int m = begin + 2; m < end; ++m) {
             const Vec3 v = vertex(m);
-            const Vec3 twice = R::cross(R::sub(previous, first), R::sub(v, first));
-            twice_area = R::add(twice_area, twice);
-            const double w = Kokkos::abs(R::dot(twice, dj));
+            const Vec3 twice = A::cross(A::sub(previous, first), A::sub(v, first));
+            twice_area = A::add(twice_area, twice);
+            const double w = Kokkos::abs(A::dot(twice, dj));
             weight += w;
-            weighted = R::add(weighted, R::mul(R::add(previous, v), w));
+            weighted = A::add(weighted, A::mul(A::add(previous, v), w));
             previous = v;
         }
-        area = R::mul(twice_area, 0.5);
-        double projected = R::dot(area, dj);
+        area = A::mul(twice_area, 0.5);
+        double projected = A::dot(area, dj);
         if (projected < 0) {
-            area = {-area.x, -area.y, -area.z};
+            area = A::mul(area, -1.0);
             projected = -projected;
         }
-        centroid = weight > 0 ? R::mul(R::add(first, R::mul(weighted, 1.0 / weight)), 1.0 / 3.0) : first;
+        // The last product rounded on its own in both: a caller adding to it must not fuse it (the stored bits).
+        const Vec3 sum = A::add(first, A::mul(weighted, 1.0 / weight));
+        centroid =
+            weight > 0 ? Vec3{R::mul(sum.x, 1.0 / 3.0), R::mul(sum.y, 1.0 / 3.0), R::mul(sum.z, 1.0 / 3.0)} : first;
         return projected;
     }
 };
@@ -1762,10 +1743,10 @@ FaceGeometry<MemorySpace, X> face_geometry(const X& x, const Box& box, const Mes
 // 2. Face area vectors (owner to neighbour), centroids (relative to the owner) and, if out.volume is allocated,
 // cell volumes (summed by atomics), one thread per owned face; face f is slot `slot(f)` of the mesh's faces if given.
 // Used by: Mesh<3>::geometry and the stored faces of Mesh<3> (area(), face_centroid()), after update_face_rings.
-template <class ExecSpace, class X>
-void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
-           const Geometry<typename ExecSpace::memory_space>& out,
-           const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot = {}) {
+template <class A, class ExecSpace, class X>
+void faces_as(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
+              const Geometry<typename ExecSpace::memory_space>& out,
+              const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot) {
     const bool with_volume = out.volume.extent(0) > 0;
     const bool with_rows = out.rows.extent(0) > 0;
     const bool with_float = out.centroid32.extent(0) > 0;
@@ -1776,7 +1757,7 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 6>>(exec, 0, mesh.owner.extent(0)),
         KOKKOS_LAMBDA(int f) {
             Vec3 area, centroid;
-            const double projected = geometry.face(f, area, centroid);
+            const double projected = geometry.template face_as<A>(f, area, centroid);
             out.area(f, 0) = area.x;
             out.area(f, 1) = area.y;
             out.area(f, 2) = area.z;
@@ -1793,16 +1774,31 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
             const int s = geometry.slot.data() ? geometry.slot(f) : f;
             const int i = mesh.owner(s), j = mesh.neighbour(s);
             if (with_rows) {
-                const float row[8] = {float(area.x),     float(area.y),     float(area.z),
-                                      float(centroid.x), float(centroid.y), float(centroid.z),
-                                      Kokkos::bit_cast<float>(i), Kokkos::bit_cast<float>(j)};
+                const float row[8] = {float(area.x),
+                                      float(area.y),
+                                      float(area.z),
+                                      float(centroid.x),
+                                      float(centroid.y),
+                                      float(centroid.z),
+                                      Kokkos::bit_cast<float>(i),
+                                      Kokkos::bit_cast<float>(j)};
                 for (int c = 0; c < 8; ++c) out.rows(f, c) = row[c];
             }
             if (!with_volume) return;
-            const double pyramid = R::mul(projected, 1.0 / 6.0);
+            const double pyramid = A::mul(projected, 1.0 / 6.0);
             Kokkos::atomic_add(&out.volume(i), pyramid);
             Kokkos::atomic_add(&out.volume(j), pyramid);
         });
+}
+// The same in the arithmetic `rounded` picks (Rounded, else Fused). Used by: Mesh<3>::geometry, area(), face_centroid().
+template <class ExecSpace, class X>
+void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
+           const Geometry<typename ExecSpace::memory_space>& out,
+           const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot = {}, bool rounded = false) {
+    if (rounded)
+        faces_as<Rounded>(exec, x, box, mesh, out, slot);
+    else
+        faces_as<Fused>(exec, x, box, mesh, out, slot);
 }
 
 // What the checks of an update need without the faces: the live tetrahedra of the first `count` slots, the sum of
@@ -1813,7 +1809,7 @@ template <class ExecSpace, class X>
 double tet_volumes(const ExecSpace& exec, const X& x, const Box& box,
                    const Mesh<typename ExecSpace::memory_space>& mesh,
                    const Kokkos::View<const char*, typename ExecSpace::memory_space>& alive, int count, int& live,
-                   bool& small) {
+                   bool& small, bool rounded = false) {
     double total = 0;
     double largest = 0;
     const double period = Kokkos::min(Kokkos::min(box.period[0], box.period[1]), box.period[2]);
@@ -1825,11 +1821,18 @@ double tet_volumes(const ExecSpace& exec, const X& x, const Box& box,
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
             Vec3 d[3];
             rounded_offsets(x, box, v, d);
-            const double volume6 = R::dot(d[0], R::cross(d[1], d[2]));  // rounded: the same path on every backend
-            sum += R::mul(volume6, unit);
+            double rr;      // the squared circumradius in grid steps; a flat one's is infinite: too large
+            if (rounded) {  // the host's bits, so the same path on every backend
+                const double volume6 = R::dot(d[0], R::cross(d[1], d[2]));
+                sum += R::mul(volume6, unit);
+                const Vec3 c = rounded_circumcentre(d, volume6);
+                rr = R::dot(c, c);
+            } else {
+                sum += dot(d[0], cross(d[1], d[2])) * unit;
+                const Vec3 c = detail::circumcentre(d[0], d[1], d[2]);
+                rr = dot(c, c);
+            }
             ++tets;
-            const Vec3 c = rounded_circumcentre(d, volume6);  // grid steps; a flat one's is infinite: too large
-            const double rr = R::dot(c, c);
             r2 = Kokkos::fmax(r2, rr == rr ? rr : Kokkos::Experimental::infinity_v<double>);
         },
         total, live, Kokkos::Max<double>(largest));

@@ -1,6 +1,6 @@
-// The modes of voronoi::Engine (cpu, gpu, hybrid; docs/ideas.md, "CPU and GPU together") give the same bits: a build
-// and moving steps per input in every mode the build has, hashed by particle and compared with cpu (the mesh's
-// geometry is never fused, tet_mesh::rounded). Without a device space only cpu runs, and gpu must be refused.
+// The modes of voronoi::Engine (cpu, gpu, hybrid; docs/ideas.md, "CPU and GPU together") against cpu: a build and moving
+// steps per input, hashed by particle. hybrid gives cpu's bits (Layout::same_bits_as_host); gpu, fused, its faces and
+// volumes to 1e-12. Without a device space only cpu runs, and gpu must be refused.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -148,13 +148,10 @@ void compare(Check& check, const std::string& what, const Points& points, double
         const std::string mode = voronoi::name(modes[m]);
         check.expect(topology == updates, what + ": " + mode + " has cpu's faces in " + std::to_string(topology) +
                                               " of " + std::to_string(updates) + " updates");
-        check.expect(all == updates, what + ": " + mode + " equals cpu in every bit (" + counts + ")");
-    }
-    if (modes.size() == 3) {  // gpu and hybrid: one space, so the same bits
-        int all = 0;
-        for (int s = 0; s < updates; ++s) all += runs[1][s].hash == runs[2][s].hash;
-        check.expect(all == updates, what + ": hybrid equals gpu in every bit, " + std::to_string(all) + " of " +
-                                         std::to_string(updates) + " updates");
+        if (modes[m] == voronoi::Backend::hybrid)
+            check.expect(all == updates, what + ": hybrid equals cpu in every bit (" + counts + ")");
+        else
+            check.expect(worst < 1e-12, what + ": " + mode + " equals cpu to 1e-12 in volume (" + counts + ")");
     }
     if (modes.size() == 1)
         check.expect(true, what + ": cpu only (no device space), last hash " + hex(first.back().hash.second));

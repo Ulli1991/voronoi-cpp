@@ -265,8 +265,9 @@ auto cell_policy(const ExecSpace& exec, int count) {
 // ExactCell): the walk (see Stencil), then the face walk that writes the
 // owned faces or rings and integrates the geometry.
 // filtered: the deferred cells, whose walk skips what the cell's Cylinder rules out (#60); otherwise a walk that passes
-// the clip budget stops as deferred. Used by: construct_cells, construct_huge.
-template <class Cell, bool filtered = false, class ExecSpace>
+// the clip budget stops as deferred. Ar: the arithmetic of rounded cells (Fused; Rounded gives the host's bits on a GPU).
+// Used by: construct_cells, construct_huge.
+template <class Cell, bool filtered = false, class Ar = Fused, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     const Stencil<typename ExecSpace::memory_space>& stencil,
                     const Cells<typename ExecSpace::memory_space>& out, Pass pass,
@@ -325,14 +326,14 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         for (int k = 0; k < 3; ++k)
                             e[k] = ep::snap(positions(c.slot, k), box, k) + c.image[k] * box.period[k] - self[k];
                     else
-                        d = {positions(c.slot, 0) + c.image[0] * box.side[0] - p.x,
-                             positions(c.slot, 1) + c.image[1] * box.side[1] - p.y,
-                             positions(c.slot, 2) + c.image[2] * box.side[2] - p.z};
+                        d = {Ar::sub(Ar::add(positions(c.slot, 0), Ar::mul(c.image[0], box.side[0])), p.x),
+                             Ar::sub(Ar::add(positions(c.slot, 1), Ar::mul(c.image[1], box.side[1])), p.y),
+                             Ar::sub(Ar::add(positions(c.slot, 2), Ar::mul(c.image[2], box.side[2])), p.z)};
                     const int planes_before = cell.planes, vertices_before = cell.vertices;
                     // Exact cuts break ties by particle id; rounded cells keep the slot until the walk is done (one
                     // load fewer per cut).
                     const int other = Cell::exact ? grid.order(c.slot) : c.slot;
-                    status = clip<filtered>(cell, e, d, other, id);
+                    status = clip<filtered, Ar>(cell, e, d, other, id);
                     ++clipped;
                     if (cell.planes == planes_before && cell.vertices == vertices_before) continue;
                     ++cuts;
@@ -371,10 +372,10 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         const int shift[3] = {image(packed, 0), image(packed, 1), image(packed, 2)};
                         for (int q = begin; q < end; ++q) {
                             if (q == t) continue;
-                            const double dx = positions(q, 0) + shift[0] * box.side[0] - p.x;
-                            const double dy = positions(q, 1) + shift[1] * box.side[1] - p.y;
-                            const double dz = positions(q, 2) + shift[2] * box.side[2] - p.z;
-                            const double d2 = dx * dx + dy * dy + dz * dz;
+                            const double dx = Ar::sub(Ar::add(positions(q, 0), Ar::mul(shift[0], box.side[0])), p.x);
+                            const double dy = Ar::sub(Ar::add(positions(q, 1), Ar::mul(shift[1], box.side[1])), p.y);
+                            const double dz = Ar::sub(Ar::add(positions(q, 2), Ar::mul(shift[2], box.side[2])), p.z);
+                            const double d2 = Ar::dot(Vec3{dx, dy, dz}, Vec3{dx, dy, dz});
                             if (!(d2 < reach2)) continue;  // never a non-finite distance
                             if constexpr (filtered)
                                 if (!bound.admits(Vec3{dx, dy, dz}, d2)) continue;
@@ -478,14 +479,15 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     ++length;
                     const int next = cell.adjacent[current][(at + 2) % 3];
                     const Vec3 x = cell.position(next, unit);
-                    const Vec3 twice = cross(previous - first, x - first);
-                    area = area + twice * 0.5;
-                    const double w = dot(twice, normal);
+                    const Vec3 twice = Ar::cross(Ar::sub(previous, first), Ar::sub(x, first));
+                    area = Ar::add(area, Ar::mul(twice, 0.5));
+                    const double w = Ar::dot(twice, normal);
                     weight += w;
-                    face_moment = face_moment + (first + previous + x) * (w / 3.0);
-                    const double tetra = dot(first, cross(previous, x)) / 6.0;
+                    const Vec3 corners = Ar::add(Ar::add(first, previous), x);
+                    face_moment = Ar::add(face_moment, Ar::mul(corners, w / 3.0));
+                    const double tetra = Ar::dot(first, Ar::cross(previous, x)) / 6.0;
                     volume += tetra;
-                    moment = moment + (first + previous + x) * (tetra / 4.0);
+                    moment = Ar::add(moment, Ar::mul(corners, tetra / 4.0));
                     previous = x;
                     current = next;
                 } while (current != start);
@@ -702,12 +704,12 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
 // capacities once more with big ones, and exact cells that overflowed those with huge ones; deferred cells (#60) go
 // filtered from the big capacity on.
 // Used by: construct, tet_start::build.
-template <template <int, int> class Cell, class ExecSpace>
+template <template <int, int> class Cell, class Ar = Fused, class ExecSpace>
 void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                      const Stencil<typename ExecSpace::memory_space>& stencil,
                      const Cells<typename ExecSpace::memory_space>& out, Pass pass,
                      const Selection<typename ExecSpace::memory_space>& selection = {}) {
-    construct_pass<Cell<max_planes, max_vertices>>(exec, grid, stencil, out, pass, selection);
+    construct_pass<Cell<max_planes, max_vertices>, false, Ar>(exec, grid, stencil, out, pass, selection);
     const auto status = out.status;
     const auto order = grid.order;
     auto overflowed = [&] {
@@ -722,8 +724,8 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
         return count > 0;
     };
     if (!overflowed()) return;
-    construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
-    construct_pass<Cell<big_planes, big_vertices>, true>(exec, grid, stencil, out, Pass::deferred, selection);
+    construct_pass<Cell<big_planes, big_vertices>, false, Ar>(exec, grid, stencil, out, Pass::overflowed, selection);
+    construct_pass<Cell<big_planes, big_vertices>, true, Ar>(exec, grid, stencil, out, Pass::deferred, selection);
     if constexpr (Cell<big_planes, big_vertices>::exact)
         if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
 }
@@ -752,11 +754,11 @@ void exact_where_failed(const ExecSpace& exec, const Grid<typename ExecSpace::me
 // The cells the warp kernel gave up, with rounded cells: uncertified ones at the usual capacities, then every
 // overflowed one at big capacities at once (the warp's capacities are not smaller than the usual ones), and deferred
 // ones filtered (#60). The same cells and bits as construct_cells(Pass::failed). Used by: construct_warp.
-template <class ExecSpace>
+template <class Ar = Fused, class ExecSpace>
 void finish_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                    const Stencil<typename ExecSpace::memory_space>& stencil,
                    const Cells<typename ExecSpace::memory_space>& out) {
-    construct_pass<RoundedCell<max_planes, max_vertices>>(exec, grid, stencil, out, Pass::uncertain, {});
+    construct_pass<RoundedCell<max_planes, max_vertices>, false, Ar>(exec, grid, stencil, out, Pass::uncertain, {});
     const auto status = out.status;
     int count = 0;
     Kokkos::parallel_reduce(
@@ -766,8 +768,8 @@ void finish_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_
         },
         count);
     if (count == 0) return;
-    construct_pass<RoundedCell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, {});
-    construct_pass<RoundedCell<big_planes, big_vertices>, true>(exec, grid, stencil, out, Pass::deferred, {});
+    construct_pass<RoundedCell<big_planes, big_vertices>, false, Ar>(exec, grid, stencil, out, Pass::overflowed, {});
+    construct_pass<RoundedCell<big_planes, big_vertices>, true, Ar>(exec, grid, stencil, out, Pass::deferred, {});
 }
 
 // Run build() on an empty pool; if the pool turned out too small (cells
@@ -789,17 +791,23 @@ void until_pool_fits(const ExecSpace& exec, Cells<MemorySpace>& out, const Build
 // Build the selected cells (default: all) with one thread per cell: the portable kernel (rounded cells, as the warp
 // kernel; those it cannot finish exactly), or all exactly (detail::ExactCell) if `exact`. Rounded cells are guesses:
 // near-equal bisectors can break one with status ok (#30), so use them only under an exact check, as tet_start does.
+// `rounded`: rounded cells in Rounded arithmetic, the host's bits on a GPU (Layout::same_bits_as_host).
 // Used by: construct_warp (non-CUDA), tests.
 template <class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                Cells<typename ExecSpace::memory_space>& out,
-               const Selection<typename ExecSpace::memory_space>& selection = {}, bool exact = false) {
+               const Selection<typename ExecSpace::memory_space>& selection = {}, bool exact = false,
+               bool rounded = false) {
     const auto stencil = make_stencil(exec);
     detail::until_pool_fits(exec, out, [&] {
         if (exact)
             detail::construct_cells<detail::ExactCell>(exec, grid, stencil, out, detail::Pass::all, selection);
         else {
-            detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::all, selection);
+            if (rounded)
+                detail::construct_cells<detail::RoundedCell, Rounded>(exec, grid, stencil, out, detail::Pass::all,
+                                                                      selection);
+            else
+                detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::all, selection);
             detail::exact_where_failed(exec, grid, stencil, out, selection);
         }
     });

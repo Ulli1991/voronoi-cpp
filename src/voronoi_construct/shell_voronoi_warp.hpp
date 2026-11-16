@@ -1056,10 +1056,12 @@ Kokkos::View<int*, typename ExecSpace::memory_space> heavy_slots(const ExecSpace
 // Build every cell with one warp per cell, then the needle cells with the filtered warp kernel (#60), then rebuild the
 // ones given up with the per-thread kernel (finish_failed), and those still failing exactly; with face rings if `out`
 // records them. Other backends use that kernel throughout.
+// `rounded`: the cells the warp kernel leaves to the per-thread kernel (and, off CUDA, all cells) in Rounded arithmetic,
+// the host's bits (Layout::same_bits_as_host); the warp kernel's own cells exist only on the device and stay fused.
 // Used by: Mesh<3>::rebuild.
 template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
-                    Cells<typename ExecSpace::memory_space>& out) {
+                    Cells<typename ExecSpace::memory_space>& out, bool rounded = false) {
 #if defined(KOKKOS_ENABLE_CUDA)
     if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
         if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
@@ -1148,22 +1150,27 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 run(Volumes{});
             else
                 run(Faces{});
-            detail::finish_failed(exec, grid, stencil, out);
+            if (rounded)
+                detail::finish_failed<Rounded>(exec, grid, stencil, out);
+            else
+                detail::finish_failed(exec, grid, stencil, out);
             detail::exact_where_failed(exec, grid, stencil, out);
         });
         return;
     }
 #endif
-    construct(exec, grid, out);
+    construct(exec, grid, out, {}, false, rounded);
 }
 
 // Volumes and centroids only, no faces or rings: volume(i) and centroid(i, a) (relative to particle i) of the cells
 // of x(i, a), snapped to the grid of `box`. The warp build's certification and fallbacks, then exact cells for any
-// left unbuilt; throws if one still is. Used by: callers that need no faces, library_bench (warp-vo paths).
+// left unbuilt; throws if one still is; `rounded` as construct_warp. Used by: callers that need no faces, library_bench
+// (warp-vo paths).
 template <class ExecSpace, class X>
 void volumes_and_centroids(const ExecSpace& exec, const exact_predicates::Box& box, const X& x,
                            const Kokkos::View<double*, typename ExecSpace::memory_space>& volume,
-                           const Kokkos::View<double* [3], typename ExecSpace::memory_space>& centroid) {
+                           const Kokkos::View<double* [3], typename ExecSpace::memory_space>& centroid,
+                           bool rounded = false) {
     using Memory = typename ExecSpace::memory_space;
     const int n = static_cast<int>(x.extent(0));
     if (n <= 0 || volume.extent(0) != x.extent(0) || centroid.extent(0) != x.extent(0))
@@ -1185,7 +1192,7 @@ void volumes_and_centroids(const ExecSpace& exec, const exact_predicates::Box& b
     cells.volume = volume;
     cells.centroid = centroid;
     const Grid<Memory> grid = make_grid(list);
-    construct_warp(exec, grid, cells);
+    construct_warp(exec, grid, cells, rounded);
     const auto status = cells.status;
     int left = 0;
     Kokkos::parallel_reduce(

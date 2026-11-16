@@ -29,6 +29,15 @@ public:
         : exec_(exec), box_(detail::usable(box, float_rows)), point_("point2", 0, box) {}
     Mesh(const ExecSpace& exec, double side) : Mesh(exec, Box(side)) {}
 
+    // As Mesh<3>'s Layout::same_bits_as_host: the centres, faces and cell sums round every operation on its own, so a
+    // GPU gives the host's bits (off: written arithmetic, which nvcc fuses). Set it before the first update: a step
+    // computes the centres of flipped triangles only, so the others keep the arithmetic they were built with.
+    void set_same_bits_as_host(bool on) {
+        same_bits_as_host_ = on;
+        cells_current_ = false;
+    }
+    bool same_bits_as_host() const { return same_bits_as_host_; }
+
     // As Mesh<3>::update: new positions x(i, a) in [0, side[a]), repaired, or built on the first call or when n changed;
     // exact on return, or a std::runtime_error (then there is no mesh and the next update() builds).
     // Used by: callers every step; calls rebuild when stuck or overlapping.
@@ -38,7 +47,7 @@ public:
         Report report;
         Kokkos::Timer timer;
         snap(x);
-        tri_repair::screen(exec_, point_, box_, mesh_, state_);
+        tri_repair::screen(exec_, point_, box_, mesh_, state_, same_bits_as_host_);
         const tri_repair::Stats device = tri_repair::repair(exec_, point_, mesh_, state_);
         report.flips = device.flips;
         report.rounds = device.rounds;
@@ -129,7 +138,7 @@ public:
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, Areas("cell_centroid", n_)};
         lap(timer, timings, &Timings::build);
-        tri_repair::screen(exec_, point_, box_, mesh_, state_);
+        tri_repair::screen(exec_, point_, box_, mesh_, state_, same_bits_as_host_);
         const tri_repair::Stats device = tri_repair::repair(exec_, point_, mesh_, state_);
         report.flips = device.flips;
         report.rounds = device.rounds;
@@ -158,7 +167,8 @@ public:
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         if (scratch_.extent(0) < bytes)
-            scratch_ = View<char*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("mesh2_scratch")), bytes + bytes / 64);
+            scratch_ = View<char*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("mesh2_scratch")),
+                                   bytes + bytes / 64);
         return Scratch(scratch_.data(), bytes);
     }
 
@@ -166,7 +176,8 @@ public:
     // nothing if they are current. Used by: callers after update(); calls incremental_lists or tet_mesh::cells.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
-        if (!built()) throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
+        if (!built())
+            throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
         // As Mesh<3>: from the last step's lists up to one triangle created per five cells
         // (tet_mesh::finish_incremental).
@@ -174,13 +185,13 @@ public:
         if (same_lists && state_.touched_count == 0) {
             tet_mesh::detail::sort_and_sum<2>(
                 exec_, positions_, box_, geometry_, cells_, {}, {}, View<const int*>(), owner(), neighbour(),
-                View<int*>(), Kokkos::View<const char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(), true,
-                false);
+                View<int*>(), Kokkos::View<const char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(), true, false,
+                same_bits_as_host_);
         } else if (same_lists && state_.touched_count <= n_ / 5) {
             incremental_lists();
         } else {
             tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
-                            scratch(tet_mesh::cells_scratch_bytes(faces())).data());
+                            scratch(tet_mesh::cells_scratch_bytes(faces())).data(), false, same_bits_as_host_);
         }
         lists_valid_ = true;
         patched_ = false;
@@ -240,13 +251,16 @@ public:
     void incremental_lists() {
         using Range = Kokkos::RangePolicy<ExecSpace>;
         if (renumber_.extent(0) == 0) {
-            renumber_ = View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_renumber")), faces());
+            renumber_ =
+                View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_renumber")), faces());
             const auto table = renumber_;
-            Kokkos::parallel_for("voronoi2::identity", Range(exec_, 0, faces()), KOKKOS_LAMBDA(int f) { table(f) = f; });
+            Kokkos::parallel_for(
+                "voronoi2::identity", Range(exec_, 0, faces()), KOKKOS_LAMBDA(int f) { table(f) = f; });
         }
         const int count = state_.touched_count / 2, all = faces();
         const auto lists = tet_mesh::detail::begin_incremental<ExecSpace, 2>(
-            exec_, reinterpret_cast<int*>(scratch(tet_mesh::incremental_scratch_bytes(n_, all, all)).data()), n_, all, all, cells_);
+            exec_, reinterpret_cast<int*>(scratch(tet_mesh::incremental_scratch_bytes(n_, all, all)).data()), n_, all,
+            all, cells_);
         const auto table = renumber_;
         const auto dirty = state_.flipped;
         const auto touched = state_.touched;
@@ -261,8 +275,9 @@ public:
                     for (int c = 0; c < 3; ++c) marked(corners(t, c)) = 1;
                 }
             });
-        tet_mesh::detail::finish_incremental<2>(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_, View<const int*>(table),
-                                                dirty, count, lists);
+        tet_mesh::detail::finish_incremental<2>(exec_, positions_, box_, owner(), neighbour(), geometry_, cells_,
+                                                View<const int*>(table), dirty, count, lists, false,
+                                                same_bits_as_host_);
         Kokkos::parallel_for(
             "voronoi2::identity_again", Range(exec_, 0, count), KOKKOS_LAMBDA(int s) {
                 const int f = dirty(s) < 0 ? ~dirty(s) : dirty(s);
@@ -276,9 +291,11 @@ public:
         View<int*> slots("clip_slots", count), slot_of("clip_slot_of", n_);
         const auto order = list_.order;
         Kokkos::parallel_for(
-            "voronoi2::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
+            "voronoi2::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
+            KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
         Kokkos::parallel_for(
-            "voronoi2::slots", Kokkos::RangePolicy<ExecSpace>(exec_, 0, count), KOKKOS_LAMBDA(int i) { slots(i) = slot_of(cells(i)); });
+            "voronoi2::slots", Kokkos::RangePolicy<ExecSpace>(exec_, 0, count),
+            KOKKOS_LAMBDA(int i) { slots(i) = slot_of(cells(i)); });
         return slots;
     }
 
@@ -309,12 +326,13 @@ private:
     // Used by: update, rebuild (a mesh covering the torus many times passes every local test).
     bool fills_box() const {
         const double whole = 2.0 * static_cast<double>(box_.period[0]) * static_cast<double>(box_.period[1]);
-        const double area = state_.area_stale || patched_ ? tri_repair::total_area(exec_, point_, box_, mesh_) : state_.area;
+        const double area =
+            state_.area_stale || patched_ ? tri_repair::total_area(exec_, point_, box_, mesh_) : state_.area;
         return Kokkos::abs(area / whole - 1) < 1e-6;
     }
 
     // Add the time since `timer` to phase `field` (fenced) if timings are wanted. Used by: update, rebuild, update_cells, geometry.
-    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
+    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::* field) const {
         if (!timings) return;
         exec_.fence();
         timings->*field += timer.seconds() * 1e3;
@@ -329,8 +347,8 @@ private:
     // Used by: update, rebuild.
     int geometry(Timings* timings) {
         Kokkos::Timer timer;
-        tri_repair::centres(exec_, point_, box_, mesh_, state_);
-        tri_mesh::faces(exec_, positions_, box_, mesh_, geometry_);
+        tri_repair::centres(exec_, point_, box_, mesh_, state_, same_bits_as_host_);
+        tri_mesh::faces(exec_, positions_, box_, mesh_, geometry_, same_bits_as_host_);
         cells_current_ = false;
         ++updates_since_lists_;
         lap(timer, timings, &Timings::geometry);
@@ -344,10 +362,11 @@ private:
     int n_ = 0;
     Fallback fallback_ = Fallback::cheapest;
     bool cells_current_ = false;
-    bool lists_valid_ = false;     // cells_ holds the lists of the last update_cells()
-    bool patched_ = false;         // the host fallback changed faces the flip list does not know
-    int updates_since_lists_ = 0;  // more than one: the flip list covers only the last
-    View<int*> renumber_;          // the identity between steps (incremental_lists)
+    bool same_bits_as_host_ = false;  // set_same_bits_as_host
+    bool lists_valid_ = false;        // cells_ holds the lists of the last update_cells()
+    bool patched_ = false;            // the host fallback changed faces the flip list does not know
+    int updates_since_lists_ = 0;     // more than one: the flip list covers only the last
+    View<int*> renumber_;             // the identity between steps (incremental_lists)
     Positions positions_;
     ep::Points<Memory, 2> point_;
     neighbor_search::CellList<ExecSpace, 2> list_;
