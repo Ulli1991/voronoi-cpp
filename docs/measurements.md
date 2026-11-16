@@ -229,7 +229,7 @@ have, 105 and 107 out of time at 280 s as on main (#49).
 
 ### Surface: the warp kernel's overflows to the filtered kernels (2026-11-16)
 
-Branch `fix-60-b2` (6242449) against main fbe6a0c (the 128-slot kernel above), one A100 SXM4 40 GB at its default
+Branch `fix-60-b2` (proof job on 109b329; the kernel is unchanged since) against main fbe6a0c (the 128-slot kernel above), one A100 SXM4 40 GB at its default
 clocks (boost up to 1410 MHz), main and branch in the same gpu1 job 32416930 (`build-jobs/final_B2.sh`; jittered 256³
 start again in job 32422214). Cells the first, unfiltered warp kernel leaves past its 64 vertex or plane slots now go
 to the filtered warp kernels (64 slots, then 128) instead of the thread kernel. A filtered cell's overflow is now
@@ -271,7 +271,7 @@ uniform +0.4 / −0.3 %, the rest within 0.1 %. Exact start: cosmic web +4.0 / +
 round, −1.0 % in three (job 32422214), with the same bits. Library bench: cosmic web 256³ warp +6.0 %, exact +11 %
 (repeat noise about ±5 %); blue noise and uniform within 0.6 % (warp) and +0.4 to +5.3 % (exact).
 
-Tests on the branch: A100 ctest 22 of 22; CI's host steps 22 of 22 with sanitizers off and on (job 32423179);
+Tests on the branch: A100 ctest 22 of 22; CI's host steps 22 of 22 with sanitizers off and on (job 32423951; `clipping_test` on the A100 there too);
 comment and format checks pass; clang-tidy 18 clean on `clipping_test.cpp`, `voronoi_bench.cpp` and
 `library_bench.cpp`. A100 fuzz, profile huge, seeds 4e12 + 101 to 108: as on main (one exact, five refused for causes
 the inputs have, 105 and 107 out of time, #49).
