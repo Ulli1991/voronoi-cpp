@@ -1557,8 +1557,7 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
                 area = {-area.x, -area.y, -area.z};
                 projected = -projected;
             }
-            const Vec3 centroid =
-                weight > 0 ? R::mul(R::add(first, R::mul(weighted, 1.0 / weight)), 1.0 / 3.0) : first;
+            const Vec3 centroid = weight > 0 ? R::mul(R::add(first, R::mul(weighted, 1.0 / weight)), 1.0 / 3.0) : first;
             out.area(f, 0) = area.x;
             out.area(f, 1) = area.y;
             out.area(f, 2) = area.z;
