@@ -128,7 +128,9 @@ template <int D>
 void compare(Check& check, const std::string& what, const Points& points, double spacings, int steps) {
     std::vector<voronoi::Backend> modes{voronoi::Backend::cpu};
     if (voronoi::has_device()) modes = {voronoi::Backend::cpu, voronoi::Backend::gpu, voronoi::Backend::hybrid};
-    std::vector<std::vector<Update>> runs{run<D>(modes[0], points, spacings, steps)};
+    std::vector<std::vector<Update>> runs;
+    runs.reserve(modes.size());  // `first` and `other` stay valid
+    runs.push_back(run<D>(modes[0], points, spacings, steps));
     const auto& first = runs[0];
     const int updates = int(first.size());
     for (std::size_t m = 1; m < modes.size(); ++m) {

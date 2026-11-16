@@ -168,7 +168,8 @@ std::vector<double> volume_errors(const M& mesh, const Points& points) {
 // A moving run on execution space E: build, then `steps` steps of the bench flow; hashes per step and times.
 template <class E>
 std::vector<std::pair<std::uint64_t, std::uint64_t>> run(Points points, double distance, int steps, const char* name,
-                                                         std::vector<std::vector<double>>* errors) {
+                                                         std::vector<std::vector<double>>* errors,
+                                                         std::vector<std::vector<double>>* volumes) {
     E exec;
     voronoi::Mesh<3, E> mesh(exec, 1.0);
     std::vector<int> label(points.size());
@@ -186,6 +187,8 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> run(Points points, double d
         if (r.resorted) throw std::logic_error("no re-sort expected");
         out.push_back(summary(mesh, label));
         errors->push_back(volume_errors(mesh, points));
+        const auto v = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, mesh.volume());
+        volumes->emplace_back(v.data(), v.data() + mesh.particles());
         std::printf(
             "backend=%s step=%d ms=%.2f Mcells_s=%.2f rebuilt=%d stuck=%d host_flips=%lld topology=%016llx "
             "all=%016llx\n",
@@ -288,9 +291,9 @@ int main(int argc, char** argv) {
     const int steps = std::stoi(argv[4]);
     std::printf("# n=%zu distribution=%s host_threads=%d\n", points.size(), argv[2], Host().concurrency());
     tail(points, std::stoi(argv[5]));
-    std::vector<std::vector<double>> he, de;
-    const auto h = run<Host>(points, distance, steps, "openmp", &he);
-    const auto d = run<Device>(points, distance, steps, "cuda", &de);
+    std::vector<std::vector<double>> he, de, hv, dv;
+    const auto h = run<Host>(points, distance, steps, "openmp", &he, &hv);
+    const auto d = run<Device>(points, distance, steps, "cuda", &de, &dv);
     int topology = 0, all = 0;
     for (std::size_t s = 0; s < h.size(); ++s) topology += h[s].first == d[s].first, all += h[s] == d[s];
     // Volume errors against the long-double reference (every 16th particle), each space, and the spaces' difference.
@@ -308,8 +311,14 @@ int main(int argc, char** argv) {
         std::vector<double> gap(he[s].size());
         long long same = 0;
         for (std::size_t k = 0; k < gap.size(); ++k) gap[k] = de[s][k] - he[s][k], same += he[s][k] == de[s][k];
+        std::vector<double> apart(hv[s].size());
+        long long equal = 0;
+        for (std::size_t i = 0; i < apart.size(); ++i)
+            apart[i] = (dv[s][i] - hv[s][i]) / hv[s][i], equal += bits(dv[s][i]) == bits(hv[s][i]);
         std::printf("volume_error step=%zu openmp: %s | cuda: %s | cuda-openmp: %s | same=%lld of %zu\n", s,
                     stats(he[s]).c_str(), stats(de[s]).c_str(), stats(gap).c_str(), same, gap.size());
+        std::printf("volume_apart step=%zu (cuda-openmp)/openmp, all cells: %s | bit-equal=%lld of %zu\n", s,
+                    stats(apart).c_str(), equal, apart.size());
     }
     std::printf("same: topology %d of %zu steps, all bits %d of %zu\n", topology, h.size(), all, h.size());
     return 0;
