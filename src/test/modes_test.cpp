@@ -117,6 +117,12 @@ Points flat_points(int n, int d, std::uint64_t seed) {
     return p;
 }
 
+std::string sci(double x) {
+    char text[32];
+    std::snprintf(text, sizeof text, "%.3g", x);
+    return text;
+}
+
 std::string hex(std::uint64_t h) {
     char text[17];
     std::snprintf(text, sizeof text, "%016llx", static_cast<unsigned long long>(h));
@@ -149,7 +155,7 @@ void compare(Check& check, const std::string& what, const Points& points, double
         }
         const std::string counts = std::to_string(all) + " of " + std::to_string(updates) + " updates in every bit, " +
                                    std::to_string(cells_same) + " of " + std::to_string(cells) +
-                                   " volumes; largest relative volume difference " + std::to_string(worst) +
+                                   " volumes; largest relative volume difference " + sci(worst) +
                                    "; last hash " + hex(other.back().hash.second);
         const std::string mode = voronoi::name(modes[m]);
         check.expect(topology == updates, what + ": " + mode + " has cpu's faces in " + std::to_string(topology) +

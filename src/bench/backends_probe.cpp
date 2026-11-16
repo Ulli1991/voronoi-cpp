@@ -242,6 +242,32 @@ void tail(const Points& points, int tail_count) {
             worst_spaces = std::max(worst_spaces, std::abs(tv(i) - hcells.volume(i)) / hcells.volume(i));
             worst_kernels = std::max(worst_kernels, std::abs(tv(i) - dv(i)) / dv(i));
         }
+        // Cells where the kernels disagree beyond rounding: statuses, volumes, the exact kernel's volume on the host.
+        const auto ts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, tdev.status);
+        const auto ds = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, dcells.status);
+        const auto tf = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, tdev.face_count);
+        std::vector<int> odd;
+        for (int i = 0; i < n; ++i) {
+            const double h = hcells.volume(i);
+            if (std::abs(tv(i) - h) > 1e-9 * h || std::abs(dv(i) - h) > 1e-9 * h || ts(i) != 0 ||
+                hcells.status(i) != 0 || ds(i) != 0)
+                odd.push_back(i);
+        }
+        if (!odd.empty()) {
+            shell_voronoi::Cells<Host::memory_space> ecells(n, false);
+            shell_voronoi::construct(Host{}, hgrid, ecells, {}, true);
+            for (std::size_t k = 0; k < odd.size() && k < 20; ++k) {
+                const int i = odd[k];
+                std::printf(
+                    "clip_odd: cell=%d x=(%.17g, %.17g, %.17g) status thread_device=%d thread_host=%d warp_device=%d "
+                    "exact_host=%d volume thread_device=%.17g thread_host=%.17g warp_device=%.17g exact_host=%.17g "
+                    "faces thread_device=%d thread_host=%d exact_host=%d\n",
+                    i, points[i][0], points[i][1], points[i][2], ts(i), hcells.status(i), ds(i), ecells.status(i),
+                    tv(i), hcells.volume(i), dv(i), ecells.volume(i), tf(i), hcells.face_count(i),
+                    ecells.face_count(i));
+            }
+            std::printf("clip_odd: %zu cells\n", odd.size());
+        }
         std::printf(
             "clip_kernels: thread_device_vs_thread_host_differ=%lld (max rel %.3g) thread_device_vs_warp_device_differ="
             "%lld (max rel %.3g) of %d\n",

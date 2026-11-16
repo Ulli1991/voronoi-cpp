@@ -69,3 +69,10 @@ Upper bounds from Nsight traces (measurements.md, "CPU and GPU together: where t
 | CPU runs the start's patch rounds while the GPU writes faces (H6) | 0 | dropped | the faces are computed from the patched tetrahedra, so the two are sequential by data; the re-clipping inside the rounds is the tail (H2) | same |
 | Hilbert re-sort keys on the CPU (H7) | below 0: the positions copy (about 12 ms at 128³) costs more than the key kernel | dropped | the keys need every position on the host; the re-sort is off by default | same |
 | CPU takes a share of bulk cells (H8) | at most 7 % of a rebuild before copies; the positions copy alone is about 10 % of a jittered clipping | dropped | a 72-core node is 13× slower clipping and 17× slower stepping than the A100 with the same code; a step would need the mesh mirrored on the host | same |
+
+## CPU and GPU from one build
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| One build on Kokkos CUDA + OpenMP instead of CUDA + Serial (S0) | rebuild, exact start and steps 0.993 to 1.009 of the CUDA-only build (28 cases); compile time the same, binary +0.5 % | kept (option of the Kokkos install; the library needs no change) | only the host space changes; device kernels are the same code | measurements.md, "CPU and GPU from one build" |
+| Device arithmetic unfused (`-DVORONOI_FMAD=OFF`) | rebuild +4.6 to +11.3 %, start +1.4 to +5.5 %, steps −1.5 to +0.9 %; CPU and GPU meshes equal in every bit (default: 21 % of volumes differ by at most 8e-16 relative) | option, off by default; the owner decides | the clipping is dense multiply-add arithmetic (plane cuts, vertex and volume sums) and DFMA halves its instructions; the step's geometry is bound by memory | same; TESTING.md, "Bits across backends" |

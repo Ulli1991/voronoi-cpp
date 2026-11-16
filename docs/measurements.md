@@ -440,6 +440,40 @@ The copies are 20 to 46 % of this path: 50 MB of points in at 2.6 GB/s and 67 MB
 
 Bulk cells on the CPU: the same code on a full 72-core node clips 2.6 M cells/s against 33.7 on the A100 (13×) and steps 8.5 against 144 M cells/s (17×) (README, library benchmark). Giving the CPU its share of bulk cells could save at most 7 % of a rebuild, and copying the positions over alone costs 4.7 ms at 128³ (50 MB at 10.7 GB/s), about 10 % of a jittered clipping; a step would need the mesh (about 1950 B/cell) mirrored on the host every step. So no candidate splits bulk cells.
 
+### CPU and GPU from one build (2026-11-16)
+
+S0 and S2 of [ideas.md](ideas.md#cpu-and-gpu-together-2026-11-15): one build on Kokkos with CUDA 13.0 and OpenMP (`/u/uli/kokkos-cuda-omp`), and `voronoi::Engine` choosing cpu, gpu or hybrid at run time. One A100 40 GB on `gpu1`, 18 host threads; jobs 32378021 (build cost, CI host steps, first speed run), 32407747 (speed with `--fmad=false`, bits), 32410447 (fixed `modes_test`, bits, second speed run).
+
+Build cost, `voronoi_bench` at -j1: 143 s in both builds; binary 8,905,800 bytes (CUDA only) against 8,947,864 (+0.5 %). `mesh_test`: 99 s in both; 6,058,536 against 6,100,688 bytes. CI's host steps (gcc 15 OpenMP build, sanitizers off and on): 23 of 23; clang-tidy on `modes_test` (with `voronoi_engine.hpp`): 0 warnings. A100 ctest after the Engine fix: 23 of 23 in both builds.
+
+Speed of the two-backend build against the CUDA-only one (job 32407747; three interleaved rounds, median; rebuild = warp clipping median of 5, start = exact start, steps = `update` + `update_cells` median of steps 2 to 10 (2 to 6 at 256³)): all 28 cases within 1 %, geometric mean 0.9996, range 0.993 to 1.009.
+
+| input, N | rebuild | start 0.03 / 0.3 | steps 0.03 / 0.3 |
+|---|---|---|---|
+| jittered 128³ | 1.000 | 0.997 / 1.001 | 0.993 / 1.009 |
+| uniform 128³ | 1.001 | 0.998 / 1.000 | 1.002 / 0.996 |
+| clustered 128³ | 1.000 | 0.999 / 1.000 | 1.005 / 1.000 |
+| halo 128³ | 1.002 | 0.995 / 1.001 | 1.003 / 1.000 |
+| cosmicweb 128³ | 0.999 | 0.997 / 0.995 | 0.999 / 1.000 |
+| jittered 256³ | 1.000 | 0.999 / – | 0.999 / – |
+
+Time ratios, two backends / CUDA only. The first run (job 32378021) agreed for rebuild (0.999 to 1.000) and steps (0.998 to 1.010); its exact starts varied by up to 2× from round to round on both builds (one sample per round), so the start is taken from 32407747, where rounds agree to 1 %. The bench's host advection is slower in the two-backend build (260 against 30 ms at 128³: OpenMP binds the main thread to one core, and the bench's 16 `std::thread`s inherit it); it is outside every timed phase. Tetrahedron counts differ from run to run on CUDA in both builds (flip scheduling), faces never.
+
+Unfused device arithmetic (`-DVORONOI_FMAD=OFF`, `--fmad=false`), same job, against the default two-backend build:
+
+| input, N | rebuild | start 0.03 / 0.3 | steps 0.03 / 0.3 |
+|---|---|---|---|
+| jittered 128³ | 1.046 | 1.021 / 1.020 | 1.001 / 0.995 |
+| uniform 128³ | 1.107 | 1.042 / 1.041 | 0.989 / 1.009 |
+| clustered 128³ | 1.086 | 1.036 / 1.038 | 0.990 / 0.993 |
+| halo 128³ | 1.077 | 1.052 / 1.053 | 0.985 / 1.003 |
+| cosmicweb 128³ | 1.113 | 1.053 / 1.055 | 0.993 / 1.000 |
+| jittered 256³ | 1.046 | 1.014 / – | 0.994 / – |
+
+The cost is in the clipping (rebuild +4.6 to +11.3 %, start +1.4 to +5.5 %); steps are unchanged (−1.5 to +0.9 %). What it buys: CPU and GPU meshes equal in every bit (TESTING.md, "Bits across backends").
+
+Host against device clipping (`backends_probe`, 128³, all cells on 18 threads with the per-thread kernel, against the A100's warp kernel): 22.6 to 28.7× slower; the tail cells alone cost 118 to 275 µs per cell per core.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
