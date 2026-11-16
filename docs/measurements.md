@@ -457,7 +457,7 @@ Speed of the two-backend build against the CUDA-only one (job 32407747; three in
 | cosmicweb 128³ | 0.999 | 0.997 / 0.995 | 0.999 / 1.000 |
 | jittered 256³ | 1.000 | 0.999 / – | 0.999 / – |
 
-Time ratios, two backends / CUDA only. The first run (job 32378021) agreed for rebuild (0.999 to 1.000) and steps (0.998 to 1.010); its exact starts varied by up to 2× from round to round on both builds (one sample per round), so the start is taken from 32407747, where rounds agree to 1 %. The bench's host advection is slower in the two-backend build (260 against 30 ms at 128³: OpenMP binds the main thread to one core, and the bench's 16 `std::thread`s inherit it); it is outside every timed phase. Tetrahedron counts differ from run to run on CUDA in both builds (flip scheduling), faces never.
+Time ratios, two backends / CUDA only. Two more runs (jobs 32378021 and 32410447) agree for rebuild (0.998 to 1.005) and steps (0.996 to 1.010). The exact start is one sample per round: in those two runs single rounds of either build were 10 to 25 % (once 2×) slower than the others, so their start medians range 0.86 to 1.11; only 32407747, where the rounds agree to 1 %, resolves the start to 1 %. A start claim at 1 % needs repeats per round. The bench's host advection is slower in the two-backend build (260 against 30 ms at 128³: OpenMP binds the main thread to one core, and the bench's 16 `std::thread`s inherit it); it is outside every timed phase. Tetrahedron counts differ from run to run on CUDA in both builds (flip scheduling), faces never.
 
 Unfused device arithmetic (`-DVORONOI_FMAD=OFF`, `--fmad=false`), same job, against the default two-backend build:
 
