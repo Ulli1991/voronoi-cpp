@@ -67,8 +67,7 @@ std::string coincident(const Positions& positions) {
     std::iota(id.begin(), id.end(), 0);
     const bool third = x.extent(1) > 2;  // D = 2 or 3
     auto key = [&](int i) { return std::array<double, 3>{x(i, 0), x(i, 1), third ? x(i, 2) : 0.0}; };
-    std::sort(id.begin(), id.end(),
-              [&](int a, int b) { return std::make_pair(key(a), a) < std::make_pair(key(b), b); });
+    std::sort(id.begin(), id.end(), [&](int a, int b) { return std::make_pair(key(a), a) < std::make_pair(key(b), b); });
     long long extra = 0;
     int first = -1, second = -1;
     for (std::size_t i = 1; i < id.size(); ++i) {
@@ -101,8 +100,8 @@ std::string not_exact(const Cells& cells, const Positions& positions) {
     const long long overflow = count[shell_voronoi::plane_overflow] + count[shell_voronoi::vertex_overflow];
     if (overflow > 0)
         return "voronoi::Mesh: " + std::to_string(overflow) + " cells need more than the clipping's " +
-               std::to_string(shell_voronoi::huge_planes) + " planes or " +
-               std::to_string(shell_voronoi::huge_vertices) + " vertices (too many particles around one cell)";
+               std::to_string(shell_voronoi::huge_planes) + " planes or " + std::to_string(shell_voronoi::huge_vertices) +
+               " vertices (too many particles around one cell)";
     return "voronoi::Mesh: the start is not exact (clipping statuses: " + std::to_string(count[0]) + " ok, " +
            std::to_string(count[shell_voronoi::face_overflow]) + " out of pool room, " +
            std::to_string(count[shell_voronoi::degenerate]) + " degenerate)";
@@ -134,14 +133,14 @@ exact_predicates::BoxN<D> usable(const exact_predicates::BoxN<D>& box, bool floa
 
 // What an update did: filled by update() and rebuild(), returned to the caller.
 struct Report {
-    bool rebuilt = false;      // built from scratch (first update, rebuild(), or the guard)
-    tet_start::Stats start;    // of that build
-    long long flips = 0;       // device flips
-    int rounds = 0;            // device repair rounds
-    int stuck = 0;             // triangles the device repair could not repair
-    bool overlapped = false;   // the repair's mesh did not fill the box once: rebuilt
-    bool miscounted = false;   // the repair's faces were not cells + tetrahedra (Euler, #48): rebuilt
-    long long host_flips = 0;  // flips and local rebuilds of the host fallback
+    bool rebuilt = false;          // built from scratch (first update, rebuild(), or the guard)
+    tet_start::Stats start;        // of that build
+    long long flips = 0;           // device flips
+    int rounds = 0;                // device repair rounds
+    int stuck = 0;                 // triangles the device repair could not repair
+    bool overlapped = false;       // the repair's mesh did not fill the box once: rebuilt
+    bool miscounted = false;       // the repair's faces were not cells + tetrahedra (Euler, #48): rebuilt
+    long long host_flips = 0;      // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
     int faces = 0;
     bool resorted = false;  // cell ids changed: cell i is the particle the caller passed as Mesh::permutation()(i)
@@ -386,8 +385,7 @@ public:
         View<int*> slot_of(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("clip_slot_of")), n_);
         const auto order = list_.order;
         Kokkos::parallel_for(
-            "voronoi::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
-            KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
+            "voronoi::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
         Kokkos::parallel_for(
             "voronoi::listed", Kokkos::RangePolicy<ExecSpace>(exec_, 0, count), KOKKOS_LAMBDA(int i) {
                 slots(i) = slot_of(cells(i));
@@ -585,7 +583,7 @@ private:
 
     // With timings: fence, add the time since `timer` started to the phase `field`, restart the timer.
     // Used by: update, rebuild, update_cells, geometry.
-    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::* field) const {
+    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
         if (!timings) return;
         exec_.fence();
         timings->*field += timer.seconds() * 1e3;
@@ -605,9 +603,8 @@ private:
     // Used by: rebuild, clip.
     template <class P>
     void index(const P& p) {
-        if (list_.n != n_)
-            neighbor_search::configure(
-                list_, n_, box_, box_.cubic() ? box_.side[0] * std::cbrt(1.0 / n_) : std::cbrt(box_.volume() / n_));
+        if (list_.n != n_) neighbor_search::configure(list_, n_, box_, box_.cubic() ? box_.side[0] * std::cbrt(1.0 / n_)
+                                                                                   : std::cbrt(box_.volume() / n_));
         neighbor_search::build(exec_, list_, p);
     }
 
@@ -619,9 +616,8 @@ private:
         lists_of_last_update_ = updates_since_lists_ == 0;
         ++updates_since_lists_;
         const Kokkos::View<const int*, Memory> created =
-            state_.touched_entries < 0
-                ? Kokkos::View<const int*, Memory>()
-                : Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries));
+            state_.touched_entries < 0 ? Kokkos::View<const int*, Memory>()
+                                       : Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries));
         if (rings_.faces < 0)
             tet_mesh::circumcentres(exec_, positions_, box_, tets_, state_.count);
         else
@@ -697,7 +693,7 @@ private:
     double total_volume_ = 0;  // of the cells, from the last geometry()
     int live_tets_ = 0;        // tetrahedra, from the last geometry()
     bool cells_current_ = false;
-    int updates_since_lists_ = 1;        // updates since the last update_cells()
+    int updates_since_lists_ = 1;       // updates since the last update_cells()
     bool lists_of_last_update_ = false;  // the cell lists have the numbers of the update before the last
     tet_mesh::Points4<Memory> positions_;
     neighbor_search::CellList<ExecSpace> list_;
@@ -718,5 +714,5 @@ private:
 };
 
 }  // namespace voronoi
-#include "sorted_mesh.hpp"      // Mesh<1>
+#include "sorted_mesh.hpp"  // Mesh<1>
 #include "voronoi_mesh_2d.hpp"  // Mesh<2>

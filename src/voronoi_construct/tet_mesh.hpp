@@ -50,9 +50,9 @@ using Points4 = Kokkos::View<double* [4], Kokkos::LayoutRight, MemorySpace>;
 // Used by: voronoi_mesh::Mesh<3>, tet_start, tet_repair, tet_flips.
 template <class MemorySpace>
 struct Mesh {
-    Quads<MemorySpace> vertex;    // particles
-    Quads<MemorySpace> adjacent;  // tetrahedron across the face opposite vertex k, -1 if none
-    Points4<MemorySpace> centre;  // circumcentre in grid steps in [0, period), and squared radius in box units
+    Quads<MemorySpace> vertex;     // particles
+    Quads<MemorySpace> adjacent;   // tetrahedron across the face opposite vertex k, -1 if none
+    Points4<MemorySpace> centre;   // circumcentre in grid steps in [0, period), and squared radius in box units
     // Owned faces (owner < neighbour); face f's ring is ring[ring_start(f), ring_start(f) + ring_length(f)).
     Kokkos::View<int*, MemorySpace> owner, neighbour, ring_start, ring_length, ring;
     // Bit k: this tetrahedron represents its edge k (see edge_ends), the Voronoi face of that pair.
@@ -117,9 +117,7 @@ KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
 }
 
-KOKKOS_INLINE_FUNCTION bool same_face(const int* a, const int* b) {
-    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
-}
+KOKKOS_INLINE_FUNCTION bool same_face(const int* a, const int* b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
 
 // The corner of tetrahedron t opposite its face f (sorted particles). Used by: tet_flips::finish.
 template <class M>
@@ -786,13 +784,13 @@ struct FaceRings {
     Ints counts;                                        // device counters of the renumbering (detail::renumber)
     Borrowed dirty;                                     // faces to walk this step, in the spare pool
     Kokkos::View<int, MemorySpace> listed;              // their number
-    int faces = -1;                                     // -1: none yet, every face is walked
-    int in_use = 0;                                     // pool[in_use] holds the rings
-    int used = 0;                                       // its entries in use, superseded rings included
-    int ids_used = 0;                                   // entries of ids in use, superseded blocks included
-    bool ids_identity = false;                          // ids(s) == s (number_slots): lookups skip ids
-    int tets = 0;                                       // tetrahedra numbered by the last update
-    int dirty_count = 0;                                // entries of `dirty`
+    int faces = -1;       // -1: none yet, every face is walked
+    int in_use = 0;       // pool[in_use] holds the rings
+    int used = 0;         // its entries in use, superseded rings included
+    int ids_used = 0;     // entries of ids in use, superseded blocks included
+    bool ids_identity = false;  // ids(s) == s (number_slots): lookups skip ids
+    int tets = 0;         // tetrahedra numbered by the last update
+    int dirty_count = 0;  // entries of `dirty`
     // Whether `renumber` maps the faces of the last update but one (`renumbered` of them) to the last update's; it
     // and `dirty` are the first `kept_ints` ints of the spare pool.
     bool renumber_valid = false;
@@ -1397,8 +1395,8 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
         rings.renumber_valid = false;
         int entries = 0;
         Kokkos::parallel_reduce(
-            "tet_mesh::ring_entries", Range(exec, 0, faces), KOKKOS_LAMBDA(int f, int& sum) { sum += ring_length(f); },
-            entries);
+            "tet_mesh::ring_entries", Range(exec, 0, faces),
+            KOKKOS_LAMBDA(int f, int& sum) { sum += ring_length(f); }, entries);
         {
             auto& spare = rings.pool[1 - rings.in_use];
             if (entries > static_cast<int>(spare.extent(0)))
@@ -1430,8 +1428,7 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
         const auto& pool = rings.pool[rings.in_use];
         if (spare.extent(0) < pool.extent(0)) {
             if (static_cast<std::size_t>(entries) + entries / 4 > spare.extent(0))
-                Kokkos::realloc(Kokkos::WithoutInitializing, spare,
-                                std::min<std::size_t>(entries + entries / 2, pool.extent(0)));
+                Kokkos::realloc(Kokkos::WithoutInitializing, spare, std::min<std::size_t>(entries + entries / 2, pool.extent(0)));
             Kokkos::deep_copy(exec, Kokkos::subview(spare, std::make_pair(0, entries)),
                               Kokkos::subview(pool, std::make_pair(0, entries)));
             rings.in_use = 1 - rings.in_use;
@@ -1553,6 +1550,7 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* 
     const double unit = box.step / (2 * double(det));
     return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
+
 
 // The pieces of a stored circumcentre (Mesh::centre), each operation rounded on its own (`rounded`).
 
@@ -1774,14 +1772,9 @@ void faces_as(const ExecSpace& exec, const X& x, const Box& box, const Mesh<type
             const int s = geometry.slot.data() ? geometry.slot(f) : f;
             const int i = mesh.owner(s), j = mesh.neighbour(s);
             if (with_rows) {
-                const float row[8] = {float(area.x),
-                                      float(area.y),
-                                      float(area.z),
-                                      float(centroid.x),
-                                      float(centroid.y),
-                                      float(centroid.z),
-                                      Kokkos::bit_cast<float>(i),
-                                      Kokkos::bit_cast<float>(j)};
+                const float row[8] = {float(area.x),     float(area.y),     float(area.z),
+                                      float(centroid.x), float(centroid.y), float(centroid.z),
+                                      Kokkos::bit_cast<float>(i), Kokkos::bit_cast<float>(j)};
                 for (int c = 0; c < 8; ++c) out.rows(f, c) = row[c];
             }
             if (!with_volume) return;

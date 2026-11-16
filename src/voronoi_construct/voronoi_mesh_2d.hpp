@@ -167,8 +167,7 @@ public:
     using Scratch = Kokkos::View<char*, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     Scratch scratch(std::size_t bytes) {
         if (scratch_.extent(0) < bytes)
-            scratch_ = View<char*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("mesh2_scratch")),
-                                   bytes + bytes / 64);
+            scratch_ = View<char*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("mesh2_scratch")), bytes + bytes / 64);
         return Scratch(scratch_.data(), bytes);
     }
 
@@ -176,8 +175,7 @@ public:
     // nothing if they are current. Used by: callers after update(); calls incremental_lists or tet_mesh::cells.
     void update_cells(Timings* timings = nullptr) {
         if (cells_current_) return;
-        if (!built())
-            throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
+        if (!built()) throw std::logic_error("voronoi::Mesh<2>::update_cells: no mesh (no update yet, or it was refused)");
         Kokkos::Timer timer;
         // As Mesh<3>: from the last step's lists up to one triangle created per five cells
         // (tet_mesh::finish_incremental).
@@ -251,16 +249,13 @@ public:
     void incremental_lists() {
         using Range = Kokkos::RangePolicy<ExecSpace>;
         if (renumber_.extent(0) == 0) {
-            renumber_ =
-                View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_renumber")), faces());
+            renumber_ = View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_renumber")), faces());
             const auto table = renumber_;
-            Kokkos::parallel_for(
-                "voronoi2::identity", Range(exec_, 0, faces()), KOKKOS_LAMBDA(int f) { table(f) = f; });
+            Kokkos::parallel_for("voronoi2::identity", Range(exec_, 0, faces()), KOKKOS_LAMBDA(int f) { table(f) = f; });
         }
         const int count = state_.touched_count / 2, all = faces();
         const auto lists = tet_mesh::detail::begin_incremental<ExecSpace, 2>(
-            exec_, reinterpret_cast<int*>(scratch(tet_mesh::incremental_scratch_bytes(n_, all, all)).data()), n_, all,
-            all, cells_);
+            exec_, reinterpret_cast<int*>(scratch(tet_mesh::incremental_scratch_bytes(n_, all, all)).data()), n_, all, all, cells_);
         const auto table = renumber_;
         const auto dirty = state_.flipped;
         const auto touched = state_.touched;
@@ -291,11 +286,9 @@ public:
         View<int*> slots("clip_slots", count), slot_of("clip_slot_of", n_);
         const auto order = list_.order;
         Kokkos::parallel_for(
-            "voronoi2::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_),
-            KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
+            "voronoi2::slot_of", Kokkos::RangePolicy<ExecSpace>(exec_, 0, n_), KOKKOS_LAMBDA(int q) { slot_of(order(q)) = q; });
         Kokkos::parallel_for(
-            "voronoi2::slots", Kokkos::RangePolicy<ExecSpace>(exec_, 0, count),
-            KOKKOS_LAMBDA(int i) { slots(i) = slot_of(cells(i)); });
+            "voronoi2::slots", Kokkos::RangePolicy<ExecSpace>(exec_, 0, count), KOKKOS_LAMBDA(int i) { slots(i) = slot_of(cells(i)); });
         return slots;
     }
 
@@ -326,13 +319,12 @@ private:
     // Used by: update, rebuild (a mesh covering the torus many times passes every local test).
     bool fills_box() const {
         const double whole = 2.0 * static_cast<double>(box_.period[0]) * static_cast<double>(box_.period[1]);
-        const double area =
-            state_.area_stale || patched_ ? tri_repair::total_area(exec_, point_, box_, mesh_) : state_.area;
+        const double area = state_.area_stale || patched_ ? tri_repair::total_area(exec_, point_, box_, mesh_) : state_.area;
         return Kokkos::abs(area / whole - 1) < 1e-6;
     }
 
     // Add the time since `timer` to phase `field` (fenced) if timings are wanted. Used by: update, rebuild, update_cells, geometry.
-    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::* field) const {
+    void lap(Kokkos::Timer& timer, Timings* timings, double Timings::*field) const {
         if (!timings) return;
         exec_.fence();
         timings->*field += timer.seconds() * 1e3;

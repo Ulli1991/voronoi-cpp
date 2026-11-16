@@ -33,7 +33,7 @@ struct Triangles {
     Sixes<MemorySpace> corners;
     // Row t: the triangle across the edge opposite corner k, then its face number (3 + k).
     Sixes<MemorySpace> links;
-    Rows2<MemorySpace> centre;                         // circumcentre, unwrapped near corner 0
+    Rows2<MemorySpace> centre;  // circumcentre, unwrapped near corner 0
     Kokkos::View<int*, MemorySpace> owner, neighbour;  // of face f, owner < neighbour
 
     int count() const { return static_cast<int>(corners.extent(0)); }
@@ -81,8 +81,8 @@ struct RingLookup {
 // rings do not close (never for exact rings on distinct points).
 // Used by: Mesh<2>::rebuild (start).
 template <class ExecSpace>
-Triangles<typename ExecSpace::memory_space> from_rings(
-    const ExecSpace& exec, const polygon_clip::Rings<typename ExecSpace::memory_space>& rings) {
+Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
+                                                       const polygon_clip::Rings<typename ExecSpace::memory_space>& rings) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int n = static_cast<int>(rings.degree.extent(0));
@@ -104,13 +104,10 @@ Triangles<typename ExecSpace::memory_space> from_rings(
         },
         total);
     if (total != 2 * n)
-        throw std::runtime_error("tri_mesh::from_rings: " + std::to_string(total) + " triangles of " +
-                                 std::to_string(n) +
+        throw std::runtime_error("tri_mesh::from_rings: " + std::to_string(total) + " triangles of " + std::to_string(n) +
                                  " particles (2n on a torus): too few particles across the box, or duplicates");
     Triangles<Memory> mesh;
-    const auto no_init = [](const char* label) {
-        return Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label));
-    };
+    const auto no_init = [](const char* label) { return Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)); };
     mesh.corners = Sixes<Memory>(no_init("tri_corners"), total);
     mesh.links = Sixes<Memory>(no_init("tri_links"), total);
     mesh.centre = Rows2<Memory>(no_init("tri_centre"), total);
@@ -229,14 +226,8 @@ void faces_as(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
                 tet_mesh::store(area, f, A);
                 tet_mesh::store(centroid, f, c);
                 if (with_rows) {
-                    const float row[8] = {float(A.x),
-                                          float(A.y),
-                                          0,
-                                          float(c.x),
-                                          float(c.y),
-                                          0,
-                                          Kokkos::bit_cast<float>(o),
-                                          Kokkos::bit_cast<float>(j)};
+                    const float row[8] = {float(A.x), float(A.y), 0, float(c.x), float(c.y), 0,
+                                          Kokkos::bit_cast<float>(o), Kokkos::bit_cast<float>(j)};
                     for (int s = 0; s < 8; ++s) rows(f, s) = row[s];
                 }
             }
