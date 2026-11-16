@@ -1,7 +1,6 @@
-// The modes of voronoi::Engine (cpu, gpu, hybrid; docs/ideas.md, "CPU and GPU together") agree: a build and moving
-// steps per input in every mode the build has, hashed by particle and compared with cpu. The faces always agree; the
-// bits do where same_bits_across_spaces() says so, else volumes to 1e-12. Without a device space only cpu runs, and
-// gpu must be refused.
+// The modes of voronoi::Engine (cpu, gpu, hybrid; docs/ideas.md, "CPU and GPU together") give the same bits: a build
+// and moving steps per input in every mode the build has, hashed by particle and compared with cpu (the mesh's
+// geometry is never fused, tet_mesh::rounded). Without a device space only cpu runs, and gpu must be refused.
 
 #include "check.hpp"
 #include "support.hpp"
@@ -97,17 +96,6 @@ std::vector<Update> run(voronoi::Backend backend, Points points, double spacings
     return out;
 }
 
-// Whether cpu and gpu must agree in every bit: in a build without a device, or with the device's multiply-add unfused
-// (VORONOI_FMAD=OFF). With nvcc's default the device rounds a * b + c once where the host rounds twice, so the geometry
-// differs in the last bits (TESTING.md, "modes"); the topology never does.
-constexpr bool same_bits_across_spaces() {
-#if defined(VORONOI_NO_FMAD)
-    return true;
-#else
-    return !voronoi::has_device();
-#endif
-}
-
 // Random points in the unit square or segment, n of them. Used by: main (2D, 1D).
 Points flat_points(int n, int d, std::uint64_t seed) {
     std::mt19937_64 rng(seed);
@@ -160,10 +148,7 @@ void compare(Check& check, const std::string& what, const Points& points, double
         const std::string mode = voronoi::name(modes[m]);
         check.expect(topology == updates, what + ": " + mode + " has cpu's faces in " + std::to_string(topology) +
                                               " of " + std::to_string(updates) + " updates");
-        if (same_bits_across_spaces())
-            check.expect(all == updates, what + ": " + mode + " equals cpu in every bit (" + counts + ")");
-        else
-            check.expect(worst < 1e-12, what + ": " + mode + " equals cpu to 1e-12 in volume (" + counts + ")");
+        check.expect(all == updates, what + ": " + mode + " equals cpu in every bit (" + counts + ")");
     }
     if (modes.size() == 3) {  // gpu and hybrid: one space, so the same bits
         int all = 0;

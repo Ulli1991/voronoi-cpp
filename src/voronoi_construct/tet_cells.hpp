@@ -46,8 +46,8 @@ KOKKOS_INLINE_FUNCTION double pyramid(const X& x, const exact_predicates::BoxN<D
     const VecN<D> d = snapped_difference<D>(row<D>(x, j) - row<D>(x, i), box);
     const VecN<D> A = row<D>(area, f);
     c = row<D>(centroid, f);
-    if (j < i) c = c + d;
-    return Kokkos::abs(dot(A, d));
+    if (j < i) c = rounded::add(c, d);
+    return Kokkos::abs(rounded::dot(A, d));
 }
 
 // Sort cell i's list entries [begin, end) by the other particle, the XOR of
@@ -99,8 +99,8 @@ struct CellLists {
         return pyramid<D>(x, box, area, centroid, i, owner(f) ^ neighbour(f) ^ i, f, c);
     }
     KOKKOS_INLINE_FUNCTION void finish(int i, double v, VecN<D> moment) const {
-        volume(i) = v * pyramid_volume<D>;
-        store(cell_centroid, i, moment * (pyramid_centroid<D> / v));
+        volume(i) = rounded::mul(v, pyramid_volume<D>);
+        store(cell_centroid, i, rounded::mul(moment, pyramid_centroid<D> / v));
     }
     // The sequential sum of one cell.
     KOKKOS_INLINE_FUNCTION void sum(int i) const {
@@ -112,7 +112,7 @@ struct CellLists {
             VecN<D> c;
             const double p = side(i, entry(begin, from, at, is_kept), c);
             v += p;
-            moment = moment + c * p;
+            moment = rounded::add(moment, rounded::mul(c, p));
         }
         finish(i, v, moment);
     }
@@ -195,7 +195,7 @@ struct CellSumsWarp {
                 cr.y = __shfl_sync(everyone, c.y, first + r);
                 if constexpr (D == 3) cr.z = __shfl_sync(everyone, c.z, first + r);
                 v += pr;
-                moment = moment + cr * pr;
+                moment = rounded::add(moment, rounded::mul(cr, pr));
             }
         }
         if (real && lane == 0) lists.finish(i, v, moment);
