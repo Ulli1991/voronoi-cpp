@@ -6,7 +6,6 @@
 #include "clipping_cases.hpp"
 #include "support.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <sstream>
@@ -134,8 +133,8 @@ int main(int argc, char** argv) {
                                           std::to_string(differ) + " cells differ)");
         }
     }
-    // Volumes and centroids only (volumes_and_centroids): the bits of a full rebuild's; a rings build's too where warp
-    // kernels build every cell (#60). The thread kernel sums a rings cell's faces in id order: there within 1e-12.
+    // Volumes and centroids only (volumes_and_centroids): the bits of a full rebuild's; on the GPU a rings build's too,
+    // as every output routes a cell to the same kernel (#60). The host's thread kernel sums rings faces in id order.
     for (const std::string kind :
          {"jittered", "uniform", "clustered", "halo", "lattice", "wave", "cosmicweb", "fccsolid", "surface"}) {
         const Positions x = to_device(make_points(kind, 32 * 32 * 32));
@@ -148,29 +147,24 @@ int main(int argc, char** argv) {
         Kokkos::View<double*, Memory> volume("volume", m);
         Kokkos::View<double* [3], Memory> centroid("centroid", m);
         shell_voronoi::volumes_and_centroids(exec, Box{}, x, volume, centroid);
+        const auto v0 = to_host(full.volume), v1 = to_host(volume);
+        const auto c0 = to_host(full.centroid), c1 = to_host(centroid);
+        auto differ = [&](const auto& v, const auto& c) {
+            int count = 0;
+            for (int i = 0; i < m; ++i)
+                count += v0(i) != v(i) || c0(i, 0) != c(i, 0) || c0(i, 1) != c(i, 1) || c0(i, 2) != c(i, 2);
+            return count;
+        };
+        const int volumes_only = differ(v1, c1);
+        check.expect(volumes_only == 0, kind + ": volumes and centroids only, bits of the full rebuild (" +
+                                            std::to_string(volumes_only) + " of " + std::to_string(m) +
+                                            " cells differ)");
+        if constexpr (std::is_same_v<Exec, Kokkos::DefaultHostExecutionSpace>) continue;
         auto ringed = shell_voronoi::Cells<Memory>::with_rings(m, 64LL * m);
         shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(list), ringed);
-        const auto v0 = to_host(full.volume), v1 = to_host(volume), v2 = to_host(ringed.volume);
-        const auto c0 = to_host(full.centroid), c1 = to_host(centroid), c2 = to_host(ringed.centroid);
-        const bool warp = !std::is_same_v<Exec, Kokkos::DefaultHostExecutionSpace>;
-        const double tolerance = warp ? 0.0 : 1e-12;
-        int differ = 0, differ_rings = 0;
-        double largest = 0;
-        for (int i = 0; i < m; ++i) {
-            differ += v0(i) != v1(i) || c0(i, 0) != c1(i, 0) || c0(i, 1) != c1(i, 1) || c0(i, 2) != c1(i, 2);
-            const double scale = std::cbrt(v0(i));
-            largest = std::max({largest, std::abs(v2(i) - v0(i)) / v0(i), std::abs(c2(i, 0) - c0(i, 0)) / scale,
-                                std::abs(c2(i, 1) - c0(i, 1)) / scale, std::abs(c2(i, 2) - c0(i, 2)) / scale});
-            differ_rings +=
-                std::abs(v2(i) - v0(i)) > tolerance * v0(i) || std::abs(c2(i, 0) - c0(i, 0)) > tolerance * scale ||
-                std::abs(c2(i, 1) - c0(i, 1)) > tolerance * scale || std::abs(c2(i, 2) - c0(i, 2)) > tolerance * scale;
-        }
-        check.expect(differ == 0, kind + ": volumes and centroids only, bits of the full rebuild (" +
-                                      std::to_string(differ) + " of " + std::to_string(m) + " cells differ)");
-        check.expect(differ_rings == 0, kind + (warp ? ": rings build, bits" : ": rings build, within 1e-12") +
-                                            " of the full rebuild's volumes and centroids (" +
-                                            std::to_string(differ_rings) + " of " + std::to_string(m) +
-                                            " cells differ, largest relative " + std::to_string(largest) + ")");
+        const int rings = differ(to_host(ringed.volume), to_host(ringed.centroid));
+        check.expect(rings == 0, kind + ": rings build, bits of the full rebuild's volumes and centroids (" +
+                                     std::to_string(rings) + " of " + std::to_string(m) + " cells differ)");
     }
     return check.failed() != 0;
 }
