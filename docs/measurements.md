@@ -183,6 +183,50 @@ Not adopted, the owner's call: a clip budget of 256 instead of 4096 makes the su
 but changes the bits of the halo and cosmic-web tail cells (p99 210 to 268 clips), which restart filtered, and slows
 those inputs by 5 to 6 % (rebuild) and 4 to 11 % (exact start).
 
+### Surface: a 128-slot filtered warp kernel (2026-11-16)
+
+Branch `fix-60` at 343f653 (main 8d7ac1f merged in) against main 8d7ac1f, one A100 SXM4 40 GB at its default clocks
+(boost up to 1410 MHz), main and branch in the same gpu1 job (job 32406803, `build-jobs/final_B.sh`). Cells the
+filtered warp kernel leaves past its 64 vertex or plane slots are built again by the same kernel with 128 slots (twice
+the shared memory, 4 blocks per SM) before any reach the thread kernel. M cells/s:
+
+| surface | 64³ | 128³ | 256³ |
+|---|---|---|---|
+| warp rebuild, main | 0.129, 69 refused | 0.038, 476 refused | did not finish in 14 min |
+| warp rebuild, after 05e44e1 | 0.41 | 0.100 | 0.041 |
+| warp rebuild, 128-slot kernel | 0.51 | 0.104 | 0.045 |
+| exact start (library bench), main / branch | | 0.027 / 0.098 | |
+
+Main's rates: job 32378814 to 32378815. Cells per path at 64³ / 128³ / 256³ (counted in an instrumented build of the
+same commit): the unfiltered warp kernel certifies 24 / 65 / 52 %; the filtered warp kernel, from the cells it left
+uncertified or past the budget, 73 / 29 / 43 %; the 128-slot kernel 0.6 / 0.6 / 1.5 %; the thread kernel builds the
+unfiltered kernel's overflows, 1.7 / 5.8 / 3.2 %, of which 6 / 357 / 4261 cells go on to the exact kernel. That last
+pass is now most of the time.
+
+Check: `voronoi_bench rebuild --check` certifies every cell at all three sizes (closure at most 3.1e-15, volume sum
+within 4e-14; 128³ and 256³ fail only `faces=2*owned`, as before). Oracle check, 1000 sampled cells at 128³: every cell
+present for the warp rebuild and the exact start, sum − 1 = −7.7e-17 / −2.4e-17, largest relative error 3.9e-14 /
+1.4e-13.
+
+The other inputs, 128³ and 256³, against main: tets, rings, rings topology, start cells, geometry, faces and lists
+checksums of 3 steps and the warp rebuild's clip checksum and topology identical on all eight of the step bench (wave
+256³: start and rebuild only, as its step runs out of memory on main too); the library bench's warp and exact volumes
+identical bit for bit on blue noise and uniform (128³) and blue noise and cosmic web (256³). Rates, main → branch:
+rebuild −0.07 to −0.73 %; exact start −1.7 to +3.3 % (min of 3 repeats; uniform 128³ +9.6 %, main's slow repeat).
+Library bench within its repeat noise.
+
+Dropped, variant B2: sending the unfiltered warp kernel's own overflows to the filtered kernels too (4497a6c, jobs
+32378800 to 32378816). Surface 1.01 / 0.29 / 0.100 at 64³ / 128³ / 256³ (2 to 2.7 times the kept variant), and the
+other inputs' rebuild 0 to +5.7 % faster (cosmic web +5.2 / +5.7 %, halo +3.6 / +1.5 %, clustered +2.5 %), but the
+filtered kernel cuts in another order, so `rings_checksum`, `clip_checksum` and `clip_topology` change on uniform,
+clustered, halo and cosmic web (128³ and 256³), and `clipping_test` fails (volumes-only and full rebuild differ in 2 of
+32768 clustered and 3 halo cells).
+
+Tests on 343f653: A100 ctest 22 of 22; CI's host steps (GCC 15, OpenMP Kokkos) 22 of 22 with sanitizers off and on;
+comment and format checks pass; clang-tidy 18 clean on `clipping_test.cpp`, `voronoi_bench.cpp` and
+`library_bench.cpp`. A100 fuzz, profile huge, seeds 4e12 + 101 to 108: one exact, five refused for causes the inputs
+have, 105 and 107 out of time at 280 s as on main (#49).
+
 The other libraries (`bench/libraries/results/summary.md`, section "Application inputs"; A100 chains 32367907 to
 32367911 and 32370411, CPU jobs 32367538 to 32367544): the kNN codes lose cells wherever a cell has more neighbours
 than K. On cosmic web VoroGPU K 190 misses 2.4 % of the cells (sum of volumes − 1 = −0.038), K 90 and Liu et al. 19 %,
