@@ -108,8 +108,8 @@ Real reference_volume(const std::vector<R3>& d) {  // d: neighbour offsets; plan
         const Real h = off / std::sqrt(mm);  // distance of the plane from the particle
         std::vector<R3> poly;
         for (auto [a, b] : {std::pair<Real, Real>{-4, -4}, {4, -4}, {4, 4}, {-4, 4}})
-            poly.push_back({h * n[0] + a * u[0] + b * v[0], h * n[1] + a * u[1] + b * v[1],
-                            h * n[2] + a * u[2] + b * v[2]});
+            poly.push_back(
+                {h * n[0] + a * u[0] + b * v[0], h * n[1] + a * u[1] + b * v[1], h * n[2] + a * u[2] + b * v[2]});
         for (std::size_t j = 0; j < planes.size() && !poly.empty(); ++j) {
             if (j == k) continue;
             const R3& q = planes[j];
@@ -149,18 +149,17 @@ std::vector<double> volume_errors(const M& mesh, const Points& points) {
         if (owner(f) % 16 == 0 || neighbour(f) % 16 == 0)
             adjacent[owner(f)].push_back(neighbour(f)), adjacent[neighbour(f)].push_back(owner(f));
     std::vector<double> error((n + 15) / 16);
-    Kokkos::parallel_for(
-        "reference_volumes", Kokkos::RangePolicy<Host>(0, int(error.size())), [&](int s) {
-            const int i = 16 * s;
-            std::vector<R3> d;
-            for (int j : adjacent[i]) {
-                R3 r;
-                for (int a = 0; a < 3; ++a) r[a] = Real(nearest_image(points[j][a] - points[i][a]));
-                d.push_back(r);
-            }
-            const Real ref = reference_volume(d);
-            error[s] = double((Real(volume(i)) - ref) / ref);
-        });
+    Kokkos::parallel_for("reference_volumes", Kokkos::RangePolicy<Host>(0, int(error.size())), [&](int s) {
+        const int i = 16 * s;
+        std::vector<R3> d;
+        for (int j : adjacent[i]) {
+            R3 r;
+            for (int a = 0; a < 3; ++a) r[a] = Real(nearest_image(points[j][a] - points[i][a]));
+            d.push_back(r);
+        }
+        const Real ref = reference_volume(d);
+        error[s] = double((Real(volume(i)) - ref) / ref);
+    });
     Host{}.fence();
     return error;
 }
