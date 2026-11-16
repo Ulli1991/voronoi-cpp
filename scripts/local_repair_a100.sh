@@ -48,6 +48,9 @@ speed)  # per-step stage times: main (cheapest), branch (local) and branch (rebu
         run new "$label-cheapest" "$kind" "$d" $flags
     done < <(jumps)
     ;;
+large)  # SHARE of jumpers (4 spacings), local repair forced: why it gives up when it does
+    run new "jump-${SHARE:-1e-3}-4-local" jittered 0.1 --jump-share=${SHARE:-1e-3} --jump-spacings=4 --fallback=local
+    ;;
 crossover)  # local against rebuild over the share of jumpers (4 spacings)
     for f in 1e-5 1e-4 3e-4 1e-3 3e-3 1e-2 3e-2; do
         for policy in local rebuild; do
