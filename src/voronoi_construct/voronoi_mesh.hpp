@@ -233,6 +233,7 @@ public:
         Report report;
         resorted_ = false;
         ++since_sort_;
+        local_ = tet_local::Stats{};
         Kokkos::Timer timer;
         snap(x);
         tet_repair::move_screened(exec_, positions_, box_, tets_, state_);

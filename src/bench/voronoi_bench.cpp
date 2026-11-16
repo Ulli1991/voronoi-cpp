@@ -756,6 +756,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
                   << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
                   << " host_rebuilt=" << r.host_rebuilds << " local_ms=" << t.local << " local_cells=" << r.local_cells
                   << " local_tets=" << r.local_tets << " local_attempts=" << r.local_attempts
+                  << " local_why=" << mesh.local_stats().why << " local_why_first=" << mesh.local_stats().why_first
                   << " local_index_ms=" << mesh.local_stats().index_ms
                   << " local_select_ms=" << mesh.local_stats().select_ms
                   << " local_clip_ms=" << mesh.local_stats().clip_ms

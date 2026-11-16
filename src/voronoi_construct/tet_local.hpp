@@ -16,9 +16,16 @@ namespace tet_local {
 
 namespace ep = exact_predicates;
 
+// Why the last attempt did not finish: no seeds, more cells than n / largest_share, a cell not ok, a stitch that does
+// not close, or stuck entries after the device check.
+namespace why {
+constexpr int none = 0, seeds = 1, large = 2, cells = 3, stitch = 4, check = 5;
+}
+
 // What repair() did (counts of its last attempt). Used by: Mesh::update (Report::local_*), the bench.
 struct Stats {
-    int seeds = 0;                 // cells whose new neighbours were added (the seeds; all on a second attempt)
+    int why = why::none, why_first = why::none;  // of the last attempt, of the first
+    int seeds = 0;                // cells whose new neighbours were added (the seeds; all on a second attempt)
     int cells = 0;                 // cells clipped exactly (the affected set)
     int removed = 0, created = 0;  // tetrahedra replaced
     int attempts = 0;
@@ -199,7 +206,8 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
     };
 
     for (int attempt = 0; attempt < 2 && !stats.done; ++attempt) {
-        stats.seeds = stats.cells = stats.removed = stats.created = 0;
+        if (attempt > 0) stats.why_first = stats.why;
+        stats.seeds = stats.cells = stats.removed = stats.created = stats.why = 0;
         stats.attempts = attempt + 1;
         Kokkos::Timer timer;
         auto lap = [&](double& ms) {
@@ -232,24 +240,36 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         if (attempt > 0) ring(flag::affected);  // wider: one more ring of old neighbours
         const int first_count = select(flag::affected, true);
         lap(stats.select_ms);
-        if (static_cast<long long>(first_count) * largest_share > n) break;  // a rebuild is cheaper
+        if (static_cast<long long>(first_count) * largest_share > n) {  // a rebuild is cheaper
+            stats.why = why::large;
+            break;
+        }
         if (cells.capacity() < 64LL * first_count + 4096) cells.reallocate(96LL * first_count + 65536);
         clip(first_count);
         // A jumped particle's new neighbourhood (on the second attempt every cell's), then their cells.
         stats.seeds = select(attempt > 0 ? flag::affected : flag::seed, false);
-        if (stats.seeds == 0) break;
+        if (stats.seeds == 0) {
+            stats.why = why::seeds;
+            break;
+        }
         neighbours();
         clip(select(flag::affected, true));
         int count = select(flag::affected, false);
         stats.cells = count;
-        if (static_cast<long long>(count) * largest_share > n) break;
+        if (static_cast<long long>(count) * largest_share > n) {
+            stats.why = why::large;
+            break;
+        }
         if (failed(count) > 0 && cells.needed() > cells.capacity()) {  // pool full: all again in a bigger one
             cells.reallocate(cells.needed() + cells.needed() / 2);
             Kokkos::deep_copy(exec, cells.ring_used, 0u);
             clip(count);
         }
         lap(stats.clip_ms);
-        if (failed(count) > 0) continue;
+        if (failed(count) > 0) {
+            stats.why = why::cells;
+            continue;
+        }
 
         // The tetrahedra the cells imply, numbered by cell, positively oriented.
         const auto rings = cells.rings;
@@ -371,7 +391,10 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
                 if (found != 1 || (i >= 4 * created && other < 0)) Kokkos::atomic_inc(&failures());
                 if (i < 4 * created) across(i / 4, i % 4) = other;
             });
-        if (read(failures) > 0) continue;  // the region does not close: widen
+        if (read(failures) > 0) {  // the region does not close: widen
+            stats.why = why::stitch;
+            continue;
+        }
 
         // Slots: the old ones first, then free ones, then new; old ones left over are freed.
         const int extra = Kokkos::max(0, created - removed), dead = Kokkos::max(0, removed - created);
@@ -427,6 +450,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         const tet_repair::Stats device = tet_repair::repair(exec, m, s);
         stats.flips += device.flips23 + device.flips32;
         stats.done = device.stuck == 0 && !device.unfinished;
+        stats.why = stats.done ? why::none : why::check;
         lap(stats.check_ms);
         if (device.unfinished) break;
     }
