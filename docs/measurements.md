@@ -133,6 +133,100 @@ clips about 6000 neighbours instead of 75. The exact start inherits the cost, si
 [#60](https://github.com/Ulli1991/voronoi-cpp/issues/60), with a 953-point case. The mesh itself is right: Delaunay
 exact in every step (`failing=0`), volumes within 2.3e-13 of the oracle, moving steps at 139 M cells/s.
 
+### Surface after the fix of #60 (2026-11-15)
+
+Branch `fix-60` against `new-inputs` c4e6249 (ref), one A100 at 1305 MHz, ref and new in the same gpu1 jobs
+(`scripts/issue60_a100.sh`; jobs 32374838 to 32374852, 32375358 to 32375364). Every row M cells/s.
+
+| surface | 64³ | 128³ | 256³ |
+|---|---|---|---|
+| warp rebuild, ref | 0.129, 69 refused | 0.036, 475 degenerate + 1 plane overflow | did not finish in 14 min (below 0.020) |
+| warp rebuild, new | 0.41, none refused | 0.100, none refused | 0.041, none refused |
+| exact start (library bench), ref / new | | 0.026 / 0.095 | |
+| exact start: bad tetrahedra, patched cells, ref / new | 302, 1819 / 4, 101 | 11800, 75598 / 20, 404 | |
+
+Oracle check (`oracle_check`, 1000 sampled cells, job 32375451): the new warp rebuild and exact start at 128³ have
+every cell, sum of volumes − 1 = −7e-17 / −2e-17, largest relative volume error 3.9e-14 / 1.4e-13; ref's warp rebuild
+misses 476 cells (sum − 1 = −1.1e-3). `voronoi_bench rebuild --check`: every cell certified at 64³, 128³ and 256³,
+closure at most 3.1e-15, volume sum within 4e-14; 128³ and 256³ fail only `faces=2*owned`, the one-sided zero-area
+faces of clipping alone, as cosmic web 256³ does on ref.
+
+Causes. (1) Every refusal was a rounded cut: when the walk goes one level coarser it re-reads a grid cell the finer
+walk did not cover and clips a particle it already clipped; the twin plane should cut nothing, but in a needle cell the
+vertices of its face come from nearly parallel planes and round past the 64 ε |d| R tolerance, so the twin "cuts" its
+own face and the cut cannot close (thread kernel: the two planes meet nowhere, det 0). The 953-point case of the issue
+is this, for particle 255 and its neighbour 672 in slot order. Fix: cells a rounded build leaves neither ok nor out of
+pool room are built again exactly. (2) The slowness: the cell list puts every surface point at the base level (64 of
+them fill a node of mean density), so the warp kernel took its shortcut for uniform input and walked the base level
+only; it left 74 % of the cells uncertified at 64³ (measurement build, job 32371403) to the thread kernel, one thread
+per needle with thousands of candidates. Those cells now go to a filtered warp kernel (a cylinder around the cell rules
+out grid cells and particles, a vertex-ball test the rest, planes are compacted when full), as do cells whose walk
+passes 4096 clips. What is left: 2.5 % of the cells at 128³ grow past the warp kernel's 64 vertices and are built by the
+thread kernel (filtered, from its big capacity), and that pass is most of the time (phase timers: 10.7 of 14.5 s at 128³
+before the plane compaction).
+
+The other inputs (jittered, blue noise, uniform, clustered, halo, lattice, wave, cosmic web, fcc solid), 128³ and 256³:
+tets, rings, rings topology, start cells, geometry, faces and lists checksums of 3 steps and the warp rebuild's clip
+checksums identical to ref; blue noise by the library bench's volume files, identical bit for bit. The per-step
+`cells_checksum` differs between two runs of ref itself (job 32373870), so it is not compared. Wave at 256³ runs out of
+device memory in the step bench in both builds; its rebuild and start rates and its rebuild checksum are compared.
+Rates, ref → new, rebuild at 128³ / 256³: −0.06 to −0.30 % / −0.07 to −0.46 %; exact start within the ±3 % noise of
+its repeats (lattice and wave within 1 %). Blue noise through the library bench: within 0.5 %.
+
+Tests: A100 ctest 22 of 22 (job 32375356), with the 953-point case of the issue (thread and warp kernels against the
+exact one) and the surface input at 64³ (32³ on the host) in `clipping_test`; OpenMP `clipping_test` passes on the login
+node. Fuzz on the A100 (job 32375357, profile huge, seeds 4e12 + 101 to 108): one exact, five refused for causes the
+inputs have (coincident particles, reach), two out of time at 280 s; those two (105, 107) also run past 13 minutes on ref
+(jobs 32376473, 32376490), so they are #49, not this change.
+
+Not adopted, the owner's call: a clip budget of 256 instead of 4096 makes the surface 1.6 times faster at 128³ (0.16),
+but changes the bits of the halo and cosmic-web tail cells (p99 210 to 268 clips), which restart filtered, and slows
+those inputs by 5 to 6 % (rebuild) and 4 to 11 % (exact start).
+
+### Surface: a 128-slot filtered warp kernel (2026-11-16)
+
+Branch `fix-60` at 343f653 (main 8d7ac1f merged in) against main 8d7ac1f, one A100 SXM4 40 GB at its default clocks
+(boost up to 1410 MHz), main and branch in the same gpu1 job (job 32406803, `build-jobs/final_B.sh`). Cells the
+filtered warp kernel leaves past its 64 vertex or plane slots are built again by the same kernel with 128 slots (twice
+the shared memory, 4 blocks per SM) before any reach the thread kernel. M cells/s:
+
+| surface | 64³ | 128³ | 256³ |
+|---|---|---|---|
+| warp rebuild, main | 0.129, 69 refused | 0.038, 476 refused | did not finish in 14 min |
+| warp rebuild, after 05e44e1 | 0.41 | 0.100 | 0.041 |
+| warp rebuild, 128-slot kernel | 0.51 | 0.104 | 0.045 |
+| exact start (library bench), main / branch | | 0.027 / 0.098 | |
+
+Main's rates: job 32378814 to 32378815. Cells per path at 64³ / 128³ / 256³ (counted in an instrumented build of the
+same commit): the unfiltered warp kernel certifies 24 / 65 / 52 %; the filtered warp kernel, from the cells it left
+uncertified or past the budget, 73 / 29 / 43 %; the 128-slot kernel 0.6 / 0.6 / 1.5 %; the thread kernel builds the
+unfiltered kernel's overflows, 1.7 / 5.8 / 3.2 %, of which 6 / 357 / 4261 cells go on to the exact kernel. That last
+pass is now most of the time.
+
+Check: `voronoi_bench rebuild --check` certifies every cell at all three sizes (closure at most 3.1e-15, volume sum
+within 4e-14; 128³ and 256³ fail only `faces=2*owned`, as before). Oracle check, 1000 sampled cells at 128³: every cell
+present for the warp rebuild and the exact start, sum − 1 = −7.7e-17 / −2.4e-17, largest relative error 3.9e-14 /
+1.4e-13.
+
+The other inputs, 128³ and 256³, against main: tets, rings, rings topology, start cells, geometry, faces and lists
+checksums of 3 steps and the warp rebuild's clip checksum and topology identical on all eight of the step bench (wave
+256³: start and rebuild only, as its step runs out of memory on main too); the library bench's warp and exact volumes
+identical bit for bit on blue noise and uniform (128³) and blue noise and cosmic web (256³). Rates, main → branch:
+rebuild −0.07 to −0.73 %; exact start −1.7 to +3.3 % (min of 3 repeats; uniform 128³ +9.6 %, main's slow repeat).
+Library bench within its repeat noise.
+
+Dropped, variant B2: sending the unfiltered warp kernel's own overflows to the filtered kernels too (4497a6c, jobs
+32378800 to 32378816). Surface 1.01 / 0.29 / 0.100 at 64³ / 128³ / 256³ (2 to 2.7 times the kept variant), and the
+other inputs' rebuild 0 to +5.7 % faster (cosmic web +5.2 / +5.7 %, halo +3.6 / +1.5 %, clustered +2.5 %), but the
+filtered kernel cuts in another order, so `rings_checksum`, `clip_checksum` and `clip_topology` change on uniform,
+clustered, halo and cosmic web (128³ and 256³), and `clipping_test` fails (volumes-only and full rebuild differ in 2 of
+32768 clustered and 3 halo cells).
+
+Tests on 343f653: A100 ctest 22 of 22; CI's host steps (GCC 15, OpenMP Kokkos) 22 of 22 with sanitizers off and on;
+comment and format checks pass; clang-tidy 18 clean on `clipping_test.cpp`, `voronoi_bench.cpp` and
+`library_bench.cpp`. A100 fuzz, profile huge, seeds 4e12 + 101 to 108: one exact, five refused for causes the inputs
+have, 105 and 107 out of time at 280 s as on main (#49).
+
 The other libraries (`bench/libraries/results/summary.md`, section "Application inputs"; A100 chains 32367907 to
 32367911 and 32370411, CPU jobs 32367538 to 32367544): the kNN codes lose cells wherever a cell has more neighbours
 than K. On cosmic web VoroGPU K 190 misses 2.4 % of the cells (sum of volumes − 1 = −0.038), K 90 and Liu et al. 19 %,

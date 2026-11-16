@@ -13,13 +13,20 @@ enum Status : int {
     vertex_overflow = 3,
     face_overflow = 4,  // the cell's chunk of the face or ring pool is full
     degenerate = 5,
+    deferred = 6,  // the warp kernel's walk passed heavy_clips: built again by the filtered kernel, never an output
 };
-constexpr int status_count = 6;
+constexpr int status_count = 7;
 
 constexpr int max_planes = 48;                             // cutting planes, including the 6 box planes
 constexpr int max_vertices = 64;                           // one 64-bit mask marks vertices to remove
 constexpr int big_planes = 128, big_vertices = 256;        // for the rare cells that overflow those
 constexpr int huge_planes = 16000, huge_vertices = 32000;  // exact, on the host: the few that overflow those
+// A walk that clips more candidates than this goes on filtered (#60): the warp kernel's stops and the filtered kernel
+// builds the cell again. Above every cell of the benchmark inputs (most 2096, halo 128³); -D for measurements.
+#if !defined(VORONOI_HEAVY_CLIPS)
+#define VORONOI_HEAVY_CLIPS 4096
+#endif
+constexpr int heavy_clips = VORONOI_HEAVY_CLIPS;
 constexpr int ring_buffer = 32;
 constexpr int box_planes = 6;
 constexpr int face_block = 256;  // face pool entries a warp claims at a time (shell_voronoi_warp.hpp)

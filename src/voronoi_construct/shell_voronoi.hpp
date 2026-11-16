@@ -99,9 +99,7 @@ struct Cells {
         for (std::size_t c = 0; c < used.extent(0); ++c) most = Kokkos::max(most, used(c));
         return static_cast<long long>(most) * static_cast<long long>(used.extent(0));
     }
-    long long capacity() const {
-        return static_cast<long long>(with_rings() ? rings.extent(0) : neighbour.extent(0));
-    }
+    long long capacity() const { return static_cast<long long>(with_rings() ? rings.extent(0) : neighbour.extent(0)); }
 
     // A pool of `entries`; the contents are dropped.
     void reallocate(long long entries) {
@@ -154,7 +152,8 @@ struct Selection {
 // The pool chunk of cell t: a multiplicative hash, as slot order is spatial
 // and t % chunks can pick, say, only the cells at one box face.
 KOKKOS_INLINE_FUNCTION unsigned pool_chunk(int t, unsigned chunks) {
-    return static_cast<unsigned>((static_cast<unsigned long long>(static_cast<unsigned>(t) * 2654435761u) * chunks) >> 32);
+    return static_cast<unsigned>((static_cast<unsigned long long>(static_cast<unsigned>(t) * 2654435761u) * chunks) >>
+                                 32);
 }
 
 // Claim `need` entries of a pool of `capacity` for cell t: sets start,
@@ -223,10 +222,10 @@ struct Candidate {
     std::int8_t image[3];  // periodic image of the slot, in box lengths
 };
 
-// Which of the selected cells a pass builds: all, those not ok, those that overflowed the usual capacities, or
-// those not ok that did not overflow (uncertain).
+// Which of the selected cells a pass builds: all, those not ok, those that overflowed the usual capacities, those not
+// ok that did not overflow (uncertain), or those a walk left past the clip budget (deferred, #60).
 // Used by: construct_cells, construct_huge, finish_failed.
-enum class Pass { all, failed, overflowed, uncertain };
+enum class Pass { all, failed, overflowed, uncertain, deferred };
 
 // A thread's cell: on its stack, the host's huge ones (over a megabyte) on
 // the heap, as an OpenMP thread may have little more than that.
@@ -265,8 +264,9 @@ auto cell_policy(const ExecSpace& exec, int count) {
 // The per-thread kernel, with cells of type Cell (RoundedCell or
 // ExactCell): the walk (see Stencil), then the face walk that writes the
 // owned faces or rings and integrates the geometry.
-// Used by: construct_cells, construct_huge.
-template <class Cell, class ExecSpace>
+// filtered: the deferred cells, whose walk skips what the cell's Cylinder rules out (#60); otherwise a walk that passes
+// the clip budget stops as deferred. Used by: construct_cells, construct_huge.
+template <class Cell, bool filtered = false, class ExecSpace>
 void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     const Stencil<typename ExecSpace::memory_space>& stencil,
                     const Cells<typename ExecSpace::memory_space>& out, Pass pass,
@@ -287,9 +287,11 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             const int before = out.status(id);
             // A full pool stays full: those cells wait for a bigger one.
             const bool overflow = before == vertex_overflow || before == plane_overflow;
-            if ((pass == Pass::failed && (before == ok || before == face_overflow)) ||
+            if ((pass == Pass::failed && (before == ok || before == face_overflow || before == deferred)) ||
                 (pass == Pass::overflowed && !overflow) ||
-                (pass == Pass::uncertain && (before == ok || before == face_overflow || overflow)))
+                (pass == Pass::uncertain &&
+                 (before == ok || before == face_overflow || overflow || before == deferred)) ||
+                (pass == Pass::deferred && before != deferred))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
             ep::i64 self[3] = {0, 0, 0};
@@ -304,6 +306,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             bool certified = false;
             Candidate buffer[ring_buffer];
             int buffered = 0, batches = 0, clipped = 0, cuts = 0;
+            [[maybe_unused]] Cylinder bound{};
 
             // Clip with the buffered particles nearest-first, until the rest are too far to cut.
             auto flush = [&]() {
@@ -328,7 +331,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     const int planes_before = cell.planes, vertices_before = cell.vertices;
                     // Exact cuts break ties by particle id; rounded cells keep the slot until the walk is done (one
                     // load fewer per cut).
-                    status = clip(cell, e, d, Cell::exact ? grid.order(c.slot) : c.slot, id);
+                    const int other = Cell::exact ? grid.order(c.slot) : c.slot;
+                    status = clip<filtered>(cell, e, d, other, id);
                     ++clipped;
                     if (cell.planes == planes_before && cell.vertices == vertices_before) continue;
                     ++cuts;
@@ -346,6 +350,14 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 const int reach = level_reach(level, grid.fewest), entries = stencil.ends(reach);
                 for (int first = 0; first < entries && status == ok && !certified; first += ring_buffer) {
                     ++batches;
+                    // Rounded cells check the budget every batch, exact ones (the start's patches) at level changes.
+                    if constexpr (!filtered && !Cell::exact)
+                        if (clipped > heavy_clips) {
+                            status = deferred;
+                            break;
+                        }
+                    // The cell only shrinks, so a bound from its vertices now holds for the whole batch.
+                    if constexpr (filtered) bound = cylinder(cell, unit);
                     for (int e = first; e < Kokkos::min(first + ring_buffer, entries) && status == ok; ++e) {
                         if (double(stencil.bound2(e)) * width * width >= reach2) {
                             certified = true;
@@ -354,6 +366,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                         int begin = 0, end = 0, packed = 0;
                         if (!stencil_cell(grid, level, home, finer, stencil.offsets(e), p, reach2, begin, end, packed))
                             continue;
+                        if constexpr (filtered)
+                            if (!admits(grid, bound, level, home, stencil.offsets(e), p)) continue;
                         const int shift[3] = {image(packed, 0), image(packed, 1), image(packed, 2)};
                         for (int q = begin; q < end; ++q) {
                             if (q == t) continue;
@@ -362,6 +376,8 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                             const double dz = positions(q, 2) + shift[2] * box.side[2] - p.z;
                             const double d2 = dx * dx + dy * dy + dz * dz;
                             if (!(d2 < reach2)) continue;  // never a non-finite distance
+                            if constexpr (filtered)
+                                if (!bound.admits(Vec3{dx, dy, dz}, d2)) continue;
                             if (buffered == ring_buffer) flush();
                             using Image = std::int8_t;
                             buffer[buffered++] = {d2, q, {Image(shift[0]), Image(shift[1]), Image(shift[2])}};
@@ -376,6 +392,11 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                     break;
                 }
                 if (level == 2) break;
+                if constexpr (!filtered && Cell::exact)
+                    if (clipped > heavy_clips) {
+                        status = deferred;
+                        break;
+                    }
                 finer = (home[0] & 1) | (home[1] & 1) << 1 | (home[2] & 1) << 2;
                 for (int k = 0; k < 3; ++k) home[k] >>= 1;
                 --level;
@@ -497,6 +518,10 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             }
             if (status == ok && !(volume > 0)) status = degenerate;
 
+            // A deferred cell that overflows stays deferred, for the next capacity.
+            if (filtered && (status == plane_overflow || status == vertex_overflow) &&
+                Cell::planes_capacity < huge_planes)
+                status = deferred;
             out.status(id) = status;
             if (with_faces) {
                 out.face_count(id) = status == ok ? faces : 0;
@@ -620,6 +645,7 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
     using Huge = ExactCell<huge_planes, huge_vertices>;
     if constexpr (std::is_same_v<Memory, HostMemory>) {
         huge_on_host<Huge>(grid, out, selection);
+        construct_pass<Huge, true>(Host{}, grid, make_stencil(Host{}), out, Pass::deferred, selection);
     } else {
         Grid<HostMemory> g;
         g.positions = host_copy<decltype(g.positions)>(grid.positions);
@@ -655,6 +681,7 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
         const Selection<HostMemory> s{host_copy<Kokkos::View<int*, HostMemory>>(selection.slots),
                                       host_copy<Kokkos::View<char*, HostMemory>>(selection.listed)};
         huge_on_host<Huge>(g, c, s);
+        construct_pass<Huge, true>(Host{}, g, make_stencil(Host{}), c, Pass::deferred, s);
         copy_back(c.status, out.status);
         copy_back(c.face_count, out.face_count);
         copy_back(c.owned_count, out.owned_count);
@@ -671,9 +698,9 @@ void construct_huge(const Grid<typename ExecSpace::memory_space>& grid,
     }
 }
 
-// Build the cells of `pass` with cells of kind Cell (RoundedCell or
-// ExactCell), then those that overflowed the usual capacities once more
-// with big ones, and exact cells that overflowed those with huge ones.
+// Build the cells of `pass` with cells of kind Cell (RoundedCell or ExactCell), then those that overflowed the usual
+// capacities once more with big ones, and exact cells that overflowed those with huge ones; deferred cells (#60) go
+// filtered from the big capacity on.
 // Used by: construct, tet_start::build.
 template <template <int, int> class Cell, class ExecSpace>
 void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
@@ -689,20 +716,42 @@ void construct_cells(const ExecSpace& exec, const Grid<typename ExecSpace::memor
             "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
             KOKKOS_LAMBDA(int i, int& sum) {
                 const int s = status(order(selection.slot(i)));
-                sum += s == vertex_overflow || s == plane_overflow;
+                sum += s == vertex_overflow || s == plane_overflow || s == deferred;
             },
             count);
         return count > 0;
     };
     if (!overflowed()) return;
     construct_pass<Cell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, selection);
+    construct_pass<Cell<big_planes, big_vertices>, true>(exec, grid, stencil, out, Pass::deferred, selection);
     if constexpr (Cell<big_planes, big_vertices>::exact)
         if (overflowed()) construct_huge<ExecSpace>(grid, out, selection);
 }
 
+// Cells a rounded build left neither ok nor out of pool room, built again exactly: a rounded cut can see a face's own
+// vertices beyond its plane, as when a coarser level re-reads a particle it clipped (#60). Exact cells decide by sign.
+// Used by: construct, construct_warp.
+template <class ExecSpace>
+void exact_where_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
+                        const Stencil<typename ExecSpace::memory_space>& stencil,
+                        const Cells<typename ExecSpace::memory_space>& out,
+                        const Selection<typename ExecSpace::memory_space>& selection = {}) {
+    const auto status = out.status;
+    const auto order = grid.order;
+    int failed = 0;
+    Kokkos::parallel_reduce(
+        "shell_voronoi::count_failed", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
+        KOKKOS_LAMBDA(int i, int& sum) {
+            const int s = status(order(selection.slot(i)));
+            sum += s != ok && s != face_overflow;
+        },
+        failed);
+    if (failed > 0) construct_cells<ExactCell>(exec, grid, stencil, out, Pass::failed, selection);
+}
+
 // The cells the warp kernel gave up, with rounded cells: uncertified ones at the usual capacities, then every
-// overflowed one at big capacities at once (the warp's capacities are not smaller than the usual ones). The same
-// cells and bits as construct_cells(Pass::failed): a cell that fits gives the same bits at either. Used by: construct_warp.
+// overflowed one at big capacities at once (the warp's capacities are not smaller than the usual ones), and deferred
+// ones filtered (#60). The same cells and bits as construct_cells(Pass::failed). Used by: construct_warp.
 template <class ExecSpace>
 void finish_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                    const Stencil<typename ExecSpace::memory_space>& stencil,
@@ -712,9 +761,13 @@ void finish_failed(const ExecSpace& exec, const Grid<typename ExecSpace::memory_
     int count = 0;
     Kokkos::parallel_reduce(
         "shell_voronoi::count_overflows", Kokkos::RangePolicy<ExecSpace>(exec, 0, grid.n),
-        KOKKOS_LAMBDA(int i, int& sum) { sum += status(i) == vertex_overflow || status(i) == plane_overflow; }, count);
-    if (count > 0)
-        construct_pass<RoundedCell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, {});
+        KOKKOS_LAMBDA(int i, int& sum) {
+            sum += status(i) == vertex_overflow || status(i) == plane_overflow || status(i) == deferred;
+        },
+        count);
+    if (count == 0) return;
+    construct_pass<RoundedCell<big_planes, big_vertices>>(exec, grid, stencil, out, Pass::overflowed, {});
+    construct_pass<RoundedCell<big_planes, big_vertices>, true>(exec, grid, stencil, out, Pass::deferred, {});
 }
 
 // Run build() on an empty pool; if the pool turned out too small (cells
@@ -734,8 +787,8 @@ void until_pool_fits(const ExecSpace& exec, Cells<MemorySpace>& out, const Build
 }  // namespace detail
 
 // Build the selected cells (default: all) with one thread per cell: the portable kernel (rounded cells, as the warp
-// kernel), or exactly (detail::ExactCell) if `exact`. Rounded cells are guesses: near-equal bisectors can break one with
-// status ok (#30), so use them only under an exact check, as tet_start does.
+// kernel; those it cannot finish exactly), or all exactly (detail::ExactCell) if `exact`. Rounded cells are guesses:
+// near-equal bisectors can break one with status ok (#30), so use them only under an exact check, as tet_start does.
 // Used by: construct_warp (non-CUDA), tests.
 template <class ExecSpace>
 void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
@@ -745,8 +798,10 @@ void construct(const ExecSpace& exec, const Grid<typename ExecSpace::memory_spac
     detail::until_pool_fits(exec, out, [&] {
         if (exact)
             detail::construct_cells<detail::ExactCell>(exec, grid, stencil, out, detail::Pass::all, selection);
-        else
+        else {
             detail::construct_cells<detail::RoundedCell>(exec, grid, stencil, out, detail::Pass::all, selection);
+            detail::exact_where_failed(exec, grid, stencil, out, selection);
+        }
     });
 }
 
