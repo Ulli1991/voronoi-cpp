@@ -46,7 +46,8 @@ void fallback_cases() {
             });
     const std::pair<voronoi::Fallback, std::string> modes[] = {{voronoi::Fallback::cheapest, "cheapest"},
                                                                {voronoi::Fallback::host, "host"},
-                                                               {voronoi::Fallback::rebuild, "rebuild"}};
+                                                               {voronoi::Fallback::rebuild, "rebuild"},
+                                                               {voronoi::Fallback::local, "local"}};
     for (const auto& [mode, name] : modes) {
         const voronoi::Fallback fallback = mode;
         const std::string label = name;
@@ -94,6 +95,38 @@ void fallback_cases() {
             std::cout << "    faces " << double(r.faces) / n << " per cell\n";
         });
     }
+    // The local repair (Fallback::local, tet_local) at 32³: 2 or 33 particles (1e-3) jump 1 to 4 spacings on a slow
+    // flow. Each step it runs must finish the mesh without a rebuild, and the mesh must equal a fresh build.
+    for (const int jumpers : {2, 33})
+        for (const double d : {1.0, 2.0, 4.0})
+            add("fallback.local.jumpers." + std::to_string(jumpers) + "." + sci(d), [=](Check& c) {
+                Points p = make_points("jittered", 32768);
+                Mesh m(Exec{}, 1.0);
+                m.set_fallback(voronoi::Fallback::local);
+                build(c, "start", m, p, Expect::exact, 2);
+                std::mt19937_64 rng(200 + jumpers);
+                std::normal_distribution<double> g(0, 1);
+                std::uniform_int_distribution<int> any(0, 32767);
+                const Flow flow;
+                int local = 0;
+                for (int s = 1; s <= 4; ++s) {
+                    flow.advect(p, 0.1 / 32);
+                    for (int k = 0; k < jumpers; ++k) {
+                        auto& q = p[any(rng)];
+                        const Point u{g(rng), g(rng), g(rng)};
+                        const double scale = d / 32 / std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+                        for (int a = 0; a < 3; ++a) q[a] = wrap(q[a] + scale * u[a]);
+                    }
+                    to_grid(p);
+                    const auto r = step(c, "jumps of " + sci(d) + " spacings, step " + std::to_string(s), m, p, 8);
+                    local += r.local_cells > 0;
+                    c.expect(r.local_cells == 0 || (r.local_done && !r.rebuilt),
+                             "local repair of " + std::to_string(r.local_cells) + " cells, " +
+                                 std::to_string(r.local_tets) + " tetrahedra: done " + std::to_string(r.local_done) +
+                                 ", rebuilt " + std::to_string(r.rebuilt));
+                }
+                c.expect(local > 0, std::to_string(local) + " of 4 steps repaired locally");
+            });
     // What one step of Fallback::host costs against the stuck entries it gets.
     for (const int n : {1000, 1728, 4096, 8000})
         for (const double d : {0.3, 0.5, 1.0, 2.0})

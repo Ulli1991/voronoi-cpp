@@ -18,7 +18,7 @@ namespace ep = exact_predicates;
 
 // What repair() did (counts of its last attempt). Used by: Mesh::update (Report::local_*), the bench.
 struct Stats {
-    int seeds = 0;                 // particles of the stuck entries
+    int seeds = 0;                 // cells whose new neighbours were added (the seeds; all on a second attempt)
     int cells = 0;                 // cells clipped exactly (the affected set)
     int removed = 0, created = 0;  // tetrahedra replaced
     int attempts = 0;
@@ -95,8 +95,10 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
     const Kokkos::View<char*, Memory> flags("local_flags", n);
     const auto order = grid.order;
     const auto point = s.point;
+    const Kokkos::View<char*, Memory> clipped("local_clipped", n);
     auto cells = shell_voronoi::Cells<Memory>::with_rings(n, 4096);
     cells.ring_used = Kokkos::View<unsigned*, Memory>("local_ring_used", 1);  // one pool chunk: few cells
+    const auto stencil = shell_voronoi::make_stencil(exec);
     const Kokkos::View<int, Memory> failures("local_failures");
     auto read = [&](const auto& scalar) {
         int value = 0;
@@ -129,35 +131,38 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
             });
         settle();
     };
-    // The slots of the cells flagged 1..level, in slot order.
+    // The slots of the cells flagged 1..level (only those not clipped yet if `fresh`), in slot order.
     Ints slots;
-    auto select = [&](char level) {
+    auto select = [&](char level, bool fresh) {
+        Ints out(uninitialized("local_slots"), n);
         int count = 0;
-        Kokkos::parallel_reduce(
-            "tet_local::count", Range(exec, 0, n),
-            KOKKOS_LAMBDA(int q, int& sum) {
-                const char f = flags(order(q));
-                sum += f != flag::none && f <= level;
-            },
-            count);
-        slots = Ints(uninitialized("local_slots"), count);
-        const auto out = slots;
         Kokkos::parallel_scan(
-            "tet_local::select", Range(exec, 0, n), KOKKOS_LAMBDA(int q, int& at, bool last) {
-                const char f = flags(order(q));
-                if (f == flag::none || f > level) return;
+            "tet_local::select", Range(exec, 0, n),
+            KOKKOS_LAMBDA(int q, int& at, bool last) {
+                const int i = order(q);
+                const char f = flags(i);
+                if (f == flag::none || f > level || (fresh && clipped(i))) return;
                 if (last) out(at) = q;
                 ++at;
-            });
+            },
+            count);
+        slots = Kokkos::subview(out, std::make_pair(0, count));
         return count;
     };
-    // Exact cells of the selected slots, listed = every flagged particle (so faces to unflagged ones are kept).
+    // Cells of the selected slots, appended to the pool; listed = every flagged particle (faces to the others are
+    // kept). Rounded cells on a first attempt (a guess the device repair checks), exact ones on the second.
+    bool exact = false;
     auto clip = [&](int count) {
-        const long long entries = 128LL * count + 4096;
-        if (cells.capacity() < entries) cells.reallocate(entries);
-        shell_voronoi::construct(exec, grid, cells,
-                                 {Kokkos::View<const int*, Memory>(slots), Kokkos::View<const char*, Memory>(flags)},
-                                 true);
+        if (count == 0) return;
+        const shell_voronoi::Selection<Memory> selection{slots, flags};
+        namespace sv = shell_voronoi::detail;
+        if (exact)
+            sv::construct_cells<sv::ExactCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
+        else
+            sv::construct_cells<sv::RoundedCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
+        const auto sel = slots;
+        Kokkos::parallel_for(
+            "tet_local::clipped", Range(exec, 0, count), KOKKOS_LAMBDA(int c) { clipped(order(sel(c))) = 1; });
     };
     // The unflagged neighbours of the selected cells become affected.
     auto neighbours = [&] {
@@ -177,12 +182,25 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
             });
         settle();
     };
+    // Cells that did not come out ok (pool full, uncertified, overflowed): returns their number.
+    auto failed = [&](int count) {
+        const auto status = cells.status;
+        const auto sel = slots;
+        int bad = 0;
+        Kokkos::parallel_reduce(
+            "tet_local::status", Range(exec, 0, count),
+            KOKKOS_LAMBDA(int c, int& sum) { sum += status(order(sel(c))) != shell_voronoi::ok; }, bad);
+        return bad;
+    };
 
     for (int attempt = 0; attempt < 2 && !stats.done; ++attempt) {
         stats = Stats{0, 0, 0, 0, attempt + 1, stats.flips, false};
+        exact = attempt > 0;
         const int stuck = Kokkos::min(s.host_counters(tet_repair::counter::stuck), static_cast<int>(s.stuck.extent(0)));
         // Seeds: the particles of the stuck tetrahedra and of the ones across their stuck triangles.
         Kokkos::deep_copy(exec, flags, flag::none);
+        Kokkos::deep_copy(exec, clipped, 0);
+        Kokkos::deep_copy(exec, cells.ring_used, 0u);
         {
             const auto vertex = m.vertex, adjacent = m.adjacent;
             const auto alive = s.alive;
@@ -199,28 +217,23 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
                 });
         }
         ring(flag::seed);
-        stats.seeds = select(flag::seed);
+        if (attempt > 0) ring(flag::affected);  // wider: one more ring of old neighbours
+        const int first_count = select(flag::affected, true);
+        if (cells.capacity() < 160LL * first_count + 4096) cells.reallocate(256LL * first_count + 4096);
+        clip(first_count);
+        // A jumped particle's new neighbourhood (on the second attempt every cell's), then their cells.
+        stats.seeds = select(attempt > 0 ? flag::affected : flag::seed, false);
         if (stats.seeds == 0) break;
-        clip(stats.seeds);
-        neighbours();  // a jumped particle's new neighbourhood
-        if (attempt > 0) {  // wider: one more ring of old and of new neighbours
-            ring(flag::affected);
-            clip(select(flag::affected));
-            neighbours();
-        }
-        const int count = select(flag::affected);
+        neighbours();
+        clip(select(flag::affected, true));
+        int count = select(flag::affected, false);
         stats.cells = count;
-        clip(count);
-        // Every affected cell must be exact and certified.
-        {
-            const auto status = cells.status;
-            const auto sel = slots;
-            int bad = 0;
-            Kokkos::parallel_reduce(
-                "tet_local::status", Range(exec, 0, count),
-                KOKKOS_LAMBDA(int c, int& sum) { sum += status(order(sel(c))) != shell_voronoi::ok; }, bad);
-            if (bad > 0) break;
+        if (failed(count) > 0 && cells.needed() > cells.capacity()) {  // pool full: all again in a bigger one
+            cells.reallocate(cells.needed() + cells.needed() / 2);
+            Kokkos::deep_copy(exec, cells.ring_used, 0u);
+            clip(count);
         }
+        if (failed(count) > 0) continue;
 
         // The tetrahedra the cells imply, numbered by cell, positively oriented.
         const auto rings = cells.rings;
@@ -273,24 +286,32 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         auto touches = KOKKOS_LAMBDA(int t) {
             return flags(vertex(t, 0)) || flags(vertex(t, 1)) || flags(vertex(t, 2)) || flags(vertex(t, 3));
         };
-        int removed = 0;
-        Kokkos::parallel_reduce(
-            "tet_local::count_old", Range(exec, 0, s.count),
-            KOKKOS_LAMBDA(int t, int& sum) { sum += alive(t) && touches(t); }, removed);
-        const Ints old(uninitialized("local_old"), removed), border(uninitialized("local_border"), 4 * removed);
+        // One scan into a list sized by a guess (about 27 tetrahedra per particle), a second if it did not fit.
+        Ints old, border;
         const Kokkos::View<int, Memory> borders("local_borders");
-        Kokkos::parallel_scan(
-            "tet_local::old", Range(exec, 0, s.count), KOKKOS_LAMBDA(int t, int& at, bool last) {
-                if (!alive(t) || !touches(t)) return;
-                if (last) {
-                    old(at) = t;
-                    for (int k = 0; k < 4; ++k) {
-                        const int o = adjacent(t, k);
-                        if (o >= 0 && !touches(o)) border(Kokkos::atomic_fetch_add(&borders(), 1)) = 4 * t + k;
+        int removed = 0;
+        for (int room = 32 * count + 4096;;) {
+            old = Ints(uninitialized("local_old"), room);
+            border = Ints(uninitialized("local_border"), 4 * room);
+            Kokkos::deep_copy(exec, borders, 0);
+            const auto list = old, faces = border;
+            Kokkos::parallel_scan(
+                "tet_local::old", Range(exec, 0, s.count),
+                KOKKOS_LAMBDA(int t, int& at, bool last) {
+                    if (!alive(t) || !touches(t)) return;
+                    if (last && at < room) {
+                        list(at) = t;
+                        for (int k = 0; k < 4; ++k) {
+                            const int o = adjacent(t, k);
+                            if (o >= 0 && !touches(o)) faces(Kokkos::atomic_fetch_add(&borders(), 1)) = 4 * t + k;
+                        }
                     }
-                }
-                ++at;
-            });
+                    ++at;
+                },
+                removed);
+            if (removed <= room) break;
+            room = removed;
+        }
         const int boundary = read(borders);
         stats.removed = removed;
         stats.created = created;

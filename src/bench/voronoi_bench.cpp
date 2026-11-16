@@ -755,7 +755,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
                   << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
                   << " host_rebuilt=" << r.host_rebuilds << " local_ms=" << t.local << " local_cells=" << r.local_cells
-                  << " local_tets=" << r.local_tets << " local_done=" << r.local_done << " rebuilt=" << r.rebuilt << " overlapped=" << r.overlapped
+                  << " local_tets=" << r.local_tets << " local_attempts=" << r.local_attempts << " local_done=" << r.local_done << " rebuilt=" << r.rebuilt << " overlapped=" << r.overlapped
                   << " miscounted=" << r.miscounted << " rebuild_ms=" << t.build
                   << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
                   << " cells_ms=" << t.cells << " resorted=" << r.resorted << " resort_ms=" << t.resort

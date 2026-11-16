@@ -145,6 +145,7 @@ struct Report {
     long long host_rebuilds = 0;
     int local_cells = 0;           // cells the local repair clipped exactly (tet_local), 0 if it did not run
     int local_tets = 0;            // tetrahedra it created
+    int local_attempts = 0;        // its attempts (2: widened once)
     bool local_done = false;       // the local repair finished the mesh
     int faces = 0;
     bool resorted = false;  // cell ids changed: cell i is the particle the caller passed as Mesh::permutation()(i)
@@ -250,6 +251,7 @@ public:
             report.local_cells = patch.cells;
             report.local_tets = patch.created;
             report.local_done = patch.done;
+            report.local_attempts = patch.attempts;
             report.flips += patch.flips;
             stuck = !patch.done;
             lap(timer, timings, &Timings::local);
@@ -285,6 +287,7 @@ public:
         rebuilt.host_rebuilds = report.host_rebuilds;
         rebuilt.local_cells = report.local_cells;
         rebuilt.local_tets = report.local_tets;
+        rebuilt.local_attempts = report.local_attempts;
         rebuilt.overlapped = report.overlapped;
         rebuilt.miscounted = report.miscounted;
         return rebuilt;
