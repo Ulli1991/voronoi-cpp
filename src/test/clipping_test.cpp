@@ -1,13 +1,15 @@
-// Full rebuild by clipping on jittered, random, lattice, clustered and halo points: certified cells that fill the box with
-// consistent faces; thread, warp and exact kernels agree; volumes_and_centroids gives the full rebuild's bits.
-// Exercises shell_voronoi::construct / construct_warp / volumes_and_centroids.
+// Full rebuild by clipping on jittered, random, lattice, clustered and halo points and the surface input of #60:
+// certified cells that fill the box with consistent faces; thread, warp and exact kernels agree; volumes_and_centroids
+// gives the full rebuild's bits. Exercises shell_voronoi::construct / construct_warp / volumes_and_centroids.
 
 #include "check.hpp"
+#include "clipping_cases.hpp"
 #include "support.hpp"
 
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <type_traits>
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
@@ -59,6 +61,48 @@ int main(int argc, char** argv) {
         check.expect(small.capacity() > n && w.neighbours == 0 && w.volume < 1e-12,
                      "a small face pool grows to " + std::to_string(double(small.capacity()) / n) +
                          " faces per cell, same cells");
+    }
+
+    // #60: rounded clipping refused cell 255 of these surface points (OpenMP); every kernel now certifies every cell, and
+    // the cells agree with the exact kernel's.
+    {
+        Points points;
+        for (const auto& k : clipping_cases::surface_953)
+            points.push_back({std::ldexp(k[0], -30), std::ldexp(k[1], -30), std::ldexp(k[2], -30)});
+        const int m = static_cast<int>(points.size());
+        const Positions x = to_device(points);
+        const auto grid = shell_voronoi::make_grid(cell_list(x));
+        shell_voronoi::Cells<Memory> thread(m, true), warp(m, true), exact(m, false);
+        shell_voronoi::construct(exec, grid, thread);
+        shell_voronoi::construct_warp(exec, grid, warp);
+        shell_voronoi::construct(exec, grid, exact, {}, true);
+        const Reference reference = by_particle(exact);
+        for (const auto& [name, cells] : {std::pair{"thread", thread}, std::pair{"warp", warp}}) {
+            std::ostringstream summary;
+            const bool valid = check_cells(cells, x, summary) == 0;
+            std::string details = summary.str();
+            details.pop_back();
+            const Difference d = compare(reference, by_particle(cells));
+            check.expect(valid && d.neighbours == 0 && d.volume < 1e-12,
+                         std::string("#60 surface case: ") + name +
+                             " kernel certifies every cell and agrees with the exact (" + std::to_string(d.neighbours) +
+                             " neighbour sets, volumes " + sci(d.volume) + ")\n" + details);
+        }
+    }
+
+    // #60 at full size: the surface input, 64³ on a GPU (32³ on the host, in CI time), every cell certified and checked.
+    {
+        const bool device = !std::is_same_v<Exec, Kokkos::DefaultHostExecutionSpace>;
+        const int m = device ? 262144 : 32768;
+        const Positions x = to_device(make_points("surface", m));
+        shell_voronoi::Cells<Memory> cells(m, true);
+        shell_voronoi::construct_warp(exec, shell_voronoi::make_grid(cell_list(x)), cells);
+        std::ostringstream summary;
+        const bool valid = check_cells(cells, x, summary) == 0;
+        std::string details = summary.str();
+        details.pop_back();
+        check.expect(valid,
+                     "#60 surface input, " + std::to_string(m) + " points: every cell certified and valid\n" + details);
     }
 
     // Non-finite positions are never a candidate, so every other cell is the cell without them: the same neighbours and
