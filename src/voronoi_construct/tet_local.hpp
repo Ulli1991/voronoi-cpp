@@ -33,6 +33,9 @@ namespace flag {
 constexpr char none = 0, seed = 1, affected = 2, added = 3;
 }
 
+// Past n / largest_share affected cells the step rebuilds (a rebuild is faster from about n / 10, docs/measurements.md).
+constexpr long long largest_share = 8;
+
 namespace detail {
 
 // Whether cell i emits tetrahedron (i, j, p, q) of its face to j: i is the lowest affected particle of the four and j
@@ -54,24 +57,23 @@ KOKKOS_INLINE_FUNCTION unsigned hash(const int* key, unsigned mask) {
 // (value -1 - tetrahedron); each key must occur exactly twice. Used by: repair.
 template <class MemorySpace>
 struct Table {
-    Kokkos::View<int*, MemorySpace> used, value;
-    Kokkos::View<int* [3], Kokkos::LayoutRight, MemorySpace> key;
+    static constexpr int empty = -2147483647 - 1;      // no value is this
+    Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace> slot;  // the key's 3 particles, the value
     unsigned mask = 0;
 
     KOKKOS_INLINE_FUNCTION void insert(const int* k, int v) const {
         for (unsigned h = hash(k, mask);; h = (h + 1) & mask)
-            if (Kokkos::atomic_compare_exchange(&used(h), 0, 1) == 0) {
-                for (int a = 0; a < 3; ++a) key(h, a) = k[a];
-                value(h) = v;
+            if (Kokkos::atomic_compare_exchange(&slot(h, 3), empty, v) == empty) {
+                for (int a = 0; a < 3; ++a) slot(h, a) = k[a];
                 return;
             }
     }
     // The values stored under k other than `self`: how many, and the last one in `other`.
     KOKKOS_INLINE_FUNCTION int others(const int* k, int self, int& other) const {
         int count = 0;
-        for (unsigned h = hash(k, mask); used(h); h = (h + 1) & mask)
-            if (key(h, 0) == k[0] && key(h, 1) == k[1] && key(h, 2) == k[2] && value(h) != self) {
-                other = value(h);
+        for (unsigned h = hash(k, mask); slot(h, 3) != empty; h = (h + 1) & mask)
+            if (slot(h, 0) == k[0] && slot(h, 1) == k[1] && slot(h, 2) == k[2] && slot(h, 3) != self) {
+                other = slot(h, 3);
                 ++count;
             }
         return count;
@@ -163,13 +165,13 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
             sv::construct_cells<sv::ExactCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
         else
             sv::construct_cells<sv::RoundedCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
-        const auto sel = slots;
+        const auto& sel = slots;  // copied into the kernels
         Kokkos::parallel_for(
             "tet_local::clipped", Range(exec, 0, count), KOKKOS_LAMBDA(int c) { clipped(order(sel(c))) = 1; });
     };
     // The unflagged neighbours of the selected cells become affected.
     auto neighbours = [&] {
-        const auto sel = slots;
+        const auto& sel = slots;  // copied into the kernels
         const auto rings = cells.rings;
         const auto start = cells.ring_start;
         const auto owned = cells.owned_count;
@@ -188,7 +190,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
     // Cells that did not come out ok (pool full, uncertified, overflowed): returns their number.
     auto failed = [&](int count) {
         const auto status = cells.status;
-        const auto sel = slots;
+        const auto& sel = slots;  // copied into the kernels
         int bad = 0;
         Kokkos::parallel_reduce(
             "tet_local::status", Range(exec, 0, count),
@@ -230,7 +232,8 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         if (attempt > 0) ring(flag::affected);  // wider: one more ring of old neighbours
         const int first_count = select(flag::affected, true);
         lap(stats.select_ms);
-        if (cells.capacity() < 160LL * first_count + 4096) cells.reallocate(256LL * first_count + 4096);
+        if (static_cast<long long>(first_count) * largest_share > n) break;  // a rebuild is cheaper
+        if (cells.capacity() < 64LL * first_count + 4096) cells.reallocate(96LL * first_count + 65536);
         clip(first_count);
         // A jumped particle's new neighbourhood (on the second attempt every cell's), then their cells.
         stats.seeds = select(attempt > 0 ? flag::affected : flag::seed, false);
@@ -239,6 +242,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         clip(select(flag::affected, true));
         int count = select(flag::affected, false);
         stats.cells = count;
+        if (static_cast<long long>(count) * largest_share > n) break;
         if (failed(count) > 0 && cells.needed() > cells.capacity()) {  // pool full: all again in a bigger one
             cells.reallocate(cells.needed() + cells.needed() / 2);
             Kokkos::deep_copy(exec, cells.ring_used, 0u);
@@ -251,7 +255,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         const auto rings = cells.rings;
         const auto ring_start = cells.ring_start;
         const auto owned = cells.owned_count;
-        const auto sel = slots;
+        const auto& sel = slots;  // copied into the kernels
         const Ints first(uninitialized("local_first"), count + 1);
         Kokkos::parallel_scan(
             "tet_local::count_tets", Range(exec, 0, count), KOKKOS_LAMBDA(int c, int& at, bool last) {
@@ -330,12 +334,11 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
 
         // Stitch: every face of a new tetrahedron meets exactly one other new face or one kept boundary face.
         detail::Table<Memory> table;
-        unsigned size = 1024;
-        while (size < 2u * (4u * static_cast<unsigned>(created) + static_cast<unsigned>(boundary))) size *= 2;
+        unsigned size = 1024;  // at most 2/3 full
+        while (2 * size < 3 * (4u * static_cast<unsigned>(created) + static_cast<unsigned>(boundary))) size *= 2;
         table.mask = size - 1;
-        table.used = Ints("local_used", size);
-        table.value = Ints(uninitialized("local_value"), size);
-        table.key = Kokkos::View<int* [3], Kokkos::LayoutRight, Memory>(uninitialized("local_key"), size);
+        table.slot = Kokkos::View<int* [4], Kokkos::LayoutRight, Memory>(uninitialized("local_table"), size);
+        Kokkos::deep_copy(exec, table.slot, detail::Table<Memory>::empty);
         const tet_mesh::Quads<Memory> across(uninitialized("local_across"), created);
         Kokkos::parallel_for(
             "tet_local::insert", Range(exec, 0, 4 * created + boundary), KOKKOS_LAMBDA(int i) {

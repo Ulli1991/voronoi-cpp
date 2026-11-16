@@ -249,7 +249,11 @@ public:
             index(positions_);
             exec_.fence();
             const double index_ms = clock.seconds() * 1e3;
-            local_ = tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_);
+            try {  // out of memory before it writes (its arrays are freed): the step rebuilds
+                local_ = tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_);
+            } catch (const std::exception&) {
+                local_ = tet_local::Stats{};
+            }
             local_.index_ms = index_ms;
             const tet_local::Stats& patch = local_;
             list_ = neighbor_search::CellList<ExecSpace>{};  // as after a rebuild: memory only while used
