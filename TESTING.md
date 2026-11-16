@@ -41,8 +41,8 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 whose name starts with a given prefix; ctest runs one group per prefix. A case
 requires the exact mesh, or accepts a refusal (an exception) in its place; it
 never accepts a wrong mesh without an error. A case of an open problem would
-carry its issue, be skipped by default and run with `--known`: `repro.serial`
-(#27).
+carry its issue, be skipped by default and run with `--known` (none at present; `repro.serial`, #27, runs
+on CUDA since the geometry is unfused).
 ctest runs a subset within its time budget;
 `MESH_CASES_FULL=1` runs the whole matrix, as the A100 job does. On the A100 a
 failing case of a rare outcome needs repeats: `large.random_walk.10` is wrong
@@ -59,10 +59,33 @@ in about 2 % of steps, and rounds vary from run to run on that path.
 | `large` | displacements of 0.5 to 20 spacings, random walks of 0.3 to 10, every particle somewhere else, permuted ids, no motion (no flip, the same bits), another n, 1000 steps of a solenoidal flow without drift in faces, slots or memory, there and back 8 times to the same tetrahedra and the same bits; a refused update leaves no mesh, no crash, and the next update builds, at the start and after the repair and the host (`large.after_refusal.*`); `update_cells()` without a mesh says so |
 | `fallback` | a repair out of rounds (limit lowered to 1 and 2) never returns as a mesh; the cheapest fallback does no host work at 32768 cells (`fallback.cheapest.small_n`); all three fallbacks on shells, kicks of 2 spacings, and a jump from a lattice to two skew segments; growth in small steps; `clip()` of a hub with its pool of 10 faces per cell |
 | `predicates` | the library's orient and in-sphere on the quintuples real meshes ask about (eight point sets, lattices with +-1 and +-3 grid steps of noise, a clump on 2048³ positions) equal the oracle's integers |
-| `repro` | two runs give the same bits, the default space and Serial the same bits; `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds (measured: Serial, OpenMP at 1 and 8 threads and CUDA agree on every hash of faces, volumes and centroids, 4 inputs, 21 steps) |
+| `repro` | two runs give the same bits, the default space and Serial the same bits (CUDA included: "Bits across backends"); `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds (Serial, OpenMP at 1 and 8 threads and CUDA agree on every hash of faces, volumes and centroids, 4 inputs, 21 steps) |
 
 `hostcost.*` (not in ctest) measures one step of `Fallback::host` against the
 stuck entries it gets.
+
+### Bits across backends
+
+The mesh's geometry (circumcentres, face areas and centroids, cell volumes and centroids, in 1D, 2D and 3D) is
+computed with every multiply and add rounded on its own (`tet_mesh::rounded`: `__dmul_rn`, `__dadd_rn`, `__dsub_rn`
+on CUDA and HIP, plain arithmetic on the host). nvcc otherwise fuses `a * b + c` into one rounding in device code
+(`--fmad=true`, its default), and the host compiler, without `-march`, does not. Topology is exact on every backend.
+Measured on the A100 (job 32413666, 128³, uniform, clustered, halo, cosmicweb and jittered, a build and 3 steps of
+0.1 spacings, `voronoi_bench --dump-cells`): CUDA equals OpenMP (gcc 15) in every volume and centroid bit, and so
+does `repro.serial` (CUDA against Serial, 4 inputs, 21 steps). Branch `cpu-overlap`'s `modes_test` and
+`backends_probe` (one build with CUDA and OpenMP) agree: every hash of 3D, 2D and 1D runs, and all 2,097,152 volumes
+in 3 of 3 updates on four inputs. Accuracy against a long-double reference is unchanged (median relative volume
+error 1.3e-15 to 2.6e-15, at most 2e-14 to 3e-13).
+
+Against main 8cb1475 this changes the CUDA bits and only those: 19 to 21 % of volumes and 96 to 99.9 % of centroids
+differ in the last bits, by at most 8.0e-16 relative in volume; the OpenMP bits are unchanged. The cost is in the
+step: +3.2 to +4.9 % at 0.03 spacings, +2.2 to +4.3 % at 0.1, +1.3 to +2.7 % at 0.3 (128³ and 256³), mostly the
+cell sums (`update_cells`, +5 to +11 %); rebuild unchanged, exact start +0.4 ms at 128³ (measurements.md).
+
+What stays outside: the clipping (rebuild, volumes-only builds, `clip()`) keeps fused arithmetic, and its warp
+and per-thread kernels add up in a different order, so its own outputs differ between host and device; `update()`'s
+volumes are summed with atomics, in no fixed order.
+
 
 `distortion_test` drives `voronoi::Mesh` with prescribed velocity fields, no
 hydro (`src/test/distortion.hpp`): shear, sawtooth, vortex, taylor_green,

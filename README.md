@@ -204,6 +204,8 @@ One A100 40 GB, double precision, periodic unit box. Rates are M cells/s: millio
 | `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 559 / 440 / 432 | |
 | Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | 161 / 99.3 / 57.2 | |
 
+The table predates the unfused geometry (2026-11-16, same bits on CUDA and the host): update + `update_cells()` is 3.2 to 4.9 / 2.2 to 4.3 / 1.3 to 2.7 % slower at 0.03 / 0.1 / 0.3 spacings (128³ and 256³, job 32413666); rebuild and exact start are unchanged.
+
 Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, uniform random, clustered, halo, lattice, wave) and the three application inputs of the library benchmark (cosmic web: Zel'dovich positions of a CDM field; fcc solid: a thermal crystal near melting; surface: points on closed shells and tori) are described in the measurements file.
 
 The step kernels of 2026-11-12 (register limits on `faces` and `screen`, warp-aggregated counters, a thread per edge in `dirty_faces`, one host wait per flip round) made the step 5.4 / 11.0 / 12.8 % faster at 0.03 / 0.1 / 0.3 spacings at 128³ (6.3 / 9.3 / 15.0 % at 256³) with the same bits and arrays. The step at 0.03 now runs at 47 % of what its memory traffic allows on the A100 (434 M cells/s with every kernel at 80 % of peak bandwidth; [measure_2026-11-12.md](docs/measure_2026-11-12.md)). Keeping the face numbers of faces whose tetrahedron no flip touched ([#53](https://github.com/Ulli1991/voronoi-cpp/issues/53)) and walking each changed face ring once then cut the step's memory traffic from 2717 to 2392 B/cell at 0.03 spacings (4292 to 4133 at 0.1) and made it 8.4 / 2.8 / 3.5 % faster at 0.03 / 0.1 / 0.3 spacings at 128³ (13.4 / 7.2 / 1.5 % at 256³), with the same geometry bits and a lower memory peak ([docs/measurements.md](docs/measurements.md)).
@@ -376,7 +378,7 @@ Open bugs, found by fuzzing the mesh against an oracle that shares no code with 
 Other limits:
 
 - Bit-reproducible moving runs cost 2.4 to 4.7 % on the mesh step alone.
-- CUDA and Serial give different last bits of volumes and centroids ([#27](https://github.com/Ulli1991/voronoi-cpp/issues/27)).
+- The mesh's geometry has the same bits on CUDA and on the host: multiplies and adds are rounded one by one, never fused (fixed [#27](https://github.com/Ulli1991/voronoi-cpp/issues/27); TESTING.md, "Bits across backends"). It costs 1.3 to 4.9 % of a step (most at 0.03 spacings) and nothing in the rebuild. The clipping's own outputs (rebuild, volumes only, `clip()`) still differ between host and device in the last bits.
 - Clipping alone is not watertight on uniform random input at 2.1M cells; the exact start makes the mesh exact.
 - Particles on one grid position (grid step box / 2³⁰) have no Voronoi cell. `update()` refuses them on every path with a `std::runtime_error` naming a pair by id, and does not merge them. Finding out takes a rebuild, so such a step costs one. After a refusal there is no mesh (no faces, no particles) and the next `update()` builds from scratch. Zero particles are a `std::invalid_argument` and change nothing.
 - `update()` does not look at its input: a NaN or infinite coordinate is snapped to some grid position, with no error.

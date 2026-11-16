@@ -80,7 +80,7 @@ void reproducibility_cases() {
                 c.expect(geometry == 0, name + ": bits of volumes and centroids agree (" + std::to_string(geometry) +
                                             " of 21 steps differ)");
             },
-            on_cuda(27));
+            0);
 #endif
         add("repro.dump." + name, [=](Check& c) {
             // Hashes to compare builds and thread counts: MESH_REPRO_DUMP=<file> appends "<case> <step> <topology> <geometry>".

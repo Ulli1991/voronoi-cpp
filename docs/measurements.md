@@ -552,6 +552,36 @@ At 128³ jittered, uniform and clustered need 1, 2 and 2 rounds (as on main). La
 
 **Allocation.** The first `Mesh::update` at 256³ spends 528 ms of its 1992 in `cudaMalloc` on main (Nsight Systems job 32372190): mapping fresh device memory costs about as much as the start's kernels. A pool for the mesh's arrays would remove it for every caller; not done here.
 
+### Unfused mesh geometry: the same bits on CUDA and the host (2026-11-16, job 32413666)
+
+Branch `unfused-on-main` (main 8cb1475 plus the change) against main 8cb1475, one A100 40 GB on `gpu1`, 1410 MHz max SM clock. The geometry kernels round every multiply and add on their own (`tet_mesh::rounded`; TESTING.md, "Bits across backends"); the clipping is unchanged.
+
+Bits, per cell after a build and 3 steps of 0.1 spacings at 128³ (`voronoi_bench step --dump-cells`; volume and centroid of every particle, and a hash of its neighbours):
+
+| input | CUDA vs OpenMP (unfused) | CUDA, main vs unfused: volumes / centroids changed | largest relative volume change | OpenMP, main vs unfused |
+|---|---|---|---|---|
+| uniform | 0 cells differ | 448,132 / 2,037,882 of 2,097,152 | 7.9e-16 | 0 |
+| clustered | 0 | 448,662 / 2,037,347 | 6.9e-16 | 0 |
+| halo | 0 | 449,762 / 2,036,167 | 6.9e-16 | 0 |
+| cosmicweb | 0 | 448,599 / 2,020,103 | 6.9e-16 | 0 |
+| jittered | 0 | 402,791 / 2,095,384 | 8.0e-16 | 0 |
+
+Neighbours are the same in every comparison. main's CUDA differs from main's OpenMP exactly as from the unfused CUDA: the unfused device now gives the host's bits. Accuracy against a long-double reference (every 16th cell, `backends_probe` on `cpu-overlap`): unchanged, median relative volume error 1.28e-15 (uniform), 2.61e-15 (clustered), 2.55e-15 (halo), 1.55e-15 (cosmicweb), at most 2.0e-14 to 2.8e-13.
+
+Speed, three interleaved rounds, medians (steps: `update` + `update_cells`, steps 2 to 10, 2 to 6 at 256³):
+
+| input, N | rebuild | steps 0.03 | steps 0.1 | steps 0.3 |
+|---|---|---|---|---|
+| jittered 128³ | 1.000 | 1.032 | 1.022 | 1.015 |
+| uniform 128³ | 1.000 | 1.042 | 1.033 | 1.022 |
+| clustered 128³ | 1.000 | 1.041 | 1.030 | 1.014 |
+| halo 128³ | 1.003 | 1.042 | 1.030 | 1.013 |
+| cosmicweb 128³ | 0.998 | 1.044 | 1.031 | 1.021 |
+| jittered 256³ | 1.000 | 1.044 | 1.029 | 1.014 |
+| cosmicweb 256³ | 1.000 | 1.049 | 1.043 | 1.027 |
+
+Time ratios, unfused / main; per-round ratios agree to 1 % for rebuild and steps. Where it goes: the cell sums (`update_cells`) +5 to +11 %, centres and faces +0.5 to +4 %, flips unchanged. Exact start: its clipping and assembly unchanged (build_ms), geometry +0.6 to +1.1 % and cells +5 to +6 %, together about +0.4 ms of 110 to 265 ms at 128³ and +3 ms of 1.6 to 2.5 s at 256³; the start totals are one sample per round and vary by up to 20 % from round to round in both builds.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
