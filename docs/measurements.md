@@ -803,6 +803,30 @@ The cost is in the clipping (rebuild +4.6 to +11.3 %, start +1.4 to +5.5 %); ste
 
 Host against device clipping (`backends_probe`, 128³, all cells on 18 threads with the per-thread kernel, against the A100's warp kernel): 22.6 to 28.7× slower; the tail cells alone cost 118 to 275 µs per cell per core.
 
+### Rounding per mode (2026-11-16, jobs 32422876 and 32429908)
+
+Branch `cpu-gpu-modes` (main fbe6a0c, S0/S2, and both arithmetics compiled in, `Layout::same_bits_as_host` off by default; TESTING.md, "Bits across backends") against main fbe6a0c, one A100 40 GB on `gpu1`, 1410 MHz max SM clock. Three builds compared: main, the branch's default (gpu mode), and the branch with `--same-bits` (hybrid's arithmetic).
+
+Bits. gpu mode equals main in every bit: per cell (volume, centroid, neighbours) after a build and 3 steps of 0.1 spacings on uniform, clustered, halo, cosmicweb and jittered at 128³, and a 2D mesh of 2²⁰ cells over 5 updates. hybrid equals cpu in every bit (`modes_test`, 3D, 2D, 1D; `backends_probe` at 128³ on uniform, clustered, halo and cosmicweb: all 2,097,152 volumes in 3 of 3 updates; the per-thread clipping kernel in Rounded on the device equals the host's in every cell). Accuracy against a long-double reference is the same in all three.
+
+Speed, time ratios against main (job 32422876: three interleaved rounds, median; steps: `update` + `update_cells`, steps 2 to 10, 2 to 6 at 256³):
+
+| input, N | gpu: rebuild / steps 0.03 / 0.1 / 0.3 | same_bits: rebuild / steps 0.03 / 0.1 / 0.3 |
+|---|---|---|
+| jittered 128³ | 1.000 / 1.007 / 0.999 / 1.006 | 1.000 / 1.034 / 1.017 / 1.007 |
+| uniform 128³ | 1.000 / 1.005 / 0.996 / 1.001 | 1.000 / 1.051 / 1.026 / 1.019 |
+| clustered 128³ | 1.000 / 0.999 / 1.000 / 0.999 | 1.002 / 1.040 / 1.031 / 1.023 |
+| halo 128³ | 0.999 / 1.004 / 1.001 / 1.000 | 1.000 / 1.039 / 1.034 / 1.012 |
+| cosmicweb 128³ | 1.000 / 0.997 / 1.012 / 1.006 | 1.007 / 1.036 / 1.029 / 1.016 |
+| jittered 256³ | 1.000 / 1.001 / 1.000 / 0.999 | 1.000 / 1.043 / 1.030 / 1.012 |
+| cosmicweb 256³ | 1.000 / 1.002 / 1.001 / 1.002 | 1.010 / 1.050 / 1.046 / 1.028 |
+
+The one gpu case above 1 % (cosmicweb 128³ at 0.1) was 0.998 in six more rounds (job 32429908); there jittered 256³ at 0.3 was 1.007. The exact start's totals are one sample per round and vary by up to 20 % between rounds in all three builds, so the start is read from its phases (median over every run): gpu 0.998 to 1.004 of main in clipping and assembly (`build_ms`), geometry and cells on all seven cases except one round-to-round outlier (jittered 256³ `build_ms` 1.068 in job 32422876, 0.999 in six rounds of job 32429908). same_bits: start clipping and assembly 1.000 to 1.015, except cosmicweb 256³ at 1.054 (both jobs: its tail of per-thread cells is long), geometry +0.6 to +1.2 %, cells +4 to +6 %. In the steps the cost of same_bits is the cell sums (+5 to +11 %) and centres and faces (+0.5 to +4 %); flips are unchanged.
+
+The clipping's per-thread kernel alone (`backends_probe`, all cells on the device): Rounded costs +0.1 to +1.1 % (832.7 / 840.2 ms uniform, 1471 / 1483 ms cosmicweb at 128³); a warp build whose tail runs in Rounded: −0.2 to +1.2 %.
+
+Build: `voronoi_bench` at -j1 in 214 s against main's 204 s (+4.9 %), binary 15,327,536 against 14,417,232 bytes (+6.3 %), both variants of the geometry and per-thread kernels instantiated. A100 ctest 23 of 23 in the CUDA and the CUDA + OpenMP build; CI host steps (gcc 15, sanitizers off and on) 23 of 23; clang-tidy 18: 0 warnings.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).

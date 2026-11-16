@@ -34,7 +34,7 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 | `order` | 4096 | | the memory layout (#34): on an 8³ grid Hilbert and Moore move to a neighbouring cell at every step and Moore closes its loop, Gray-coded Morton changes one Morton bit, row-major runs x fastest, every curve visits every cell; for each of the six orderings, re-sorted at the build and every second update over six steps of 0.3 spacings, the permutation is one, `permute()` carries the caller's rows and the mesh's positions are those rows, every particle keeps its neighbours (by its first number) and volumes and centroids equal an unsorted mesh's to 1e-12; faces by owner with the owner bit over six steps of 0.03 spacings (the incremental lists): faces in owner order, `owned_start` right, areas, volumes and centroids the same bits as without, entries carry the bit |
 | `mesh1d` | 2048 | under 1 s | the 1D mesh (`voronoi::Mesh<1>`, `sorted_mesh.hpp`) against a host oracle, periodic and with walls, lines of length 1 and 3, uniform, lattice and clumps of snapped duplicates (ties by id): the sorted order, volumes and centroids exact in quarter grid steps of the 2⁵² grid, volumes summing to the line in integers, faces once with owner < neighbour, area +-1, per-cell face lists by id of the other particle, the end cells reaching the walls; moving: after every step (small ones that keep the order, large ones that cross, points wrapping through L) the mesh equals a fresh build bit for bit, and the order is sorted again only when points crossed; insertion and removal over random batches, on a rotated periodic line and with walls, on generators and twice in a gap: the oracle, a fresh build bit for bit, the reported overlaps against the host's integers, growth, a transfer by the report conserves to rounding |
 | `mesh2d` | ~4096, 2²⁰ | 3 min | the 2D mesh (`voronoi::Mesh<2>`) against oracles that share no code with it: in-circle signs against a 4 x 4 integer determinant, the perturbed test consistent under every permutation; on random, jittered, clustered, lattice, hexagonal and wave inputs in square and non-square boxes: every triangle positive, every edge in two triangles, signed areas summing to the box in exact integers, no particle strictly inside a circumcircle, every cell clipped in long double by the bisectors of all particles in all images (volumes, centroids, neighbours, face lengths and centroids), face lists in order of the other id (brute force, O(n²), oracle only); after steps of 0.03 to 1 spacings a repaired mesh equals a fresh build bit for bit, with both fallbacks; repeated runs give the same hash; particles on one position refused by name at the start and in a step, no mesh after a refusal and the next update builds, no particles, a mapping of degree 4 and kicks of order the box |
-| `modes` | 32768 (3D), 16384 (2D), 4096 (1D) | | `voronoi::Engine` in every mode the build has (cpu; with a device also gpu and hybrid): a build and 4 steps of 0.3 spacings on jittered, uniform, clustered, halo and cosmicweb, and 2 steps of 2 spacings (rebuilds); per particle, faces, area vectors, volumes and centroids hashed independently of face numbering. Required: the same faces and the same bits in every update and every mode (the mesh's geometry is never fused, see "Bits across backends" below). Positions in any memory and layout are accepted (a host `View<double*[3]>` is LayoutRight, the CUDA mesh LayoutLeft). Options: names, refusals, cpu on 2 host threads the same bits as on all |
+| `modes` | 32768 (3D), 16384 (2D), 4096 (1D) | | `voronoi::Engine` in every mode the build has (cpu; with a device also gpu and hybrid): a build and 4 steps of 0.3 spacings on jittered, uniform, clustered, halo and cosmicweb, and 2 steps of 2 spacings (rebuilds); per particle, faces, area vectors, volumes and centroids hashed independently of face numbering. Required: the same faces in every update and mode; hybrid (`Layout::same_bits_as_host`) the same bits as cpu; gpu (fused, the default) volumes to 1e-12 of cpu (measured: 20 to 23 % of volumes differ, at most 6.6e-16 relative in 3D, 3.6e-14 in 2D; see "Bits across backends" below). Positions in any memory and layout are accepted (a host `View<double*[3]>` is LayoutRight, the CUDA mesh LayoutLeft). Options: names, refusals, cpu on 2 host threads the same bits as on all |
 
 ### Special cases of the mesh
 
@@ -43,7 +43,7 @@ whose name starts with a given prefix; ctest runs one group per prefix. A case
 requires the exact mesh, or accepts a refusal (an exception) in its place; it
 never accepts a wrong mesh without an error. A case of an open problem would
 carry its issue, be skipped by default and run with `--known` (none at present; `repro.serial`, #27, runs
-on CUDA since the geometry is unfused).
+on CUDA with `same_bits_as_host`).
 ctest runs a subset within its time budget;
 `MESH_CASES_FULL=1` runs the whole matrix, as the A100 job does. On the A100 a
 failing case of a rare outcome needs repeats: `large.random_walk.10` is wrong
@@ -60,32 +60,36 @@ in about 2 % of steps, and rounds vary from run to run on that path.
 | `large` | displacements of 0.5 to 20 spacings, random walks of 0.3 to 10, every particle somewhere else, permuted ids, no motion (no flip, the same bits), another n, 1000 steps of a solenoidal flow without drift in faces, slots or memory, there and back 8 times to the same tetrahedra and the same bits; a refused update leaves no mesh, no crash, and the next update builds, at the start and after the repair and the host (`large.after_refusal.*`); `update_cells()` without a mesh says so |
 | `fallback` | a repair out of rounds (limit lowered to 1 and 2) never returns as a mesh; the cheapest fallback does no host work at 32768 cells (`fallback.cheapest.small_n`); all three fallbacks on shells, kicks of 2 spacings, and a jump from a lattice to two skew segments; growth in small steps; `clip()` of a hub with its pool of 10 faces per cell |
 | `predicates` | the library's orient and in-sphere on the quintuples real meshes ask about (eight point sets, lattices with +-1 and +-3 grid steps of noise, a clump on 2048³ positions) equal the oracle's integers |
-| `repro` | two runs give the same bits, the default space and Serial the same bits (CUDA included: "Bits across backends"); `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds (Serial, OpenMP at 1 and 8 threads and CUDA agree on every hash of faces, volumes and centroids, 4 inputs, 21 steps) |
+| `repro` | two runs give the same bits; the default space with `Layout::same_bits_as_host` and Serial the same bits (on CUDA too: "Bits across backends"); `repro.dump.*` with `MESH_REPRO_DUMP=<file>` writes hashes per step to compare builds (Serial and OpenMP at 1 and 8 threads agree on every hash; CUDA, fused by default, on faces) |
 
 `hostcost.*` (not in ctest) measures one step of `Fallback::host` against the
 stuck entries it gets.
 
 ### Bits across backends
 
-The mesh's geometry (circumcentres, face areas and centroids, cell volumes and centroids, in 1D, 2D and 3D) is
-computed with every multiply and add rounded on its own (`tet_mesh::rounded`: `__dmul_rn`, `__dadd_rn`, `__dsub_rn`
-on CUDA and HIP, plain arithmetic on the host). nvcc otherwise fuses `a * b + c` into one rounding in device code
-(`--fmad=true`, its default), and the host compiler, without `-march`, does not. Topology is exact on every backend.
-Measured on the A100 (job 32413666, 128³, uniform, clustered, halo, cosmicweb and jittered, a build and 3 steps of
-0.1 spacings, `voronoi_bench --dump-cells`): CUDA equals OpenMP (gcc 15) in every volume and centroid bit, and so
-does `repro.serial` (CUDA against Serial, 4 inputs, 21 steps). Branch `cpu-overlap`'s `modes_test` and
-`backends_probe` (one build with CUDA and OpenMP) agree: every hash of 3D, 2D and 1D runs, and all 2,097,152 volumes
-in 3 of 3 updates on four inputs. Accuracy against a long-double reference is unchanged (median relative volume
-error 1.3e-15 to 2.6e-15, at most 2e-14 to 3e-13).
+The topology (tetrahedra, faces) is exact and the same on every backend. The geometry has two arithmetics, both
+compiled in and chosen at run time (`shell_voronoi::Fused` and `Rounded`, `Layout::same_bits_as_host`, off by
+default):
 
-Against main 8cb1475 this changes the CUDA bits and only those: 19 to 21 % of volumes and 96 to 99.9 % of centroids
-differ in the last bits, by at most 8.0e-16 relative in volume; the OpenMP bits are unchanged. The cost is in the
-step: +3.2 to +4.9 % at 0.03 spacings, +2.2 to +4.3 % at 0.1, +1.3 to +2.7 % at 0.3 (128³ and 256³), mostly the
-cell sums (`update_cells`, +5 to +11 %); rebuild unchanged, exact start +0.4 ms at 128³ (measurements.md).
-
-What stays outside: the clipping (rebuild, volumes-only builds, `clip()`) keeps fused arithmetic, and its warp
-and per-thread kernels add up in a different order, so its own outputs differ between host and device; `update()`'s
-volumes are summed with atomics, in no fixed order.
+- **Fused** (default; `Engine` gpu and cpu): the expressions as written. nvcc fuses `a * b + c` into one rounding in
+  device code (`--fmad=true`, its default); the host compiler without `-march` has no FMA (0 `vfmadd` in the
+  binary). So CUDA and the host differ in the last bits: 20 to 23 % of volumes, by at most 8.0e-16 relative in 3D.
+  This is main's arithmetic: the gpu mode equals main fbe6a0c in every bit (job 32422876: per cell after a build and
+  3 steps on five inputs at 128³, `voronoi_bench --dump-cells`; a 2D mesh of 2²⁰ cells over 5 updates).
+- **Rounded** (`same_bits_as_host`; `Engine` hybrid): every multiply and add rounded on its own (`__dmul_rn`,
+  `__dadd_rn`, `__dsub_rn` on CUDA and HIP, plain on the host), in the face geometry, the cell sums, the volume check,
+  the 2D centres and faces, and the clipping's per-thread kernel (the stored circumcentres are rounded in both). A
+  GPU then gives the host's bits: `modes_test` hybrid equals cpu in every bit (3D, 2D, 1D); `backends_probe` at 128³
+  on uniform, clustered, halo and cosmicweb: all 2,097,152 volumes in 3 of 3 updates, and the per-thread clipping
+  kernel on the device equals it on the host in every cell; `repro.serial` on CUDA.
+- Accuracy against a long-double reference (every 16th cell) is the same in both: median relative volume error
+  1.3e-15 to 2.6e-15, at most 2e-14 to 3e-13. The cost of Rounded is in measurements.md ("Rounding per mode").
+- The warp kernel keeps fused arithmetic in both: only the GPU builds its cells, and it adds up in another order
+  than the per-thread kernel (97 % of volumes differ by at most 4e-13), so the clipping's own outputs (rebuild,
+  volumes only, `clip()`) differ between host and device. A hybrid tail (the host clipping the cells the warp kernel
+  leaves) would replace the per-thread kernel's cells, which Rounded makes the same. `update()`'s volumes (before
+  `update_cells()`) are summed with atomics, in no fixed order.
+- 2D: set it before the first update (a step recomputes only the flipped triangles' centres).
 
 
 `distortion_test` drives `voronoi::Mesh` with prescribed velocity fields, no
