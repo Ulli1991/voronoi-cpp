@@ -279,13 +279,51 @@ KOKKOS_INLINE_FUNCTION int sort_corners(int* v) {
     return parity;
 }
 
+// Operations rounded one by one, never fused into a multiply-add, so the mesh's geometry has the same bits wherever it
+// runs: in any kernel it is inlined into, on the host, and on a GPU whose compiler fuses a * b + c by default (nvcc
+// --fmad=true; TESTING.md, "Bits across backends"). The clipping keeps plain arithmetic, fused where the compiler likes.
+// Used by: every kernel that writes the mesh's geometry (circumcentres, faces, tet_cells, tri_mesh), tet_repair.
+namespace rounded {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+KOKKOS_INLINE_FUNCTION double mul(double a, double b) { return __dmul_rn(a, b); }
+KOKKOS_INLINE_FUNCTION double add(double a, double b) { return __dadd_rn(a, b); }
+KOKKOS_INLINE_FUNCTION double sub(double a, double b) { return __dsub_rn(a, b); }
+#else
+// a * b, rounded. A host compiler fuses only where the target has FMA (__FP_FAST_FMA); there the product is stored.
+KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
+#if defined(__FP_FAST_FMA)
+    const volatile double r = a * b;
+    return r;
+#else
+    return a * b;
+#endif
+}
+KOKKOS_INLINE_FUNCTION double add(double a, double b) { return a + b; }
+KOKKOS_INLINE_FUNCTION double sub(double a, double b) { return a - b; }
+#endif
+// The vector operations of shell_grid.hpp, each component rounded on its own.
+KOKKOS_INLINE_FUNCTION Vec3 add(Vec3 a, Vec3 b) { return {add(a.x, b.x), add(a.y, b.y), add(a.z, b.z)}; }
+KOKKOS_INLINE_FUNCTION Vec3 sub(Vec3 a, Vec3 b) { return {sub(a.x, b.x), sub(a.y, b.y), sub(a.z, b.z)}; }
+KOKKOS_INLINE_FUNCTION Vec3 mul(Vec3 a, double s) { return {mul(a.x, s), mul(a.y, s), mul(a.z, s)}; }
+KOKKOS_INLINE_FUNCTION Vec2 add(Vec2 a, Vec2 b) { return {add(a.x, b.x), add(a.y, b.y)}; }
+KOKKOS_INLINE_FUNCTION Vec2 sub(Vec2 a, Vec2 b) { return {sub(a.x, b.x), sub(a.y, b.y)}; }
+KOKKOS_INLINE_FUNCTION Vec2 mul(Vec2 a, double s) { return {mul(a.x, s), mul(a.y, s)}; }
+// a x b and a . b, each operation rounded.
+KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
+    return {sub(mul(a.y, b.z), mul(a.z, b.y)), sub(mul(a.z, b.x), mul(a.x, b.z)), sub(mul(a.x, b.y), mul(a.y, b.x))};
+}
+KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x), mul(a.y, b.y)), mul(a.z, b.z)); }
+KOKKOS_INLINE_FUNCTION double dot(Vec2 a, Vec2 b) { return add(mul(a.x, b.x), mul(a.y, b.y)); }
+}  // namespace rounded
+
 using Box = exact_predicates::Box;
 
 // A coordinate difference in a periodic box, to the nearest image; multiplies by 1 / side, so it differs from a
 // division only if d is within an ulp of half a side.
 KOKKOS_INLINE_FUNCTION double wrap(double d, double side, double inverse) {
-    return d - side * Kokkos::nearbyint(d * inverse);
+    return rounded::sub(d, rounded::mul(side, Kokkos::nearbyint(rounded::mul(d, inverse))));
 }
+
 // The 2D wrap of a vector d to the nearest image in `box`.
 // Used by: tri_mesh::faces.
 KOKKOS_INLINE_FUNCTION Vec2 wrap(Vec2 d, const exact_predicates::BoxN<2>& box) {
@@ -1542,39 +1580,6 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* 
     return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
 
-// Operations rounded one by one (no fused multiply-add), so inlined into different kernels they give the same bits.
-namespace rounded {
-// a * b, rounded. Used by: rounded_offsets, rounded_sliver, rounded_circumcentre, and cross/dot below.
-KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
-#if defined(__CUDA_ARCH__)
-    return __dmul_rn(a, b);
-#else
-    const volatile double r = a * b;  // stored, so it cannot be fused into a later sum
-    return r;
-#endif
-}
-// a + b, rounded. Used by: rounded_circumcentre, dot.
-KOKKOS_INLINE_FUNCTION double add(double a, double b) {
-#if defined(__CUDA_ARCH__)
-    return __dadd_rn(a, b);
-#else
-    return a + b;
-#endif
-}
-// a - b, rounded. Used by: rounded_offsets, cross.
-KOKKOS_INLINE_FUNCTION double sub(double a, double b) {
-#if defined(__CUDA_ARCH__)
-    return __dsub_rn(a, b);
-#else
-    return a - b;
-#endif
-}
-// Cross product of a and b, each operation rounded. Used by: rounded_sliver, rounded_circumcentre.
-KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
-    return {sub(mul(a.y, b.z), mul(a.z, b.y)), sub(mul(a.z, b.x), mul(a.x, b.z)), sub(mul(a.x, b.y), mul(a.y, b.x))};
-}
-KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x), mul(a.y, b.y)), mul(a.z, b.z)); }
-}  // namespace rounded
 
 // The pieces of a stored circumcentre (Mesh::centre), each operation rounded on its own (`rounded`).
 
@@ -1726,25 +1731,23 @@ struct FaceGeometry {
         const Vec3 first = vertex(begin);
         Vec3 previous = vertex(begin + 1), twice_area{0, 0, 0}, weighted{0, 0, 0};
         double weight = 0;
+        // Every operation rounded on its own (`rounded`): the same bits on every backend.
         for (int m = begin + 2; m < end; ++m) {
             const Vec3 v = vertex(m);
-            const Vec3 twice = cross(previous - first, v - first);
-            twice_area = twice_area + twice;
-            const double w = Kokkos::abs(dot(twice, dj));
+            const Vec3 twice = R::cross(R::sub(previous, first), R::sub(v, first));
+            twice_area = R::add(twice_area, twice);
+            const double w = Kokkos::abs(R::dot(twice, dj));
             weight += w;
-            weighted = weighted + (previous + v) * w;
+            weighted = R::add(weighted, R::mul(R::add(previous, v), w));
             previous = v;
         }
-        area = twice_area * 0.5;
-        double projected = dot(area, dj);
+        area = R::mul(twice_area, 0.5);
+        double projected = R::dot(area, dj);
         if (projected < 0) {
-            area = area * -1.0;
+            area = {-area.x, -area.y, -area.z};
             projected = -projected;
         }
-        // The last product rounded on its own: a caller adding to it must not fuse it (the stored bits).
-        const Vec3 sum = first + weighted * (1.0 / weight);
-        centroid =
-            weight > 0 ? Vec3{R::mul(sum.x, 1.0 / 3.0), R::mul(sum.y, 1.0 / 3.0), R::mul(sum.z, 1.0 / 3.0)} : first;
+        centroid = weight > 0 ? R::mul(R::add(first, R::mul(weighted, 1.0 / weight)), 1.0 / 3.0) : first;
         return projected;
     }
 };
@@ -1796,7 +1799,7 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
                 for (int c = 0; c < 8; ++c) out.rows(f, c) = row[c];
             }
             if (!with_volume) return;
-            const double pyramid = projected * (1.0 / 6.0);
+            const double pyramid = R::mul(projected, 1.0 / 6.0);
             Kokkos::atomic_add(&out.volume(i), pyramid);
             Kokkos::atomic_add(&out.volume(j), pyramid);
         });
@@ -1822,10 +1825,11 @@ double tet_volumes(const ExecSpace& exec, const X& x, const Box& box,
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
             Vec3 d[3];
             rounded_offsets(x, box, v, d);
-            sum += dot(d[0], cross(d[1], d[2])) * unit;
+            const double volume6 = R::dot(d[0], R::cross(d[1], d[2]));  // rounded: the same path on every backend
+            sum += R::mul(volume6, unit);
             ++tets;
-            const Vec3 c = detail::circumcentre(d[0], d[1], d[2]);  // grid steps; a flat one's is infinite: too large
-            const double rr = dot(c, c);
+            const Vec3 c = rounded_circumcentre(d, volume6);  // grid steps; a flat one's is infinite: too large
+            const double rr = R::dot(c, c);
             r2 = Kokkos::fmax(r2, rr == rr ? rr : Kokkos::Experimental::infinity_v<double>);
         },
         total, live, Kokkos::Max<double>(largest));

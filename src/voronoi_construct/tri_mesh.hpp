@@ -16,6 +16,7 @@ namespace tri_mesh {
 
 namespace ep = exact_predicates;
 using tet_mesh::Vec2;
+namespace R = tet_mesh::rounded;
 
 // Row-major view of one 6-int row per triangle (corners and links).
 // Used by: Mesh<2>, tri_mesh::Mesh (corners, links).
@@ -176,12 +177,17 @@ Triangles<typename ExecSpace::memory_space> from_rings(const ExecSpace& exec,
 // Used by: centres in tri_repair, the screen, total_area, centre of each triangle.
 struct Circle {
     double la, lb, mx, my, det;
+    // Each operation rounded on its own (tet_mesh::rounded): the same bits on every backend.
     KOKKOS_INLINE_FUNCTION Circle(double ax, double ay, double bx, double by)
-        : la(ax * ax + ay * ay), lb(bx * bx + by * by), mx(la * bx - lb * ax), my(la * by - lb * ay), det(ax * by - ay * bx) {}
+        : la(R::add(R::mul(ax, ax), R::mul(ay, ay))),
+          lb(R::add(R::mul(bx, bx), R::mul(by, by))),
+          mx(R::sub(R::mul(la, bx), R::mul(lb, ax))),
+          my(R::sub(R::mul(la, by), R::mul(lb, ay))),
+          det(R::sub(R::mul(ax, by), R::mul(ay, bx))) {}
     // The circumcentre of corner 0 at grid point (x0, y0), in box units.
     KOKKOS_INLINE_FUNCTION Vec2 centre(int x0, int y0, double step) const {
         const double scale = 0.5 / det;
-        return {(x0 + my * scale) * step, (y0 - mx * scale) * step};
+        return {R::mul(R::add(x0, R::mul(my, scale)), step), R::mul(R::sub(y0, R::mul(mx, scale)), step)};
     }
 };
 
@@ -215,7 +221,7 @@ void faces(const ExecSpace& exec, const X& x, const ep::BoxN<2>& box,
                 const int o = a < b ? a : b, j = a < b ? b : a;
                 const double sign = a < b ? 1.0 : -1.0;
                 const Vec2 A{sign * e.y, -sign * e.x};
-                const Vec2 c = tet_mesh::wrap(ct - tet_mesh::row<2>(x, o), box) - e * 0.5;
+                const Vec2 c = R::sub(tet_mesh::wrap(ct - tet_mesh::row<2>(x, o), box), R::mul(e, 0.5));
                 tet_mesh::store(area, f, A);
                 tet_mesh::store(centroid, f, c);
                 if (with_rows) {
