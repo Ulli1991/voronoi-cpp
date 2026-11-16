@@ -137,8 +137,8 @@ int main(int argc, char** argv) {
     // centroids, so all three route each cell alike (#60).
     for (const std::string kind :
          {"jittered", "uniform", "clustered", "halo", "lattice", "wave", "cosmicweb", "fccsolid", "surface"}) {
-        const int m = 32 * 32 * 32;
-        const Positions x = to_device(make_points(kind, m));
+        const Positions x = to_device(make_points(kind, 32 * 32 * 32));
+        const int m = static_cast<int>(x.extent(0));  // the fcc solid rounds to whole unit cells
         neighbor_search::CellList<Exec> list;
         neighbor_search::configure(list, m, Box{}, std::cbrt(1.0 / m));
         neighbor_search::build(exec, list, x);
@@ -157,9 +157,10 @@ int main(int argc, char** argv) {
             differ_rings += v0(i) != v2(i) || c0(i, 0) != c2(i, 0) || c0(i, 1) != c2(i, 1) || c0(i, 2) != c2(i, 2);
         }
         check.expect(differ == 0, kind + ": volumes and centroids only, bits of the full rebuild (" +
-                                      std::to_string(differ) + " of 32768 cells differ)");
+                                      std::to_string(differ) + " of " + std::to_string(m) + " cells differ)");
         check.expect(differ_rings == 0, kind + ": rings build, bits of the full rebuild's volumes and centroids (" +
-                                            std::to_string(differ_rings) + " of 32768 cells differ)");
+                                            std::to_string(differ_rings) + " of " + std::to_string(m) +
+                                            " cells differ)");
     }
     return check.failed() != 0;
 }
