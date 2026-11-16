@@ -11,6 +11,13 @@ find_package(Kokkos CONFIG REQUIRED)
 
 add_library(voronoi_library INTERFACE)
 target_link_libraries(voronoi_library INTERFACE Kokkos::kokkos)
+# nvcc fuses a * b + c into one rounding (FMA) in device code by default; the host compiler, without -march, has no FMA.
+# OFF compiles device code unfused, so CPU and GPU give the same bits (TESTING.md, "modes"); its cost is in measurements.md.
+option(VORONOI_FMAD "CUDA: let nvcc fuse multiply-add in device code (its default)" ON)
+if(Kokkos_ENABLE_CUDA AND NOT VORONOI_FMAD)
+    target_compile_options(voronoi_library INTERFACE --fmad=false)
+    target_compile_definitions(voronoi_library INTERFACE VORONOI_NO_FMAD)
+endif()
 target_compile_features(voronoi_library INTERFACE cxx_std_17)
 target_include_directories(voronoi_library INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/neighbour_search

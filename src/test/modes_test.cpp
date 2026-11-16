@@ -1,11 +1,14 @@
-// The modes of voronoi::Engine (cpu, gpu, hybrid; docs/ideas.md, "CPU and GPU together") give the same bits: a build
-// and moving steps per input in every mode the build has, hashed by particle and compared with cpu. Without a device
-// space only cpu runs, and gpu must be refused.
+// The modes of voronoi::Engine (cpu, gpu, hybrid; docs/ideas.md, "CPU and GPU together") agree: a build and moving
+// steps per input in every mode the build has, hashed by particle and compared with cpu. The faces always agree; the
+// bits do where same_bits_across_spaces() says so, else volumes to 1e-12. Without a device space only cpu runs, and
+// gpu must be refused.
 
 #include "check.hpp"
 #include "support.hpp"
 #include "voronoi_engine.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <random>
 
@@ -67,23 +70,42 @@ Kokkos::View<double* [D], Kokkos::HostSpace> host_rows(const std::vector<std::ar
     return x;
 }
 
-// A build and `steps` steps of the bench flow, scaled to `spacings` per step, in one mode: hashes per update.
+// One update in one mode: the hashes, and the volumes by particle.
+struct Update {
+    std::pair<std::uint64_t, std::uint64_t> hash;
+    std::vector<double> volume;
+};
+
+// A build and `steps` steps of the bench flow, scaled to `spacings` per step, in one mode.
 template <int D>
-std::vector<std::pair<std::uint64_t, std::uint64_t>> run(voronoi::Backend backend, Points points, double spacings,
-                                                         int steps) {
+std::vector<Update> run(voronoi::Backend backend, Points points, double spacings, int steps) {
     voronoi::Engine<D> engine(1.0, {backend});
     const double distance = spacings * std::pow(1.0 / double(points.size()), 1.0 / D);
     const Flow flow;
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+    std::vector<Update> out;
     for (int s = 0; s <= steps; ++s) {
         if (s > 0) flow.advect(points, distance);
         if constexpr (D < 3)
             for (auto& p : points)
                 for (int a = D; a < 3; ++a) p[a] = 0;
         engine.update(host_rows<D>(points));
-        out.push_back(hashes(engine));
+        Update u{hashes(engine), {}};
+        const auto volume = engine.volume();
+        u.volume.assign(volume.data(), volume.data() + engine.particles());
+        out.push_back(std::move(u));
     }
     return out;
+}
+
+// Whether cpu and gpu must agree in every bit: in a build without a device, or with the device's multiply-add unfused
+// (VORONOI_FMAD=OFF). With nvcc's default the device rounds a * b + c once where the host rounds twice, so the geometry
+// differs in the last bits (TESTING.md, "modes"); the topology never does.
+constexpr bool same_bits_across_spaces() {
+#if defined(VORONOI_NO_FMAD)
+    return true;
+#else
+    return !voronoi::has_device();
+#endif
 }
 
 // Random points in the unit square or segment, n of them. Used by: main (2D, 1D).
@@ -106,19 +128,43 @@ template <int D>
 void compare(Check& check, const std::string& what, const Points& points, double spacings, int steps) {
     std::vector<voronoi::Backend> modes{voronoi::Backend::cpu};
     if (voronoi::has_device()) modes = {voronoi::Backend::cpu, voronoi::Backend::gpu, voronoi::Backend::hybrid};
-    const auto first = run<D>(modes[0], points, spacings, steps);
+    std::vector<std::vector<Update>> runs{run<D>(modes[0], points, spacings, steps)};
+    const auto& first = runs[0];
+    const int updates = int(first.size());
     for (std::size_t m = 1; m < modes.size(); ++m) {
-        const auto other = run<D>(modes[m], points, spacings, steps);
+        runs.push_back(run<D>(modes[m], points, spacings, steps));
+        const auto& other = runs.back();
         int topology = 0, all = 0;
-        for (std::size_t s = 0; s < first.size(); ++s)
-            topology += first[s].first == other[s].first, all += first[s] == other[s];
-        check.expect(all == int(first.size()), what + ": " + voronoi::name(modes[m]) + " equals cpu in every bit, " +
-                                                   std::to_string(all) + " of " + std::to_string(first.size()) +
-                                                   " updates (topology " + std::to_string(topology) + "; last hash " +
-                                                   hex(other.back().second) + ")");
+        long long cells = 0, cells_same = 0;
+        double worst = 0;
+        for (int s = 0; s < updates; ++s) {
+            topology += first[s].hash.first == other[s].hash.first, all += first[s].hash == other[s].hash;
+            for (std::size_t i = 0; i < first[s].volume.size(); ++i) {
+                const double a = first[s].volume[i], b = other[s].volume[i];
+                ++cells, cells_same += bits(a) == bits(b);
+                worst = std::max(worst, std::abs(b - a) / a);
+            }
+        }
+        const std::string counts = std::to_string(all) + " of " + std::to_string(updates) + " updates in every bit, " +
+                                   std::to_string(cells_same) + " of " + std::to_string(cells) +
+                                   " volumes; largest relative volume difference " + std::to_string(worst) +
+                                   "; last hash " + hex(other.back().hash.second);
+        const std::string mode = voronoi::name(modes[m]);
+        check.expect(topology == updates, what + ": " + mode + " has cpu's faces in " + std::to_string(topology) +
+                                              " of " + std::to_string(updates) + " updates");
+        if (same_bits_across_spaces())
+            check.expect(all == updates, what + ": " + mode + " equals cpu in every bit (" + counts + ")");
+        else
+            check.expect(worst < 1e-12, what + ": " + mode + " equals cpu to 1e-12 in volume (" + counts + ")");
+    }
+    if (modes.size() == 3) {  // gpu and hybrid: one space, so the same bits
+        int all = 0;
+        for (int s = 0; s < updates; ++s) all += runs[1][s].hash == runs[2][s].hash;
+        check.expect(all == updates, what + ": hybrid equals gpu in every bit, " + std::to_string(all) + " of " +
+                                         std::to_string(updates) + " updates");
     }
     if (modes.size() == 1)
-        check.expect(true, what + ": cpu only (no device space), last hash " + hex(first.back().second));
+        check.expect(true, what + ": cpu only (no device space), last hash " + hex(first.back().hash.second));
 }
 
 }  // namespace

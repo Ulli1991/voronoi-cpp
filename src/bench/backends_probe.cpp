@@ -5,6 +5,8 @@
 #include "support.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 #include <numeric>
 
@@ -76,9 +78,97 @@ std::pair<std::uint64_t, std::uint64_t> summary(const M& mesh, const std::vector
     return {topology.h, all.h};
 }
 
+// Volume of the cell of particle i in long double: a cube of half side 1/2 around it clipped by the bisector planes
+// of its mesh neighbours (nearest images), each face a square on its plane clipped by every other plane, the volume
+// the sum of face area times distance over 3. The reference for the volume errors of both spaces.
+using Real = long double;
+using R3 = std::array<Real, 3>;
+Real dot(const R3& a, const R3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+R3 cross(const R3& a, const R3& b) {
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+Real reference_volume(const std::vector<R3>& d) {  // d: neighbour offsets; plane: y.d <= d.d / 2
+    std::vector<R3> planes = d;
+    for (int a = 0; a < 3; ++a)
+        for (Real s : {Real(-1), Real(1)}) {
+            R3 c{0, 0, 0};
+            c[a] = s;  // y.c <= 1/2: the cube
+            planes.push_back(c);
+        }
+    Real volume = 0;
+    for (std::size_t k = 0; k < planes.size(); ++k) {
+        const R3& m = planes[k];
+        const Real mm = dot(m, m), off = mm / 2;  // plane y.m = off
+        const R3 n{m[0] / std::sqrt(mm), m[1] / std::sqrt(mm), m[2] / std::sqrt(mm)};
+        R3 u = std::abs(n[0]) < 0.6L ? R3{1, 0, 0} : R3{0, 1, 0};
+        u = cross(n, u);
+        const Real lu = std::sqrt(dot(u, u));
+        u = {u[0] / lu, u[1] / lu, u[2] / lu};
+        const R3 v = cross(n, u);
+        const Real h = off / std::sqrt(mm);  // distance of the plane from the particle
+        std::vector<R3> poly;
+        for (auto [a, b] : {std::pair<Real, Real>{-4, -4}, {4, -4}, {4, 4}, {-4, 4}})
+            poly.push_back({h * n[0] + a * u[0] + b * v[0], h * n[1] + a * u[1] + b * v[1],
+                            h * n[2] + a * u[2] + b * v[2]});
+        for (std::size_t j = 0; j < planes.size() && !poly.empty(); ++j) {
+            if (j == k) continue;
+            const R3& q = planes[j];
+            const Real qo = dot(q, q) / 2;
+            std::vector<R3> next;
+            for (std::size_t p = 0; p < poly.size(); ++p) {
+                const R3& A = poly[p];
+                const R3& B = poly[(p + 1) % poly.size()];
+                const Real fa = dot(A, q) - qo, fb = dot(B, q) - qo;
+                if (fa <= 0) next.push_back(A);
+                if ((fa < 0) != (fb < 0) && fa != fb) {
+                    const Real t = fa / (fa - fb);
+                    next.push_back({A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1]), A[2] + t * (B[2] - A[2])});
+                }
+            }
+            poly.swap(next);
+        }
+        R3 s{0, 0, 0};
+        for (std::size_t p = 0; p < poly.size(); ++p) {
+            const R3 c = cross(poly[p], poly[(p + 1) % poly.size()]);
+            for (int a = 0; a < 3; ++a) s[a] += c[a];
+        }
+        volume += h * std::abs(dot(s, n)) / 2 / 3;
+    }
+    return volume;
+}
+
+// Relative volume errors of a mesh against reference_volume on every 16th particle: "median max" and the values.
+template <class M>
+std::vector<double> volume_errors(const M& mesh, const Points& points) {
+    const int n = mesh.particles();
+    const auto owner = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, mesh.owner());
+    const auto neighbour = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, mesh.neighbour());
+    const auto volume = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, mesh.volume());
+    std::vector<std::vector<int>> adjacent(n);
+    for (int f = 0; f < mesh.faces(); ++f)
+        if (owner(f) % 16 == 0 || neighbour(f) % 16 == 0)
+            adjacent[owner(f)].push_back(neighbour(f)), adjacent[neighbour(f)].push_back(owner(f));
+    std::vector<double> error((n + 15) / 16);
+    Kokkos::parallel_for(
+        "reference_volumes", Kokkos::RangePolicy<Host>(0, int(error.size())), [&](int s) {
+            const int i = 16 * s;
+            std::vector<R3> d;
+            for (int j : adjacent[i]) {
+                R3 r;
+                for (int a = 0; a < 3; ++a) r[a] = Real(nearest_image(points[j][a] - points[i][a]));
+                d.push_back(r);
+            }
+            const Real ref = reference_volume(d);
+            error[s] = double((Real(volume(i)) - ref) / ref);
+        });
+    Host{}.fence();
+    return error;
+}
+
 // A moving run on execution space E: build, then `steps` steps of the bench flow; hashes per step and times.
 template <class E>
-std::vector<std::pair<std::uint64_t, std::uint64_t>> run(Points points, double distance, int steps, const char* name) {
+std::vector<std::pair<std::uint64_t, std::uint64_t>> run(Points points, double distance, int steps, const char* name,
+                                                         std::vector<std::vector<double>>* errors) {
     E exec;
     voronoi::Mesh<3, E> mesh(exec, 1.0);
     std::vector<int> label(points.size());
@@ -95,6 +185,7 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> run(Points points, double d
         const double ms = t.seconds() * 1e3;
         if (r.resorted) throw std::logic_error("no re-sort expected");
         out.push_back(summary(mesh, label));
+        errors->push_back(volume_errors(mesh, points));
         std::printf(
             "backend=%s step=%d ms=%.2f Mcells_s=%.2f rebuilt=%d stuck=%d host_flips=%lld topology=%016llx "
             "all=%016llx\n",
@@ -134,6 +225,25 @@ void tail(const Points& points, int tail_count) {
     const auto dv = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, dcells.volume);
     long long differ = 0;
     for (int i = 0; i < n; ++i) differ += bits(dv(i)) != bits(hcells.volume(i));
+    // The kernels apart from the spaces: the per-thread kernel on the device against it on the host (same code, other
+    // compiler), and against the warp kernel on the device (same compiler, other code).
+    {
+        shell_voronoi::Cells<Device::memory_space> tdev(n, false);
+        shell_voronoi::construct(Device{}, dgrid, tdev);
+        const auto tv = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, tdev.volume);
+        long long thread_spaces = 0, kernels = 0;
+        double worst_spaces = 0, worst_kernels = 0;
+        for (int i = 0; i < n; ++i) {
+            thread_spaces += bits(tv(i)) != bits(hcells.volume(i));
+            kernels += bits(tv(i)) != bits(dv(i));
+            worst_spaces = std::max(worst_spaces, std::abs(tv(i) - hcells.volume(i)) / hcells.volume(i));
+            worst_kernels = std::max(worst_kernels, std::abs(tv(i) - dv(i)) / dv(i));
+        }
+        std::printf(
+            "clip_kernels: thread_device_vs_thread_host_differ=%lld (max rel %.3g) thread_device_vs_warp_device_differ="
+            "%lld (max rel %.3g) of %d\n",
+            thread_spaces, worst_spaces, kernels, worst_kernels, n);
+    }
     // The tail: the `tail` cells with the most clips (the warp kernel's overflows are among them; their count is the
     // measurement build's warp_status), clipped alone on the host, timed.
     const auto work = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, dcells.work);
@@ -178,10 +288,29 @@ int main(int argc, char** argv) {
     const int steps = std::stoi(argv[4]);
     std::printf("# n=%zu distribution=%s host_threads=%d\n", points.size(), argv[2], Host().concurrency());
     tail(points, std::stoi(argv[5]));
-    const auto h = run<Host>(points, distance, steps, "openmp");
-    const auto d = run<Device>(points, distance, steps, "cuda");
+    std::vector<std::vector<double>> he, de;
+    const auto h = run<Host>(points, distance, steps, "openmp", &he);
+    const auto d = run<Device>(points, distance, steps, "cuda", &de);
     int topology = 0, all = 0;
     for (std::size_t s = 0; s < h.size(); ++s) topology += h[s].first == d[s].first, all += h[s] == d[s];
+    // Volume errors against the long-double reference (every 16th particle), each space, and the spaces' difference.
+    auto stats = [](std::vector<double> v) {
+        for (auto& x : v) x = std::abs(x);
+        std::sort(v.begin(), v.end());
+        double rms = 0;
+        for (double x : v) rms += x * x;
+        char text[160];
+        std::snprintf(text, sizeof text, "median=%.3g p99=%.3g max=%.3g rms=%.3g", v[v.size() / 2],
+                      v[std::size_t(0.99 * (v.size() - 1))], v.back(), std::sqrt(rms / v.size()));
+        return std::string(text);
+    };
+    for (std::size_t s = 0; s < h.size(); ++s) {
+        std::vector<double> gap(he[s].size());
+        long long same = 0;
+        for (std::size_t k = 0; k < gap.size(); ++k) gap[k] = de[s][k] - he[s][k], same += he[s][k] == de[s][k];
+        std::printf("volume_error step=%zu openmp: %s | cuda: %s | cuda-openmp: %s | same=%lld of %zu\n", s,
+                    stats(he[s]).c_str(), stats(de[s]).c_str(), stats(gap).c_str(), same, gap.size());
+    }
     std::printf("same: topology %d of %zu steps, all bits %d of %zu\n", topology, h.size(), all, h.size());
     return 0;
 }

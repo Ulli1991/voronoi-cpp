@@ -151,7 +151,19 @@ private:
             if (copy.extent(0) != x.extent(0))
                 copy =
                     Rows(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("engine_positions")), x.extent(0));
-            Kokkos::deep_copy(copy, x);
+            // Between spaces Kokkos copies only contiguous views of one layout (a host View<double*[D]> is LayoutRight,
+            // a CUDA one LayoutLeft): otherwise through host staging, re-laid out on the host, then copied whole.
+            if constexpr (std::is_same_v<typename X::array_layout, typename Rows::array_layout>) {
+                if (x.span_is_contiguous()) {
+                    Kokkos::deep_copy(copy, x);
+                    return copy;
+                }
+            }
+            const auto from = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, x);
+            const auto to = Kokkos::create_mirror_view(Kokkos::WithoutInitializing, copy);
+            Kokkos::deep_copy(Host{}, to, from);
+            Host{}.fence();
+            Kokkos::deep_copy(copy, to);
             return copy;
         }
     }
