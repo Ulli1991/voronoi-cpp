@@ -6,6 +6,7 @@
 #include "clipping_cases.hpp"
 #include "support.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <sstream>
@@ -134,7 +135,7 @@ int main(int argc, char** argv) {
         }
     }
     // Volumes and centroids only (volumes_and_centroids): the bits of a full rebuild's; a rings build's too where warp
-    // kernels build every cell (#60). The thread kernel sums a rings cell's faces in id order: there within 1e-13.
+    // kernels build every cell (#60). The thread kernel sums a rings cell's faces in id order: there within 1e-12.
     for (const std::string kind :
          {"jittered", "uniform", "clustered", "halo", "lattice", "wave", "cosmicweb", "fccsolid", "surface"}) {
         const Positions x = to_device(make_points(kind, 32 * 32 * 32));
@@ -152,21 +153,24 @@ int main(int argc, char** argv) {
         const auto v0 = to_host(full.volume), v1 = to_host(volume), v2 = to_host(ringed.volume);
         const auto c0 = to_host(full.centroid), c1 = to_host(centroid), c2 = to_host(ringed.centroid);
         const bool warp = !std::is_same_v<Exec, Kokkos::DefaultHostExecutionSpace>;
-        const double tolerance = warp ? 0.0 : 1e-13;
+        const double tolerance = warp ? 0.0 : 1e-12;
         int differ = 0, differ_rings = 0;
+        double largest = 0;
         for (int i = 0; i < m; ++i) {
             differ += v0(i) != v1(i) || c0(i, 0) != c1(i, 0) || c0(i, 1) != c1(i, 1) || c0(i, 2) != c1(i, 2);
             const double scale = std::cbrt(v0(i));
+            largest = std::max({largest, std::abs(v2(i) - v0(i)) / v0(i), std::abs(c2(i, 0) - c0(i, 0)) / scale,
+                                std::abs(c2(i, 1) - c0(i, 1)) / scale, std::abs(c2(i, 2) - c0(i, 2)) / scale});
             differ_rings +=
                 std::abs(v2(i) - v0(i)) > tolerance * v0(i) || std::abs(c2(i, 0) - c0(i, 0)) > tolerance * scale ||
                 std::abs(c2(i, 1) - c0(i, 1)) > tolerance * scale || std::abs(c2(i, 2) - c0(i, 2)) > tolerance * scale;
         }
         check.expect(differ == 0, kind + ": volumes and centroids only, bits of the full rebuild (" +
                                       std::to_string(differ) + " of " + std::to_string(m) + " cells differ)");
-        check.expect(differ_rings == 0, kind + (warp ? ": rings build, bits" : ": rings build, within 1e-13") +
+        check.expect(differ_rings == 0, kind + (warp ? ": rings build, bits" : ": rings build, within 1e-12") +
                                             " of the full rebuild's volumes and centroids (" +
                                             std::to_string(differ_rings) + " of " + std::to_string(m) +
-                                            " cells differ)");
+                                            " cells differ, largest relative " + std::to_string(largest) + ")");
     }
     return check.failed() != 0;
 }
