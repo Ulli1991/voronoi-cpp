@@ -4,10 +4,10 @@
 #   sbatch -o build-overlap/jobs/%x-%j.out scripts/modes_rounding_a100.sh <main checkout> <bits2d source dir>
 # 1. Builds: main (CUDA) and this branch (CUDA; CUDA + OpenMP); voronoi_bench at -j1 side by side (compile time, size).
 # 2. A100 ctest of this branch in both builds; modes_test (hybrid must equal cpu in every bit).
-# 3. gpu mode against main, bit for bit: voronoi_bench --dump-cells (3D, five inputs, 128³) and bits2d (2D).
+# 3. gpu mode against main, bit for bit: voronoi_bench --dump-cells (3D, six inputs with surface, 128³) and bits2d (2D).
 # 4. backends_probe: hybrid's arithmetic against the host, and the clipping's cost of it.
 # 5. Speed, interleaved: main, this branch (gpu), this branch --same-bits (hybrid's arithmetic): rebuild, exact start,
-#    steps at 0.03, 0.1, 0.3; 128³ (five inputs) and 256³ (jittered, cosmicweb).
+#    steps at 0.03, 0.1, 0.3; 128³ (six inputs) and 256³ (jittered, cosmicweb).
 # 6. CI host steps: OpenMP build (gcc 15), sanitizers off and on, ctest on 2 threads; clang-tidy 18 over the programs.
 #SBATCH -J modes_rounding
 #SBATCH -p gpu1
@@ -83,7 +83,7 @@ echo "modes_test exit $?: $(grep -c '^ *ok' "$out/modes.log") ok, $(grep -c '^ *
 grep -E "FAIL|hybrid equals|gpu equals" "$out/modes.log" | head -24
 
 echo "== 3. gpu mode against main"
-for kind in uniform clustered halo cosmicweb jittered; do
+for kind in uniform clustered halo cosmicweb jittered surface; do
     for b in main cuda; do
         "$out/$b/voronoi_bench" step 2097152 "$kind" 0.1 3 --dump-cells="$out/dump/$b-$kind" >/dev/null 2>&1
     done
@@ -121,7 +121,7 @@ run() {  # run <round> <name> <dir> <n> <kind> <steps> [flags]
 }
 for round in 1 2 3; do
     for row in "2097152 jittered 10" "2097152 uniform 10" "2097152 clustered 10" "2097152 halo 10" \
-        "2097152 cosmicweb 10" "16777216 jittered 6" "16777216 cosmicweb 6"; do
+        "2097152 cosmicweb 10" "2097152 surface 10" "16777216 jittered 6" "16777216 cosmicweb 6"; do
         read -r n kind steps <<<"$row"
         run $round main main "$n" "$kind" "$steps"
         run $round gpu cuda "$n" "$kind" "$steps"
