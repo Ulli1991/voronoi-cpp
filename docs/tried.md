@@ -121,3 +121,22 @@ Kernel times fenced per kernel (`--kernels`), 128³ jittered unless stated, agai
 |---|---|---|---|---|
 | #45: circumcentres in grid steps | step −0.9 to −1.7 % | kept | equal centres must round equally | measurements.md, "After the fix of #45" |
 | #48: edge representatives from the tetrahedra, plus the face-count check | step −0.9 % | kept | a doubled face gave wrong cells; the check makes such errors impossible to miss | issue #48 |
+
+## CPU and GPU together (measured, not built)
+
+Upper bounds from Nsight traces (measurements.md, "CPU and GPU together: where the GPU waits"); none of these was implemented.
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| CPU finishes stuck flips while the GPU goes on (H5) | 0: no triangle stuck in 240 steps, six inputs, 0.03 to 0.3 spacings, 128³ and 256³ | dropped | nothing to hide; the host fallback stays as the rare path it is | ideas.md, "CPU and GPU together" |
+| CPU runs the start's patch rounds while the GPU writes faces (H6) | 0 | dropped | the faces are computed from the patched tetrahedra, so the two are sequential by data; the re-clipping inside the rounds is the tail (H2) | same |
+| Hilbert re-sort keys on the CPU (H7) | below 0: the positions copy (about 12 ms at 128³) costs more than the key kernel | dropped | the keys need every position on the host; the re-sort is off by default | same |
+| CPU takes a share of bulk cells (H8) | at most 7 % of a rebuild before copies; the positions copy alone is about 10 % of a jittered clipping | dropped | a 72-core node is 13× slower clipping and 17× slower stepping than the A100 with the same code; a step would need the mesh mirrored on the host | same |
+
+## CPU and GPU from one build
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| One build on Kokkos CUDA + OpenMP instead of CUDA + Serial (S0) | rebuild, exact start and steps 0.993 to 1.009 of the CUDA-only build (28 cases); compile time the same, binary +0.5 % | kept (option of the Kokkos install; the library needs no change) | only the host space changes; device kernels are the same code | measurements.md, "CPU and GPU from one build" |
+| Device arithmetic unfused (`-DVORONOI_FMAD=OFF`) | rebuild +4.6 to +11.3 %, start +1.4 to +5.5 %, steps −1.5 to +0.9 %; CPU and GPU meshes equal in every bit (default: 21 % of volumes differ by at most 8e-16 relative) | option, off by default; the owner decides | the clipping is dense multiply-add arithmetic (plane cuts, vertex and volume sums) and DFMA halves its instructions; the step's geometry is bound by memory | same; TESTING.md, "Bits across backends" |
+| Mesh geometry unfused on the device, option (c) (`tet_mesh::rounded` in circumcentres, faces, cell sums, 2D centres; clipping still fused) | CPU and GPU meshes equal in every bit with the default build; on main's code steps +1.3 to +4.9 %, rebuild 0, accuracy unchanged | kept (on main: the owner decides) | the cell sums lose a DFMA per moment component of each pyramid | measurements.md, "Unfused mesh geometry"; branch `unfused-on-main` |

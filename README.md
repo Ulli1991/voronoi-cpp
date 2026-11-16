@@ -61,13 +61,24 @@ cmake -S . -B build-omp -DCMAKE_BUILD_TYPE=Release \
 cmake --build build-omp -j4
 ```
 
+CPU and GPU in one build (Kokkos with CUDA and OpenMP, `scripts/kokkos_cuda_omp.sh`; `voronoi::Engine` in `voronoi_engine.hpp` then picks cpu, gpu or hybrid at run time):
+
+```sh
+module load gcc/14 cuda/13.0 cmake
+cmake -S . -B build-both -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/u/uli/kokkos-cuda-omp \
+  -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper
+cmake --build build-both -j4
+```
+
 Elsewhere, point `CMAKE_PREFIX_PATH` at a Kokkos installation with the backend you want. On Raven, build with at most `-j4` on the login node, or inside a Slurm job, and run GPU work through Slurm (`scripts/bench_a100.sh`).
 
 ### Compiler flags in use
 
 - Release: `-O3 -DNDEBUG` (CMake's default), C++17 required (Kokkos sets `-std=c++20`), warnings `-Wall -Wextra -Wpedantic` on the programs.
 - CUDA: `nvcc_wrapper` with `-extended-lambda -arch=sm_80`. The warp clipping kernel uses `Kokkos::LaunchBounds<128, 5>`, which caps it at 96 registers; 18 KB of shared memory per block.
-- OpenMP: `-fopenmp` from Kokkos. The project sets no `-march`; `-DCMAKE_CXX_FLAGS=-march=icelake-server` is worth adding on Raven's CPUs.
+- OpenMP: `-fopenmp` from Kokkos. The project sets no `-march`; `-DCMAKE_CXX_FLAGS=-march=icelake-server` is worth adding on Raven's CPUs (it lets gcc fuse multiply-add, so host results then differ in the last bits from a build without it).
+- `-DVORONOI_FMAD=OFF` (default ON) compiles all device code with `--fmad=false`, at 4.6 to 11.3 % of a rebuild and 1.4 to 5.5 % of an exact start. The mesh's geometry has the host's bits either way; the option only makes the clipping's own outputs unfused too (TESTING.md, "Bits across backends").
 - `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (always on in `CMakeLists.txt`) writes the database clang-tidy needs: `bash scripts/lint_cpp.sh build-omp` (Raven: `module load clang/20`).
 - `-DVORONOI_SANITIZERS=ON` adds address and undefined-behaviour sanitizers to a host build.
 
@@ -401,11 +412,12 @@ Done: exact 3D, 2D and 1D meshes, incremental cell lists, special-case tests, th
 
 1. Bound the time of builds where most cells are large ([#49](https://github.com/Ulli1991/voronoi-cpp/issues/49): a warp kernel of larger capacity), and explain the last two cases of [#45](https://github.com/Ulli1991/voronoi-cpp/issues/45).
 2. Mesh speed: done, the re-sort ([#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)) and faces numbered by owner (+16 % hydro on Sedov, but its numbering pass gives most of it back: +1 % a whole step); fewer clips measured and dropped (they do not save time); next the repair rounds and fixed cost per step.
-3. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
-4. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
-5. Clustered rebuild tuning: done, the cells the warp kernel gives up (+5 % halo, +1 % clustered at 128³); its tail is thin, and what is left changes bits (larger warp cells, other grid levels).
-6. Multi-GPU: overlapped against blocking communication across two nodes first.
-7. Refinement and derefinement in 3D.
+3. CPU, GPU and CPU+GPU from one build ([docs/ideas.md](docs/ideas.md#cpu-and-gpu-together-2026-11-15)). Built on branch `cpu-overlap`: S0, one build with both backends (within 1 % of the CUDA-only build in rebuild and steps, and in the exact start where its single samples were steady; binary +0.5 %), and S2, `voronoi::Engine` with a run-time choice of mode (`voronoi_engine.hpp`); `modes_test` checks the three modes give the same bits. Queued, each with its measured upper bound: S3, the CPU clips the clipping's tail while the GPU clips the rest (up to 11.6 % of a rebuild at 128³), after the fix of [#60](https://github.com/Ulli1991/voronoi-cpp/issues/60) is merged; S1, allocations off the critical path of the exact start (18 to 31 % of it at 256³), after the start and step branches now open are merged; S4, fewer read-backs per step (at most 5 % of a step at 128³, under 1 % at 256³), after the step branch is merged.
+4. Cut memory to 384³ on one A100 ([#28](https://github.com/Ulli1991/voronoi-cpp/issues/28)): float faces, `tet_centre`, repair lists, start peak.
+5. Point insertion and removal ([#25](https://github.com/Ulli1991/voronoi-cpp/issues/25)): done in 1D (`Mesh<1>::insert`, `remove`), then 2D and 3D.
+6. Clustered rebuild tuning: done, the cells the warp kernel gives up (+5 % halo, +1 % clustered at 128³); its tail is thin, and what is left changes bits (larger warp cells, other grid levels).
+7. Multi-GPU: overlapped against blocking communication across two nodes first.
+8. Refinement and derefinement in 3D.
 
 ## Repository layout
 

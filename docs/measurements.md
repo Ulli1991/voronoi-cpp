@@ -676,6 +676,133 @@ Speed, three interleaved rounds, medians (steps: `update` + `update_cells`, step
 
 Time ratios, unfused / main; per-round ratios agree to 1 % for rebuild and steps. Where it goes: the cell sums (`update_cells`) +5 to +11 %, centres and faces +0.5 to +4 %, flips unchanged. Exact start: its clipping and assembly unchanged (build_ms), geometry +0.6 to +1.1 % and cells +5 to +6 %, together about +0.4 ms of 110 to 265 ms at 128³ and +3 ms of 1.6 to 2.5 s at 256³; the start totals are one sample per round and vary by up to 20 % from round to round in both builds.
 
+### CPU and GPU together: where the GPU waits (2026-11-15)
+
+Phase 1 of "overlapped CPU tail" ([ideas.md](ideas.md#cpu-and-gpu-together-2026-11-15)): measured only, no library change. Branch `cpu-overlap` on main 04eb9e4; one A100 40 GB on `gpu1` (18 of the node's 72 cores), 1305 MHz SM clock under load in every job; double precision, periodic unit box. Nsight Systems 2026 traces CUDA and the bench's NVTX phase ranges (`--nvtx=phases`, fenced at both ends, no per-kernel callbacks); `scripts/overlap_tables.py` splits each phase into GPU busy (the union of kernels, copies and memsets) and idle, and each idle interval by what the issuing host thread did meanwhile. Tail counts come from the measurement build (`-DVORONOI_MEASURE`, `warp_status`). Jobs 32373756 (128³), 32373758 and 32373759 (256³), 32373757 (surface 128³), 32373991 (volumes only); scripts `scripts/overlap_a100.sh`, `scripts/overlap_volumes_a100.sh`. The step's numbers include the bench's own fences (`Timings`, one per phase): three or four of the read-backs are those.
+
+Rebuild (warp clipping, median of 3):
+
+| input | N | clipping ms | GPU idle ms (%) | tail cells | tail pass ms (% of clipping) |
+|---|---|---|---|---|---|
+| jittered | 128³ | 49.3 | 0.32 (0.6 %) | 0 | 0.07 (0.1 %) |
+| uniform | 128³ | 95.7 | 0.32 (0.3 %) | 33 | 2.54 (2.7 %) |
+| clustered | 128³ | 123.1 | 0.41 (0.3 %) | 68 | 6.28 (5.1 %) |
+| halo | 128³ | 135.2 | 0.32 (0.2 %) | 261 | 15.63 (11.6 %) |
+| cosmicweb | 128³ | 161.5 | 0.32 (0.2 %) | 976 | 17.11 (10.6 %) |
+| jittered | 256³ | 392.3 | 0.91 (0.2 %) | 0 | 0.50 (0.1 %) |
+| uniform | 256³ | 748.3 | 0.57 (0.1 %) | 306 | 5.65 (0.8 %) |
+| clustered | 256³ | 904.6 | 0.36 (0.0 %) | 315 | 6.31 (0.7 %) |
+| halo | 256³ | 937.9 | 0.47 (0.1 %) | 1235 | 35.52 (3.8 %) |
+| cosmicweb | 256³ | 1308.3 | 0.56 (0.0 %) | 8501 | 113.65 (8.7 %) |
+
+Exact start (Mesh::update from scratch, one run):
+
+| input | N | start ms | GPU idle ms (%) | of which allocation | read-back trips ms | tail pass ms | exact re-clipped cells | warp kernel ends, first check ends (ms) |
+|---|---|---|---|---|---|---|---|---|
+| jittered | 128³ | 140.4 | 12.6 (9.0 %) | 9.0 | 0.95 | 0.07 | 0 | 60, 109 |
+| uniform | 128³ | 261.6 | 16.7 (6.4 %) | 12.6 | 1.34 | 15.43 | 129 | 118, 168 |
+| clustered | 128³ | 303.6 | 31.2 (10.3 %) | 26.9 | 1.25 | 23.32 | 134 | 149, 204 |
+| halo | 128³ | 269.8 | 52.7 (19.5 %) | 49.1 | 1.06 | 14.95 | 0 | 137, 202 |
+| cosmicweb | 128³ | 343.7 | 16.6 (4.8 %) | 12.6 | 1.46 | 52.91 | 108 | 166, 231 |
+| jittered | 256³ | 2046.3 | 629.4 (30.8 %) | 623.7 | 6.99 | 3.12 | 830 | 462, 853 |
+| uniform | 256³ | 2422.9 | 525.9 (21.7 %) | 520.3 | 18.60 | 16.46 | 277 | 928, 1349 |
+| clustered | 256³ | 2600.0 | 639.3 (24.6 %) | 633.3 | 10.74 | 22.30 | 203 | 1019, 1426 |
+| halo | 256³ | 2524.6 | 487.6 (19.3 %) | 482.2 | 5.10 | 67.34 | 393 | 1019, 1432 |
+| cosmicweb | 256³ | 2974.2 | 541.4 (18.2 %) | 534.9 | 18.21 | 154.37 | 156 | 1362, 1876 |
+
+Moving step (update + update_cells, median of steps 2 to the last):
+
+| input | N | spacings | step ms | GPU idle ms (%) | read-backs | trips ms | launches | host code ms | stuck, host-fallback ms |
+|---|---|---|---|---|---|---|---|---|---|
+| jittered | 128³ | 0.03 | 13.06 | 0.62 (4.7 %) | 13 | 0.22 | 67 | 0.17 | 0, 0.0 |
+| jittered | 128³ | 0.1 | 21.15 | 0.73 (3.5 %) | 17 | 0.28 | 74 | 0.21 | 0, 0.0 |
+| jittered | 128³ | 0.3 | 37.81 | 0.89 (2.4 %) | 19 | 0.35 | 82 | 0.24 | 0, 0.0 |
+| uniform | 128³ | 0.03 | 11.02 | 0.56 (5.1 %) | 11 | 0.19 | 60 | 0.16 | 0, 0.0 |
+| uniform | 128³ | 0.1 | 14.75 | 0.68 (4.6 %) | 15 | 0.25 | 71 | 0.19 | 0, 0.0 |
+| uniform | 128³ | 0.3 | 24.21 | 0.81 (3.4 %) | 19 | 0.31 | 84 | 0.22 | 0, 0.0 |
+| clustered | 128³ | 0.03 | 10.70 | 0.53 (5.0 %) | 10 | 0.18 | 57 | 0.16 | 0, 0.0 |
+| clustered | 128³ | 0.1 | 14.25 | 0.68 (4.8 %) | 15 | 0.25 | 70 | 0.19 | 0, 0.0 |
+| clustered | 128³ | 0.3 | 23.03 | 0.80 (3.5 %) | 19 | 0.31 | 82 | 0.23 | 0, 0.0 |
+| halo | 128³ | 0.03 | 10.92 | 0.53 (4.9 %) | 10 | 0.18 | 57 | 0.15 | 0, 0.0 |
+| halo | 128³ | 0.1 | 14.50 | 0.70 (4.9 %) | 15 | 0.25 | 72 | 0.19 | 0, 0.0 |
+| halo | 128³ | 0.3 | 23.95 | 0.85 (3.6 %) | 20 | 0.33 | 86 | 0.24 | 0, 0.0 |
+| cosmicweb | 128³ | 0.03 | 10.67 | 0.52 (4.9 %) | 10 | 0.18 | 56 | 0.16 | 0, 0.0 |
+| cosmicweb | 128³ | 0.1 | 14.18 | 0.68 (4.8 %) | 15 | 0.25 | 71 | 0.19 | 0, 0.0 |
+| cosmicweb | 128³ | 0.3 | 22.91 | 0.81 (3.5 %) | 18 | 0.32 | 81 | 0.22 | 0, 0.0 |
+| jittered | 256³ | 0.03 | 77.42 | 0.67 (0.9 %) | 11 | 0.23 | 62 | 0.19 | 0, 0.0 |
+| jittered | 256³ | 0.1 | 109.45 | 0.80 (0.7 %) | 15 | 0.28 | 72 | 0.22 | 0, 0.0 |
+| jittered | 256³ | 0.3 | 193.62 | 1.09 (0.6 %) | 20 | 0.42 | 89 | 0.29 | 0, 0.0 |
+| uniform | 256³ | 0.03 | 69.74 | 0.57 (0.8 %) | 10 | 0.19 | 57 | 0.16 | 0, 0.0 |
+| uniform | 256³ | 0.1 | 83.66 | 0.76 (0.9 %) | 14 | 0.29 | 70 | 0.21 | 0, 0.0 |
+| uniform | 256³ | 0.3 | 121.65 | 1.10 (0.9 %) | 17 | 0.41 | 81 | 0.30 | 0, 0.0 |
+| clustered | 256³ | 0.03 | 69.00 | 0.58 (0.8 %) | 10 | 0.19 | 57 | 0.17 | 0, 0.0 |
+| clustered | 256³ | 0.1 | 82.08 | 0.69 (0.8 %) | 13 | 0.26 | 67 | 0.19 | 0, 0.0 |
+| clustered | 256³ | 0.3 | 117.51 | 0.79 (0.7 %) | 17 | 0.29 | 82 | 0.21 | 0, 0.0 |
+| halo | 256³ | 0.03 | 69.30 | 0.54 (0.8 %) | 10 | 0.18 | 57 | 0.15 | 0, 0.0 |
+| halo | 256³ | 0.1 | 83.40 | 0.70 (0.8 %) | 13 | 0.26 | 67 | 0.19 | 0, 0.0 |
+| halo | 256³ | 0.3 | 121.14 | 0.82 (0.7 %) | 17 | 0.31 | 81 | 0.22 | 0, 0.0 |
+| cosmicweb | 256³ | 0.03 | 68.46 | 0.57 (0.8 %) | 10 | 0.19 | 57 | 0.16 | 0, 0.0 |
+| cosmicweb | 256³ | 0.1 | 81.32 | 0.69 (0.8 %) | 13 | 0.25 | 67 | 0.20 | 0, 0.0 |
+| cosmicweb | 256³ | 0.3 | 117.64 | 0.87 (0.7 %) | 17 | 0.35 | 82 | 0.24 | 0, 0.0 |
+
+What the numbers say:
+
+- **The host does nothing while kernels run.** In every phase it spends the kernels blocked in a synchronising call; host code outside the CUDA API is 0.2 ms per step and under 1.5 ms per start.
+- **Rebuild:** the GPU never waits (idle under 1 %). The tail is the per-thread pass over the cells the warp kernel overflows: up to 11.6 % of the clipping at 128³ (halo, cosmic web) and 8.7 % at 256³ (cosmic web, 8501 cells). A tail cell is known on the device when its warp finishes it, on the host only after the warp kernel.
+- **Exact start:** the GPU waits 5 to 20 % of the start at 128³ and 18 to 31 % at 256³, nearly all of it in synchronous `cudaMalloc` and `cudaFree` (81 and 43 calls; at 256³ three single `cudaMalloc` calls of 100 to 210 ms after the assembly). Read-backs cost about 1 ms at 128³ (6 round trips), 5 to 19 ms at 256³. The cells for exact re-clipping are known only after the first check (60 to 65 ms after the warp kernel at 128³, about 400 ms at 256³).
+- **Moving step:** the GPU waits 2.4 to 5.1 % at 128³ and under 1 % at 256³ (0.5 to 1.1 ms a step): 10 to 20 read-backs (counters of the repair rounds, face counts, the volume check) of 0.02 ms each and the launch gaps between them. In none of the 240 steps (30 runs of 8) did a triangle stick, so no host fallback ran.
+- **Copies (pageable, as the benches do them):** host to device 2.2 to 2.7 GB/s in library_bench and 10.7 GB/s in voronoi_bench, device to host 4.3 GB/s.
+
+Volumes only (`library_bench build --path=warp-host-vc`: points in host memory to volumes and centroids in host memory; medians of the timed builds, ms):
+
+| input | N | build | kernels | points in | volumes and centroids out | GPU idle |
+|---|---|---|---|---|---|---|
+| jittered | 128³ | 96.5 | 49.2 | 19.4 | 25.0 | 3.3 (3.4 %) |
+| uniform | 128³ | 136.8 | 95.0 | 24.9 | 14.2 | 2.8 (2.0 %) |
+| clustered | 128³ | 165.0 | 122.4 | 19.8 | 14.3 | 2.9 (1.7 %) |
+| halo | 128³ | 176.2 | 135.0 | 24.9 | 13.3 | 2.7 (1.5 %) |
+| cosmic web | 128³ | 201.2 | 159.8 | 24.0 | 14.1 | 2.7 (1.4 %) |
+| jittered | 256³ | 719.2 | 392.5 | 188.3 | 132.0 | 6.6 (0.9 %) |
+| uniform | 256³ | 1070.7 | 746.1 | 188.5 | 129.5 | 6.7 (0.6 %) |
+
+The copies are 20 to 46 % of this path: 50 MB of points in at 2.6 GB/s and 67 MB out, from and to pageable host memory. (The GPU counts as busy during a copy, so the idle column misses that the copies and the clipping run one after the other.)
+
+Bulk cells on the CPU: the same code on a full 72-core node clips 2.6 M cells/s against 33.7 on the A100 (13×) and steps 8.5 against 144 M cells/s (17×) (README, library benchmark). Giving the CPU its share of bulk cells could save at most 7 % of a rebuild, and copying the positions over alone costs 4.7 ms at 128³ (50 MB at 10.7 GB/s), about 10 % of a jittered clipping; a step would need the mesh (about 1950 B/cell) mirrored on the host every step. So no candidate splits bulk cells.
+
+### CPU and GPU from one build (2026-11-16)
+
+S0 and S2 of [ideas.md](ideas.md#cpu-and-gpu-together-2026-11-15): one build on Kokkos with CUDA 13.0 and OpenMP (`/u/uli/kokkos-cuda-omp`), and `voronoi::Engine` choosing cpu, gpu or hybrid at run time. One A100 40 GB on `gpu1`, 18 host threads; jobs 32378021 (build cost, CI host steps, first speed run), 32407747 (speed with `--fmad=false`, bits), 32410447 (fixed `modes_test`, bits, second speed run).
+
+Build cost, `voronoi_bench` at -j1: 143 s in both builds; binary 8,905,800 bytes (CUDA only) against 8,947,864 (+0.5 %). `mesh_test`: 99 s in both; 6,058,536 against 6,100,688 bytes. CI's host steps (gcc 15 OpenMP build, sanitizers off and on): 23 of 23; clang-tidy on `modes_test` (with `voronoi_engine.hpp`): 0 warnings. A100 ctest after the Engine fix: 23 of 23 in both builds.
+
+Speed of the two-backend build against the CUDA-only one (job 32407747; three interleaved rounds, median; rebuild = warp clipping median of 5, start = exact start, steps = `update` + `update_cells` median of steps 2 to 10 (2 to 6 at 256³)): all 28 cases within 1 %, geometric mean 0.9996, range 0.993 to 1.009.
+
+| input, N | rebuild | start 0.03 / 0.3 | steps 0.03 / 0.3 |
+|---|---|---|---|
+| jittered 128³ | 1.000 | 0.997 / 1.001 | 0.993 / 1.009 |
+| uniform 128³ | 1.001 | 0.998 / 1.000 | 1.002 / 0.996 |
+| clustered 128³ | 1.000 | 0.999 / 1.000 | 1.005 / 1.000 |
+| halo 128³ | 1.002 | 0.995 / 1.001 | 1.003 / 1.000 |
+| cosmicweb 128³ | 0.999 | 0.997 / 0.995 | 0.999 / 1.000 |
+| jittered 256³ | 1.000 | 0.999 / – | 0.999 / – |
+
+Time ratios, two backends / CUDA only. Two more runs (jobs 32378021 and 32410447) agree for rebuild (0.998 to 1.005) and steps (0.996 to 1.010). The exact start is one sample per round: in those two runs single rounds of either build were 10 to 25 % (once 2×) slower than the others, so their start medians range 0.86 to 1.11; only 32407747, where the rounds agree to 1 %, resolves the start to 1 %. A start claim at 1 % needs repeats per round. The bench's host advection is slower in the two-backend build (260 against 30 ms at 128³: OpenMP binds the main thread to one core, and the bench's 16 `std::thread`s inherit it); it is outside every timed phase. Tetrahedron counts differ from run to run on CUDA in both builds (flip scheduling), faces never.
+
+Unfused device arithmetic (`-DVORONOI_FMAD=OFF`, `--fmad=false`), same job, against the default two-backend build:
+
+| input, N | rebuild | start 0.03 / 0.3 | steps 0.03 / 0.3 |
+|---|---|---|---|
+| jittered 128³ | 1.046 | 1.021 / 1.020 | 1.001 / 0.995 |
+| uniform 128³ | 1.107 | 1.042 / 1.041 | 0.989 / 1.009 |
+| clustered 128³ | 1.086 | 1.036 / 1.038 | 0.990 / 0.993 |
+| halo 128³ | 1.077 | 1.052 / 1.053 | 0.985 / 1.003 |
+| cosmicweb 128³ | 1.113 | 1.053 / 1.055 | 0.993 / 1.000 |
+| jittered 256³ | 1.046 | 1.014 / – | 0.994 / – |
+
+The cost is in the clipping (rebuild +4.6 to +11.3 %, start +1.4 to +5.5 %); steps are unchanged (−1.5 to +0.9 %). What it buys: CPU and GPU meshes equal in every bit (TESTING.md, "Bits across backends").
+
+Host against device clipping (`backends_probe`, 128³, all cells on 18 threads with the per-thread kernel, against the A100's warp kernel): 22.6 to 28.7× slower; the tail cells alone cost 118 to 275 µs per cell per core.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
