@@ -8,10 +8,12 @@ namespace mesh_cases {
 
 // Runs `steps` flow steps on execution space E and returns a (topology, geometry) hash pair per step.
 // Used by: reproducibility_cases (E = default space against Serial).
+// same_bits: Layout::same_bits_as_host (the host's bits on a GPU).
 template <class E>
-std::vector<std::uint64_t> trace(const Points& start, double displacement, int steps) {
+std::vector<std::uint64_t> trace(const Points& start, double displacement, int steps, bool same_bits = false) {
     using Memory = typename E::memory_space;
     voronoi::Mesh<3, E> mesh(E{}, 1.0);
+    mesh.set_same_bits_as_host(same_bits);
     Points p = start;
     const Flow flow;
     std::vector<std::uint64_t> hashes;
@@ -68,7 +70,8 @@ void reproducibility_cases() {
             "repro.serial." + name,
             [=](Check& c) {
                 const Points p = make_points(name, 4096);
-                const auto a = trace<Exec>(p, d, 20);
+                // The default space in the host's bits (on CUDA, fused, only the faces would agree; #27).
+                const auto a = trace<Exec>(p, d, 20, true);
                 const auto b = trace<Kokkos::Serial>(p, d, 20);
                 long long topology = 0, geometry = 0;
                 for (std::size_t i = 0; i < a.size(); i += 2) {
