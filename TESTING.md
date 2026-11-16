@@ -86,6 +86,11 @@ every backend. The geometry is not bit-identical between the host and CUDA by de
   differ in 97 % of cells by at most 1.7e-13 relative, with or without FMA. This reaches only outputs of
   the clipping itself (`voronoi_bench rebuild`, a volumes-only build); the mesh recomputes its geometry
   from the tetrahedra. The per-thread kernel gives the same bits on host and device with `--fmad=false`.
+  With FMA, the per-thread kernel run on the device (a path the library does not take on CUDA; tests and
+  `backends_probe` only) marks 2 of 2,097,152 cosmicweb cells `degenerate` and leaves them unbuilt (volume 0,
+  no faces): particles 1576947 and 1751066 of `make_points("cosmicweb", 2097152)` in slot order. The host's
+  per-thread kernel, the warp kernel and the exact kernel build both, agreeing to 3e-16 relative. A status,
+  not a wrong volume: the exact start counts any cell not `ok` as bad and patches it (`tet_start::unfinished`).
 
 `distortion_test` drives `voronoi::Mesh` with prescribed velocity fields, no
 hydro (`src/test/distortion.hpp`): shear, sawtooth, vortex, taylor_green,
