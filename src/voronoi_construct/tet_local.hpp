@@ -57,7 +57,7 @@ KOKKOS_INLINE_FUNCTION unsigned hash(const int* key, unsigned mask) {
 // (value -1 - tetrahedron); each key must occur exactly twice. Used by: repair.
 template <class MemorySpace>
 struct Table {
-    static constexpr int empty = -2147483647 - 1;      // no value is this
+    static constexpr int empty = -2147483647 - 1;                   // no value is this
     Kokkos::View<int* [4], Kokkos::LayoutRight, MemorySpace> slot;  // the key's 3 particles, the value
     unsigned mask = 0;
 
