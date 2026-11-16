@@ -31,8 +31,9 @@ each around a torus of radii 0.1 and 0.05 (the inner circles), points uniform in
 0.1 rms surface spacings. The ratio under each panel is the measured density contrast: the 99.9th over the 0.1th
 percentile of 1/r₃₂³ (r₃₂ the distance to the 32nd neighbour), which also counts the background and Poisson scatter;
 for the surface it measures only the density along the shells (the space between them holds no points at all).
-Bottom of each panel: nearest-neighbour distances in mean spacings (n^(−1/3)) on one log axis for all eight, each strip
-scaled to its peak; dotted: one spacing. Two degenerate test cases are not shown: an exact cubic lattice (every point
+Each input has one colour, used for its points, its curve and the same input in every other figure. Bottom: the
+nearest-neighbour distances of all eight inputs, as the fraction of points per bin (40 bins per decade) against the
+distance in mean spacings (n^(−1/3)); dashed: the three application inputs; dotted: one mean spacing. Two degenerate test cases are not shown: an exact cubic lattice (every point
 cospherical with its neighbours) and the lattice shifted by 10⁻⁵ spacing ("wave").
 
 **application.** Completeness against build rate on the three application inputs, one point per code at 128³

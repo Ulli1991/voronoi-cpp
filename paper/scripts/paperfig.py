@@ -27,9 +27,12 @@ INPUTS = ["jittered", "bluenoise", "uniform", "clustered", "halo", "lattice", "w
 LABEL = {"jittered": "jittered", "bluenoise": "blue noise", "uniform": "white noise", "clustered": "clustered",
          "halo": "halo", "lattice": "lattice", "wave": "wave", "slab": "slab", "cosmicweb": "cosmic web",
          "fccsolid": "fcc solid", "surface": "surface"}
+# One colour per input in every figure (owner, 2026-11-16), all from the tab10 cycle that LUNA's figstyle uses; the ten
+# inputs take the ten colours, so no two inputs share one. Curves also differ in marker or dash where inputs meet in
+# one panel, for readers who cannot tell red from green.
 COLOR = {"jittered": "#1f77b4", "bluenoise": "#17becf", "uniform": "#2ca02c", "clustered": "#ff7f0e",
-         "halo": "#d62728", "lattice": "#9467bd", "wave": "#8c564b", "slab": "#7f7f7f", "cosmicweb": "#e377c2",
-         "fccsolid": "#bcbd22", "surface": "#000080"}
+         "halo": "#d62728", "lattice": "#9467bd", "wave": "#8c564b", "cosmicweb": "#e377c2", "fccsolid": "#bcbd22",
+         "surface": "#7f7f7f", "slab": "#7f7f7f"}
 MARKER = {"jittered": "o", "bluenoise": "D", "uniform": "s", "clustered": "^", "halo": "v", "lattice": "P",
           "wave": "X", "slab": "h", "cosmicweb": "*", "fccsolid": "p", "surface": "d"}
 
