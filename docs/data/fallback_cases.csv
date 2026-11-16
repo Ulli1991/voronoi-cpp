@@ -1,0 +1,237 @@
+job,input,n,what,stage,ms,steps,steps_used,stuck_entries,Mcells_s
+32378332,jittered,2097152,flow-0.5,repair,21.11,11,11,,51.61
+32378332,jittered,2097152,flow-0.5,host fallback,0,11,0,0,51.61
+32378332,jittered,2097152,flow-0.5,rebuild,0,11,0,0,51.61
+32378332,jittered,2097152,flow-0.5,re-sort,0,11,11,,51.61
+32378332,jittered,2097152,flow-0.5,geometry,14.52,11,11,,51.61
+32378332,jittered,2097152,flow-0.5,cells,4.999,11,11,,51.61
+32378332,jittered,2097152,flow-1,repair,29.13,11,11,,40.62
+32378332,jittered,2097152,flow-1,host fallback,0,11,0,0,40.62
+32378332,jittered,2097152,flow-1,rebuild,0,11,0,0,40.62
+32378332,jittered,2097152,flow-1,re-sort,0,11,11,,40.62
+32378332,jittered,2097152,flow-1,geometry,17.48,11,11,,40.62
+32378332,jittered,2097152,flow-1,cells,5.016,11,11,,40.62
+32378332,jittered,2097152,flow-2,repair,60.91,11,11,,21.81
+32378332,jittered,2097152,flow-2,host fallback,0,11,0,0,21.81
+32378332,jittered,2097152,flow-2,rebuild,0,11,0,0,21.81
+32378332,jittered,2097152,flow-2,re-sort,0,11,11,,21.81
+32378332,jittered,2097152,flow-2,geometry,29.26,11,11,,21.81
+32378332,jittered,2097152,flow-2,cells,5.992,11,11,,21.81
+32378332,uniform,2097152,flow-1,repair,30.84,11,11,,37.8
+32378332,uniform,2097152,flow-1,host fallback,0,11,0,0,37.8
+32378332,uniform,2097152,flow-1,rebuild,0,11,0,0,37.8
+32378332,uniform,2097152,flow-1,re-sort,0,11,11,,37.8
+32378332,uniform,2097152,flow-1,geometry,19.27,11,11,,37.8
+32378332,uniform,2097152,flow-1,cells,5.366,11,11,,37.8
+32378332,clustered,2097152,flow-0.3,repair,10.13,11,11,,87.98
+32378332,clustered,2097152,flow-0.3,host fallback,0,11,0,0,87.98
+32378332,clustered,2097152,flow-0.3,rebuild,0,11,0,0,87.98
+32378332,clustered,2097152,flow-0.3,re-sort,0,11,11,,87.98
+32378332,clustered,2097152,flow-0.3,geometry,8.556,11,11,,87.98
+32378332,clustered,2097152,flow-0.3,cells,5.156,11,11,,87.98
+32378332,clustered,2097152,flow-0.5,repair,14.83,11,11,,65.01
+32378332,clustered,2097152,flow-0.5,host fallback,0.7255,11,1,6,65.01
+32378332,clustered,2097152,flow-0.5,rebuild,0,11,0,0,65.01
+32378332,clustered,2097152,flow-0.5,re-sort,0,11,11,,65.01
+32378332,clustered,2097152,flow-0.5,geometry,11.63,11,11,,65.01
+32378332,clustered,2097152,flow-0.5,cells,5.078,11,11,,65.01
+32378332,halo,2097152,flow-0.3,repair,10.55,11,11,,84.83
+32378332,halo,2097152,flow-0.3,host fallback,0,11,0,0,84.83
+32378332,halo,2097152,flow-0.3,rebuild,0,11,0,0,84.83
+32378332,halo,2097152,flow-0.3,re-sort,0,11,11,,84.83
+32378332,halo,2097152,flow-0.3,geometry,9.012,11,11,,84.83
+32378332,halo,2097152,flow-0.3,cells,5.163,11,11,,84.83
+32378332,jittered,2097152,flow-1-host --fallback=host,repair,29.05,11,11,,40.7
+32378332,jittered,2097152,flow-1-host --fallback=host,host fallback,0,11,0,0,40.7
+32378332,jittered,2097152,flow-1-host --fallback=host,rebuild,0,11,0,0,40.7
+32378332,jittered,2097152,flow-1-host --fallback=host,re-sort,0,11,11,,40.7
+32378332,jittered,2097152,flow-1-host --fallback=host,geometry,17.47,11,11,,40.7
+32378332,jittered,2097152,flow-1-host --fallback=host,cells,5.013,11,11,,40.7
+32378332,jittered,2097152,flow-1-rebuild --fallback=rebuild,repair,29.13,11,11,,40.65
+32378332,jittered,2097152,flow-1-rebuild --fallback=rebuild,host fallback,0,11,0,0,40.65
+32378332,jittered,2097152,flow-1-rebuild --fallback=rebuild,rebuild,0,11,0,0,40.65
+32378332,jittered,2097152,flow-1-rebuild --fallback=rebuild,re-sort,0,11,11,,40.65
+32378332,jittered,2097152,flow-1-rebuild --fallback=rebuild,geometry,17.45,11,11,,40.65
+32378332,jittered,2097152,flow-1-rebuild --fallback=rebuild,cells,5.017,11,11,,40.65
+32378334,surface,2097152,flow-0.3,none,,0,0,0,
+32378334,surface,2097152,flow-1,none,,0,0,0,
+32378334,cosmicweb,2097152,flow-0.3,repair,10.05,11,11,,88.52
+32378334,cosmicweb,2097152,flow-0.3,host fallback,0,11,0,0,88.52
+32378334,cosmicweb,2097152,flow-0.3,rebuild,0,11,0,0,88.52
+32378334,cosmicweb,2097152,flow-0.3,re-sort,0,11,11,,88.52
+32378334,cosmicweb,2097152,flow-0.3,geometry,8.499,11,11,,88.52
+32378334,cosmicweb,2097152,flow-0.3,cells,5.145,11,11,,88.52
+32378334,cosmicweb,2097152,flow-1,repair,28.87,11,11,,38.93
+32378334,cosmicweb,2097152,flow-1,host fallback,0.9337,11,1,6,38.93
+32378334,cosmicweb,2097152,flow-1,rebuild,0,11,0,0,38.93
+32378334,cosmicweb,2097152,flow-1,re-sort,0,11,11,,38.93
+32378334,cosmicweb,2097152,flow-1,geometry,18.77,11,11,,38.93
+32378334,cosmicweb,2097152,flow-1,cells,5.295,11,11,,38.93
+32378334,lattice,2097152,flow-0.5,repair,10.06,11,11,,91.47
+32378334,lattice,2097152,flow-0.5,host fallback,0,11,0,0,91.47
+32378334,lattice,2097152,flow-0.5,rebuild,0,11,0,0,91.47
+32378334,lattice,2097152,flow-0.5,re-sort,0,11,11,,91.47
+32378334,lattice,2097152,flow-0.5,geometry,7.321,11,11,,91.47
+32378334,lattice,2097152,flow-0.5,cells,5.546,11,11,,91.47
+32378334,lattice,2097152,flow-1,repair,19.35,11,11,,57.22
+32378334,lattice,2097152,flow-1,host fallback,0,11,0,0,57.22
+32378334,lattice,2097152,flow-1,rebuild,0,11,0,0,57.22
+32378334,lattice,2097152,flow-1,re-sort,0,11,11,,57.22
+32378334,lattice,2097152,flow-1,geometry,11.03,11,11,,57.22
+32378334,lattice,2097152,flow-1,cells,6.277,11,11,,57.22
+32378334,wave,2097152,flow-0.5,repair,10.07,11,11,,95.05
+32378334,wave,2097152,flow-0.5,host fallback,0,11,0,0,95.05
+32378334,wave,2097152,flow-0.5,rebuild,0,11,0,0,95.05
+32378334,wave,2097152,flow-0.5,re-sort,0,11,11,,95.05
+32378334,wave,2097152,flow-0.5,geometry,7.006,11,11,,95.05
+32378334,wave,2097152,flow-0.5,cells,4.989,11,11,,95.05
+32378334,wave,2097152,flow-1,repair,19.43,11,11,,57.55
+32378334,wave,2097152,flow-1,host fallback,0,11,0,0,57.55
+32378334,wave,2097152,flow-1,rebuild,0,11,0,0,57.55
+32378334,wave,2097152,flow-1,re-sort,0,11,11,,57.55
+32378334,wave,2097152,flow-1,geometry,10.92,11,11,,57.55
+32378334,wave,2097152,flow-1,cells,6.092,11,11,,57.55
+32378333,jittered,2097152,jump-1e-6 --jump-share=1e-6 --jump-spacings=4,repair,11.47,11,11,,13.62
+32378333,jittered,2097152,jump-1e-6 --jump-share=1e-6 --jump-spacings=4,host fallback,0,11,0,0,13.62
+32378333,jittered,2097152,jump-1e-6 --jump-share=1e-6 --jump-spacings=4,rebuild,125,11,11,398,13.62
+32378333,jittered,2097152,jump-1e-6 --jump-share=1e-6 --jump-spacings=4,re-sort,0,11,11,,13.62
+32378333,jittered,2097152,jump-1e-6 --jump-share=1e-6 --jump-spacings=4,geometry,12.54,11,11,,13.62
+32378333,jittered,2097152,jump-1e-6 --jump-share=1e-6 --jump-spacings=4,cells,4.979,11,11,,13.62
+32378333,jittered,2097152,jump-5e-6 --jump-share=5e-6 --jump-spacings=4,repair,14.71,11,11,,13.34
+32378333,jittered,2097152,jump-5e-6 --jump-share=5e-6 --jump-spacings=4,host fallback,0,11,0,0,13.34
+32378333,jittered,2097152,jump-5e-6 --jump-share=5e-6 --jump-spacings=4,rebuild,124.9,11,11,2216,13.34
+32378333,jittered,2097152,jump-5e-6 --jump-share=5e-6 --jump-spacings=4,re-sort,0,11,11,,13.34
+32378333,jittered,2097152,jump-5e-6 --jump-share=5e-6 --jump-spacings=4,geometry,12.54,11,11,,13.34
+32378333,jittered,2097152,jump-5e-6 --jump-share=5e-6 --jump-spacings=4,cells,4.967,11,11,,13.34
+32378333,jittered,2097152,jump-1e-5 --jump-share=1e-5 --jump-spacings=4,repair,16.55,11,11,,13.19
+32378333,jittered,2097152,jump-1e-5 --jump-share=1e-5 --jump-spacings=4,host fallback,0,11,0,0,13.19
+32378333,jittered,2097152,jump-1e-5 --jump-share=1e-5 --jump-spacings=4,rebuild,125,11,11,4358,13.19
+32378333,jittered,2097152,jump-1e-5 --jump-share=1e-5 --jump-spacings=4,re-sort,0,11,11,,13.19
+32378333,jittered,2097152,jump-1e-5 --jump-share=1e-5 --jump-spacings=4,geometry,12.55,11,11,,13.19
+32378333,jittered,2097152,jump-1e-5 --jump-share=1e-5 --jump-spacings=4,cells,4.97,11,11,,13.19
+32378333,jittered,2097152,jump-1e-4 --jump-share=1e-4 --jump-spacings=4,repair,21.97,11,11,,12.75
+32378333,jittered,2097152,jump-1e-4 --jump-share=1e-4 --jump-spacings=4,host fallback,0,11,0,0,12.75
+32378333,jittered,2097152,jump-1e-4 --jump-share=1e-4 --jump-spacings=4,rebuild,125,11,11,41384,12.75
+32378333,jittered,2097152,jump-1e-4 --jump-share=1e-4 --jump-spacings=4,re-sort,0,11,11,,12.75
+32378333,jittered,2097152,jump-1e-4 --jump-share=1e-4 --jump-spacings=4,geometry,12.56,11,11,,12.75
+32378333,jittered,2097152,jump-1e-4 --jump-share=1e-4 --jump-spacings=4,cells,4.971,11,11,,12.75
+32378333,jittered,2097152,jump-1e-3 --jump-share=1e-3 --jump-spacings=4,repair,32.97,11,11,,11.83
+32378333,jittered,2097152,jump-1e-3 --jump-share=1e-3 --jump-spacings=4,host fallback,0,11,0,0,11.83
+32378333,jittered,2097152,jump-1e-3 --jump-share=1e-3 --jump-spacings=4,rebuild,126.7,11,11,416790,11.83
+32378333,jittered,2097152,jump-1e-3 --jump-share=1e-3 --jump-spacings=4,re-sort,0,11,11,,11.83
+32378333,jittered,2097152,jump-1e-3 --jump-share=1e-3 --jump-spacings=4,geometry,12.63,11,11,,11.83
+32378333,jittered,2097152,jump-1e-3 --jump-share=1e-3 --jump-spacings=4,cells,4.979,11,11,,11.83
+32378333,jittered,2097152,jump-1e-2 --jump-share=1e-2 --jump-spacings=4,repair,99.33,11,11,,8.049
+32378333,jittered,2097152,jump-1e-2 --jump-share=1e-2 --jump-spacings=4,host fallback,0,11,0,0,8.049
+32378333,jittered,2097152,jump-1e-2 --jump-share=1e-2 --jump-spacings=4,rebuild,142.9,11,11,4144047,8.049
+32378333,jittered,2097152,jump-1e-2 --jump-share=1e-2 --jump-spacings=4,re-sort,0,11,11,,8.049
+32378333,jittered,2097152,jump-1e-2 --jump-share=1e-2 --jump-spacings=4,geometry,13.22,11,11,,8.049
+32378333,jittered,2097152,jump-1e-2 --jump-share=1e-2 --jump-spacings=4,cells,5.064,11,11,,8.049
+32378333,jittered,2097152,jump-1e-3-host --jump-share=1e-3 --jump-spacings=4 --fallback=host,repair,32.57,11,11,,0.4528
+32378333,jittered,2097152,jump-1e-3-host --jump-share=1e-3 --jump-spacings=4 --fallback=host,host fallback,4454,11,11,415692,0.4528
+32378333,jittered,2097152,jump-1e-3-host --jump-share=1e-3 --jump-spacings=4 --fallback=host,rebuild,127.6,11,11,415692,0.4528
+32378333,jittered,2097152,jump-1e-3-host --jump-share=1e-3 --jump-spacings=4 --fallback=host,re-sort,0,11,11,,0.4528
+32378333,jittered,2097152,jump-1e-3-host --jump-share=1e-3 --jump-spacings=4 --fallback=host,geometry,12.65,11,11,,0.4528
+32378333,jittered,2097152,jump-1e-3-host --jump-share=1e-3 --jump-spacings=4 --fallback=host,cells,4.992,11,11,,0.4528
+32378771,clustered,2097152,flow-0.5 --no-start,repair,16.13,29,29,,60.07
+32378771,clustered,2097152,flow-0.5 --no-start,host fallback,0,29,0,0,60.07
+32378771,clustered,2097152,flow-0.5 --no-start,rebuild,0,29,0,0,60.07
+32378771,clustered,2097152,flow-0.5 --no-start,re-sort,0,29,29,,60.07
+32378771,clustered,2097152,flow-0.5 --no-start,geometry,13.03,29,29,,60.07
+32378771,clustered,2097152,flow-0.5 --no-start,cells,5.753,29,29,,60.07
+32378771,cosmicweb,2097152,flow-1 --no-start,repair,32.19,29,29,,34.65
+32378771,cosmicweb,2097152,flow-1 --no-start,host fallback,0.4782,29,3,18,34.65
+32378771,cosmicweb,2097152,flow-1 --no-start,rebuild,0,29,0,0,34.65
+32378771,cosmicweb,2097152,flow-1 --no-start,re-sort,0,29,29,,34.65
+32378771,cosmicweb,2097152,flow-1 --no-start,geometry,21.37,29,29,,34.65
+32378771,cosmicweb,2097152,flow-1 --no-start,cells,6.49,29,29,,34.65
+32378771,clustered,2097152,flow-0.5-rebuild --no-start --fallback=rebuild,repair,16.14,29,29,,60.12
+32378771,clustered,2097152,flow-0.5-rebuild --no-start --fallback=rebuild,host fallback,0,29,0,0,60.12
+32378771,clustered,2097152,flow-0.5-rebuild --no-start --fallback=rebuild,rebuild,0,29,0,0,60.12
+32378771,clustered,2097152,flow-0.5-rebuild --no-start --fallback=rebuild,re-sort,0,29,29,,60.12
+32378771,clustered,2097152,flow-0.5-rebuild --no-start --fallback=rebuild,geometry,12.99,29,29,,60.12
+32378771,clustered,2097152,flow-0.5-rebuild --no-start --fallback=rebuild,cells,5.751,29,29,,60.12
+32378770,jittered,2097152,jump-1e-6-1-cheapest --jump-share=1e-6 --jump-spacings=1 --fallback=cheapest,repair,9.694,11,11,,19.97
+32378770,jittered,2097152,jump-1e-6-1-cheapest --jump-share=1e-6 --jump-spacings=1 --fallback=cheapest,host fallback,1.697,11,3,17,19.97
+32378770,jittered,2097152,jump-1e-6-1-cheapest --jump-share=1e-6 --jump-spacings=1 --fallback=cheapest,rebuild,78.3,11,7,119,19.97
+32378770,jittered,2097152,jump-1e-6-1-cheapest --jump-share=1e-6 --jump-spacings=1 --fallback=cheapest,re-sort,0,11,11,,19.97
+32378770,jittered,2097152,jump-1e-6-1-cheapest --jump-share=1e-6 --jump-spacings=1 --fallback=cheapest,geometry,10.47,11,11,,19.97
+32378770,jittered,2097152,jump-1e-6-1-cheapest --jump-share=1e-6 --jump-spacings=1 --fallback=cheapest,cells,4.885,11,11,,19.97
+32378770,jittered,2097152,jump-1e-6-1-host --jump-share=1e-6 --jump-spacings=1 --fallback=host,repair,10.61,11,11,,16.31
+32378770,jittered,2097152,jump-1e-6-1-host --jump-share=1e-6 --jump-spacings=1 --fallback=host,host fallback,105.4,11,10,144,16.31
+32378770,jittered,2097152,jump-1e-6-1-host --jump-share=1e-6 --jump-spacings=1 --fallback=host,rebuild,0,11,0,0,16.31
+32378770,jittered,2097152,jump-1e-6-1-host --jump-share=1e-6 --jump-spacings=1 --fallback=host,re-sort,0,11,11,,16.31
+32378770,jittered,2097152,jump-1e-6-1-host --jump-share=1e-6 --jump-spacings=1 --fallback=host,geometry,7.599,11,11,,16.31
+32378770,jittered,2097152,jump-1e-6-1-host --jump-share=1e-6 --jump-spacings=1 --fallback=host,cells,4.969,11,11,,16.31
+32378770,jittered,2097152,jump-1e-6-2-cheapest --jump-share=1e-6 --jump-spacings=2 --fallback=cheapest,repair,10.62,11,11,,13.69
+32378770,jittered,2097152,jump-1e-6-2-cheapest --jump-share=1e-6 --jump-spacings=2 --fallback=cheapest,host fallback,0,11,0,0,13.69
+32378770,jittered,2097152,jump-1e-6-2-cheapest --jump-share=1e-6 --jump-spacings=2 --fallback=cheapest,rebuild,125.1,11,11,343,13.69
+32378770,jittered,2097152,jump-1e-6-2-cheapest --jump-share=1e-6 --jump-spacings=2 --fallback=cheapest,re-sort,0,11,11,,13.69
+32378770,jittered,2097152,jump-1e-6-2-cheapest --jump-share=1e-6 --jump-spacings=2 --fallback=cheapest,geometry,12.54,11,11,,13.69
+32378770,jittered,2097152,jump-1e-6-2-cheapest --jump-share=1e-6 --jump-spacings=2 --fallback=cheapest,cells,4.973,11,11,,13.69
+32378770,jittered,2097152,jump-1e-6-2-host --jump-share=1e-6 --jump-spacings=2 --fallback=host,repair,10.81,11,11,,2.272
+32378770,jittered,2097152,jump-1e-6-2-host --jump-share=1e-6 --jump-spacings=2 --fallback=host,host fallback,827.2,11,11,370,2.272
+32378770,jittered,2097152,jump-1e-6-2-host --jump-share=1e-6 --jump-spacings=2 --fallback=host,rebuild,70.27,11,6,208,2.272
+32378770,jittered,2097152,jump-1e-6-2-host --jump-share=1e-6 --jump-spacings=2 --fallback=host,re-sort,0,11,11,,2.272
+32378770,jittered,2097152,jump-1e-6-2-host --jump-share=1e-6 --jump-spacings=2 --fallback=host,geometry,9.967,11,11,,2.272
+32378770,jittered,2097152,jump-1e-6-2-host --jump-share=1e-6 --jump-spacings=2 --fallback=host,cells,4.879,11,11,,2.272
+32378770,jittered,2097152,jump-1e-6-4-cheapest --jump-share=1e-6 --jump-spacings=4 --fallback=cheapest,repair,11.4,11,11,,13.64
+32378770,jittered,2097152,jump-1e-6-4-cheapest --jump-share=1e-6 --jump-spacings=4 --fallback=cheapest,host fallback,0,11,0,0,13.64
+32378770,jittered,2097152,jump-1e-6-4-cheapest --jump-share=1e-6 --jump-spacings=4 --fallback=cheapest,rebuild,124.9,11,11,427,13.64
+32378770,jittered,2097152,jump-1e-6-4-cheapest --jump-share=1e-6 --jump-spacings=4 --fallback=cheapest,re-sort,0,11,11,,13.64
+32378770,jittered,2097152,jump-1e-6-4-cheapest --jump-share=1e-6 --jump-spacings=4 --fallback=cheapest,geometry,12.54,11,11,,13.64
+32378770,jittered,2097152,jump-1e-6-4-cheapest --jump-share=1e-6 --jump-spacings=4 --fallback=cheapest,cells,4.97,11,11,,13.64
+32378770,jittered,2097152,jump-1e-6-4-host --jump-share=1e-6 --jump-spacings=4 --fallback=host,repair,11.67,11,11,,1.84
+32378770,jittered,2097152,jump-1e-6-4-host --jump-share=1e-6 --jump-spacings=4 --fallback=host,host fallback,997,11,11,407,1.84
+32378770,jittered,2097152,jump-1e-6-4-host --jump-share=1e-6 --jump-spacings=4 --fallback=host,rebuild,114.4,11,10,385,1.84
+32378770,jittered,2097152,jump-1e-6-4-host --jump-share=1e-6 --jump-spacings=4 --fallback=host,re-sort,0,11,11,,1.84
+32378770,jittered,2097152,jump-1e-6-4-host --jump-share=1e-6 --jump-spacings=4 --fallback=host,geometry,12.04,11,11,,1.84
+32378770,jittered,2097152,jump-1e-6-4-host --jump-share=1e-6 --jump-spacings=4 --fallback=host,cells,4.948,11,11,,1.84
+32378770,jittered,2097152,jump-1e-5-host --jump-share=1e-5 --jump-spacings=4 --fallback=host,repair,16.8,11,11,,1.667
+32378770,jittered,2097152,jump-1e-5-host --jump-share=1e-5 --jump-spacings=4 --fallback=host,host fallback,1075,11,11,4231,1.667
+32378770,jittered,2097152,jump-1e-5-host --jump-share=1e-5 --jump-spacings=4 --fallback=host,rebuild,148.5,11,11,4231,1.667
+32378770,jittered,2097152,jump-1e-5-host --jump-share=1e-5 --jump-spacings=4 --fallback=host,re-sort,0,11,11,,1.667
+32378770,jittered,2097152,jump-1e-5-host --jump-share=1e-5 --jump-spacings=4 --fallback=host,geometry,12.57,11,11,,1.667
+32378770,jittered,2097152,jump-1e-5-host --jump-share=1e-5 --jump-spacings=4 --fallback=host,cells,5.11,11,11,,1.667
+32378770,jittered,2097152,jump-1e-4-host --jump-share=1e-4 --jump-spacings=4 --fallback=host,repair,22.03,11,11,,1.445
+32378770,jittered,2097152,jump-1e-4-host --jump-share=1e-4 --jump-spacings=4 --fallback=host,host fallback,1286,11,11,41933,1.445
+32378770,jittered,2097152,jump-1e-4-host --jump-share=1e-4 --jump-spacings=4 --fallback=host,rebuild,125.2,11,11,41933,1.445
+32378770,jittered,2097152,jump-1e-4-host --jump-share=1e-4 --jump-spacings=4 --fallback=host,re-sort,0,11,11,,1.445
+32378770,jittered,2097152,jump-1e-4-host --jump-share=1e-4 --jump-spacings=4 --fallback=host,geometry,12.57,11,11,,1.445
+32378770,jittered,2097152,jump-1e-4-host --jump-share=1e-4 --jump-spacings=4 --fallback=host,cells,4.979,11,11,,1.445
+32378772,surface,2097152,flow-0.3 --no-start,repair,25.73,5,5,,0.1192
+32378772,surface,2097152,flow-0.3 --no-start,host fallback,0,5,0,0,0.1192
+32378772,surface,2097152,flow-0.3 --no-start,rebuild,1.755e+04,5,1,14,0.1192
+32378772,surface,2097152,flow-0.3 --no-start,re-sort,0,5,5,,0.1192
+32378772,surface,2097152,flow-0.3 --no-start,geometry,12.36,5,5,,0.1192
+32378772,surface,2097152,flow-0.3 --no-start,cells,5.774,5,5,,0.1192
+32378773,surface,2097152,flow-1 --no-start,repair,82.44,5,5,,0.02443
+32378773,surface,2097152,flow-1 --no-start,host fallback,176.3,5,1,10,0.02443
+32378773,surface,2097152,flow-1 --no-start,rebuild,8.556e+04,5,5,120,0.02443
+32378773,surface,2097152,flow-1 --no-start,re-sort,0,5,5,,0.02443
+32378773,surface,2097152,flow-1 --no-start,geometry,12.37,5,5,,0.02443
+32378773,surface,2097152,flow-1 --no-start,cells,5.918,5,5,,0.02443
+32378981,cosmicweb,2097152,flow-1-verify --no-start --verify,repair,28.83,11,11,,38.44
+32378981,cosmicweb,2097152,flow-1-verify --no-start --verify,host fallback,1.498,11,2,12,38.44
+32378981,cosmicweb,2097152,flow-1-verify --no-start --verify,rebuild,0,11,0,0,38.44
+32378981,cosmicweb,2097152,flow-1-verify --no-start --verify,re-sort,0,11,11,,38.44
+32378981,cosmicweb,2097152,flow-1-verify --no-start --verify,geometry,18.93,11,11,,38.44
+32378981,cosmicweb,2097152,flow-1-verify --no-start --verify,cells,5.294,11,11,,38.44
+32378981,clustered,2097152,flow-0.5-verify --no-start --verify,repair,14.85,11,11,,65.35
+32378981,clustered,2097152,flow-0.5-verify --no-start --verify,host fallback,0.5101,11,1,6,65.35
+32378981,clustered,2097152,flow-0.5-verify --no-start --verify,rebuild,0,11,0,0,65.35
+32378981,clustered,2097152,flow-0.5-verify --no-start --verify,re-sort,0,11,11,,65.35
+32378981,clustered,2097152,flow-0.5-verify --no-start --verify,geometry,11.65,11,11,,65.35
+32378981,clustered,2097152,flow-0.5-verify --no-start --verify,cells,5.077,11,11,,65.35
+32378981,jittered,2097152,jump-1e-6-1-verify --jump-share=1e-6 --jump-spacings=1 --no-start --verify,repair,9.668,11,11,,18.7
+32378981,jittered,2097152,jump-1e-6-1-verify --jump-share=1e-6 --jump-spacings=1 --no-start --verify,host fallback,1.717,11,3,17,18.7
+32378981,jittered,2097152,jump-1e-6-1-verify --jump-share=1e-6 --jump-spacings=1 --no-start --verify,rebuild,85.42,11,7,120,18.7
+32378981,jittered,2097152,jump-1e-6-1-verify --jump-share=1e-6 --jump-spacings=1 --no-start --verify,re-sort,0,11,11,,18.7
+32378981,jittered,2097152,jump-1e-6-1-verify --jump-share=1e-6 --jump-spacings=1 --no-start --verify,geometry,10.47,11,11,,18.7
+32378981,jittered,2097152,jump-1e-6-1-verify --jump-share=1e-6 --jump-spacings=1 --no-start --verify,cells,4.885,11,11,,18.7
+32378981,jittered,2097152,jump-1e-6-2-host-verify --jump-share=1e-6 --jump-spacings=2 --fallback=host --no-start --verify,repair,11.8,11,11,,2.744
+32378981,jittered,2097152,jump-1e-6-2-host-verify --jump-share=1e-6 --jump-spacings=2 --fallback=host --no-start --verify,host fallback,691.6,11,11,323,2.744
+32378981,jittered,2097152,jump-1e-6-2-host-verify --jump-share=1e-6 --jump-spacings=2 --fallback=host --no-start --verify,rebuild,46.82,11,4,129,2.744
+32378981,jittered,2097152,jump-1e-6-2-host-verify --jump-share=1e-6 --jump-spacings=2 --fallback=host --no-start --verify,re-sort,0,11,11,,2.744
+32378981,jittered,2097152,jump-1e-6-2-host-verify --jump-share=1e-6 --jump-spacings=2 --fallback=host --no-start --verify,geometry,8.992,11,11,,2.744
+32378981,jittered,2097152,jump-1e-6-2-host-verify --jump-share=1e-6 --jump-spacings=2 --fallback=host --no-start --verify,cells,5.09,11,11,,2.744
