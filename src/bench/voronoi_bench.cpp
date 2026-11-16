@@ -681,6 +681,7 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
     mesh.set_layout(layout);
     if (fallback == "host") mesh.set_fallback(voronoi::Fallback::host);
     if (fallback == "rebuild") mesh.set_fallback(voronoi::Fallback::rebuild);
+    if (fallback == "local") mesh.set_fallback(voronoi::Fallback::local);
     std::cout << "motion: jump_share=" << jump_share << " jump_spacings=" << jump_spacings << " fallback=" << fallback
               << "\n";
     // label[i]: the particle cell i was first; the points follow every re-sort.
@@ -753,12 +754,13 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         const double step_ms = t.repair + t.geometry;
         std::cout << "gpuflips: step=" << s << " gpu_ms=" << t.repair << " rounds=" << r.rounds << " flips=" << r.flips
                   << " stuck=" << r.stuck << " host_ms=" << t.fallback << " host_flips=" << r.host_flips
-                  << " host_rebuilt=" << r.host_rebuilds << " rebuilt=" << r.rebuilt << " overlapped=" << r.overlapped
+                  << " host_rebuilt=" << r.host_rebuilds << " local_ms=" << t.local << " local_cells=" << r.local_cells
+                  << " local_tets=" << r.local_tets << " local_done=" << r.local_done << " rebuilt=" << r.rebuilt << " overlapped=" << r.overlapped
                   << " miscounted=" << r.miscounted << " rebuild_ms=" << t.build
                   << " tets=" << mesh.repair_state().count << " faces=" << r.faces << " centres_faces_ms=" << t.geometry
                   << " cells_ms=" << t.cells << " resorted=" << r.resorted << " resort_ms=" << t.resort
                   << " step_ms=" << step_ms << " step_Mcells_s=" << n / step_ms / 1e3
-                  << " all_ms=" << t.repair + t.fallback + t.build + t.resort + t.geometry + t.cells
+                  << " all_ms=" << t.repair + t.fallback + t.local + t.build + t.resort + t.geometry + t.cells
                   << " advect_ms=" << advect_ms << " copy_ms=" << copy_ms << "\n";
         if (order_every > 0 && s % order_every == 0) report_order(mesh, s);
 #if defined(VORONOI_MEASURE)
@@ -922,7 +924,7 @@ int main(int argc, char** argv) {
                  "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
                  "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids]\n"
                  "                          [--closure] [--dump-cells=path]\n"
-                 "                          [--jump-share=f --jump-spacings=d] [--fallback=cheapest|host|rebuild]\n"
+                 "                          [--jump-share=f --jump-spacings=d] [--fallback=cheapest|local|host|rebuild]\n"
                  "                          [--no-start]\n"
                  "       both: [--nvtx | --nvtx=phases] (CUDA: NVTX ranges per phase, and per kernel label)\n"
                  "       both: [--box=Lx,Ly,Lz]\n";
