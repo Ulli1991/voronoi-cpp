@@ -86,8 +86,7 @@ KOKKOS_INLINE_FUNCTION void sort_list(const Ints& face, const Others& other, con
 // The sums of cells(), viewed through this: the lists of the `marked` cells
 // (all if `all`) are sorted and in `face`; an unmarked cell's list is its
 // old list (old_start, old_face) under new numbers (renumber), still sorted.
-template <int D, class Ar, class X, class Faces, class Ints, class Const, class Marks, class Volume, class Centroids,
-          class Map>
+template <int D, class Ar, class X, class Faces, class Ints, class Const, class Mark, class Vol, class Centres, class Map>
 struct CellLists {
     using Arith = Ar;
     X x;
@@ -97,9 +96,9 @@ struct CellLists {
     Const old_start, old_face;
     Map renumber;  // old face -> new face (-1: none), a View or tet_mesh::Renumber
     Const owner, neighbour;
-    Marks marked;
-    Volume volume;
-    Centroids cell_centroid;
+    Mark marked;
+    Vol volume;
+    Centres cell_centroid;
     int n;
     bool all;
 
