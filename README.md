@@ -10,6 +10,76 @@ The library will be renamed **kikkou** (亀甲, kikkō, the tortoise-shell patte
 
 BSD 3-Clause, see [LICENSE](LICENSE).
 
+## Results at a glance
+
+Measured on one NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless stated; CPU rows on one 72-core node (2 × Xeon 8360Y). Every code runs on the same points with the same timing scope. Measurements of 12–16 November 2026; some rows predate the latest speed-ups, as the captions say.
+
+1. **Exact on every input.**
+   - Topology is decided by exact predicates on positions quantised to integer coordinates on a 2³⁰ grid.
+   - Every cell is built, on all eight inputs, including clustered, halo, cosmic web and points on surfaces. Median volume errors are 10⁻¹⁵ (at most about 10⁻¹³) against an independent exact reference.
+   - The float GPU codes lose up to 20 % of cells on cosmic web and nearly all on surfaces.
+2. **Fast full Voronoi cells.**
+   - 42.6 M cells/s on jittered points at 128³ (faces, areas, centroids, neighbours), 4–55× faster than the other public libraries on the same GPU.
+   - Volumes and centroids only: 33 M cells/s, 1.8–3.2× faster than the fastest float GPU codes.
+   - On a CPU node it is ahead of multithreaded voro++ on every input.
+3. **A persistent moving mesh.** When points move, exact GPU flips repair the mesh instead of rebuilding it: 150–280 M cells/s per step at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding. Each step is checked against a fresh exact build.
+4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
+
+**Building the mesh and one moving step.** One 2D example of 96 points throughout. Build (rows 1–2): quantise positions, Morton cell list, clip each cell against its neighbours until certified, face rings, exact Delaunay start. Step (rows 3–4): screen the tetrahedra the motion may break, repair them with exact flips, recompute geometry from the dual, per-cell sums, fallbacks, optional re-sort. 3D works the same way with polyhedra and tetrahedra.
+
+![Building the mesh and one moving step](docs/figures/results/walkthrough.png)
+
+**Test inputs.** Five synthetic inputs and three application inputs (cosmic web from Zel'dovich displacements, a thermal fcc solid, points on noisy shells and tori), with the measured density contrast. Bottom: nearest-neighbour distance distributions; the wider the distribution, the harder the input for every library.
+
+![Test inputs](docs/figures/results/inputs.png)
+
+**Against the public libraries.**
+- Top: full cells (faces, areas, neighbours) on one A100. Codes that return only tetrahedra or neighbours get our face step, timed in.
+- Bottom: (a) volumes and centroids only, (b) one 72-core node, (c) the moving step.
+- Only our own measurements are drawn.
+- The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³).
+
+![Full cells against the public libraries](docs/figures/results/library_headline.png)
+
+![Volumes only, 72 cores and the moving step](docs/figures/results/library_more.png)
+
+**Where the time goes.**
+- Top: the moving step as a flowchart, and its cost per cell by stage for each input and displacement.
+- Bottom: each library's time split into neighbour search and cell construction. Our neighbour search takes under 1 ns per cell; the k-nearest-neighbour GPU codes spend 20–55 % of their time finding neighbours.
+
+![Flowchart of update() and its cost by stage](docs/figures/results/where_time.png)
+
+![Time per stage for every library](docs/figures/results/library_stages.png)
+
+**Throughput against problem size, and against displacement.**
+- Rebuild, exact start, moving step and memory from 32³ to 256³.
+- The moving step against how far points move per step (grey band: the exact start).
+- 500 steps with an optional Hilbert re-sort every 50 steps, which restores memory order (1.3–1.5× over the run).
+- Panel (b) of the first plot predates the exact-start speed-up.
+
+![Throughput against problem size](docs/figures/results/throughput_vs_n.png)
+
+![Step rate against displacement](docs/figures/results/step_vs_displacement.png)
+
+![Re-sort over 500 steps](docs/figures/results/resort.png)
+
+**Speed against quality.**
+- Every library measured against an independent exact reference on sampled cells: relative volume error, fraction of cells missing, and the total sampled volume against the box.
+- Then the three application inputs; open markers are wrong volumes.
+- Last, our per-cell volume errors, all at the level of double rounding.
+
+![Speed against quality](docs/figures/results/quality.png)
+
+![Application inputs: completeness against build rate](docs/figures/results/application.png)
+
+![Volume error against the exact reference](docs/figures/results/oracle_errors.png)
+
+**Memory.** (a) Device bytes per cell at the peak, by array, for the rebuild, exact start and moving step at 128³. (b) Peak bytes per cell for every GPU code, with the limits at which 256³, 384³ and 512³ fit one A100 40 GB.
+
+![Memory per cell](docs/figures/results/memory.png)
+
+The scripts and data that draw these figures are on the [`paper-figures`](https://github.com/Ulli1991/voronoi-cpp/tree/paper-figures/paper) branch.
+
 ## What it computes
 
 Every path takes positions in a periodic box, snaps them to a grid of 2³⁰ steps across the longest side and decides
