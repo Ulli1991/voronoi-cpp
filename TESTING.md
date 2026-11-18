@@ -100,8 +100,9 @@ default):
 - **Fused** (default; `Engine` gpu and cpu): the expressions as written. nvcc fuses `a * b + c` into one rounding in
   device code (`--fmad=true`, its default); the host compiler without `-march` has no FMA (0 `vfmadd` in the
   binary). So CUDA and the host differ in the last bits: 20 to 23 % of volumes, by at most 8.0e-16 relative in 3D.
-  This is main's arithmetic: the gpu mode equals main fbe6a0c in every bit (job 32422876: per cell after a build and
-  3 steps on five inputs at 128³, `voronoi_bench --dump-cells`; a 2D mesh of 2²⁰ cells over 5 updates).
+  This is main's arithmetic: the gpu mode equals main 5aac4bf in every bit (job 32431927: per cell after a build and
+  3 steps on six inputs at 128³, surface included, `voronoi_bench --dump-cells`; a 2D mesh of 2²⁰ cells over 5
+  updates).
 - **Rounded** (`same_bits_as_host`; `Engine` hybrid): every multiply and add rounded on its own (`__dmul_rn`,
   `__dadd_rn`, `__dsub_rn` on CUDA and HIP, plain on the host), in the face geometry, the cell sums, the volume check,
   the 2D centres and faces, and the clipping's per-thread kernel (the stored circumcentres are rounded in both). A

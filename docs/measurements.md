@@ -936,7 +936,9 @@ The one gpu case above 1 % (cosmicweb 128³ at 0.1) was 0.998 in six more rounds
 
 The clipping's per-thread kernel alone (`backends_probe`, all cells on the device): Rounded costs +0.1 to +1.1 % (832.7 / 840.2 ms uniform, 1471 / 1483 ms cosmicweb at 128³); a warp build whose tail runs in Rounded: −0.2 to +1.2 %.
 
-Build: `voronoi_bench` at -j1 in 214 s against main's 204 s (+4.9 %), binary 15,327,536 against 14,417,232 bytes (+6.3 %), both variants of the geometry and per-thread kernels instantiated. A100 ctest 23 of 23 in the CUDA and the CUDA + OpenMP build; CI host steps (gcc 15, sanitizers off and on) 23 of 23; clang-tidy 18: 0 warnings.
+Again after merging main 5aac4bf (#60 B2: the warp kernel's overflow cells to the filtered warp kernels; job 32431927, same three builds, surface added): gpu mode equals main in every bit on all six inputs at 128³ (surface included) and in 2D; rebuild 0.999 to 1.004 and steps 0.995 to 1.010 of main (eight inputs and sizes, three rounds); hybrid equals cpu in every bit (`modes_test`, `backends_probe` on four inputs); same_bits steps +0.7 to +5.1 %, rebuild within 0.3 %; the rounded per-thread kernel +0.2 to +0.9 % and equal to the host in every cell. The exact start's totals and its `build_ms` swung by up to ±15 % between rounds in all three builds in this job (jittered 128³ `build_ms` 0.937, jittered 256³ 1.059, with the same bits), so the start's speed rests on job 32429908. B2's `clipping_test` (volumes only, rings and faces give the same cells) passes in both builds.
+
+Build: `voronoi_bench` at -j1 in 214 s against main's 204 s (+4.9 %; 216 against 206 s in job 32431927), binary 15,327,536 against 14,417,232 bytes (+6.3 %), both variants of the geometry and per-thread kernels instantiated. A100 ctest 23 of 23 in the CUDA and the CUDA + OpenMP build; CI host steps (gcc 15, sanitizers off and on) 23 of 23; clang-tidy 18: 0 warnings.
 
 ## Removed, and where to find it
 
