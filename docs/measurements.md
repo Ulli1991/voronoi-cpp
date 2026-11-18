@@ -227,6 +227,55 @@ comment and format checks pass; clang-tidy 18 clean on `clipping_test.cpp`, `vor
 `library_bench.cpp`. A100 fuzz, profile huge, seeds 4e12 + 101 to 108: one exact, five refused for causes the inputs
 have, 105 and 107 out of time at 280 s as on main (#49).
 
+### Surface: the warp kernel's overflows to the filtered kernels (2026-11-16)
+
+Branch `fix-60-b2` (proof job on 109b329; the kernel is unchanged since) against main fbe6a0c (the 128-slot kernel above), one A100 SXM4 40 GB at its default
+clocks (boost up to 1410 MHz), main and branch in the same gpu1 job 32416930 (`build-jobs/final_B2.sh`; jittered 256³
+start again in job 32422214). Cells the first, unfiltered warp kernel leaves past its 64 vertex or plane slots now go
+to the filtered warp kernels (64 slots, then 128) instead of the thread kernel. A filtered cell's overflow is now
+`deferred` in every output: the volumes-only output used to keep it as an overflow, so its cells went to the thread
+kernel where a faces build used the 128-slot kernel. M cells/s:
+
+| surface | 64³ | 128³ | 256³ |
+|---|---|---|---|
+| warp rebuild, main | 0.52 | 0.105 | 0.045 |
+| warp rebuild, branch | 1.01 | 0.287 | 0.100 |
+| exact start (library bench), main (job 32406803) / branch | | 0.098 / 0.246 | |
+
+Cells per path at 64³ / 128³ / 256³ (instrumented build of the same routing, job 32378783): the unfiltered warp kernel
+24 / 65 / 52 %, the filtered 64-slot kernel 74 / 32 / 43 %, the 128-slot kernel 2.1 / 3.4 / 4.1 %, the thread kernel 20
+/ 988 / 14655 cells (0 / 0.05 / 0.09 %), and 0 / 5 / 182 cells exactly. Check: every cell certified at all three sizes
+(128³ and 256³ fail only `faces=2*owned`, as before); oracle check, 1000 cells at 128³: every cell present, sum − 1 =
+−8.7e-17 (warp rebuild) and −2.4e-17 (exact start), largest relative error 3.9e-14 and 1.4e-13.
+
+Bits against main, 128³ and 256³:
+- jittered, lattice, wave, fcc solid and blue noise: every checksum identical (blue noise: the library bench's volumes).
+- uniform, clustered, halo and cosmic web: `clip_checksum`, `clip_topology` and `rings_checksum` change. Identical:
+  `tets_checksum`, `rings_topology`, `assembly_checksum`, `start_arrays_checksum`, the build's `cells_checksum` and
+  after 3 steps `geometry_checksum`, `faces_checksum` and `lists_checksum`, and the exact start's volumes. These are the
+  cells that overflow the unfiltered warp kernel, now clipped in another order. Per-cell dumps of the rebuild at 128³
+  (job 32414966): 32 uniform, 62 clustered, 224 halo and 898 cosmic-web cells differ (114,544 on the surface), all with
+  the same status, face count, owned count and set of neighbours; volumes within 4.8e-15, 1.9e-14, 1.8e-14 and 5.5e-15
+  relative (surface 2.0e-13). `clip_topology` changes although no face does: the faces output stores a cell's faces in
+  plane order, which is the clipping order. The rings are canonical (increasing neighbour id), so `rings_topology` stays.
+
+Routing is now the same in every output: `clipping_test` compares a volumes-only, a rings and a faces build at 32³ on
+nine inputs, to the bit on the A100. Main fails it: the rings build differs from the faces build in 72 clustered and 17
+halo cells (the thread kernel sums a rings cell's faces in neighbour-id order), and on the surface the volumes-only
+build in 39 cells and the rings build in 142. On the host, where the thread kernel builds every cell and sums
+a rings cell's faces in id order, only the volumes-only build is compared (to the bit).
+
+Rates, main → branch, rebuild at 128³ / 256³: cosmic web +5.5 / +6.1 %, halo +3.9 / +2.2 %, clustered +2.8 / −0.2 %,
+uniform +0.4 / −0.3 %, the rest within 0.1 %. Exact start: cosmic web +4.0 / +4.1 %, halo +3.3 / +1.2 %, clustered
++1.7 / +0.8 %, the rest within −2.3 to +1.3 % except uniform 256³ +7.3 % (one round); jittered 256³ −11.5 % in one
+round, −1.0 % in three (job 32422214), with the same bits. Library bench: cosmic web 256³ warp +6.0 %, exact +11 %
+(repeat noise about ±5 %); blue noise and uniform within 0.6 % (warp) and +0.4 to +5.3 % (exact).
+
+Tests on the branch: A100 ctest 22 of 22; CI's host steps 22 of 22 with sanitizers off and on (job 32423951; `clipping_test` on the A100 there too);
+comment and format checks pass; clang-tidy 18 clean on `clipping_test.cpp`, `voronoi_bench.cpp` and
+`library_bench.cpp`. A100 fuzz, profile huge, seeds 4e12 + 101 to 108: as on main (one exact, five refused for causes
+the inputs have, 105 and 107 out of time, #49).
+
 The other libraries (`bench/libraries/results/summary.md`, section "Application inputs"; A100 chains 32367907 to
 32367911 and 32370411, CPU jobs 32367538 to 32367544): the kNN codes lose cells wherever a cell has more neighbours
 than K. On cosmic web VoroGPU K 190 misses 2.4 % of the cells (sum of volumes − 1 = −0.038), K 90 and Liu et al. 19 %,

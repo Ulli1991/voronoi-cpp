@@ -886,6 +886,9 @@ struct Kernel {
 
         volume = warp_sum(volume);
         moment = {warp_sum(moment.x), warp_sum(moment.y), warp_sum(moment.z)};
+        // A filtered cell's overflows stay heavy, for every output: the big kernel, then the thread kernel, filtered.
+        if constexpr (filtered)
+            if (status == plane_overflow || status == vertex_overflow) status = deferred;
         if constexpr (!with_faces) {
             if (status == ok && !(volume > 0)) status = degenerate;
             if (l == 0) {
@@ -904,9 +907,6 @@ struct Kernel {
         int owned = 0;
         int offset = exclusive_scan(owned_here, owned);
         if (status == ok && !(volume > 0)) status = degenerate;
-        // Its overflows stay heavy: the thread kernel filters them from the start too.
-        if constexpr (filtered)
-            if (status == plane_overflow || status == vertex_overflow) status = deferred;
 
         // The owned faces go to one block per cell that lane 0 claims: with rings, each face as neighbour, ring length
         // and ring (Cells::rings) in increasing neighbour id, otherwise neighbour, area and centroid in plane order.
@@ -1021,18 +1021,19 @@ struct Kernel {
 
 namespace detail {
 
-// The slots of the cells for a filtered warp kernel (#60): deferred ones, with `uncertified` too after a walk of the
-// base level alone (levels false). Used by: construct_warp.
+// The slots of the cells for a filtered warp kernel (#60): deferred ones, `uncertified` too after a walk of the base
+// level alone (levels false), and the unfiltered warp kernel's overflows (overflows true). Used by: construct_warp.
 template <class ExecSpace>
 Kokkos::View<int*, typename ExecSpace::memory_space> heavy_slots(const ExecSpace& exec,
                                                                  const Grid<typename ExecSpace::memory_space>& grid,
                                                                  const Cells<typename ExecSpace::memory_space>& out,
-                                                                 bool levels) {
+                                                                 bool levels, bool overflows) {
     const auto status = out.status;
     const auto order = grid.order;
     auto heavy = KOKKOS_LAMBDA(int t) {
         const int s = status(order(t));
-        return s == deferred || (!levels && s == uncertified);
+        return s == deferred || (!levels && s == uncertified) ||
+               (overflows && (s == vertex_overflow || s == plane_overflow));
     };
     int count = 0;
     Kokkos::parallel_reduce(
@@ -1111,9 +1112,9 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 Kokkos::parallel_for(
                     label, policy,
                     Kernel<Memory, false, o>{grid, out, half_width, stencil, next_cell, unit, unit2, budget, {}});
-            // Cells past the budget, and those a walk of the base level alone left (needles into empty space, #60):
-            // the filtered kernel, over a list of their slots. The warp's overflows keep the thread kernel (same bits).
-            const auto list = detail::heavy_slots(exec, grid, out, off_base > 0);
+            // Cells past the budget or 64 vertices or planes, and those a walk of the base level alone left (needles
+            // into empty space, #60): the filtered kernel, over a list of their slots.
+            const auto list = detail::heavy_slots(exec, grid, out, off_base > 0, true);
             if (list.extent(0) == 0) return;
             Kokkos::deep_copy(exec, next_cell, 0);
             if (cube && o != warp::Output::rings)
@@ -1125,7 +1126,7 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                                      Kernel<Memory, true, o, false, true>{grid, out, half_width, stencil, next_cell,
                                                                           unit, unit2, budget, list});
             // Those past 64 vertices or planes once more, with big_capacity slots; past those, the thread kernel.
-            const auto big = detail::heavy_slots(exec, grid, out, true);
+            const auto big = detail::heavy_slots(exec, grid, out, true, false);
             if (big.extent(0) == 0) return;
             Kokkos::deep_copy(exec, next_cell, 0);
             if (cube && o != warp::Output::rings)
