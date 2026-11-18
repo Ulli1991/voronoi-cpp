@@ -115,7 +115,7 @@ long)  # args: <n> <spacings> [flags...]
 bits)
     for kind in jittered uniform clustered halo lattice wave cosmicweb; do
         for d in 0.03 0.1 0.3; do
-            for name in "${names[@]}"; do run "$name" step 2097152 "$kind" "$d" 5 --checksum --no-start; done
+            for name in "${names[@]}"; do run "$name" step 2097152 "$kind" "$d" 5 --checksum --no-start "${args[@]}"; done
         done
     done
     ;;
