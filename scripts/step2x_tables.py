@@ -52,7 +52,7 @@ def long_runs(paths):
     """500-step runs: rate over the run (re-sorts paid), steps 2-11, the last 10, re-sorts and their cost."""
     runs = defaultdict(list)
     for build, args, kind, text in lines(paths):
-        if kind == "gpuflips":
+        if kind == "gpuflips" and "advect_ms" in text:  # a line cut off by the end of a job is dropped
             runs[(build, args)].append(fields(text))
     print("| build | flags | n | spacings | M cells/s over the run | steps 2-11 | last 10 | re-sorts | re-sort ms (mean) |")
     print("|---|---|---|---|---|---|---|---|---|")
@@ -78,16 +78,19 @@ def bits(paths):
         a = args.split()
         f = fields(text)
         key = (a[2], a[3], f["step"])
-        sums[key][build] = " ".join(text.split()[1:])
-    same = differ = 0
+        sums[key][build] = (text.split()[1], f["faces_checksum"], f["lists_checksum"], f["cells_checksum"])
+    # geometry, faces and lists do not depend on the face numbering; cells_checksum hashes the face numbers too
+    same = differ = numbering = 0
     for key, by in sorted(sums.items()):
-        values = set(by.values())
+        values = {v[:3] for v in by.values()}
         if len(values) == 1 and len(by) > 1:
             same += 1
         else:
             differ += 1
             print("DIFFER", key, by)
-    print(f"checksum lines equal across builds: {same}, differing: {differ}")
+        numbering += len({v[3] for v in by.values()}) > 1
+    print(f"geometry, faces, lists equal across builds: {same} lines, differing: {differ}; "
+          f"cells_checksum (face numbers) differing: {numbering}")
 
 
 def kernels(paths):

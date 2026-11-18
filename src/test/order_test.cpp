@@ -77,6 +77,14 @@ std::map<std::pair<int, int>, Point> areas_by_pair(const Mesh& mesh) {
     return out;
 }
 
+// A layout that never re-sorts (the default re-sorts after a flip per cell). Used by: the meshes compared by id.
+voronoi::Layout never_sorted() {
+    voronoi::Layout layout;
+    layout.flips = layout.far = 0;
+    layout.every = 0;
+    return layout;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -121,6 +129,7 @@ int main(int argc, char** argv) {
         std::vector<int> label(n);
         std::iota(label.begin(), label.end(), 0);
         Mesh plain(Exec{}, box), sorted(Exec{}, box);
+        plain.set_layout(never_sorted());
         voronoi::Layout layout;
         layout.curve = curve;
         layout.every = 2;
@@ -189,10 +198,7 @@ int main(int argc, char** argv) {
         std::vector<int> label(n);
         std::iota(label.begin(), label.end(), 0);
         Mesh plain(Exec{}, box), sorted(Exec{}, box);
-        voronoi::Layout never;
-        never.flips = never.every = 0;
-        never.far = 0;
-        plain.set_layout(never);
+        plain.set_layout(never_sorted());
         long long resorts = 0, wrong_sets = 0, wrong_positions = 0, steps = 0;
         double worst_volume = 0;
         for (int s = 0; s <= 120 && resorts < 2; ++s, ++steps) {
@@ -236,7 +242,8 @@ int main(int argc, char** argv) {
     {  // faces by owner and the owner bit, without a re-sort: the same ids, the same bits
         Points points = start_points;
         Mesh plain(Exec{}, box), owned(Exec{}, box);
-        voronoi::Layout layout;
+        plain.set_layout(never_sorted());
+        voronoi::Layout layout = never_sorted();
         layout.owner_faces = layout.owner_bit = true;
         owned.set_layout(layout);
         long long unsorted = 0, wrong_start = 0, wrong_bits = 0, differing = 0, wrong_entries = 0;

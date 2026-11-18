@@ -37,6 +37,16 @@ nvidia-smi --query-gpu=name,clocks.max.sm,clocks.current.sm,clocks.applications.
 nvidia-smi --query-gpu=timestamp,clocks.sm,utilization.gpu --format=csv,noheader -l 5 >"$bin/clock.csv" &
 smi=$!
 trap 'kill $smi 2>/dev/null' EXIT
+if [[ "$mode" == ctest ]]; then  # every target of the first tree, ctest (fuzz smoke included), then the fuzz batch
+    dir="$bin/build-${names[0]}"
+    cmake -S "${src[1]}" -B "$dir" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/u/uli/kokkos-cuda \
+        -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper -DCMAKE_CXX_EXTENSIONS=OFF >"$dir.configure.log" 2>&1
+    cmake --build "$dir" --parallel 18 2>&1 | grep -E " error|Error " | head -20
+    echo "build ${names[0]} ($(git -C "${src[1]}" rev-parse --short HEAD))"
+    ctest --test-dir "$dir" --output-on-failure 2>&1 | tail -60
+    [[ ${#args[@]} -gt 0 ]] && "$dir/mesh_fuzz_test" "${args[@]}" 2>&1 | tail -30
+    exit 0
+fi
 k=0
 builds=()
 for name in "${names[@]}"; do
