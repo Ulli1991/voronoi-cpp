@@ -29,12 +29,14 @@ def rates(paths):
             continue
         a = args.split()
         f = fields(text)
-        if int(f["step"]) < 2:
+        if int(f["step"]) < 2 or a[4] != "10" or "--checksum" in a:  # ten-step rate runs only
             continue
         runs[(a[1], a[2], a[3], build)].append(float(f["all_ms"]))
-    builds = sorted({k[3] for k in runs}, key=lambda b: (b != "main", b))
+    names = {k[3] for k in runs}
+    main = "ref" if "ref" in names else "main"  # the baseline's name
+    builds = sorted(names, key=lambda b: (b != main, b))
     print("| n | input | spacings | " + " | ".join(f"{b} M cells/s" for b in builds) + " | " +
-          " | ".join(f"{b} / main" for b in builds if b != "main") + " | " + " | ".join(f"{b} ns/cell" for b in builds) + " |")
+          " | ".join(f"{b} / {main}" for b in builds if b != main) + " | " + " | ".join(f"{b} ns/cell" for b in builds) + " |")
     print("|---" * (3 + 3 * len(builds) - 1) + "|")
     for key in sorted({k[:3] for k in runs}, key=lambda k: (int(k[0]), k[1], float(k[2]))):
         n = int(key[0])
@@ -43,7 +45,7 @@ def rates(paths):
         size = round(n ** (1 / 3))
         row = [f"{size}³", key[1], key[2]]
         row += [f"{rate[b]:.1f}" if b in rate else "" for b in builds]
-        row += [f"{rate[b] / rate['main']:.3f}" if b in rate and "main" in rate else "" for b in builds if b != "main"]
+        row += [f"{rate[b] / rate[main]:.3f}" if b in rate and main in rate else "" for b in builds if b != main]
         row += [f"{ms[b] * 1e6 / n:.2f}" if b in ms else "" for b in builds]
         print("| " + " | ".join(row) + " |")
 
@@ -52,7 +54,8 @@ def long_runs(paths):
     """500-step runs: rate over the run (re-sorts paid), steps 2-11, the last 10, re-sorts and their cost."""
     runs = defaultdict(list)
     for build, args, kind, text in lines(paths):
-        if kind == "gpuflips" and "advect_ms" in text:  # a line cut off by the end of a job is dropped
+        # 500-step runs; a line cut off by the end of a job is dropped
+        if kind == "gpuflips" and "advect_ms" in text and args.split()[4] == "500":
             runs[(build, args)].append(fields(text))
     print("| build | flags | n | spacings | M cells/s over the run | steps 2-11 | last 10 | re-sorts | re-sort ms (mean) |")
     print("|---|---|---|---|---|---|---|---|---|")
