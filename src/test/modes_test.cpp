@@ -131,8 +131,7 @@ std::string hex(std::uint64_t h) {
 
 // Every mode this build has against the first; `what` names the case.
 template <int D>
-void compare(Check& check, const std::string& what, const Points& points, double spacings, int steps,
-             int jumpers = 0) {
+void compare(Check& check, const std::string& what, const Points& points, double spacings, int steps, int jumpers = 0) {
     std::vector<voronoi::Backend> modes{voronoi::Backend::cpu};
     if (voronoi::has_device()) modes = {voronoi::Backend::cpu, voronoi::Backend::gpu, voronoi::Backend::hybrid};
     std::vector<std::vector<Update>> runs;
@@ -143,9 +142,10 @@ void compare(Check& check, const std::string& what, const Points& points, double
     for (std::size_t m = 1; m < modes.size(); ++m) {
         runs.push_back(run<D>(modes[m], points, spacings, steps, jumpers));
         if (jumpers > 0) {
-            const auto local = std::count_if(runs.back().begin(), runs.back().end(), [](const Update& u) { return u.local; });
-            check.expect(local > 0, what + ": " + voronoi::name(modes[m]) + " repaired " + std::to_string(local) + " of " +
-                                        std::to_string(updates) + " updates locally");
+            const auto local =
+                std::count_if(runs.back().begin(), runs.back().end(), [](const Update& u) { return u.local; });
+            check.expect(local > 0, what + ": " + voronoi::name(modes[m]) + " repaired " + std::to_string(local) +
+                                        " of " + std::to_string(updates) + " updates locally");
         }
         const auto& other = runs.back();
         int topology = 0, all = 0;

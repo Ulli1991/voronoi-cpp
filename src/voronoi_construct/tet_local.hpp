@@ -174,7 +174,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         } else {
             if (same_bits)
                 sv::construct_cells<sv::RoundedCell, shell_voronoi::Rounded>(exec, grid, stencil, cells, sv::Pass::all,
-                                                                              selection);
+                                                                             selection);
             else
                 sv::construct_cells<sv::RoundedCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
             sv::exact_where_failed(exec, grid, stencil, cells, selection);  // as shell_voronoi::construct

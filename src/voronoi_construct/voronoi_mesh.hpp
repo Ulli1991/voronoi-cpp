@@ -255,8 +255,8 @@ public:
             exec_.fence();
             const double index_ms = clock.seconds() * 1e3;
             try {  // out of memory before it writes (its arrays are freed): the step rebuilds
-                local_ = tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_,
-                                           layout_.same_bits_as_host);
+                local_ =
+                    tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_, layout_.same_bits_as_host);
             } catch (const std::exception&) {
                 local_ = tet_local::Stats{};
             }
