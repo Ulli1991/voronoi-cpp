@@ -94,8 +94,11 @@ kernels)
         done
     done
     ;;
-rates)
-    for n in 2097152 16777216; do
+rates | rates128 | rates256)  # rates128 and rates256: one size only
+    sizes=(2097152 16777216)
+    [[ "$1" == rates128 ]] && sizes=(2097152)
+    [[ "$1" == rates256 ]] && sizes=(16777216)
+    for n in "${sizes[@]}"; do
         for d in 0.03 0.1 0.3; do
             for rep in 1 2; do
                 for name in "${names[@]}"; do run "$name" step "$n" jittered "$d" 10 --no-start; done
@@ -165,6 +168,6 @@ esac
 IFS=+ read -ra modes <<<"$mode"
 for one in "${modes[@]}"; do measure "$one"; done
 for one in "${modes[@]}"; do  # tables of the lines above
-    [[ "$one" =~ ^(kernels|rates|long|bits)$ ]] && python3 "$here/scripts/step2x_tables.py" "$one" "$bin/lines.txt"
+    [[ "$one" =~ ^(kernels|rates|rates128|rates256|long|bits)$ ]] && python3 "$here/scripts/step2x_tables.py" "${one%[0-9][0-9][0-9]}" "$bin/lines.txt"
 done
 nvidia-smi --query-gpu=clocks.sm,clocks.applications.graphics --format=csv,noheader

@@ -19,7 +19,15 @@ cmake -S "$src" -B "$dir" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/u/uli/
     -DCMAKE_CXX_COMPILER=/u/uli/kokkos-src/bin/nvcc_wrapper -DCMAKE_CXX_EXTENSIONS=OFF -DBUILD_TESTING=OFF \
     -DCMAKE_CXX_FLAGS=-lineinfo >"$dir/configure.log" 2>&1
 cmake --build "$dir" --target voronoi_bench -j8 >"$dir/build.log" 2>&1
-echo "build exit $?"
+rc=$?
+echo "build exit $rc"
+# A clean worktree root's binary goes to the measuring jobs' cache (scripts/levers_a100.sh), keyed by commit.
+cache=/raven/u/uli/voronoi-cpp-levers/build-jobs/levers/cache
+if ((rc == 0)) && [[ "$(git -C "$src" rev-parse --show-toplevel 2>/dev/null)" == "$(realpath "$src")" ]] &&
+    git -C "$src" diff --quiet HEAD -- src CMakeLists.txt; then
+    mkdir -p "$cache"
+    cp "$dir/voronoi_bench" "$cache/voronoi_bench_$(git -C "$src" rev-parse --short HEAD)" && echo cached
+fi
 grep -E "error|warning" "$dir/build.log" | grep -v "^--" | head -40
 # Resource usage of the kernels: enclosing function, lambda instance, REG, STACK (local memory per thread).
 cuobjdump --dump-resource-usage "$dir/voronoi_bench" 2>/dev/null | cu++filt | grep -E "Function .*(tet_repair|tet_mesh|tet_cells)" |

@@ -1,19 +1,18 @@
 #!/bin/bash
 # The proof of the step levers (branch step-levers) in one gpu1 job, against step-2x (ref): fresh builds of both, A100
 # ctest of the branch (modes: hybrid equals cpu), every step against a fresh exact build on seven inputs at three
-# spacings and S2's jump cases, geometry, faces and lists checksums against ref, then CI's host steps. From the branch:
-#   sbatch -o build-jobs/logs/%x-%j.out scripts/levers_proof_a100.sh <ref checkout> <base ref for the format check> <source>...
-# The sources are the changed programs for clang-tidy.
+# spacings and S2's jump cases, geometry, faces and lists checksums against ref. CI's host steps run apart on a CPU node
+# (scripts/ci_host_general.sh). From the branch:
+#   sbatch -o build-jobs/logs/%x-%j.out scripts/levers_proof_a100.sh <ref checkout>
 #SBATCH -J lev_proof
 #SBATCH -p gpu1
 #SBATCH --gres=gpu:a100:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
 #SBATCH --mem=120G
-#SBATCH --time=03:00:00
+#SBATCH --time=01:15:00
 set -uo pipefail
-ref_src=$(realpath "$1") base="$2"
-shift 2
+ref_src=$(realpath "$1")
 here=$(pwd)
 bin="$here/build-jobs/levers/proof-$SLURM_JOB_ID"
 mkdir -p "$bin"
@@ -57,5 +56,3 @@ for kind in jittered uniform clustered halo lattice wave cosmicweb; do
     done
 done
 nvidia-smi --query-gpu=clocks.sm,clocks.applications.graphics --format=csv,noheader
-echo "== ci host steps"
-cd "$here" && bash scripts/ci_host_general.sh "$base" "$@"
