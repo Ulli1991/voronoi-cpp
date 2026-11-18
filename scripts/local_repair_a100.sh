@@ -58,6 +58,11 @@ crossover)  # local against rebuild over the share of jumpers (4 spacings)
         done
     done
     ;;
+clustered)  # clustered input at SPACINGS (default 0.7) per step under the default policy, every step verified
+    STEPS=${STEPS:-12}
+    steps=$STEPS
+    run new "flow-${SPACINGS:-0.7}-cheapest" clustered "${SPACINGS:-0.7}" --verify
+    ;;
 smooth)  # the default path: checksums and rates, seven inputs, three spacings
     STEPS=${STEPS:-10}
     steps=$STEPS
