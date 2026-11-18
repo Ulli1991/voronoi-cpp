@@ -25,7 +25,7 @@ constexpr int none = 0, seeds = 1, large = 2, cells = 3, stitch = 4, check = 5;
 // What repair() did (counts of its last attempt). Used by: Mesh::update (Report::local_*), the bench.
 struct Stats {
     int why = why::none, why_first = why::none;  // of the last attempt, of the first
-    int seeds = 0;                // cells whose new neighbours were added (the seeds; all on a third attempt)
+    int seeds = 0;                 // cells whose new neighbours were added (the seeds; all on a third attempt)
     int cells = 0;                 // cells clipped exactly (the affected set)
     int removed = 0, created = 0;  // tetrahedra replaced
     int attempts = 0;
