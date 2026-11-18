@@ -78,8 +78,10 @@ kernels)
         done
     done
     ;;
-rates)
-    for n in 2097152 16777216; do
+rates | rates128)
+    sizes=(2097152 16777216)
+    [[ "$mode" == rates128 ]] && sizes=(2097152)
+    for n in "${sizes[@]}"; do
         for kind in jittered uniform clustered halo; do
             for d in 0.03 0.1 0.3; do
                 for rep in 1 2; do
