@@ -166,6 +166,8 @@ The repair keeps its own state in `tet_repair::State`: which slots are alive, wh
 3. Vote. Each plan writes a key into the locks of the tetrahedra it would rewrite and of their outer neighbours (atomic max). The key is the round in the high bits and a hash of the plan index below. A later round always outvotes an earlier one, so the locks never need resetting, and the winners do not depend on the order of the work list.
 4. Apply the plans that hold all their locks. Their new tetrahedra are dirty for the next round. Losers retry.
 
+How the rounds run (since 2026-11-18, branch `step-levers`). The plan step looks for its first valid flip and then checks that flip's cavity once, so the threads of a warp run one search and one check together (one copy of the code per candidate split them, about 4 threads of 32 active). The cavity check and the apply step work by formula: the three new tetrahedra (a, far, fₑ, fₑ₊₁) of a 2-3 flip across triangle f₀f₁f₂ take their outer neighbours from the faces of the two old ones opposite fₑ₊₂, the two of a 3-2 flip from the old tetrahedron that lacks each of their other corners; one code path serves both kinds, and every array has a fixed size, so it stays in registers. While the dirty list is short (at most 2048 tetrahedra) the rounds run back to back on one team of threads (`small_rounds`): barriers instead of launches, and one host wait for all of them.
+
 In 2D the same scheme runs with Lawson's 2-2 flip:
 
 ![Repair by flips](figures/construction_flip.png)
@@ -174,7 +176,7 @@ In 2D the same scheme runs with Lawson's 2-2 flip:
 
 **What can go wrong.** A triangle that no flip can repair, a plan that does not close its cavity, or a tetrahedron turned inside out is listed as stuck. When a round finds nothing left to flip, the stuck ones are tried again as long as that makes progress. A repair that runs out of rounds (1000) is unfinished. Both cases go to the fallbacks.
 
-**Read.** `tet_repair.hpp` (`move_screened`, `repair`, `plan`, `flip23`, `flip32`, `closes`, `priority`).
+**Read.** `tet_repair.hpp` (`move_screened`, `repair`, `Round`, `small_rounds`, `plan`, `candidate`, `closes23`, `closes32`, `apply_flip`, `priority`).
 
 ## 7. The fallbacks and refusals
 

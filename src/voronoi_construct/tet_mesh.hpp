@@ -116,10 +116,12 @@ KOKKOS_INLINE_FUNCTION int far_vertex(const M& m, int t, int u) {
     return -1;
 }
 
-// The face of tetrahedron v opposite corner k, its particles sorted. Used by: tet_repair (closes), tet_flips.
+// The face of tetrahedron v opposite corner k, its particles sorted. Used by: tet_repair (plan), tet_flips.
+// Selects, not a running index, so f stays in registers on the device.
 KOKKOS_INLINE_FUNCTION void sorted_face(const int* v, int k, int* f) {
-    for (int a = 0, b = 0; a < 4; ++a)
-        if (a != k) f[b++] = v[a];
+    f[0] = k == 0 ? v[1] : v[0];
+    f[1] = k <= 1 ? v[2] : v[1];
+    f[2] = k <= 2 ? v[3] : v[2];
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
     if (f[1] > f[2]) Kokkos::kokkos_swap(f[1], f[2]);
     if (f[0] > f[1]) Kokkos::kokkos_swap(f[0], f[1]);
@@ -135,6 +137,13 @@ KOKKOS_INLINE_FUNCTION int opposite(const M& m, int t, const int* f) {
         if (v != f[0] && v != f[1] && v != f[2]) return k;
     }
     return 3;
+}
+
+// The same for the face of particles a, b, c in any order. Used by: tet_repair (apply_flip).
+template <class M>
+KOKKOS_INLINE_FUNCTION int opposite(const M& m, int t, int a, int b, int c) {
+    const int f[3] = {a, b, c};
+    return opposite(m, t, f);
 }
 
 // Bound on walks around an edge, not a limit on faces: on a checked mesh a ring closes within n - 2 tetrahedra.
