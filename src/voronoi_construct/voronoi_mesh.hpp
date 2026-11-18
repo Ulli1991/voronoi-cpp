@@ -422,7 +422,7 @@ public:
         const auto& spare = rings_.pool[1 - rings_.in_use];
         const std::size_t table = sizeof(int) * rings_.kept_ints;
         const bool incremental = lists_of_last_update_ && rings_.renumber_valid && state_.touched_entries >= 0 &&
-                                 state_.touched_entries <= n_ / 5 &&
+                                 state_.touched_entries <= n_ / 2 &&
                                  table + tet_mesh::incremental_scratch_bytes(n_, rings_.renumbered, faces()) <=
                                      spare.extent(0) * sizeof(int);
         // The sums read the stored faces if there are, else compute each face from its ring (the same bits).
