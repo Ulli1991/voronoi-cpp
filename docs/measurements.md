@@ -1,12 +1,51 @@
 # Measurements: provenance
 
-Where each number in the [README](../README.md) comes from: jobs, commits, clocks and the setup details left out of the README. Sections follow the README headings.
+Where each number in the [README](../README.md) comes from: jobs, commits, clocks and the setup details left out of the README. The full tables of rebuild and step rates, long runs, GPU against a CPU node, and 2D and 1D are here; the comparison with other libraries is in [library_benchmark.md](library_benchmark.md#the-full-table).
 
 ## Measured performance
 
 One A100 40 GB (Raven gpu1), double precision, periodic unit box. Rates are million cells per second, cells processed per second of GPU time.
 
-| Rows in the README table | Job | Commit |
+### Rebuild, start and step rates
+
+Rates are M cells/s: million cells built or updated per second of GPU time. luna-cpp quotes its hydro in G cell updates/s; 154 M cells/s is 0.154 G. Memory is in bytes per cell and GB of 10⁹ bytes. Every change tried since 2026-11-12, with its measured effect and why it was kept or dropped, is in [tried.md](tried.md). The rebuild rows are the lean cut of 2026-11-13 (1305 MHz, 128³ and 256³), the white-noise rebuild with the hard-cell change of 2026-11-15, the clustered and halo rebuilds with the overflow routing of 2026-11-16 (#60, default clocks); the step rows, at 128³ and 256³, are the incremental face numbering and ring re-walk of 2026-11-12 (`step-bytes`, 1305 MHz); the exact start is `start-fast` of 2026-11-15 (1305 MHz, 128³ and 256³).
+
+| M cells/s | 2,097,152 cells (128³) | 16,777,216 cells (256³) |
+|---|---|---|
+| Full rebuild (warp clipping), jittered | 42.6 | 42.8 |
+| Full rebuild, white noise | 22.2 | 22.5 |
+| Full rebuild, clustered (Gaussian blobs, ~1:500) | 17.7 | 18.5 |
+| Full rebuild, halo (1:10⁴ core to edge) | 16.9 | 18.3 |
+| Full rebuild, lattice / wave | 55.1 / 40.9 | 57.7 / 41.0 |
+| Full rebuild, surface (shells and tori, 2026-11-16, [#60](https://github.com/Ulli1991/voronoi-cpp/issues/60)) | 0.29 | 0.100 |
+| Exact start (warp with rings + `tet_start::build`), jittered / blue noise | 25.3 / 23.1 | 22.2 / 20.6 |
+| Exact start, white noise / clustered / halo | 12.3 / 10.3 / 11.9 | 12.6 / 12.5 / 12.1 |
+| Exact start, lattice / wave | 8.0 / 5.0 | 8.4 / 5.1 |
+| Moving-mesh update, 0.03 spacings per step | 223 | 318 (215 with `update_cells()`) |
+| Moving-mesh update, 0.1 spacings per step | 130 | 209 (151 with `update_cells()`) |
+| Moving-mesh update, 0.3 spacings per step | 65.9 | 110 (85.6 with `update_cells()`) |
+| `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 559 / 440 / 432 | |
+| Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | 161 / 99.3 / 57.2 | |
+
+With `Layout::same_bits_as_host` (the host's bits on the GPU; `Engine` hybrid) update + `update_cells()` is 3.4 to 5.1 / 1.7 to 4.6 / 0.7 to 2.8 % slower at 0.03 / 0.1 / 0.3 spacings (128³ and 256³), the rebuild at most 1 % and the exact start at most 1.5 %, 5 % on cosmicweb at 256³ ([below](#rounding-per-mode-2026-11-16-jobs-32422876-and-32429908)). Without it the GPU keeps main's arithmetic and speed.
+
+Spacings per step is how far a smooth flow moves the points per step, in mean interparticle spacings. 0.03 is a typical hydro step and 0.3 a very large one, with more flips per step and lower throughput. The six inputs (jittered lattice, white noise, clustered, halo, lattice, wave) and the three application inputs of the library benchmark (cosmic web: Zel'dovich positions of a CDM field; fcc solid: a thermal crystal near melting; surface: points on closed shells and tori) are described [below](#inputs).
+
+The step kernels of 2026-11-12 (register limits on `faces` and `screen`, warp-aggregated counters, a thread per edge in `dirty_faces`, one host wait per flip round) made the step 5.4 / 11.0 / 12.8 % faster at 0.03 / 0.1 / 0.3 spacings at 128³ (6.3 / 9.3 / 15.0 % at 256³) with the same bits and arrays. The step at 0.03 now runs at 47 % of what its memory traffic allows on the A100 (434 M cells/s with every kernel at 80 % of peak bandwidth; [measure_2026-11-12.md](measure_2026-11-12.md)). Keeping the face numbers of faces whose tetrahedron no flip touched ([#53](https://github.com/Ulli1991/voronoi-cpp/issues/53)) and walking each changed face ring once then cut the step's memory traffic from 2717 to 2392 B/cell at 0.03 spacings (4292 to 4133 at 0.1) and made it 8.4 / 2.8 / 3.5 % faster at 0.03 / 0.1 / 0.3 spacings at 128³ (13.4 / 7.2 / 1.5 % at 256³), with the same geometry bits and a lower memory peak ([below](#fewer-bytes-per-step-incremental-face-numbers-e-and-the-ring-re-walk-k2-2026-11-12)).
+
+GPU memory, as the peak of all arrays the mesh allocates: a plain warp rebuild takes 701 B/cell (656 at 256³); a step with face lists peaks at 1979 B/cell (2010 at 0.3 spacings; 128³): about 1930 for the mesh's arrays, the rest the bench's positions. The arrays and pools are drawn in [how_it_works.md](how_it_works.md#13-where-the-data-lives-and-how-the-gpu-touches-it).
+
+A thin slab (Lz = 16 spacings, up to 16.8M cells) rebuilt at the cube's rate before the lean cut, 39.9 M cells/s for jittered input ([non-cubic box](#non-cubic-box)).
+
+The lean cut (2026-11-13) made the rebuild 10 to 15 % faster than main 6ead543 on all six inputs at 128³ and 256³, and the exact start 6 % on jittered input, with the same tetrahedra, volumes, centroids and per-cell lists. It needed canonical face rings, which cost under 1 %: a new vertex goes into the lowest free slot, built by the lane that owns it, without a stack of free slots; the starting cube is set by formula; the candidate sort and the side test have no branches. That is 7 to 8 % fewer warp instructions per cell (9611 to 8802 on jittered input, 15128 to 14020 on white noise). The kernel still waits on the latency of each cut and on instruction fetch, so a leaner cut is not enough ([lean cut](#canonical-rings-and-a-lean-cut-2026-11-13)). Fewer clips are not enough either (2026-11-15): vertex balls halve the clips on unstructured input with the same cuts and the same time, and clipping by k-nearest lists (k = 24, 32, 48, and hybrids with the walk) is 4 to 55 % slower than the walk on all six inputs at 128³ and 256³, with the same mesh. The cuts, about one per face, are the cost; a several times faster rebuild needs a cheaper cut or no clipping ([kNN-first clipping](#knn-first-clipping-hybrids-and-a-vertex-ball-filter-2026-11-15)).
+
+Clustered and halo input (2026-11-15) are slower than white noise because of more clips per cell (50.7 and 53.6 against 48.0) and the few cells the warp kernel gives up (68 and 261 of 2.1M, more than 64 planes or vertices), not because of a tail of slow cells: persistent warps take cells from a counter, and the slowest 1 % of cells hold 2 to 4 % of the warp's cycles. Those few cells used to be built twice more on one thread each, first at the thread kernel's usual capacities, which they overflow again; they now go straight to its big cells. That made the halo rebuild 5.3 % faster at 128³ (clustered and white noise 1.2 %, 0 to 0.7 % at 256³) with the same bits. A queue of hard cells, cells on the host, and larger warp cells were measured or ruled out ([tried.md](tried.md), [hard cells](#hard-cells-on-clustered-and-halo-input-and-49-2026-11-15)).
+
+The exact start of 2026-11-15 (`start-fast`) builds the same arrays as main c42c230, entry for entry, 1.07 to 1.74× faster on all seven inputs at 128³ and 256³ (jittered 18.6 → 25.3 and 12.7 → 22.2 M cells/s; blue noise 18.6 → 23.1 and 13.6 → 20.6). `tet_start::build` alone, without the clipping, is 2.1× faster at 128³ and 2.8× at 256³ on jittered input. The assembly reads the clipping's ring blocks in place with one thread per ring slot, tetrahedron or face (main ran one per face and copied every ring first), the check decides by double filters and sends only undecided tetrahedra to the exact predicates, and the round after a partial re-clip, which most inputs need at 256³, looks up only around the re-clipped cells ([#59](https://github.com/Ulli1991/voronoi-cpp/issues/59)). The clipping, unchanged (with rings, and on lattice and wave the exact re-clip of every cell), is now 60 to 90 % of the start. The start's memory peak through `Mesh::update` is main's (1955 B/cell at 256³ jittered). Kernel by kernel: [the exact start](#the-exact-start-assembly-from-the-ring-blocks-and-an-incremental-patch-round-2026-11-15).
+
+### Provenance of the rates
+
+| Rows in the table above | Job | Commit |
 |---|---|---|
 | Moving-mesh update, update plus `update_cells()`, 128³ and 256³ | 32269165, 32237516 (interleaved with main 9e9ec03; [fewer bytes per step](#fewer-bytes-per-step-incremental-face-numbers-e-and-the-ring-re-walk-k2-2026-11-12)) | `step-bytes` (the ring re-walk commit) |
 | `update_cells()` alone | 32231679 ([step kernels](#step-kernels-at-todays-bytes-2026-11-12)) | `step-kernels` |
@@ -29,7 +68,7 @@ All in the periodic unit box, generated in `src/test/support.hpp`.
 | Name | Points | Tests |
 |---|---|---|
 | jittered | cubic lattice, each point moved randomly by up to ±0.1 lattice spacing per axis | the typical hydro start; nearly regular, about 16 faces per cell |
-| uniform random | independent uniform points | unstructured cells of very different size and shape |
+| white noise (`uniform`) | independent uniform random points | unstructured cells of very different size and shape |
 | clustered | 8 Gaussian blobs (σ = 0.04) with 80 % of the points, 20 % uniform background | density contrast about 1:500 (blob centre to void) |
 | halo | 4 halos with ρ ∝ 1/(r² + c²) to r = 0.2, c = 0.002, 90 % of the points, 10 % background | density contrast about 1:10⁴ (core to edge) |
 | lattice | perfect cubic lattice | fully degenerate: 8 points on every circumsphere |
@@ -53,8 +92,8 @@ The bench flow, stretched with the box, shears across the 16-cell thickness: 4x 
 
 ### Against other libraries (2026-11-12 to 2026-11-15)
 
-The README's library table: methods, every setting, 256³ and the per-code versions, compilers and jobs in
-[library_benchmark.md](library_benchmark.md); raw records in `bench/libraries/results/` and the tables generated from
+The library table ([library_benchmark.md](library_benchmark.md#the-full-table)): methods, every setting, 256³ and the
+per-code versions, compilers and jobs in [library_benchmark.md](library_benchmark.md); raw records in `bench/libraries/results/` and the tables generated from
 them by `scripts/library_benchmark.py` (`summary.md`). voronoi-cpp rows: 77055a4 (close-gaps, below), A100 jobs
 32368078, 32368079, 32368080 (gpu1, 1305 MHz), CPU job 32367276 (with voro++ in the same job); before that ad62997
 (main b2faee8 plus the benchmark), A100 jobs 32272549, 32272550 and 32319068 on `ravg1002` (gpudev, 1095 MHz under
@@ -291,15 +330,38 @@ and voro++ (72 cores) 0.83 M cells/s; surface 128³: geogram (72 cores) 0.69, gD
 
 ### Long runs
 
+The rates above are early steps. On a smooth flow where every cell moves, the mesh loses its memory order and the step slows from 124 M cells/s at step 100 to 61 at step 500 (128³, 0.1 spacings, update and `update_cells()`, [#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)). A Hilbert re-sort every 50 updates (`Layout`) keeps it: 121 M cells/s over 500 steps against 81.6 without, re-sorts paid (each about one step's time); at 256³ 166 against 127. Hilbert, Moore and Morton are within 1 %, row-major and reverse Cuthill-McKee 11 to 13 % slower. Flows with little bulk motion do not show the decay: on Sedov the loss is at most 4.5 % over a run. Tables in [measure_resort_2026-11-10.md](measure_resort_2026-11-10.md).
+
 Job 31953232 (128³, 0.1 spacings per step): the step falls from 118 M cells/s at step 100 to 59 at step 500. Issue: https://github.com/Ulli1991/voronoi-cpp/issues/34. On Sedov the loss is at most 4.5 % over a run.
 
 ### GPU against a full CPU node, same code
+
+Older code built with the OpenMP backend on one Raven CPU node (2x Xeon Platinum 8360Y, 72 cores), against one A100, at 2,097,152 cells in double, in M cells/s:
+
+| | 72-core CPU node | A100 | A100 / CPU |
+|---|---|---|---|
+| Full rebuild, jittered / white noise / clustered | 4.1 / 2.8 / 2.0 | 39.9 / 19.9 / 15.5 | 9.7 / 7.0 / 7.9 |
+| Moving-mesh update, 0.03 / 0.3 spacings | 11.5 / 1.7 | 202 / 57 | 17.5 / 33 |
+| `update_cells()` | 43 | 343 | 7.9 |
+
+Every phase gains more than the A100's 3.9 times the node's memory bandwidth. The CPU build is the generic Kokkos path with no hand vectorisation, so a CPU-tuned code would narrow the gap. Since 2026-11-15 the host cell list sorts with all threads (a stable radix sort; one thread's `std::sort` took about 400 of 1000 ms) and the thread kernel takes cells in dynamic chunks of 16: the rebuild with the cell list on 72 cores went from 2.2 to 3.8 M cells/s on blue noise and from 1.7 to 2.6 on white noise, the same bits ([library_benchmark.md](library_benchmark.md)).
 
 Commit 57201bc built with the Kokkos OpenMP backend on one Raven CPU node (2x Xeon Platinum 8360Y, 72 cores, `OMP_PROC_BIND=spread`, job 31796079), against one A100 40 GB (jobs 31795767, 31795035). 2,097,152 cells, double.
 
 Hardware ratios A100 / node: about 3.9 in memory bandwidth (1.55 TB/s against about 0.4 TB/s) and 1.8 in FP64 peak. Every phase gains more than the bandwidth ratio. The clipping is latency- and divergence-bound (DRAM traffic under 1 % on the GPU), the flip repair is many small parallel rounds with atomics, and even the bandwidth-like hydro passes gain 1.6 to 3x beyond bandwidth. The CPU build is the generic Kokkos OpenMP path (per-thread clipping, no hand vectorisation), so a CPU-tuned code would narrow the gap.
 
 ### 2D and 1D
+
+`voronoi::Mesh<2>` on one A100 at 1305 MHz, double, 0.03 spacings per step:
+
+| M cells/s | jittered | white noise | clustered | lattice |
+|---|---|---|---|---|
+| Build, 2²⁰ cells | 100 | 50 | 44 | 115 |
+| Step (repair, faces, cell lists), 2²⁰ | 765 | 791 | 789 | 749 |
+| Build, 2²⁴ cells | 134 | 58 | 52 | 168 |
+| Step, 2²⁴ | 1056 | 1059 | 1061 | 1023 |
+
+`voronoi::Mesh<1>`, mesh phases of a moving Sod run: 18,905 M cells/s at 2²⁰ and 39,351 at 2²⁴ (1095 MHz, older code).
 
 `voronoi::Mesh<2>`: job 31952137, one A100 at 1305 MHz, double, Morton order, 0.03 spacings per step. Jittered at 0.1 / 0.3 spacings: 770 / 744 at 2²⁰, 1024 / 1015 at 2²⁴. Peak device memory 537 to 574 B/cell (3D: 1998 to 2028 B/cell at 2.1M, job 31952136). Details: research_notes/mesh_2d_2026-11-05.md.
 

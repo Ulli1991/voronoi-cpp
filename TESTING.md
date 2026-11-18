@@ -15,8 +15,34 @@ ctest --test-dir <build> --output-on-failure            # all of them
 OMP_NUM_THREADS=1 ctest --test-dir <build-omp>          # CPU, one thread
 ```
 
-On Raven, `scripts/bench_a100.sh <build-cuda>` (submit with sbatch, see the
-README) runs the CUDA tests and the A100 checks below in one gpu1 job.
+On Raven, `scripts/bench_a100.sh <build-cuda>` runs the CUDA tests and the
+A100 checks below in one gpu1 job:
+
+```sh
+ctest --test-dir build-cuda --output-on-failure         # A100: ~5 minutes
+OMP_NUM_THREADS=1 ctest --test-dir build-omp            # one CPU core
+sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A100 checks
+```
+
+## The programs at a glance
+
+Thirteen CTest programs, 22 tests; the details follow.
+
+| Test | Specifies |
+|---|---|
+| `exact_predicates` | signs equal an independent integer evaluation; ties; periodic images; quantisation for any box |
+| `clipping` | cells certified, closing and on the bisectors (brute force); thread, warp and exact kernels agree |
+| `mesh` | `from_rings` against a host construction; adjacency, exact check, volumes; rings canonical and the same from the warp and the exact kernel |
+| `start` | the start is the Delaunay tetrahedralization (brute-force exact reference) for 13 layouts and several boxes |
+| `repair` | after every step of a flow the mesh equals an exact rebuild |
+| `voronoi_mesh` | the contract of `voronoi::Mesh` that luna-cpp relies on |
+| `order` | the curves (Hilbert and Moore continuous, Moore closed); a re-sort's permutation contract for every ordering (the caller's rows follow, each particle keeps its neighbours, geometry to rounding); faces by owner and the owner bit change no bit |
+| `mesh_cases.*` | 3D special cases against an exact reference that shares no code with the library: coincident points, extreme contrast, thin boxes, high valence, large motion, fallbacks, bits across backends |
+| `distortion` | 14 flows that wind the mesh up, with no solver: shear, vortex, Taylor-Green, turbulence, collapse, expansion and more |
+| `mesh2d` | the 2D mesh against independent exact references; a repaired mesh equals a fresh build bit for bit; steps of order the box |
+| `mesh1d` | the 1D line: sorting, walls, insert and remove |
+| `mesh_fuzz` | random point sets, boxes and motions against the exact reference, plus every saved failing case in `src/test/fuzz_cases/`; ctest runs a smoke set, `scripts/mesh_fuzz_cpu.sh` and `scripts/mesh_fuzz_gpudev.sh` run campaigns |
+| `metamorphic` | exact transformations of the input give the transformed mesh: shifts by whole grid steps, axis swaps and rotations, permuted ids, a doubled box; 3D, 2D, 1D. Geometry agrees to rounding (tolerance 1e-10); a doubled box is exact |
 
 ## The tests
 
