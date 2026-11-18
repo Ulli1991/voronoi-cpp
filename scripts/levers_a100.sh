@@ -141,6 +141,14 @@ ncu)
     M+=,launch__occupancy_limit_registers,launch__block_size,launch__grid_size,smsp__thread_inst_executed_per_inst_executed.ratio
     M+=,l1tex__t_bytes_pipe_lsu_mem_local_op_ld.sum,l1tex__t_bytes_pipe_lsu_mem_local_op_st.sum,smsp__inst_executed.sum
     M+=,smsp__issue_active.avg.pct_of_peak_sustained_active,sm__cycles_elapsed.avg.per_second
+    # Where local memory (spills) is served, and warps per scheduler (for the screen's register cap, tried.md).
+    M+=,l1tex__t_sector_pipe_lsu_mem_local_op_ld_hit_rate.pct,l1tex__t_sector_pipe_lsu_mem_local_op_st_hit_rate.pct
+    M+=,smsp__warps_active.avg.per_cycle_active
+    M+=,smsp__warps_eligible.avg.per_cycle_active,l1tex__t_sectors_pipe_lsu_mem_local_op_ld_lookup_hit.sum
+    M+=,l1tex__t_sectors_pipe_lsu_mem_local_op_ld_lookup_miss.sum,l1tex__t_sectors_pipe_lsu_mem_local_op_st_lookup_hit.sum
+    M+=,l1tex__t_sectors_pipe_lsu_mem_local_op_st_lookup_miss.sum
+    known=$("$NCU" --query-metrics --chip ga100 2>/dev/null | awk '{print $1}')  # drop names this ncu lacks
+    [[ -n "$known" ]] && M=$(tr , "\n" <<<"$M" | while read -r m; do grep -qx "${m%%.*}" <<<"$known" && echo "$m"; done | paste -sd,)
     for st in long_scoreboard short_scoreboard math_pipe_throttle lg_throttle mio_throttle tex_throttle branch_resolving \
         no_instruction barrier wait not_selected selected dispatch_stall drain misc membar imc_miss; do
         M+=",smsp__warp_issue_stalled_${st}_per_warp_active.pct"
