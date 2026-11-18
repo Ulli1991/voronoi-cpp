@@ -397,7 +397,7 @@ check's clipping drops are main's too):
   4 spacings, cosmic web at 1 spacing and clustered at 0.5: 48 of 48 steps pass; 29 steps were repaired locally (up to
   174254 cells), 1e-2 rebuilt (past n / 8), cosmic web and clustered did not stick in these 6 steps;
 - job 32513187, default policy, 16 steps of cosmic web at 1 spacing (2 local repairs) and of clustered at 0.5 (none
-  stuck): 32 of 32 pass; CLUSTERED_RESULT;
+  stuck): 32 of 32 pass; jobs 32515533 and 32515534, clustered at 0.5 and 0.7 spacings, default policy, 16 steps each: 2 and 4 local repairs (6 stuck entries, 55 to 60 cells each), 32 of 32 pass;
 - job 32513186, surface 64³ at 0.3 spacings, local forced: 6 of 6 pass (one local repair: 8 stuck entries, 101 cells, 119 ms);
 - earlier binaries of the branch: jobs 32417473 and 32417793, 81 of 81 steps.
 

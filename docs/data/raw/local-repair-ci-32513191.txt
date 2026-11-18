@@ -1,0 +1,108 @@
+comments: ok
+--- src/voronoi_construct/tet_local.hpp	2026-11-18 10:21:25.157039000 +0100
++++ -	2026-11-18 10:49:36.528193916 +0100
+@@ -25,7 +25,7 @@
+ // What repair() did (counts of its last attempt). Used by: Mesh::update (Report::local_*), the bench.
+ struct Stats {
+     int why = why::none, why_first = why::none;  // of the last attempt, of the first
+-    int seeds = 0;                // cells whose new neighbours were added (the seeds; all on a third attempt)
++    int seeds = 0;                 // cells whose new neighbours were added (the seeds; all on a third attempt)
+     int cells = 0;                 // cells clipped exactly (the affected set)
+     int removed = 0, created = 0;  // tetrahedra replaced
+     int attempts = 0;
+
+1 file(s) need formatting: run `clang-format -i --style=file --lines=A:B FILE` on the changed lines
+== ctest sanitizers OFF
+ 6/22 Test #16: mesh_cases.box ...................   Passed   20.08 sec
+      Start 12: mesh_fuzz
+ 7/22 Test #22: mesh_cases.repro .................   Passed   16.67 sec
+      Start  5: repair
+ 8/22 Test #13: mesh_cases.coincident ............   Passed   49.56 sec
+      Start 14: mesh_cases.few
+ 9/22 Test #12: mesh_fuzz ........................   Passed    9.72 sec
+      Start  7: order
+10/22 Test  #5: repair ...........................   Passed    8.11 sec
+      Start 21: mesh_cases.predicates
+11/22 Test  #4: start ............................   Passed   12.13 sec
+      Start  6: voronoi_mesh
+12/22 Test #14: mesh_cases.few ...................   Passed    7.79 sec
+      Start  3: mesh
+13/22 Test #11: metamorphic ......................   Passed   15.63 sec
+      Start  8: mesh1d
+14/22 Test  #8: mesh1d ...........................   Passed    0.09 sec
+      Start  1: exact_predicates
+15/22 Test  #1: exact_predicates .................   Passed    0.11 sec
+16/22 Test  #3: mesh .............................   Passed    0.49 sec
+17/22 Test #21: mesh_cases.predicates ............   Passed    3.37 sec
+18/22 Test  #6: voronoi_mesh .....................   Passed    3.02 sec
+19/22 Test #19: mesh_cases.large .................   Passed   59.01 sec
+20/22 Test  #7: order ............................   Passed    4.52 sec
+21/22 Test #20: mesh_cases.fallback ..............   Passed   70.23 sec
+22/22 Test  #9: mesh2d ...........................   Passed  177.69 sec
+
+100% tests passed, 0 tests failed out of 22
+
+Total Test time (real) = 177.70 sec
+== ctest sanitizers ON
+ 6/22 Test #22: mesh_cases.repro .................   Passed   99.42 sec
+      Start  5: repair
+ 7/22 Test  #4: start ............................   Passed  106.44 sec
+      Start 12: mesh_fuzz
+ 8/22 Test #19: mesh_cases.large .................   Passed  281.39 sec
+      Start  7: order
+ 9/22 Test  #2: clipping .........................   Passed  298.21 sec
+      Start 14: mesh_cases.few
+10/22 Test  #7: order ............................   Passed   27.32 sec
+      Start 21: mesh_cases.predicates
+11/22 Test #11: metamorphic ......................   Passed   82.20 sec
+      Start  6: voronoi_mesh
+12/22 Test #14: mesh_cases.few ...................   Passed   25.10 sec
+      Start  3: mesh
+13/22 Test  #3: mesh .............................   Passed    2.55 sec
+      Start  8: mesh1d
+14/22 Test  #8: mesh1d ...........................   Passed    0.80 sec
+      Start  1: exact_predicates
+15/22 Test  #1: exact_predicates .................   Passed    0.21 sec
+16/22 Test  #5: repair ...........................   Passed   52.07 sec
+17/22 Test #21: mesh_cases.predicates ............   Passed   21.55 sec
+18/22 Test #16: mesh_cases.box ...................   Passed   82.54 sec
+19/22 Test #12: mesh_fuzz ........................   Passed   53.28 sec
+20/22 Test  #6: voronoi_mesh .....................   Passed   17.45 sec
+21/22 Test #20: mesh_cases.fallback ..............   Passed  352.96 sec
+22/22 Test  #9: mesh2d ...........................   Passed  485.73 sec
+
+100% tests passed, 0 tests failed out of 22
+
+Total Test time (real) = 485.73 sec
+== clang-tidy 18
+clang-tidy done: src/bench/voronoi_bench.cpp
+clang-tidy done: src/test/mesh_cases/fallback.cpp
+clang-tidy done: src/test/repair_test.cpp
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  ci_host
+Node list: ravg1048
+Job start: Wed Nov 18 10:49:33 CET 2026
+Job end:   Wed Nov 18 11:13:10 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-s2
+Command:   /raven/u/uli/voronoi-cpp-s2/scripts/ci_host_general.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32513191         ci_host      1            36                             00:23:37      0:0
+  
+Maximum memory per node: 39.657300 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 49.3 %
+CO2 footprint: 28.7797 g (estimate based on total cluster power and electricity mix)
+  

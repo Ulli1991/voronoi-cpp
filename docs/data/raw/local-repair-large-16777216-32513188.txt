@@ -1,0 +1,39 @@
+# bin=build-cuda/bin4 host=ravg1007 job=32513188 n=16777216
+# NVIDIA A100-SXM4-40GB, 1410 MHz, 1305 MHz
+== case new jump-1e-3-4-local jittered 16777216 0.1 --jump-share=1e-3 --jump-spacings=4 --fallback=local
+# backend=Cuda n=16777216 distribution=jittered box=1,1,1 displacement=0.1 steps=6
+motion: jump_share=0.001 jump_spacings=4 fallback=local
+gpuflips: step=1 gpu_ms=110.22 rounds=132 flips=1416718 stuck=303785 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=702.784 local_cells=1391296 local_tets=16252601 local_attempts=2 local_why=0 local_why_first=4 local_index_ms=5.26088 local_select_ms=6.73495 local_clip_ms=425.089 local_stitch_ms=53.8918 local_check_ms=152.882 local_done=1 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=117047523 faces=133431587 centres_faces_ms=178.207 cells_ms=35.2648 resorted=0 resort_ms=0 step_ms=288.427 step_Mcells_s=58.168 all_ms=1026.48 advect_ms=510.083 copy_ms=166.309
+gpuflips: step=2 gpu_ms=110.44 rounds=125 flips=1412778 stuck=302913 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=562.348 local_cells=0 local_tets=0 local_attempts=3 local_why=2 local_why_first=4 local_index_ms=5.30757 local_select_ms=13.986 local_clip_ms=433.845 local_stitch_ms=0 local_check_ms=0 local_done=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=1865.66 tets=116626063 faces=133403279 centres_faces_ms=99.8991 cells_ms=35.8224 resorted=0 resort_ms=0 step_ms=210.34 step_Mcells_s=79.7625 all_ms=2674.17 advect_ms=501.623 copy_ms=168.328
+gpuflips: step=3 gpu_ms=106.198 rounds=126 flips=1407692 stuck=302654 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=720.066 local_cells=1389468 local_tets=16235134 local_attempts=2 local_why=0 local_why_first=4 local_index_ms=5.34429 local_select_ms=6.63427 local_clip_ms=443.203 local_stitch_ms=53.9312 local_check_ms=152.64 local_done=1 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=116991019 faces=133374580 centres_faces_ms=177.679 cells_ms=35.3164 resorted=0 resort_ms=0 step_ms=283.877 step_Mcells_s=59.1003 all_ms=1039.26 advect_ms=506.885 copy_ms=166.422
+gpuflips: step=4 gpu_ms=114.424 rounds=150 flips=1410427 stuck=304284 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=741.352 local_cells=1392605 local_tets=16254026 local_attempts=2 local_why=0 local_why_first=4 local_index_ms=5.37441 local_select_ms=6.80366 local_clip_ms=462.529 local_stitch_ms=54.4379 local_check_ms=153.264 local_done=1 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=116991019 faces=133342241 centres_faces_ms=173.748 cells_ms=35.0752 resorted=0 resort_ms=0 step_ms=288.173 step_Mcells_s=58.2193 all_ms=1064.6 advect_ms=503.608 copy_ms=167.83
+gpuflips: step=5 gpu_ms=117.484 rounds=150 flips=1401418 stuck=302314 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=639.826 local_cells=0 local_tets=0 local_attempts=3 local_why=2 local_why_first=4 local_index_ms=5.27159 local_select_ms=14.3042 local_clip_ms=510.547 local_stitch_ms=0 local_check_ms=0 local_done=0 rebuilt=1 overlapped=0 miscounted=0 rebuild_ms=2013.15 tets=116529689 faces=133306905 centres_faces_ms=99.981 cells_ms=35.7868 resorted=0 resort_ms=0 step_ms=217.465 step_Mcells_s=77.1491 all_ms=2906.22 advect_ms=506.105 copy_ms=167.674
+gpuflips: step=6 gpu_ms=107.802 rounds=126 flips=1398090 stuck=302814 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=452.411 local_cells=1387359 local_tets=16195462 local_attempts=1 local_why=0 local_why_first=0 local_index_ms=5.3896 local_select_ms=3.21091 local_clip_ms=230.845 local_stitch_ms=53.7694 local_check_ms=152.895 local_done=1 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=116885821 faces=133268394 centres_faces_ms=177.622 cells_ms=35.2102 resorted=0 resort_ms=0 step_ms=285.423 step_Mcells_s=58.7801 all_ms=773.045 advect_ms=503.63 copy_ms=166.746
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  local_repair
+Node list: ravg1007
+Job start: Wed Nov 18 10:46:27 CET 2026
+Job end:   Wed Nov 18 10:46:52 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-s2
+Command:   /raven/u/uli/voronoi-cpp-s2/scripts/local_repair_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32513188      local_repa      1            36                             00:00:25      0:0
+  
+Maximum memory per node: 2.267238 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 7.3 %
+CO2 footprint: 0.5078 g (estimate based on total cluster power and electricity mix)
+  

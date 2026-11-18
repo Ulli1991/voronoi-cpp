@@ -1,0 +1,45 @@
+# bin=build-cuda/bin4 host=ravg1096 job=32513186 n=262144
+# NVIDIA A100-SXM4-40GB, 1410 MHz, 1305 MHz
+== case new flow-0.3-surface-local surface 262144 0.3 --fallback=local --verify
+# backend=Cuda n=262144 distribution=surface box=1,1,1 displacement=0.3 steps=6
+motion: jump_share=0 jump_spacings=4 fallback=local
+gpuflips: step=1 gpu_ms=17.7669 rounds=62 flips=146815 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=0 local_cells=0 local_tets=0 local_attempts=0 local_why=0 local_why_first=0 local_index_ms=0 local_select_ms=0 local_clip_ms=0 local_stitch_ms=0 local_check_ms=0 local_done=0 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=1753668 faces=1995241 centres_faces_ms=2.11217 cells_ms=0.77205 resorted=0 resort_ms=0 step_ms=19.879 step_Mcells_s=13.187 all_ms=20.6511 advect_ms=10.4317 copy_ms=4.84313
+verify: step=1 failing=0 mismatched_cells=2 missing_faces=0 extra_faces=1 extra_max_area=6.38282e-14 faces=1995241 clipped_faces=1995240 wrong_lists=0 total_volume=1 max_relative_volume_difference=2.77537e-13  PASS
+gpuflips: step=2 gpu_ms=10.6427 rounds=31 flips=139595 stuck=8 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=118.934 local_cells=101 local_tets=1443 local_attempts=1 local_why=0 local_why_first=0 local_index_ms=0.634857 local_select_ms=0.366409 local_clip_ms=108.449 local_stitch_ms=1.12521 local_check_ms=1.21969 local_done=1 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=1753668 faces=1995141 centres_faces_ms=2.64375 cells_ms=0.763509 resorted=0 resort_ms=0 step_ms=13.2864 step_Mcells_s=19.7302 all_ms=132.984 advect_ms=8.01905 copy_ms=2.1722
+verify: step=2 failing=0 mismatched_cells=0 missing_faces=0 extra_faces=0 extra_max_area=0 faces=1995141 clipped_faces=1995141 wrong_lists=0 total_volume=1 max_relative_volume_difference=4.2155e-13  PASS
+gpuflips: step=3 gpu_ms=10.6463 rounds=31 flips=137319 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=0 local_cells=0 local_tets=0 local_attempts=0 local_why=0 local_why_first=0 local_index_ms=0 local_select_ms=0 local_clip_ms=0 local_stitch_ms=0 local_check_ms=0 local_done=0 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=1753668 faces=1996080 centres_faces_ms=2.13044 cells_ms=0.783124 resorted=0 resort_ms=0 step_ms=12.7767 step_Mcells_s=20.5173 all_ms=13.5599 advect_ms=8.29316 copy_ms=2.07903
+verify: step=3 failing=0 mismatched_cells=8 missing_faces=0 extra_faces=4 extra_max_area=1.70213e-13 faces=1996080 clipped_faces=1996076 wrong_lists=0 total_volume=1 max_relative_volume_difference=4.43903e-13  PASS
+gpuflips: step=4 gpu_ms=11.9838 rounds=41 flips=136731 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=0 local_cells=0 local_tets=0 local_attempts=0 local_why=0 local_why_first=0 local_index_ms=0 local_select_ms=0 local_clip_ms=0 local_stitch_ms=0 local_check_ms=0 local_done=0 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=1754423 faces=1995839 centres_faces_ms=2.72209 cells_ms=0.808159 resorted=0 resort_ms=0 step_ms=14.7059 step_Mcells_s=17.8258 all_ms=15.514 advect_ms=7.97025 copy_ms=2.08998
+verify: step=4 failing=0 mismatched_cells=0 missing_faces=0 extra_faces=0 extra_max_area=0 faces=1995839 clipped_faces=1995839 wrong_lists=0 total_volume=1 max_relative_volume_difference=3.51454e-13  PASS
+gpuflips: step=5 gpu_ms=10.1024 rounds=26 flips=135751 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=0 local_cells=0 local_tets=0 local_attempts=0 local_why=0 local_why_first=0 local_index_ms=0 local_select_ms=0 local_clip_ms=0 local_stitch_ms=0 local_check_ms=0 local_done=0 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=1754423 faces=1995984 centres_faces_ms=2.21982 cells_ms=0.805939 resorted=0 resort_ms=0 step_ms=12.3222 step_Mcells_s=21.2742 all_ms=13.1281 advect_ms=8.04415 copy_ms=4.17577
+verify: step=5 failing=0 mismatched_cells=2 missing_faces=0 extra_faces=1 extra_max_area=6.16146e-14 faces=1995984 clipped_faces=1995983 wrong_lists=0 total_volume=1 max_relative_volume_difference=4.25736e-13  PASS
+gpuflips: step=6 gpu_ms=9.68975 rounds=25 flips=134256 stuck=0 host_ms=0 host_flips=0 host_rebuilt=0 local_ms=0 local_cells=0 local_tets=0 local_attempts=0 local_why=0 local_why_first=0 local_index_ms=0 local_select_ms=0 local_clip_ms=0 local_stitch_ms=0 local_check_ms=0 local_done=0 rebuilt=0 overlapped=0 miscounted=0 rebuild_ms=0 tets=1754423 faces=1996044 centres_faces_ms=2.7905 cells_ms=0.802863 resorted=0 resort_ms=0 step_ms=12.4802 step_Mcells_s=21.0047 all_ms=13.2831 advect_ms=8.02885 copy_ms=2.19431
+verify: step=6 failing=0 mismatched_cells=6 missing_faces=0 extra_faces=3 extra_max_area=3.13722e-14 faces=1996044 clipped_faces=1996041 wrong_lists=0 total_volume=1 max_relative_volume_difference=6.32925e-13  PASS
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  local_repair
+Node list: ravg1096
+Job start: Wed Nov 18 10:49:33 CET 2026
+Job end:   Wed Nov 18 10:49:52 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-s2
+Command:   /raven/u/uli/voronoi-cpp-s2/scripts/local_repair_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32513186      local_repa      1            36                             00:00:19      0:0
+  
+Maximum memory per node: 0.455676 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 4.4 %
+CO2 footprint: 0.3859 g (estimate based on total cluster power and electricity mix)
+  
