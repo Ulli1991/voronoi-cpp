@@ -517,19 +517,18 @@ void order_tetrahedra(const ExecSpace& exec, const Kokkos::View<const int*, type
     // The new rows of one array at a time: staged, then copied back over the old (the adjacency needs only new_slot
     // and the old adjacency, the vertices only rank and the old vertices).
     Kokkos::View<int*, Memory> own_rows;
-    Kokkos::View<int*, Memory> rows = rows_room ? rows_room->template take<int>(4LL * live) :
-                                                            Kokkos::View<int*, Memory>();
+    Kokkos::View<int*, Memory> rows =
+        rows_room ? rows_room->template take<int>(4LL * live) : Kokkos::View<int*, Memory>();
     if (!rows.data()) {
-        own_rows = Kokkos::View<int*, Memory>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_rows")),
-                                              4LL * live);
+        own_rows = Kokkos::View<int*, Memory>(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_rows")), 4LL * live);
         rows = own_rows;
     }
     const auto adjacent = mesh.adjacent;
     const auto edges = mesh.edges;
     auto copy_back = [&](const tet_mesh::Quads<Memory>& to) {
         Kokkos::parallel_for(
-            "mesh_order::tet_copy", Range(exec, 0, 4 * live),
-            KOKKOS_LAMBDA(int e) { to(e / 4, e % 4) = rows(e); });
+            "mesh_order::tet_copy", Range(exec, 0, 4 * live), KOKKOS_LAMBDA(int e) { to(e / 4, e % 4) = rows(e); });
     };
     Kokkos::parallel_for(
         "mesh_order::tet_vertices", Range(exec, 0, live), KOKKOS_LAMBDA(int s) {

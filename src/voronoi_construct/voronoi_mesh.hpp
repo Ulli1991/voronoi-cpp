@@ -721,7 +721,8 @@ private:
         Arena first = room(rings_.in_use), second = room(1 - rings_.in_use);
         if (static_cast<int>(permutation_.extent(0)) != n_)
             permutation_ = View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_order")), n_);
-        const View<int*> order = permutation_;  // one re-sort per update: a rebuild after it starts again from the caller's order
+        const View<int*> order =
+            permutation_;  // one re-sort per update: a rebuild after it starts again from the caller's order
         View<int*> rank = first.template take<int>(n_);
         if (!rank.data())
             rank = View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_rank")), n_);

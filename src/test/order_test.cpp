@@ -188,8 +188,9 @@ int main(int argc, char** argv) {
         }
         check.expect(resorts == 4 && wrong_permutation == 0,
                      name + "re-sorted at the build and every second update, a permutation each time");
-        check.expect(wrong_follow == 0,
-                     name + "permute() and permute_in_place() carry the caller's rows, and the mesh's positions are those rows");
+        check.expect(
+            wrong_follow == 0,
+            name + "permute() and permute_in_place() carry the caller's rows, and the mesh's positions are those rows");
         check.expect(wrong_sets == 0, name + "every particle keeps its neighbours, by its first number");
         check.expect(
             worst_volume < 1e-12 && worst_centroid < 1e-12,
