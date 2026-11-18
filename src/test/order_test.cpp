@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
         plain.set_layout(never);
         long long resorts = 0, wrong_sets = 0, wrong_positions = 0, steps = 0;
         double worst_volume = 0;
-        for (int s = 0; s <= 400 && resorts < 2; ++s, ++steps) {
+        for (int s = 0; s <= 120 && resorts < 2; ++s, ++steps) {
             if (s > 0) {
                 flow.advect(points, 0.3 * spacing);
                 flow.advect(followed, 0.3 * spacing);

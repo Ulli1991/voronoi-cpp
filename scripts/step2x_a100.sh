@@ -38,6 +38,7 @@ nvidia-smi --query-gpu=timestamp,clocks.sm,utilization.gpu --format=csv,noheader
 smi=$!
 trap 'kill $smi 2>/dev/null' EXIT
 k=0
+builds=()
 for name in "${names[@]}"; do
     k=$((k + 1))
     dir="$bin/build-$name"
@@ -50,8 +51,9 @@ for name in "${names[@]}"; do
         echo "build $name ($(git -C "${src[$k]}" rev-parse --short HEAD)$(git -C "${src[$k]}" diff --quiet || echo +)) exit $rc"
         cp "$dir/voronoi_bench" "$bin/voronoi_bench_$name"
     ) &
+    builds+=($!)
 done
-wait
+wait "${builds[@]}"  # not the clock logger
 run() {  # run <name> <args...>: one bench run, its lines prefixed by the name and arguments
     local name="$1"
     shift
