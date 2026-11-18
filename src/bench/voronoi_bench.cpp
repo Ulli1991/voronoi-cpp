@@ -161,7 +161,8 @@ std::string text_flag(int argc, char** argv, const std::string& flag, const std:
     return fallback;
 }
 
-// The mesh layout of --curve, --every, --far, --owner-faces, --owner-bit. Used by: main.
+// The mesh layout: Layout's defaults changed by --curve, --flips, --every, --far, --sort-at-build, --no-resort (every
+// trigger off), --owner-faces, --owner-bit, ... Used by: main.
 voronoi::Layout layout_flags(int argc, char** argv) {
     voronoi::Layout layout;
     const std::string curve = text_flag(argc, argv, "--curve", "");
@@ -172,9 +173,12 @@ voronoi::Layout layout_flags(int argc, char** argv) {
     for (const auto& [name, c] : names)
         if (curve == name) layout.curve = c, known = true;
     if (!known) throw std::invalid_argument("--curve: morton, hilbert, moore, gray, row or rcm");
-    layout.every = static_cast<int>(flag_value(argc, argv, "--every", 0));
-    layout.far = flag_value(argc, argv, "--far", 0);
+    if (has_flag(argc, argv, "--no-resort")) layout.flips = layout.every = layout.far = 0;
+    layout.flips = flag_value(argc, argv, "--flips", layout.flips);
+    layout.every = static_cast<int>(flag_value(argc, argv, "--every", layout.every));
+    layout.far = flag_value(argc, argv, "--far", layout.far);
     for (int i = 1; i < argc; ++i) {
+        layout.at_build |= std::string(argv[i]) == "--sort-at-build";
         layout.owner_faces |= std::string(argv[i]) == "--owner-faces";
         layout.owner_bit |= std::string(argv[i]) == "--owner-bit";
         layout.faces_on_read |= std::string(argv[i]) == "--faces-on-read";
@@ -671,9 +675,9 @@ int step(const std::vector<std::string>& args, const Box& box, bool verify, bool
         points.swap(moved);
         label.swap(relabel);
     };
-    std::cout << "layout: curve=" << static_cast<int>(layout.curve) << " every=" << layout.every
-              << " far=" << layout.far << " owner_faces=" << layout.owner_faces << " owner_bit=" << layout.owner_bit
-              << "\n";
+    std::cout << "layout: curve=" << static_cast<int>(layout.curve) << " flips=" << layout.flips
+              << " every=" << layout.every << " far=" << layout.far << " at_build=" << layout.at_build
+              << " owner_faces=" << layout.owner_faces << " owner_bit=" << layout.owner_bit << "\n";
     {
         voronoi::Timings t;
         const voronoi::Report r = [&] {
@@ -769,7 +773,9 @@ int chunks(const std::vector<std::string>& args, const Box& box) {
     voronoi::Layout layout;
     layout.owner_faces = layout.owner_bit = true;
     layout.curve = voronoi::Curve::hilbert;
-    layout.every = 1 << 30;  // sorted at the build only
+    layout.flips = layout.far = 0;  // sorted at the build only
+    layout.every = 0;
+    layout.at_build = true;
     Mesh mesh(exec, box);
     mesh.set_layout(layout);
     mesh.update(to_device(points));
@@ -887,7 +893,8 @@ int main(int argc, char** argv) {
                  "       voronoi_bench chunks <n> <distribution> [repeats]\n"
                  "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
                  "                          [--memory] [--kernels] [--measure] [--order=every]\n"
-                 "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
+                 "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--flips=per_cell] [--every=k]\n"
+                 "                          [--far=share] [--sort-at-build] [--no-resort]\n"
                  "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] "
                  "[--same-bits]\n"
                  "                          [--closure] [--dump-cells=path]\n"

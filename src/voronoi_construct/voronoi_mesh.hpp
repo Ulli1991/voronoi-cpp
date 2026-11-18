@@ -161,13 +161,17 @@ enum class Fallback { cheapest, host, rebuild };
 constexpr long long host_budget = 1LL << 20;
 using Curve = mesh_order::Curve;
 
-// The memory layout of Mesh<3> (#34). A re-sort renumbers the cells along `curve` (a build sorts too), then the
-// tetrahedra after their lowest cell and the faces after them; it is due every `every` updates, or when more than
-// `far` of the faces join cells over 64 ids apart (checked every 16 updates). Off with both 0, as by default.
+// The memory layout of Mesh<3> (#34). A re-sort renumbers the cells along `curve`, then the tetrahedra after their
+// lowest cell and the faces after them. It is due once the device flips since the last build or re-sort reach `flips`
+// per cell, every `every` updates, or when more than `far` of the faces join cells over 64 ids apart (checked every 16
+// updates); a trigger at 0 is off, all three off: never. With `at_build` a build sorts too. A re-sort changes the
+// cells' ids: Report::resorted is set and cell i is then the caller's particle permutation()(i).
 struct Layout {
     Curve curve = Curve::hilbert;
+    double flips = 0;
     int every = 0;
     double far = 0;
+    bool at_build = false;
     bool owner_faces = false;  // faces numbered by owner (Mesh::owned_start), then by their slot
     bool owner_bit = false;    // cell_face entries of faces the cell does not own have bit 31 set (Mesh::list_face)
     // update() does not store face areas and centroids (R14, opt-in): computed where read (Mesh::face_geometry), stored
@@ -180,7 +184,7 @@ struct Layout {
     // its own (tet_mesh::Rounded): a GPU gives the host's bits, at some cost in the step (TESTING.md, "Bits across
     // backends"). Off: written arithmetic, which nvcc fuses (the fastest). voronoi::Engine turns it on for hybrid.
     bool same_bits_as_host = false;
-    bool resorts() const { return every > 0 || far > 0; }
+    bool resorts() const { return flips > 0 || every > 0 || far > 0; }
 };
 
 // The mesh in D dimensions: one interface, an engine per D (3D tetrahedra, 2D voronoi_mesh_2d.hpp, 1D sorted_mesh.hpp).
@@ -236,6 +240,7 @@ public:
         tet_repair::move_screened(exec_, positions_, box_, tets_, state_);
         const tet_repair::Stats device = tet_repair::repair(exec_, tets_, state_, repair_rounds_);
         report.flips = device.flips23 + device.flips32;
+        flips_since_sort_ += report.flips;
         report.rounds = static_cast<int>(device.rounds);
         report.stuck = device.stuck;
         lap(timer, timings, &Timings::repair);
@@ -254,7 +259,8 @@ public:
             lap(timer, timings, &Timings::fallback);
         }
         if (!stuck) {
-            if ((layout_.every > 0 && since_sort_ >= layout_.every) || (layout_.far > 0 && far_share_ > layout_.far))
+            if ((layout_.flips > 0 && static_cast<double>(flips_since_sort_) >= layout_.flips * n_) ||
+                (layout_.every > 0 && since_sort_ >= layout_.every) || (layout_.far > 0 && far_share_ > layout_.far))
                 resort(timings);
             report.resorted = resorted_;
             report.faces = geometry(timings);
@@ -324,7 +330,7 @@ public:
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, Areas("cell_centroid", n_)};
         lap(timer, timings, &Timings::build);
-        if (layout_.resorts()) resort(timings);
+        if (layout_.at_build) resort(timings);
         report.resorted = resorted_;
         report.faces = geometry(timings);
         if (!euler(report.faces)) {
@@ -573,6 +579,7 @@ private:
         owner_faces_ = tet_mesh::OwnerFaces<Memory>{};
         face_owner_ = face_neighbour_ = {};
         since_sort_ = 0;
+        flips_since_sort_ = 0;
         far_share_ = 0;
         n_ = 0;
         cells_current_ = false;
@@ -680,6 +687,7 @@ private:
         exec_.fence();
         resorted_ = true;
         since_sort_ = 0;
+        flips_since_sort_ = 0;
         far_share_ = 0;
         lap(timer, timings, &Timings::resort);
     }
@@ -708,8 +716,9 @@ private:
     Layout layout_;
     View<int*> permutation_;  // of the last re-sort
     bool resorted_ = false;   // by the update running
-    int since_sort_ = 0;      // updates since the last build or re-sort
-    double far_share_ = 0;    // far_faces() at the last check
+    int since_sort_ = 0;              // updates since the last build or re-sort
+    long long flips_since_sort_ = 0;  // device flips since then
+    double far_share_ = 0;            // far_faces() at the last check
     shell_voronoi::Cells<Memory> local_;
 };
 
