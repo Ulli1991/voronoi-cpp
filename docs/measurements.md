@@ -505,6 +505,21 @@ clang-tidy 18 clean on `voronoi_bench.cpp`, `mesh_cases/fallback.cpp` and `repai
 fuzz, profile huge, 15 minutes (job 32513190): 10 cases, 2 exact, 6 refused for causes the input has, 2 out of time
 (seeds 4000000000002 and 4000000000010, which run out of 900 s alone on main as well, job 32428400), no WRONG or CRASH.
 
+**Re-proven against main 3f27c51** (the cpu, gpu and hybrid modes; the local repair's rounded cells follow
+`Layout::same_bits_as_host`), all in one gpu1 job (32515907, `scripts/local_repair_proof_a100.sh`, branch c5d2ed8):
+- A100 ctest 23 of 23. `modes` has a new case, jittered 32³ at 0.1 spacings with 4 particles jumping 4 spacings:
+  gpu and hybrid each repair 4 of 5 updates locally, and hybrid equals cpu in every bit (163840 of 163840 volumes).
+- `--verify`, local forced, the eight cases above: 48 of 48 steps pass.
+- Rates, M cells/s, main → branch (`cheapest`): 128³ two jumpers at 1, 2, 4 spacings 18.7, 11.8, 12.7 → 55.4, 51.1,
+  52.3; share 1e-4 11.8 → 29.5; 1e-3 10.3 → 11.2 (both rebuild). 256³: 71.6, 13.8, 6.3 → 130.7, 119.2, 119.8; share
+  1e-4 8.5 → 68.7; 1e-3 8.2 → 8.2 (local forced 14.3).
+- Default path, seven inputs at 0.03, 0.1, 0.3 spacings: checksums equal in all 21 cases. Median rates within
+  −0.65 to +0.61 % in 20; clustered at 0.3 −1.35 % (mean −5.5 %): in both of the branch's runs step 2 left 6 stuck
+  entries, repaired locally in 12 ms, where main's runs did not stick. The repair code is main's; which steps stick
+  follows the flips' atomics and differs between binaries (as between runs of main above).
+- CI's host steps: comments and format pass, ctest 23 of 23 with sanitizers off and on, clang-tidy 18 clean on
+  `voronoi_bench.cpp`, `mesh_cases/fallback.cpp`, `repair_test.cpp` and `modes_test.cpp`.
+
 ### Long runs
 
 The rates above are early steps. On a smooth flow where every cell moves, the mesh loses its memory order and the step slows from 124 M cells/s at step 100 to 61 at step 500 (128³, 0.1 spacings, update and `update_cells()`, [#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)). A Hilbert re-sort every 50 updates (`Layout`) keeps it: 121 M cells/s over 500 steps against 81.6 without, re-sorts paid (each about one step's time); at 256³ 166 against 127. Hilbert, Moore and Morton are within 1 %, row-major and reverse Cuthill-McKee 11 to 13 % slower. Flows with little bulk motion do not show the decay: on Sedov the loss is at most 4.5 % over a run. Tables in [measure_resort_2026-11-10.md](measure_resort_2026-11-10.md).
