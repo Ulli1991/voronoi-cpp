@@ -357,7 +357,8 @@ void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& b
             Kokkos::atomic_inc(&start(neighbour(f)));
         });
     scan_starts(exec, out.start, n, out.scan_temp);
-    Kokkos::deep_copy(exec, Kokkos::subview(cursor, std::make_pair(0, n)), Kokkos::subview(start, std::make_pair(0, n)));
+    Kokkos::deep_copy(exec, Kokkos::subview(cursor, std::make_pair(0, n)),
+                      Kokkos::subview(start, std::make_pair(0, n)));
     Kokkos::parallel_for(
         "tet_mesh::cell_face_fill", Range(exec, 0, faces), KOKKOS_LAMBDA(int f) {
             const int o = owner(f), j = neighbour(f);

@@ -283,9 +283,12 @@ int main(int argc, char** argv) {
         Kokkos::deep_copy(neighbour, hn);
         Kokkos::deep_copy(geometry.area, ha);
         Kokkos::deep_copy(geometry.centroid, hc);
-        tet_mesh::CellFaces<Memory, 2> cells{Kokkos::View<int*, Memory>("start2", n + 1), Kokkos::View<int*, Memory>("face2", 0),
-                                             Kokkos::View<int*, Memory>("cursor2", n), Kokkos::View<double*, Memory>("v2", n),
-                                             Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("c2", n)};
+        tet_mesh::CellFaces<Memory, 2> cells{Kokkos::View<int*, Memory>("start2", n + 1),
+                                             Kokkos::View<int*, Memory>("face2", 0),
+                                             Kokkos::View<int*, Memory>("cursor2", n),
+                                             Kokkos::View<double*, Memory>("v2", n),
+                                             Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("c2", n),
+                                             {}};
         Kokkos::View<char*, Memory> scratch("scratch2", tet_mesh::cells_scratch_bytes(2 * n));
         tet_mesh::cells(exec, p, square, Kokkos::View<const int*, Memory>(owner), Kokkos::View<const int*, Memory>(neighbour),
                         geometry, cells, scratch.data());

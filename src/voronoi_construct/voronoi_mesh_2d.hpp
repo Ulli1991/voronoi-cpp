@@ -136,8 +136,12 @@ public:
                      tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0),
                      {},
                      {}};
-        cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
-                  geometry_.volume, Areas("cell_centroid", n_)};
+        cells_ = {View<int*>("cell_face_start", n_ + 1),
+                  View<int*>("cell_face", 0),
+                  View<int*>("cell_face_cursor", n_),
+                  geometry_.volume,
+                  Areas("cell_centroid", n_),
+                  {}};
         lap(timer, timings, &Timings::build);
         tri_repair::screen(exec_, point_, box_, mesh_, state_, same_bits_as_host_);
         const tri_repair::Stats device = tri_repair::repair(exec_, point_, mesh_, state_);

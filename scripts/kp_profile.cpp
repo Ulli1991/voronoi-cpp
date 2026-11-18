@@ -98,8 +98,8 @@ void kokkosp_allocate_data(const SpaceHandle h, const char* label, const void* p
         sizes[ptr] = size;
         if (live > peak) peak = live;
     }
-    std::fprintf(out, "A\t%.1f\t%s\t%llu\t%p\t%s\t%llu\n", now_us(), h.name, static_cast<unsigned long long>(size), ptr, label,
-                 static_cast<unsigned long long>(live));
+    std::fprintf(out, "A\t%.1f\t%s\t%llu\t%p\t%s\t%llu\n", now_us(), h.name, static_cast<unsigned long long>(size), ptr,
+                 label, static_cast<unsigned long long>(live));
     if (peak > logged_peak + logged_peak / 100) {
         logged_peak = peak;
         std::fprintf(out, "P\t%.1f\t%llu\n", now_us(), static_cast<unsigned long long>(peak));
@@ -109,14 +109,15 @@ void kokkosp_deallocate_data(const SpaceHandle h, const char* label, const void*
     if (!out) return;
     std::lock_guard<std::mutex> g(lock);
     if (device(h) && sizes.erase(ptr)) live -= size;
-    std::fprintf(out, "D\t%.1f\t%s\t%llu\t%p\t%s\t%llu\n", now_us(), h.name, static_cast<unsigned long long>(size), ptr, label,
-                 static_cast<unsigned long long>(live));
+    std::fprintf(out, "D\t%.1f\t%s\t%llu\t%p\t%s\t%llu\n", now_us(), h.name, static_cast<unsigned long long>(size), ptr,
+                 label, static_cast<unsigned long long>(live));
 }
-void kokkosp_begin_deep_copy(SpaceHandle dst, const char* dst_label, const void*, SpaceHandle src, const char* src_label,
-                             const void*, std::uint64_t size) {
+void kokkosp_begin_deep_copy(SpaceHandle dst, const char* dst_label, const void*, SpaceHandle src,
+                             const char* src_label, const void*, std::uint64_t size) {
     if (out)
-        std::fprintf(out, "C\t%.1f\t%s\t%s\t%llu\t%s\t%s\n", now_us(), dst.name, src.name, static_cast<unsigned long long>(size),
-                     dst_label[0] ? dst_label : "-", src_label[0] ? src_label : "-");
+        std::fprintf(out, "C\t%.1f\t%s\t%s\t%llu\t%s\t%s\n", now_us(), dst.name, src.name,
+                     static_cast<unsigned long long>(size), dst_label[0] ? dst_label : "-",
+                     src_label[0] ? src_label : "-");
 }
 void kokkosp_end_deep_copy() {}
 }

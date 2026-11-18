@@ -360,8 +360,12 @@ public:
                      tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0),
                      typename tet_mesh::Geometry<Memory>::Centroids32("face_centroid32", halves),
                      View<double*>("face_pyramid", stored)};
-        cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
-                  geometry_.volume, Areas("cell_centroid", n_)};
+        cells_ = {View<int*>("cell_face_start", n_ + 1),
+                  View<int*>("cell_face", 0),
+                  View<int*>("cell_face_cursor", n_),
+                  geometry_.volume,
+                  Areas("cell_centroid", n_),
+                  {}};
         lap(timer, timings, &Timings::build);
         if (layout_.at_build) resort(timings);
         report.resorted = resorted_;
