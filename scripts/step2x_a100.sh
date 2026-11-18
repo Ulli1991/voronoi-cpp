@@ -68,7 +68,7 @@ run() {  # run <name> <args...>: one bench run, its lines prefixed by the name a
     local name="$1"
     shift
     "$bin/voronoi_bench_$name" "$@" 2>&1 | grep -E "^(gpuflips|geometry_checksum|mesh|kernel|final_rebuild|layout)" |
-        sed "s/^/$name $* | /"
+        sed "s#^#$name $* | #"  # '#': the arguments may hold paths
 }
 case "$mode" in
 kernels)
