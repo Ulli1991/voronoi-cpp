@@ -72,6 +72,7 @@ KOKKOS_INLINE_FUNCTION bool stored_pyramid(const X&, const exact_predicates::Box
                                            int, double&, VecN<D>&) {
     return false;
 }
+// The same for stored faces (Geometry): reads Geometry::pyramid if it was written.
 template <int D, class Ar, class X, class Memory, class Ints>
 KOKKOS_INLINE_FUNCTION bool stored_pyramid(const X& x, const exact_predicates::BoxN<D>& box,
                                            const Geometry<Memory, D>& g, const Ints& owner, int i, int f, double& p,

@@ -25,7 +25,8 @@ Rates are M cells/s: million cells built or updated per second of GPU time. luna
 | Moving-mesh update, 0.1 spacings per step | 130 | 209 (151 with `update_cells()`) |
 | Moving-mesh update, 0.3 spacings per step | 65.9 | 110 (85.6 with `update_cells()`) |
 | `update_cells()` alone, 0.03 / 0.1 / 0.3 spacings | 559 / 440 / 432 | |
-| Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible) | 161 / 99.3 / 57.2 | |
+| Update + `update_cells()`, 0.03 / 0.1 / 0.3 spacings (bit-reproducible; 2026-11-18, [step-2x](#the-2-step-branch-step-2x-2026-11-18)) | 179 / 109 / 61.9 | 244 / 170 / 93.6 |
+| The same over 500 steps of the flow, re-sorts paid (default every 25) | 194 / 142 / 84.4 | – / 196 / – |
 
 With `Layout::same_bits_as_host` (the host's bits on the GPU; `Engine` hybrid) update + `update_cells()` is 3.4 to 5.1 / 1.7 to 4.6 / 0.7 to 2.8 % slower at 0.03 / 0.1 / 0.3 spacings (128³ and 256³), the rebuild at most 1 % and the exact start at most 1.5 %, 5 % on cosmicweb at 256³ ([below](#rounding-per-mode-2026-11-16-jobs-32422876-and-32429908)). Without it the GPU keeps main's arithmetic and speed.
 
@@ -331,6 +332,8 @@ and voro++ (72 cores) 0.83 M cells/s; surface 128³: geogram (72 cores) 0.69, gD
 ### Long runs
 
 The rates above are early steps. On a smooth flow where every cell moves, the mesh loses its memory order and the step slows from 124 M cells/s at step 100 to 61 at step 500 (128³, 0.1 spacings, update and `update_cells()`, [#34](https://github.com/Ulli1991/voronoi-cpp/issues/34)). A Hilbert re-sort every 50 updates (`Layout`) keeps it: 121 M cells/s over 500 steps against 81.6 without, re-sorts paid (each about one step's time); at 256³ 166 against 127. Hilbert, Moore and Morton are within 1 %, row-major and reverse Cuthill-McKee 11 to 13 % slower. Flows with little bulk motion do not show the decay: on Sedov the loss is at most 4.5 % over a run. Tables in [measure_resort_2026-11-10.md](measure_resort_2026-11-10.md).
+
+Since 2026-11-18 the re-sort is on by default, every 25 updates: over 500 steps 142 M cells/s against main's 65.9 at 128³, 0.1 spacings (2.16×), 196 against 88.7 at 256³ (2.20×), 1.65× at 0.03 and 2.15× at 0.3 ([step-2x](#the-2-step-branch-step-2x-2026-11-18)).
 
 Job 31953232 (128³, 0.1 spacings per step): the step falls from 118 M cells/s at step 100 to 59 at step 500. Issue: https://github.com/Ulli1991/voronoi-cpp/issues/34. On Sedov the loss is at most 4.5 % over a run.
 
@@ -939,6 +942,59 @@ The clipping's per-thread kernel alone (`backends_probe`, all cells on the devic
 Again after merging main 5aac4bf (#60 B2: the warp kernel's overflow cells to the filtered warp kernels; job 32431927, same three builds, surface added): gpu mode equals main in every bit on all six inputs at 128³ (surface included) and in 2D; rebuild 0.999 to 1.004 and steps 0.995 to 1.010 of main (eight inputs and sizes, three rounds); hybrid equals cpu in every bit (`modes_test`, `backends_probe` on four inputs); same_bits steps +0.7 to +5.1 %, rebuild within 0.3 %; the rounded per-thread kernel +0.2 to +0.9 % and equal to the host in every cell. The exact start's totals and its `build_ms` swung by up to ±15 % between rounds in all three builds in this job (jittered 128³ `build_ms` 0.937, jittered 256³ 1.059, with the same bits), so the start's speed rests on job 32429908. B2's `clipping_test` (volumes only, rings and faces give the same cells) passes in both builds.
 
 Build: `voronoi_bench` at -j1 in 214 s against main's 204 s (+4.9 %; 216 against 206 s in job 32431927), binary 15,327,536 against 14,417,232 bytes (+6.3 %), both variants of the geometry and per-thread kernels instantiated. A100 ctest 23 of 23 in the CUDA and the CUDA + OpenMP build; CI host steps (gcc 15, sanitizers off and on) 23 of 23; clang-tidy 18: 0 warnings.
+
+### The 2× step (branch `step-2x`, 2026-11-18)
+
+Goal: the moving step (`update()` + `update_cells()`) about 2× faster. One A100 SXM4 40 GB on Raven `gpu1` at 1305 MHz (application clock, from `nvidia-smi` in every job), double precision, periodic unit box, the bench's smooth flow (`voronoi_bench step`). Main is 3f27c51; head is 31b41fd, measured in the same job as main. Scripts: `scripts/step2x_a100.sh` (jobs), `scripts/step2x_tables.py` (tables), `scripts/resort_bits.py` (cells by particle); logs in `build-jobs/logs` of the worktree on Raven. Each lever's row, against the code before it, is in [tried.md](tried.md#moving-step).
+
+What changed:
+
+1. **Re-sort on by default.** `Layout::every = 25`: every 25 updates the cells are renumbered along a Hilbert curve, the tetrahedra and faces after them. Particle ids change: `Report::resorted`, `permutation()`, `permute()`; `order_test` checks that a caller who follows the permutation sees, particle by particle, the mesh of a run that never re-sorts. A trigger on flips per cell (`Layout::flips`, opt-in) is as fast at 0.03 and 0.1 spacings and 5 % faster at 0.3, but flip counts vary from run to run (the votes of a flip round follow the order in which threads list their work), so it would re-sort on different updates in two runs of one input.
+2. **Per-cell sums from a stored |A·d|.** `faces` keeps |A·d| per face (8 B a face, about 62 B/cell); `update_cells()` reads it and the face centroid instead of the area and both positions (the neighbour's side still reads the owner's position for its centroid). `cell_sums` −28 %. Incremental lists up to n/2 created tetrahedra (was n/5).
+3. **Fewer launches and host waits (S4): not done.** Bound 2.4–5.1 % at 128³, under 1 % at 256³ (H3); its places are in `tet_repair.hpp`, which branch `local-repair` edits.
+4. **Reconnect in one kernel.** `dirty_rings` finds each dirty face, marks it, and the marking thread walks and writes its ring; the starts are set after. Was `dirty_faces` then `append_rings`.
+5. **CUB.** Renumber's touched slots by `cub::DeviceSelect::Flagged` (was a Kokkos scan, 0.49 ms at 128³).
+
+Rates, ten steps (steps 2–10 averaged, two rounds), update + `update_cells()`, M cells/s and ns per cell (job 32516595). Ten steps hold no re-sort, so this is levers 2 to 5:
+
+| n | input | spacings | main M cells/s | head M cells/s | head / main | main ns/cell | head ns/cell |
+|---|---|---|---|---|---|---|---|
+| 128³ | jittered | 0.03 / 0.1 / 0.3 | 163.8 / 99.0 / 58.2 | 179.1 / 109.1 / 61.9 | 1.093 / 1.101 / 1.063 | 6.11 / 10.10 / 17.18 | 5.58 / 9.17 / 16.16 |
+| 128³ | uniform | 0.03 / 0.1 / 0.3 | 197.5 / 146.8 / 85.7 | 218.2 / 160.6 / 93.3 | 1.105 / 1.094 / 1.089 | 5.06 / 6.81 / 11.67 | 4.58 / 6.23 / 10.71 |
+| 128³ | clustered | 0.03 / 0.1 / 0.3 | 201.6 / 151.1 / 90.4 | 221.5 / 165.1 / 96.6 | 1.099 / 1.093 / 1.068 | 4.96 / 6.62 / 11.06 | 4.51 / 6.06 / 10.35 |
+| 128³ | halo | 0.03 / 0.1 / 0.3 | 198.4 / 148.2 / 87.2 | 219.5 / 162.1 / 95.2 | 1.106 / 1.094 / 1.091 | 5.04 / 6.75 / 11.46 | 4.56 / 6.17 / 10.50 |
+| 256³ | jittered | 0.03 / 0.1 / 0.3 | 220.5 / 153.7 / 84.8 | 244.4 / 169.9 / 93.6 | 1.109 / 1.106 / 1.104 | 4.54 / 6.51 / 11.79 | 4.09 / 5.88 / 10.68 |
+| 256³ | uniform | 0.03 / 0.1 / 0.3 | 246.6 / 204.0 / 135.6 | 274.6 / 226.0 / 149.2 | 1.114 / 1.107 / 1.101 | 4.06 / 4.90 / 7.38 | 3.64 / 4.43 / 6.70 |
+| 256³ | clustered | 0.03 / 0.1 / 0.3 | 248.3 / 207.6 / 143.4 | 277.3 / 230.7 / 158.6 | 1.117 / 1.111 / 1.106 | 4.03 / 4.82 / 6.97 | 3.61 / 4.33 / 6.31 |
+| 256³ | halo | 0.03 / 0.1 / 0.3 | 246.8 / 204.5 / 139.0 | 275.3 / 227.0 / 153.4 | 1.115 / 1.110 / 1.104 | 4.05 / 4.89 / 7.20 | 3.63 / 4.41 / 6.52 |
+
+500 steps of the smooth flow, jittered start, the rate over the whole run with the re-sorts paid (jobs 32516596–99):
+
+| n | spacings | main M cells/s | head M cells/s | head / main | head: steps 2–11 / last 10 | main: steps 2–11 / last 10 | re-sorts, ms each |
+|---|---|---|---|---|---|---|---|
+| 128³ | 0.03 | 117.9 | 194.3 | 1.65 | 178.4 / 178.9 | 162.4 / 92.8 | 20, 9.9 |
+| 128³ | 0.1 | 65.9 | 142.1 | 2.16 | 108.9 / 125.3 | 98.8 / 51.6 | 20, 13.3 |
+| 128³ | 0.3 | 39.3 | 84.4 | 2.15 | 62.9 / 74.2 | 58.0 / 34.7 | 20, 12.3 |
+| 256³ | 0.1 | 88.7 | 195.5 | 2.20 | 169.0 / 163.5 | 152.8 / 65.9 | 20, 111.6 |
+
+Re-sort triggers, 500 steps, on lever 1 alone (jobs 32515066–69; M cells/s over the run; main without a re-sort for scale):
+
+| trigger | 128³ 0.03 | 128³ 0.1 | 128³ 0.3 | 256³ 0.1 |
+|---|---|---|---|---|
+| none (main) | 117.8 | 65.7 | 39.2 | 88.9 |
+| every 25 | 179.0 | 130.8 | 77.5 | 180.0 |
+| every 50 | 180.8 | 124.5 | 68.6 | 176.7 |
+| every 100 | 176.0 | 109.8 | 56.9 | 159.5 |
+| 1 flip per cell | 178.8 | 131.0 | 81.4 | |
+| 2 / 4 / 8 flips per cell | 164.9 / 147.6 / 117.9 | 126.9 / 111.3 / 92.2 | 80.0 / 74.3 / 64.2 | |
+
+Bits. Topology is exact in every run. Levers 2 to 5 change no bit: the geometry, faces and lists checksums of head equal main's on seven inputs (jittered, uniform, clustered, halo, lattice, wave, cosmicweb) at 0.03, 0.1 and 0.3 spacings, five steps each, 105 of 105 (job 32516600; the layout cannot re-sort in five steps). `cells_checksum`, which also hashes face numbers, differs between two runs of main itself (job 32515833): face numbers depend on the order of atomics, as before. The re-sort changes ids by design; per particle after 500 steps at 128³, 0.1 spacings (job 32516923), against main: 0 of 2,097,152 neighbour sets differ, 1,495,265 volumes differ in their bits, by at most 3.2e-14 relative, centroids by at most 2.4e-14 cell sizes, as in [measure_resort_2026-11-10.md](measure_resort_2026-11-10.md#bits).
+
+Cost. 8 B a face for |A·d| (computed: about 62 B/cell at 7.7 faces per cell); a re-sort is about one step's time every 25 updates, paid also on a flow whose order does not decay (at 128³ 10–13 ms once in 25 steps of 12–34 ms, 2–4 %). gpu stays the default mode; `modes_test` (hybrid equals cpu in every bit) passes.
+
+Tests: A100 ctest 23 of 23 on head (job 32516982); CI's host steps in a gpu1 job (comments, format, gcc 15 with sanitizers off and on 23 of 23 each, clang-tidy 18 without warnings on the changed programs; job 32516922, then its warnings fixed); fuzz smoke in ctest, and a CPU batch of the small profile (below).
+
+Against the 2× goal: 1.06–1.12× on ten-step runs (levers 2 to 5), 1.65× (0.03 spacings) to 2.2× (0.1 and 0.3) over 500 steps with the re-sort. The rest of a ten-step run is the flips (`plan`, `apply`, `find`: 5.8 ms of 21 at 128³, 0.1), the screen (2.4 ms), the faces (2.7 ms) and the ring walks (3.3 ms), which these levers do not touch.
 
 ## Removed, and where to find it
 

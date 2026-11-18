@@ -152,6 +152,7 @@ int main(int argc, char** argv) {
                                             Kokkos::View<double* [3], Kokkos::LayoutRight, Memory>("centroid", faces),
                                             Kokkos::View<double*, Memory>("volume", n),
                                             {},
+                                            {},
                                             {}};
         tet_mesh::faces(exec, padded, 1.0, mesh, geometry);
         double worst = worst_volume_difference(geometry, cells);
@@ -253,6 +254,7 @@ int main(int argc, char** argv) {
             Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("area2", 2 * n),
             Kokkos::View<double* [2], Kokkos::LayoutRight, Memory>("centroid2", 2 * n),
             Kokkos::View<double*, Memory>("volume2", n),
+            {},
             {},
             {}};
         auto hp = Kokkos::create_mirror_view(p);

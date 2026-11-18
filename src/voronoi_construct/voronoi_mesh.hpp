@@ -322,8 +322,10 @@ public:
         using Areas = typename tet_mesh::Geometry<Memory>::Areas;
         const int stored = stores_faces() ? faces : 0;
         const int halves = layout_.float_centroids ? stored : 0;
-        geometry_ = {Areas("face_area", stored), Areas("face_centroid", stored - halves),
-                     View<double*>("cell_volume", n_), tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0),
+        geometry_ = {Areas("face_area", stored),
+                     Areas("face_centroid", stored - halves),
+                     View<double*>("cell_volume", n_),
+                     tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0),
                      typename tet_mesh::Geometry<Memory>::Centroids32("face_centroid32", halves),
                      View<double*>("face_pyramid", stored)};
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
@@ -716,7 +718,7 @@ private:
     Layout layout_;
     View<int*> permutation_;  // of the last re-sort
     bool resorted_ = false;   // by the update running
-    int since_sort_ = 0;              // updates since the last build or re-sort
+    int since_sort_ = 0;      // updates since the last build or re-sort
     long long flips_since_sort_ = 0;  // device flips since then
     double far_share_ = 0;            // far_faces() at the last check
     shell_voronoi::Cells<Memory> local_;

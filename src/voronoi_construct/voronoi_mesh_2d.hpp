@@ -134,6 +134,7 @@ public:
                      Areas(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_centroid")), faces),
                      View<double*>("cell_volume", n_),
                      tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0),
+                     {},
                      {}};
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, Areas("cell_centroid", n_)};
