@@ -162,7 +162,10 @@ int main(int argc, char** argv) {
                 }
                 sorted_points.swap(moved);
                 label.swap(relabel);
-                sorted.permute(x);
+                if (resorts % 2)  // both ways a caller follows: into a new view, and in place without allocating
+                    sorted.permute(x);
+                else
+                    sorted.permute_in_place(x);
                 const auto followed = to_host(x), expected = to_host(to_device(scaled(sorted_points, box)));
                 const auto snapped = to_host(sorted.positions());
                 for (int i = 0; i < n; ++i)
@@ -186,7 +189,7 @@ int main(int argc, char** argv) {
         check.expect(resorts == 4 && wrong_permutation == 0,
                      name + "re-sorted at the build and every second update, a permutation each time");
         check.expect(wrong_follow == 0,
-                     name + "permute() carries the caller's rows, and the mesh's positions are those rows");
+                     name + "permute() and permute_in_place() carry the caller's rows, and the mesh's positions are those rows");
         check.expect(wrong_sets == 0, name + "every particle keeps its neighbours, by its first number");
         check.expect(
             worst_volume < 1e-12 && worst_centroid < 1e-12,

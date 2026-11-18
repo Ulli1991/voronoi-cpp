@@ -410,6 +410,14 @@ public:
         mesh_order::gather(exec_, permutation_, in, out);
         exec_.fence();
     }
+    // The same in place, without allocating: staged in the spare ring pool (scratch(), grown only if smaller than v)
+    // and copied back. Between updates, as scratch(); for callers that follow every re-sort (luna-cpp's follow_resort).
+    template <class V>
+    void permute_in_place(const V& v) {
+        const auto room = scratch(v.span() * sizeof(typename V::non_const_value_type));
+        permute_through(permutation_, v, mesh_order::Arena<Memory>{room.data(), room.extent(0), 0});
+        exec_.fence();
+    }
 
     // Local rebuild by clipping: the cells of the particles `cells` at positions x, independent of the persistent mesh.
     // Each face of a listed cell is returned once: by the lower id if both are listed, else by the listed one (Cells:
@@ -703,32 +711,59 @@ private:
     // Used by: update (when due), rebuild.
     void resort(Timings* timings) {
         Kokkos::Timer timer;
-        View<int*> order(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_order")), n_);
-        if (layout_.curve == Curve::rcm)
-            mesh_order::rcm(exec_, tets_, state_.alive, state_.count, n_, order);
-        else
-            mesh_order::cell_order(exec_, state_.point, n_, layout_.curve, order);
-        View<int*> rank(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_rank")), n_);
-        mesh_order::invert(exec_, View<const int*>(order), rank);
-        Positions moved(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("positions")), n_);
-        decltype(state_.point.view) points(
-            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_repair_point")), n_);
-        mesh_order::gather(exec_, order, positions_, moved);
-        mesh_order::gather(exec_, order, state_.point.view, points);
-        positions_ = moved;
-        state_.point.view = points;
-        mesh_order::order_tetrahedra(exec_, View<const int*>(rank), tets_, state_);
+        // The rings are walked again after a re-sort (faces = -1), so both ring pools are free while it runs: their room
+        // holds the keys, the sorts' buffers, the rank and every staged array. Nothing is allocated when they hold it.
+        using Arena = mesh_order::Arena<Memory>;
+        auto room = [&](int p) {
+            auto& pool = rings_.pool[p];
+            return Arena{reinterpret_cast<char*>(pool.data()), pool.extent(0) * sizeof(int), 0};
+        };
+        Arena first = room(rings_.in_use), second = room(1 - rings_.in_use);
+        if (static_cast<int>(permutation_.extent(0)) != n_)
+            permutation_ = View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_order")), n_);
+        const View<int*> order = permutation_;  // one re-sort per update: a rebuild after it starts again from the caller's order
+        View<int*> rank = first.template take<int>(n_);
+        if (!rank.data())
+            rank = View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("cell_rank")), n_);
+        {
+            Arena keys = first;  // the cell keys and their sort, then free for the tetrahedra's
+            if (layout_.curve == Curve::rcm)
+                mesh_order::rcm(exec_, tets_, state_.alive, state_.count, n_, order);
+            else
+                mesh_order::cell_order(exec_, state_.point, n_, layout_.curve, order, &keys);
+            mesh_order::invert(exec_, View<const int*>(order), rank);
+            exec_.fence();
+        }
+        // Positions and quantised points gathered into the second room, then copied back.
+        permute_through(order, positions_, second);
+        permute_through(order, state_.point.view, second);
+        mesh_order::order_tetrahedra(exec_, View<const int*>(rank), tets_, state_, &first, &second);
         rings_.faces = -1;
         rings_.used = rings_.tets = rings_.dirty_count = 0;
         rings_.renumber_valid = false;
         owner_faces_.faces = -1;
-        permutation_ = order;  // one re-sort per update: a rebuild after it starts again from the caller's order
         exec_.fence();
         resorted_ = true;
         since_sort_ = 0;
         flips_since_sort_ = 0;
         far_share_ = 0;
         lap(timer, timings, &Timings::resort);
+    }
+
+    // v(i) := v(order(i)) row by row, staged in `room` when it has space (else in a temporary) and copied back.
+    template <class Order, class V>
+    void permute_through(const Order& order, const V& v, mesh_order::Arena<Memory> room) const {
+        using Value = typename V::non_const_value_type;
+        using Staged = typename V::non_const_type;
+        auto flat = room.template take<Value>(v.span());
+        Staged staged;
+        if (flat.data()) {
+            staged = Staged(flat.data(), v.layout());  // unmanaged: wraps the room
+        } else {
+            staged = Staged(Kokkos::view_alloc(Kokkos::WithoutInitializing, v.label()), v.layout());
+        }
+        mesh_order::gather(exec_, order, v, staged);
+        Kokkos::deep_copy(exec_, v, staged);
     }
 
     ExecSpace exec_;

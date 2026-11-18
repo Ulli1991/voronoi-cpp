@@ -1253,6 +1253,18 @@ At 256³ (0.03 / 0.1 / 0.3 spacings) ten steps 259.6 / 187.0 / 107.0 → 263.9 /
 
 The screen's register cap, measured (Nsight Compute, job 32540491; 64 against 76 registers): 43.8 against 32.5 % of warps active, 6.98 against 5.19 warps per scheduler; the spills are 594 B/cell of local loads (98 % L1 hits) and 391 B/cell of local stores (to L2), and add 8 B/cell of DRAM traffic. More warps hide the gathers' latency, which is what the screen waits on (long scoreboard 68 %).
 
+**The re-sort in place** (after the head above; asked for by luna-cpp, whose moving 256³ run ran out of the A100's memory at its first re-sort). The re-sort allocated about 330 B/cell for a moment: the cell keys and the sort's double buffers, the rank, a second copy of the positions and quantised points, the tetrahedra's keys and slots (64 bits each) and their sort, and new vertex, adjacency and edge arrays beside the old. The ring pools are free while it runs (the next update walks every ring again), so it now carves its keys, sort buffers and rank out of one pool (`mesh_order::Arena`), stages each permuted array in the other and copies it back, and sorts the tetrahedra by 32-bit keys. Only the permutation itself (4 B/cell) is kept, reused from the last re-sort. Callers follow with `permute_in_place(view)`, staged in the spare ring pool (`order_test` covers it beside `permute`).
+
+| jittered, 0.1 spacings | 128³ | 256³ |
+|---|---|---|
+| peak of a run with re-sorts, B/cell (jobs 32540920, 32540922; a re-sort every 3 updates) | 2320 → 1994 | 2320 → 1994 (38.9 → 33.5 GB) |
+| peak without a re-sort, B/cell | 1990 | 1990 |
+| one re-sort, ms (ns/cell) (jobs 32540913, 32540918) | 10.4 → 4.8 (5.0 → 2.3) | 108.8 → 34.3 (6.5 → 2.0) |
+| 500 steps, re-sort every 25, M cells/s | 170.3 → 173.7 | 220.7 → 230.0 |
+| 500 steps, re-sort every 100, M cells/s (jobs 32540914, 32540919) | 137.5 → 144.3 | 199.3 → 201.1 |
+
+At 0.3 spacings (128³) one re-sort is 11.6 → 5.4 ms, and 500 steps 102.4 → 103.9 M cells/s (every 25) and 73.4 → 73.6 (every 100). The step after a re-sort still walks every ring and builds every list; that is the rest of what luna-cpp measured as about one step. Bits: the same geometry, faces and lists checksums as before on seven inputs at three spacings with a re-sort every 2 updates (job 32540927); A100 ctest 23 of 23 (job 32540912).
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).

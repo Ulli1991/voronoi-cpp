@@ -140,29 +140,58 @@ KOKKOS_INLINE_FUNCTION std::uint64_t key(Curve curve, const std::uint32_t* c, co
     }
 }
 
-// Stable sorts of (key, id) pairs of up to `capacity` entries, with the buffers allocated once: equal keys keep their
-// order. Used by: cell_order, order_tetrahedra, rcm (once per level).
-template <class ExecSpace>
+// Room carved out of a buffer that is dead while a re-sort runs (a ring pool: the rings are walked again after it), as
+// views at 256-byte boundaries that do not own it; `take` gives an empty view when the room is short (the caller allocates).
+// Used by: PairSort, cell_order, order_tetrahedra, voronoi::Mesh<3>::resort.
+template <class Memory>
+struct Arena {
+    char* data = nullptr;
+    std::size_t size = 0, used = 0;
+    template <class T>
+    Kokkos::View<T*, Memory> take(std::size_t count) {
+        const std::size_t at = (used + 255) / 256 * 256;
+        if (data == nullptr || at + count * sizeof(T) > size) return {};
+        used = at + count * sizeof(T);
+        return Kokkos::View<T*, Memory>(reinterpret_cast<T*>(data + at), count);  // unmanaged: wraps the room
+    }
+};
+
+// Stable sorts of (key, id) pairs of up to `capacity` entries, the double buffers and CUB's scratch taken from `arena`
+// when it has room, else allocated once: equal keys keep their order. Used by: cell_order, order_tetrahedra, rcm.
+template <class ExecSpace, class Key = std::uint64_t>
 class PairSort {
 public:
     using Memory = typename ExecSpace::memory_space;
-    using Keys = Kokkos::View<std::uint64_t*, Memory>;
+    using Keys = Kokkos::View<Key*, Memory>;
     using Ids = Kokkos::View<int*, Memory>;
 
-    PairSort(const ExecSpace& exec, int capacity) : exec_(exec) {
+    PairSort(const ExecSpace& exec, int capacity, Arena<Memory>* arena = nullptr) : exec_(exec) {
 #if defined(KOKKOS_ENABLE_CUDA)
         if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
-            keys_ = Keys(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), capacity);
-            ids_ = Ids(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_ids")), capacity);
-            cub::DoubleBuffer<std::uint64_t> k(nullptr, nullptr);
+            cub::DoubleBuffer<Key> k(nullptr, nullptr);
             cub::DoubleBuffer<int> v(nullptr, nullptr);
             std::size_t bytes = 0;
-            cub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0, 64, exec.cuda_stream());
-            scratch_ = Kokkos::View<char*, Memory>(
-                Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_sort")), bytes);
+            cub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0, 8 * static_cast<int>(sizeof(Key)),
+                                            exec.cuda_stream());
+            if (arena) {
+                keys_ = arena->template take<Key>(capacity);
+                ids_ = arena->template take<int>(capacity);
+                scratch_ = arena->template take<char>(bytes);
+            }
+            if (!keys_.data() || !ids_.data() || !scratch_.data()) {
+                own_keys_ = Kokkos::View<Key*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), capacity);
+                own_ids_ = Kokkos::View<int*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_ids")), capacity);
+                own_scratch_ = Kokkos::View<char*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_sort")), bytes);
+                keys_ = own_keys_;
+                ids_ = own_ids_;
+                scratch_ = own_scratch_;
+            }
         }
 #else
-        (void)capacity;
+        (void)capacity, (void)arena;
 #endif
     }
 
@@ -172,7 +201,7 @@ public:
         if (n < 2) return;
 #if defined(KOKKOS_ENABLE_CUDA)
         if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
-            cub::DoubleBuffer<std::uint64_t> k(keys.data(), keys_.data());
+            cub::DoubleBuffer<Key> k(keys.data(), keys_.data());
             cub::DoubleBuffer<int> v(ids.data(), ids_.data());
             std::size_t bytes = scratch_.extent(0);
             cub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, k, v, n, 0, bits, exec_.cuda_stream());
@@ -189,7 +218,7 @@ public:
             std::vector<int> at(n);
             std::iota(at.begin(), at.end(), 0);
             std::stable_sort(at.begin(), at.end(), [&](int a, int b) { return (keys(a) & mask) < (keys(b) & mask); });
-            std::vector<std::uint64_t> k(n);
+            std::vector<Key> k(n);
             std::vector<int> v(n);
             for (int q = 0; q < n; ++q) k[q] = keys(at[q]), v[q] = ids(at[q]);
             for (int q = 0; q < n; ++q) keys(q) = k[q], ids(q) = v[q];
@@ -203,16 +232,26 @@ private:
     Keys keys_;
     Ids ids_;
     Kokkos::View<char*, Memory> scratch_;
+    Kokkos::View<Key*, Memory> own_keys_;  // when the arena had no room
+    Kokkos::View<int*, Memory> own_ids_;
+    Kokkos::View<char*, Memory> own_scratch_;
 };
 
-// order(i) = the cell that becomes cell i: cells sorted by `curve` (not rcm) of their snapped points, ties by id.
-// Used by: voronoi::Mesh<3>::resort and rebuild.
+// order(i) = the cell that becomes cell i: cells sorted by `curve` (not rcm) of their snapped points, ties by id. The
+// keys and the sort's buffers from `arena` when it has room. Used by: voronoi::Mesh<3>::resort and rebuild.
 template <class ExecSpace, class P>
 void cell_order(const ExecSpace& exec, const P& point, int n, Curve curve,
-                const Kokkos::View<int*, typename ExecSpace::memory_space>& order) {
+                const Kokkos::View<int*, typename ExecSpace::memory_space>& order,
+                Arena<typename ExecSpace::memory_space>* arena = nullptr) {
     using Memory = typename ExecSpace::memory_space;
-    Kokkos::View<std::uint64_t*, Memory> keys(
-        Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), n);
+    using Keys = typename PairSort<ExecSpace>::Keys;
+    Kokkos::View<std::uint64_t*, Memory> own;
+    Keys keys = arena ? arena->template take<std::uint64_t>(n) : Keys();
+    if (!keys.data()) {
+        own = Kokkos::View<std::uint64_t*, Memory>(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), n);
+        keys = own;
+    }
     const MooreTable moore = curve == Curve::moore ? MooreTable::build(axis_bits - 1) : MooreTable{};
     // Snapped coordinates are below 2^30 (the longest side): their top axis_bits bits.
     constexpr int drop = 30 - axis_bits;
@@ -224,7 +263,7 @@ void cell_order(const ExecSpace& exec, const P& point, int n, Curve curve,
             keys(i) = key(curve, c, moore);
             order(i) = i;
         });
-    PairSort<ExecSpace>(exec, n)(keys, order, 3 * axis_bits);
+    PairSort<ExecSpace>(exec, n, arena)(keys, order, 3 * axis_bits);
 }
 
 // rank(order(i)) = i. Used by: voronoi::Mesh<3>::resort.
@@ -427,18 +466,32 @@ void rcm(const ExecSpace& exec, const tet_mesh::Mesh<typename ExecSpace::memory_
 }
 
 // Renumbers the cells (rank(old) = new) of the tetrahedra and sorts the live ones by their lowest new cell, ties by
-// slot; the slots past them are free, and every tetrahedron counts as created (state.touched_entries = -1).
-// Used by: voronoi::Mesh<3>::resort.
+// slot; the slots past them are free, and every tetrahedron counts as created (state.touched_entries = -1). In place:
+// the keys, slots and the sort's buffers from `sort_room`, each array's new rows staged in `rows_room` and copied back,
+// so nothing is allocated when the arenas hold them (else the missing pieces are). Used by: voronoi::Mesh<3>::resort.
 template <class ExecSpace>
 void order_tetrahedra(const ExecSpace& exec, const Kokkos::View<const int*, typename ExecSpace::memory_space>& rank,
                       tet_mesh::Mesh<typename ExecSpace::memory_space>& mesh,
-                      tet_repair::State<typename ExecSpace::memory_space>& state) {
+                      tet_repair::State<typename ExecSpace::memory_space>& state,
+                      Arena<typename ExecSpace::memory_space>* sort_room = nullptr,
+                      Arena<typename ExecSpace::memory_space>* rows_room = nullptr) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const int count = state.count, capacity = static_cast<int>(mesh.vertex.extent(0));
-    Kokkos::View<std::uint64_t*, Memory> keys(
-        Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), count);
-    Kokkos::View<int*, Memory> slot(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_slots")), count);
+    // Keys are the lowest new cell (below 2^31) or 2^32 - 1 for a dead slot: 32 bits.
+    using Sort = PairSort<ExecSpace, std::uint32_t>;
+    Kokkos::View<std::uint32_t*, Memory> own_keys;
+    Kokkos::View<int*, Memory> own_slot;
+    typename Sort::Keys keys = sort_room ? sort_room->template take<std::uint32_t>(count) : typename Sort::Keys();
+    typename Sort::Ids slot = sort_room ? sort_room->template take<int>(count) : typename Sort::Ids();
+    if (!keys.data() || !slot.data()) {
+        own_keys = Kokkos::View<std::uint32_t*, Memory>(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), count);
+        own_slot = Kokkos::View<int*, Memory>(
+            Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_slots")), count);
+        keys = own_keys;
+        slot = own_slot;
+    }
     const auto vertex = mesh.vertex;
     const auto alive = state.alive;
     int live = 0;
@@ -447,46 +500,66 @@ void order_tetrahedra(const ExecSpace& exec, const Kokkos::View<const int*, type
         KOKKOS_LAMBDA(int t, int& sum) {
             slot(t) = t;
             if (!alive(t)) {
-                keys(t) = 0xffffffffull;
+                keys(t) = 0xffffffffu;
                 return;
             }
             ++sum;
             int low = rank(vertex(t, 0));
             for (int c = 1; c < 4; ++c) low = Kokkos::min(low, rank(vertex(t, c)));
-            keys(t) = static_cast<std::uint64_t>(low);
+            keys(t) = static_cast<std::uint32_t>(low);
         },
         live);
-    PairSort<ExecSpace>(exec, count)(keys, slot, 32);
+    Sort(exec, count, sort_room)(keys, slot, 32);
     // new_slot(old) for the adjacency, in the keys' room.
     const Kokkos::View<int*, Memory> new_slot(reinterpret_cast<int*>(keys.data()), count);
     Kokkos::parallel_for(
         "mesh_order::tet_rank", Range(exec, 0, count), KOKKOS_LAMBDA(int s) { new_slot(slot(s)) = s; });
-    tet_mesh::Quads<Memory> v2(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_vertex")), capacity);
-    tet_mesh::Quads<Memory> a2(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("tet_adjacent")), capacity);
-    Kokkos::View<std::uint8_t*, Memory> e2("tet_edges", capacity);
+    // The new rows of one array at a time: staged, then copied back over the old (the adjacency needs only new_slot
+    // and the old adjacency, the vertices only rank and the old vertices).
+    Kokkos::View<int*, Memory> own_rows;
+    Kokkos::View<int*, Memory> rows = rows_room ? rows_room->template take<int>(4LL * live) :
+                                                            Kokkos::View<int*, Memory>();
+    if (!rows.data()) {
+        own_rows = Kokkos::View<int*, Memory>(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_rows")),
+                                              4LL * live);
+        rows = own_rows;
+    }
     const auto adjacent = mesh.adjacent;
     const auto edges = mesh.edges;
+    auto copy_back = [&](const tet_mesh::Quads<Memory>& to) {
+        Kokkos::parallel_for(
+            "mesh_order::tet_copy", Range(exec, 0, 4 * live),
+            KOKKOS_LAMBDA(int e) { to(e / 4, e % 4) = rows(e); });
+    };
     Kokkos::parallel_for(
-        "mesh_order::tet_move", Range(exec, 0, live), KOKKOS_LAMBDA(int s) {
+        "mesh_order::tet_vertices", Range(exec, 0, live), KOKKOS_LAMBDA(int s) {
+            const int t = slot(s);
+            for (int c = 0; c < 4; ++c) rows(4 * s + c) = rank(vertex(t, c));
+        });
+    copy_back(vertex);
+    Kokkos::parallel_for(
+        "mesh_order::tet_adjacency", Range(exec, 0, live), KOKKOS_LAMBDA(int s) {
             const int t = slot(s);
             for (int c = 0; c < 4; ++c) {
-                v2(s, c) = rank(vertex(t, c));
                 const int u = adjacent(t, c);
-                a2(s, c) = u < 0 ? -1 : new_slot(u);
+                rows(4 * s + c) = u < 0 ? -1 : new_slot(u);
             }
-            e2(s) = edges(t);
         });
-    mesh.vertex = v2;
-    mesh.adjacent = a2;
-    mesh.edges = e2;
+    copy_back(adjacent);
+    // Edge bits: a byte each, staged in the first quarter of the rows' room.
+    const Kokkos::View<std::uint8_t*, Memory> bits(reinterpret_cast<std::uint8_t*>(rows.data()), live);
+    Kokkos::parallel_for(
+        "mesh_order::tet_edges", Range(exec, 0, live), KOKKOS_LAMBDA(int s) { bits(s) = edges(slot(s)); });
+    Kokkos::deep_copy(exec, Kokkos::subview(edges, std::make_pair(0, live)), bits);
+    Kokkos::deep_copy(exec, Kokkos::subview(edges, std::make_pair(live, capacity)), std::uint8_t(0));
     Kokkos::deep_copy(exec, Kokkos::subview(state.alive, std::make_pair(0, live)), char(1));
     Kokkos::deep_copy(exec, Kokkos::subview(state.alive, std::make_pair(live, capacity)), char(0));
     Kokkos::deep_copy(exec, state.touched, char(0));
-    Kokkos::deep_copy(exec, state.dirty, 0);
+    Kokkos::deep_copy(exec, state.dirty, char(0));
     state.count = live;
     state.free_count = 0;
     state.touched_entries = -1;
-    exec.fence();  // the old arrays go now
+    exec.fence();  // the staging rooms are free again
 }
 
 }  // namespace mesh_order
