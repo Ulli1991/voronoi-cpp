@@ -1,0 +1,34 @@
+mesh_fuzz run: seeds 4000000000001 to 4000100000000 by 1, resuming at 4000000000001, results /raven/u/uli/voronoi-cpp-s2/build-cuda/gpu-run/fuzz/huge_32513190.txt
+4000000000006 refused refused:reach n=1 calls=4 refusals=2 flips=0 stuck=0 host=0 rebuilt=0 hash=cbf29ce484222325 t=0.005 op=0 | rod nobg steps:4, | voronoi::Mesh: 1 cells reach too far to be certified in one periodic image: a cell's radius must stay below 3/16 of the shortest tile side, and below 1/8 of it where a tile holds fewer than about 180 particles (a tile is side / round(side / shortest side) along each axis; a cube is one tile); too fe
+4000000000007 refused refused:box_range n=14793 calls=0 refusals=0 flips=0 stuck=0 host=0 rebuilt=0 hash=cbf29ce484222325 t=0.007 op=0 | extreme nobg+shell+line+line steps:0, | voronoi::Mesh: a box side of 7.90763e-70 is outside [1e-16, 1e+20], where float face rows would over- or underflow; rescale the units
+4000000000008 exact exact n=1232595 calls=4 refusals=0 flips=76332 stuck=1533648 host=0 rebuilt=2 hash=8291759261375405 t=64.625 op=-1 | cube fcc+sheet+shell+cosphere steps:4, | 
+4000000000009 exact exact n=1687958 calls=5 refusals=0 flips=31476 stuck=369 host=0 rebuilt=1 hash=cff1715eda8a9bfd t=11.314 op=-1 | 123 hcp+cosphere steps:0,10, | 
+4000000000010 HANG HANG:signal9 n=0 calls=0 refusals=0 flips=0 stuck=0 host=0 rebuilt=0 hash=cbf29ce484222325 t=280.153 op=-1 |  | 
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  s2_fuzz
+Node list: ravg1007
+Job start: Wed Nov 18 10:46:27 CET 2026
+Job end:   Wed Nov 18 11:03:02 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-s2
+Command:   /raven/u/uli/voronoi-cpp-s2/build-cuda/gpu-run/fuzz.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32513190         s2_fuzz      1            36                             00:16:35      0:0
+  
+Maximum memory per node: 1.825128 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 32.3 %
+CO2 footprint: 20.2087 g (estimate based on total cluster power and electricity mix)
+  

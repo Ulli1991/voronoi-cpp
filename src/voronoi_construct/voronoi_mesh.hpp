@@ -6,6 +6,7 @@
 #include "shell_voronoi_warp.hpp"
 #include "tet_cells.hpp"
 #include "tet_flips.hpp"
+#include "tet_local.hpp"
 #include "tet_mesh.hpp"
 #include "tet_repair.hpp"
 #include "tet_start.hpp"
@@ -142,6 +143,10 @@ struct Report {
     bool miscounted = false;       // the repair's faces were not cells + tetrahedra (Euler, #48): rebuilt
     long long host_flips = 0;      // flips and local rebuilds of the host fallback
     long long host_rebuilds = 0;
+    int local_cells = 0;      // cells the local repair clipped exactly (tet_local), 0 if it did not run
+    int local_tets = 0;       // tetrahedra it created
+    int local_attempts = 0;   // its attempts (2: exact cells, 3: also widened)
+    bool local_done = false;  // the local repair finished the mesh
     int faces = 0;
     bool resorted = false;  // cell ids changed: cell i is the particle the caller passed as Mesh::permutation()(i)
 };
@@ -149,15 +154,16 @@ struct Report {
 // Phase times of an update, in ms, for the benchmark: given to update(), the phases are fenced and timed.
 // Used by: Mesh::lap, from update, rebuild, geometry, update_cells.
 struct Timings {
-    double repair = 0, fallback = 0, geometry = 0, build = 0, cells = 0, resort = 0;
+    double repair = 0, fallback = 0, local = 0, geometry = 0, build = 0, cells = 0, resort = 0;
 };
 
-// What update() does when the device repair leaves triangles it cannot repair: repair around them on the host
-// (tet_flips; a rebuild if that does not finish), rebuild from scratch on the device, or (cheapest) choose by the
-// number of stuck entries (host only up to n / 200000, none below 200000 cells). No clock decides: the same input
-// takes the same path. The host stops after host_budget tetrahedra of local Delaunay builds (about a second on one
-// core; the host repairs the fuzz finished took up to 1.7e6) and the mesh is rebuilt instead (#33).
-enum class Fallback { cheapest, host, rebuild };
+// What update() does when the device repair leaves triangles it cannot repair: clip the cells around them exactly on
+// the device and stitch them in (local, tet_local), repair around them on the host (tet_flips), or rebuild from
+// scratch; each falls back to a rebuild if it does not finish. cheapest: local up to n / local_share stuck entries,
+// else rebuild. No clock decides: the same input takes the same path. The host stops after host_budget tetrahedra of
+// local Delaunay builds (about a second on one core) and the mesh is rebuilt instead (#33).
+enum class Fallback { cheapest, host, rebuild, local };
+constexpr long long local_share = 64;
 constexpr long long host_budget = 1LL << 20;
 using Curve = mesh_order::Curve;
 
@@ -189,8 +195,8 @@ struct Layout {
 //
 // Workflow of the 3D mesh (public methods in call order):
 //   update(x)        every step. First call, changed count, or failure -> rebuild(x); else
-//                    snap -> tet_repair::move_screened -> tet_repair::repair (device) -> tet_flips::finish (host
-//                    fallback, if stuck) -> geometry() (tet_mesh); a mesh not filling the box once -> rebuild(x).
+//                    snap -> tet_repair::move_screened -> tet_repair::repair (device) -> tet_local::repair or
+//                    tet_flips::finish (Fallback, if stuck) -> geometry() (tet_mesh); not filling the box once -> rebuild(x).
 //   rebuild(x)       from scratch: snap -> index -> shell_voronoi clipping -> tet_start::build -> repair::prepare
 //                    -> geometry(). Throws std::runtime_error if the start is not exact.
 //   update_cells()   optional, after update/rebuild: per-cell face lists, volumes, centroids.
@@ -233,6 +239,7 @@ public:
         Report report;
         resorted_ = false;
         ++since_sort_;
+        local_ = tet_local::Stats{};
         Kokkos::Timer timer;
         snap(x);
         tet_repair::move_screened(exec_, positions_, box_, tets_, state_);
@@ -243,8 +250,30 @@ public:
         report.stuck = device.stuck;
         lap(timer, timings, &Timings::repair);
         bool stuck = device.stuck > 0 || device.unfinished;
-        if (stuck && !device.unfinished && fallback_ != Fallback::rebuild &&
-            (fallback_ == Fallback::host || static_cast<long long>(device.stuck) * 200000 <= n_)) {
+        const bool local = fallback_ == Fallback::local || (fallback_ == Fallback::cheapest &&
+                                                            static_cast<long long>(device.stuck) * local_share <= n_);
+        if (stuck && !device.unfinished && local) {
+            Kokkos::Timer clock;
+            index(positions_);
+            exec_.fence();
+            const double index_ms = clock.seconds() * 1e3;
+            try {  // out of memory before it writes (its arrays are freed): the step rebuilds
+                local_ =
+                    tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_, layout_.same_bits_as_host);
+            } catch (const std::exception&) {
+                local_ = tet_local::Stats{};
+            }
+            local_.index_ms = index_ms;
+            const tet_local::Stats& patch = local_;
+            list_ = neighbor_search::CellList<ExecSpace>{};  // as after a rebuild: memory only while used
+            report.local_cells = patch.cells;
+            report.local_tets = patch.created;
+            report.local_done = patch.done;
+            report.local_attempts = patch.attempts;
+            report.flips += patch.flips;
+            stuck = !patch.done;
+            lap(timer, timings, &Timings::local);
+        } else if (stuck && !device.unfinished && fallback_ == Fallback::host) {
             tet_flips::Stats host;
             try {
                 host = tet_flips::finish(exec_, tets_, state_, host_budget);
@@ -275,6 +304,9 @@ public:
         rebuilt.stuck = report.stuck;
         rebuilt.host_flips = report.host_flips;
         rebuilt.host_rebuilds = report.host_rebuilds;
+        rebuilt.local_cells = report.local_cells;
+        rebuilt.local_tets = report.local_tets;
+        rebuilt.local_attempts = report.local_attempts;
         rebuilt.overlapped = report.overlapped;
         rebuilt.miscounted = report.miscounted;
         return rebuilt;
@@ -398,10 +430,10 @@ public:
                 slots(i) = slot_of(cells(i));
                 listed(cells(i)) = 1;
             });
-        local_ = shell_voronoi::Cells<Memory>(n_, false, 10, count);
+        local_cells_ = shell_voronoi::Cells<Memory>(n_, false, 10, count);
         // Exact cells: nothing checks a rounded one here (#30).
-        shell_voronoi::construct(exec_, shell_voronoi::make_grid(list_), local_, {slots, listed}, true);
-        return local_;
+        shell_voronoi::construct(exec_, shell_voronoi::make_grid(list_), local_cells_, {slots, listed}, true);
+        return local_cells_;
     }
 
     // Scratch memory the caller may use between updates: the spare ring pool, grown to `bytes` if smaller.
@@ -537,6 +569,7 @@ public:
     // Internals, for tests and the benchmark.
     const tet_mesh::Mesh<Memory>& tetrahedra() const { return tets_; }
     const tet_repair::State<Memory>& repair_state() const { return state_; }
+    const tet_local::Stats& local_stats() const { return local_; }  // the last local repair's
 #if defined(VORONOI_MEASURE)
     const tet_mesh::FaceRings<Memory>& face_rings() const { return rings_; }  // measurement build only
 #endif
@@ -609,7 +642,7 @@ private:
     }
 
     // Stage 2: the cell list (spatial grid) of positions p, for the neighbour search of the clipping.
-    // Used by: rebuild, clip.
+    // Used by: rebuild, clip, update (local repair).
     template <class P>
     void index(const P& p) {
         if (list_.n != n_) neighbor_search::configure(list_, n_, box_, box_.cubic() ? box_.side[0] * std::cbrt(1.0 / n_)
@@ -721,7 +754,8 @@ private:
     int since_sort_ = 0;      // updates since the last build or re-sort
     long long flips_since_sort_ = 0;  // device flips since then
     double far_share_ = 0;            // far_faces() at the last check
-    shell_voronoi::Cells<Memory> local_;
+    shell_voronoi::Cells<Memory> local_cells_;
+    tet_local::Stats local_;
 };
 
 }  // namespace voronoi

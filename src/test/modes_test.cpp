@@ -73,22 +73,34 @@ Kokkos::View<double* [D], Kokkos::HostSpace> host_rows(const std::vector<std::ar
 struct Update {
     std::pair<std::uint64_t, std::uint64_t> hash;
     std::vector<double> volume;
+    bool local = false;  // the update finished by a local repair (tet_local)
 };
 
-// A build and `steps` steps of the bench flow, scaled to `spacings` per step, in one mode.
+// A build and `steps` steps of the bench flow, scaled to `spacings` per step, in one mode; `jumpers` particles (the
+// same in every mode) jump 4 spacings each step, which leaves stuck entries for the local repair.
 template <int D>
-std::vector<Update> run(voronoi::Backend backend, Points points, double spacings, int steps) {
+std::vector<Update> run(voronoi::Backend backend, Points points, double spacings, int steps, int jumpers = 0) {
     voronoi::Engine<D> engine(1.0, {backend});
-    const double distance = spacings * std::pow(1.0 / double(points.size()), 1.0 / D);
+    const double spacing = std::pow(1.0 / double(points.size()), 1.0 / D), distance = spacings * spacing;
     const Flow flow;
+    std::mt19937_64 rng(17);
+    std::normal_distribution<double> g(0, 1);
+    std::uniform_int_distribution<std::size_t> any(0, points.size() - 1);
     std::vector<Update> out;
     for (int s = 0; s <= steps; ++s) {
         if (s > 0) flow.advect(points, distance);
+        for (int k = 0; s > 0 && k < jumpers; ++k) {
+            auto& p = points[any(rng)];
+            const double u[3] = {g(rng), g(rng), g(rng)};
+            const double scale = 4 * spacing / std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            for (int a = 0; a < 3; ++a) p[a] = wrap(p[a] + scale * u[a]);
+        }
+        if (jumpers > 0) to_grid(points);
         if constexpr (D < 3)
             for (auto& p : points)
                 for (int a = D; a < 3; ++a) p[a] = 0;
-        engine.update(host_rows<D>(points));
-        Update u{hashes(engine), {}};
+        const voronoi::Report r = engine.update(host_rows<D>(points));
+        Update u{hashes(engine), {}, r.local_done && !r.rebuilt};
         const auto volume = engine.volume();
         u.volume.assign(volume.data(), volume.data() + engine.particles());
         out.push_back(std::move(u));
@@ -119,16 +131,22 @@ std::string hex(std::uint64_t h) {
 
 // Every mode this build has against the first; `what` names the case.
 template <int D>
-void compare(Check& check, const std::string& what, const Points& points, double spacings, int steps) {
+void compare(Check& check, const std::string& what, const Points& points, double spacings, int steps, int jumpers = 0) {
     std::vector<voronoi::Backend> modes{voronoi::Backend::cpu};
     if (voronoi::has_device()) modes = {voronoi::Backend::cpu, voronoi::Backend::gpu, voronoi::Backend::hybrid};
     std::vector<std::vector<Update>> runs;
     runs.reserve(modes.size());  // `first` and `other` stay valid
-    runs.push_back(run<D>(modes[0], points, spacings, steps));
+    runs.push_back(run<D>(modes[0], points, spacings, steps, jumpers));
     const auto& first = runs[0];
     const int updates = int(first.size());
     for (std::size_t m = 1; m < modes.size(); ++m) {
-        runs.push_back(run<D>(modes[m], points, spacings, steps));
+        runs.push_back(run<D>(modes[m], points, spacings, steps, jumpers));
+        if (jumpers > 0) {
+            const auto local =
+                std::count_if(runs.back().begin(), runs.back().end(), [](const Update& u) { return u.local; });
+            check.expect(local > 0, what + ": " + voronoi::name(modes[m]) + " repaired " + std::to_string(local) +
+                                        " of " + std::to_string(updates) + " updates locally");
+        }
         const auto& other = runs.back();
         int topology = 0, all = 0;
         long long cells = 0, cells_same = 0;
@@ -170,6 +188,8 @@ int main(int argc, char** argv) {
                    4);
     compare<3>(check, "3D uniform 32768, 2 spacings (rebuilds), 2 steps", in_slot_order(make_points("uniform", 32768)),
                2.0, 2);
+    compare<3>(check, "3D jittered 32768, 0.1 spacings and 4 jumpers of 4 spacings (local repairs), 4 steps",
+               in_slot_order(make_points("jittered", 32768)), 0.1, 4, 4);
     compare<2>(check, "2D uniform 16384, 0.3 spacings, 4 steps", flat_points(16384, 2, 7), 0.3, 4);
     compare<1>(check, "1D uniform 4096, 0.3 spacings, 4 steps", flat_points(4096, 1, 11), 0.3, 4);
 

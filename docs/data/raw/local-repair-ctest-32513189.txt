@@ -1,0 +1,70 @@
+ravg1044
+NVIDIA A100-SXM4-40GB, 1305 MHz
+      Start  5: repair
+ 5/22 Test  #5: repair ...........................   Passed    2.61 sec
+      Start  6: voronoi_mesh
+ 6/22 Test  #6: voronoi_mesh .....................   Passed    1.07 sec
+      Start  7: order
+ 7/22 Test  #7: order ............................   Passed    1.23 sec
+      Start  8: mesh1d
+ 8/22 Test  #8: mesh1d ...........................   Passed    0.78 sec
+      Start  9: mesh2d
+ 9/22 Test  #9: mesh2d ...........................   Passed  172.40 sec
+      Start 10: distortion
+10/22 Test #10: distortion .......................   Passed    9.26 sec
+      Start 11: metamorphic
+11/22 Test #11: metamorphic ......................   Passed    5.14 sec
+      Start 12: mesh_fuzz
+12/22 Test #12: mesh_fuzz ........................   Passed   10.31 sec
+      Start 13: mesh_cases.coincident
+13/22 Test #13: mesh_cases.coincident ............   Passed   17.68 sec
+      Start 14: mesh_cases.few
+14/22 Test #14: mesh_cases.few ...................   Passed    7.88 sec
+      Start 15: mesh_cases.contrast
+15/22 Test #15: mesh_cases.contrast ..............   Passed   21.27 sec
+      Start 16: mesh_cases.box
+16/22 Test #16: mesh_cases.box ...................   Passed   13.52 sec
+      Start 17: mesh_cases.degenerate
+17/22 Test #17: mesh_cases.degenerate ............   Passed   15.15 sec
+      Start 18: mesh_cases.valence
+18/22 Test #18: mesh_cases.valence ...............   Passed   25.74 sec
+      Start 19: mesh_cases.large
+19/22 Test #19: mesh_cases.large .................   Passed   16.37 sec
+      Start 20: mesh_cases.fallback
+20/22 Test #20: mesh_cases.fallback ..............   Passed   34.79 sec
+      Start 21: mesh_cases.predicates
+21/22 Test #21: mesh_cases.predicates ............   Passed    2.84 sec
+      Start 22: mesh_cases.repro
+22/22 Test #22: mesh_cases.repro .................   Passed    1.42 sec
+
+100% tests passed, 0 tests failed out of 22
+
+Total Test time (real) = 399.72 sec
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  ctest_a100
+Node list: ravg1044
+Job start: Wed Nov 18 10:49:33 CET 2026
+Job end:   Wed Nov 18 10:56:18 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-s2
+Command:   /raven/u/uli/voronoi-cpp-s2/scripts/ctest_a100.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32513189      ctest_a100      1            36                             00:06:45      0:0
+  
+Maximum memory per node: 0.982913 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 5.6 %
+CO2 footprint: 8.2257 g (estimate based on total cluster power and electricity mix)
+  
