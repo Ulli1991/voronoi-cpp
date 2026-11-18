@@ -106,10 +106,10 @@ rates | rates128 | rates256)  # rates128 and rates256: one size only
         done
     done
     ;;
-long)  # args: <n> <spacings>
+long)  # args: <n> <spacings> [flags...]
     n="${args[0]}"
     for d in ${args[1]}; do
-        for name in "${names[@]}"; do run "$name" step "$n" jittered "$d" 500 --no-start; done
+        for name in "${names[@]}"; do run "$name" step "$n" jittered "$d" 500 --no-start "${args[@]:2}"; done
     done
     ;;
 bits)
@@ -119,9 +119,10 @@ bits)
         done
     done
     ;;
-memory)
+memory)  # args: [n] [flags...] (default 128³; e.g. --every=3 to hold a re-sort)
     for name in "${names[@]}"; do
-        "$bin/voronoi_bench_$name" step 2097152 jittered 0.1 6 --no-start --memory 2>&1 | grep -E "memory: phase|B/cell" |
+        "$bin/voronoi_bench_$name" step "${args[0]:-2097152}" jittered 0.1 6 --no-start --memory "${args[@]:1}" 2>&1 |
+            grep -E "memory: phase|B/cell|resort_ms" |
             sed "s#^#$name | #"
     done
     ;;
