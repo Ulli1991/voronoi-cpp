@@ -10,6 +10,11 @@
 #if defined(__CUDA_ARCH__)
 #include <cooperative_groups.h>
 #endif
+#if defined(KOKKOS_ENABLE_CUDA)
+#include <cub/device/device_scan.cuh>
+#include <cub/device/device_select.cuh>
+#include <thrust/iterator/counting_iterator.h>
+#endif
 
 // Stage 5 (geometry) plus the mesh data structure of stages 3-4: built by tet_start, edited by tet_repair/tet_flips.
 // Mesh::update calls circumcentres -> update_face_rings -> faces; per step: one circumcentre per new tetrahedron, face
@@ -785,6 +790,7 @@ struct FaceRings {
     Ints ids;                                           // face numbers, a block per tetrahedron
     Kokkos::View<std::uint8_t*, MemorySpace> numbered;  // edge bits each block numbers
     Ints counts;                                        // device counters of the renumbering (detail::renumber)
+    Kokkos::View<char*, MemorySpace> cub_temp;          // CUB's temporary storage (detail::select_flagged)
     Borrowed dirty;                                     // faces to walk this step, in the spare pool
     Kokkos::View<int, MemorySpace> listed;              // their number
     int faces = -1;       // -1: none yet, every face is walked
@@ -985,7 +991,37 @@ struct Offsets {
 
 // Counters of renumber, in FaceRings::counts.
 namespace face_count {
-constexpr int low = 0, moved = 1;
+constexpr int low = 0, moved = 1, selected = 7;
+}
+
+// The slots t < count with flag(t) set, in slot order, into `all` (room for count), the first out.extent(0) also into
+// `out`; returns how many. CUB's select on CUDA (a tenth of a Kokkos scan's time); -1 elsewhere: the caller scans.
+template <class ExecSpace, class Flags, class Ints>
+int select_flagged(const ExecSpace& exec, const Flags& flag, int count, const Ints& all, const Ints& out,
+                   FaceRings<typename ExecSpace::memory_space>& rings) {
+#if defined(KOKKOS_ENABLE_CUDA)
+    if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
+        int* selected = rings.counts.data() + face_count::selected;
+        const thrust::counting_iterator<int> slot(0);
+        std::size_t bytes = 0;
+        cub::DeviceSelect::Flagged(nullptr, bytes, slot, flag.data(), all.data(), selected, count, exec.cuda_stream());
+        if (rings.cub_temp.extent(0) < bytes)
+            Kokkos::realloc(Kokkos::WithoutInitializing, rings.cub_temp, bytes + bytes / 4);
+        bytes = rings.cub_temp.extent(0);
+        cub::DeviceSelect::Flagged(rings.cub_temp.data(), bytes, slot, flag.data(), all.data(), selected, count,
+                                   exec.cuda_stream());
+        int found = 0;
+        Kokkos::deep_copy(exec, Kokkos::View<int, Kokkos::HostSpace>(&found),
+                          Kokkos::subview(rings.counts, face_count::selected));
+        exec.fence();
+        const int copied = Kokkos::min(found, static_cast<int>(out.extent(0)));
+        Kokkos::deep_copy(exec, Kokkos::subview(out, std::make_pair(0, copied)),
+                          Kokkos::subview(all, std::make_pair(0, copied)));
+        return found;
+    }
+#endif
+    (void)exec, (void)flag, (void)count, (void)all, (void)out, (void)rings;
+    return -1;
 }
 
 // Faces of touched tetrahedra get new numbers (one with no more faces than before reuses its own), the others keep
@@ -1028,15 +1064,20 @@ int renumber(const ExecSpace& exec, const Mesh<typename ExecSpace::memory_space>
     const auto ring_start = rings.ring_start, ring_length = rings.ring_length;
     // The touched slots in slot order, then per slot by a scan (no atomics, slot order): where its freed numbers go,
     // and for one with more faces than before its place among the growing, its first new face and its block.
-    int listed_slots = 0;
-    Kokkos::parallel_scan(
-        "tet_mesh::face_touched", Range(exec, 0, count),
-        KOKKOS_LAMBDA(int t, int& sum, bool final) {
-            if (!touched(t)) return;
-            if (final && sum < cap) slots(sum) = t;
-            ++sum;
-        },
-        listed_slots);
+    int listed_slots = -1;
+    if (count <= old_faces)  // faces = cells + live tetrahedra: the room holds every slot
+        listed_slots = select_flagged(exec, touched, count, Borrowed(room, count), slots, rings);
+    if (listed_slots < 0) {
+        listed_slots = 0;
+        Kokkos::parallel_scan(
+            "tet_mesh::face_touched", Range(exec, 0, count),
+            KOKKOS_LAMBDA(int t, int& sum, bool final) {
+                if (!touched(t)) return;
+                if (final && sum < cap) slots(sum) = t;
+                ++sum;
+            },
+            listed_slots);
+    }
     if (listed_slots > cap) return renumber_all(exec, mesh, count, touched, rings);
     Offsets total;
     Kokkos::parallel_scan(
