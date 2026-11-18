@@ -121,7 +121,8 @@ bits)
     ;;
 memory)
     for name in "${names[@]}"; do
-        "$bin/voronoi_bench_$name" step 2097152 jittered 0.1 6 --no-start --memory 2>&1 | sed "s#^#$name | #" | tail -40
+        "$bin/voronoi_bench_$name" step 2097152 jittered 0.1 6 --no-start --memory 2>&1 | grep -E "memory: phase|B/cell" |
+            sed "s#^#$name | #"
     done
     ;;
 verify)  # args: <n> <spacings> <steps>
