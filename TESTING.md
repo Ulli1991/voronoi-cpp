@@ -239,6 +239,8 @@ voronoi_bench step 262144 <kind> 0.3 3 --verify --box=1,2,3      # uniform jitte
 
 Each `verify:` line must end in `PASS`.
 
+A branch that changes the moving step proves itself against the code it starts from in one gpu1 job: `scripts/levers_proof_a100.sh <ref checkout>` (from `step-levers`, 2026-11-18) builds both, runs ctest on the A100 (with `modes`: hybrid equals cpu), checks every step against a fresh exact build on seven inputs at 0.03, 0.1 and 0.3 spacings and S2's jump cases, and compares the geometry, faces and lists checksums (not `cells_checksum`, which hashes face numbers and differs between runs) on seven inputs at three spacings. CI's host steps (comments, format, gcc 15 with sanitizers off and on, clang-tidy 18) run apart on a CPU node with `scripts/ci_host_general.sh`.
+
 ## Solver-level checks
 
 The finite-volume solver is not in this repository. Its tests, the 1D comparisons against LUNA and the 3D gate runs

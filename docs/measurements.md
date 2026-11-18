@@ -1192,6 +1192,56 @@ Fuzz, CPU (OpenMP, gcc 15, small profile): 236,785 cases on 31b41fd and (so far)
 
 Against the 2× goal: 1.06–1.12× on ten-step runs (levers 2 to 5), 1.65× (0.03 spacings) to 2.2× (0.1 and 0.3) over 500 steps with the re-sort. The rest of a ten-step run is the flips (`plan`, `apply`, `find`: 5.8 ms of 21 at 128³, 0.1), the screen (2.4 ms), the faces (2.7 ms) and the ring walks (3.3 ms), which these levers do not touch.
 
+### The step levers (branch `step-levers`, 2026-11-18)
+
+Guided by the profile of 2026-11-18 (branch `profile-2026-11-18`, research_notes/profile_2026-11-18.md: per-kernel speed of light and memory of light). One A100 SXM4 40 GB on Raven (`gpu1`, `gpudev`) at 1305 MHz (application clock, from `nvidia-smi` in every job), double precision, periodic unit box, jittered input, the bench's smooth flow (`step` mode of the bench), update + `update_cells()`. Base: step-2x 1741a1a (= main). Scripts: `scripts/levers_a100.sh` (modes kernels, rates128, rates256, long, bits, ncu, memory, verify), `scripts/levers_build.sh` (registers and stack per kernel, from `cuobjdump`), `scripts/levers_proof_a100.sh`; Nsight Compute through the Kokkos Tools connector `scripts/kp_profile.cpp` and `scripts/profile_ncu.py` (from the profile branch). Logs in `build-jobs/logs` of the worktree on Raven. Each change's row, kept or dropped, is in [tried.md](tried.md#moving-step).
+
+What changed:
+
+1. **Lever 1: the repair at its registers** (`3cc282a`). The plan step searches its first valid flip, then checks that one flip's cavity: the threads of a warp run one search and one check together (one unrolled copy per candidate left 4 of 32 threads active). The cavity check (`closes23`, `closes32`) and the apply step (`apply_flip`, one code path for 2->3 and 3->2) work by formula from the rows of the old tetrahedra; every array has a fixed size and stays in registers. Rounds of a dirty list of at most 2048 tetrahedra run back to back on one team (`small_rounds`), with barriers instead of launches and one host wait for all of them; when the lists hold a round, the plan step also unlists.
+2. **Lever 2: the screen keeps its centre in registers** (`ecb9992`). `store_centre` returns the row it stores and the neighbour tests read it from registers; each far vertex is found from t's corners in registers. The 64-register cap stays: without it the screen has no spills but is 4 to 7 % slower.
+
+Per kernel at 128³, 0.1 spacings, Nsight Compute on step 3 (jobs 32527071, 32529634; step-2x → levers):
+
+| kernel | ms | registers | local B/cell | threads active of 32 |
+|---|---|---|---|---|
+| `apply` | 2.54 → 1.43 | 58 → 72 | 526 → 27 | 7.5 → 10.9 |
+| `plan` | 2.21 → 1.22 | 156 → 96 | 369 → 0 | 15.5 → 15.0 |
+| `find` | 1.03 → 0.75 | 168 → 160 | 35 → 35 | 19.3 → 22.6 |
+| `small_rounds` (the tail rounds) | – → 0.29 | 146 | 0 | 18.9 |
+| `unlist` | 0.12 → 0.10 | 16 | 0 | 32 |
+| `screen` (lever 2) | 2.17 → 1.78 | 64 | 168 → 985 | 20.9 → 24.8 |
+
+The repair (`find`, `plan`, `apply`, `unlist`, `release`, small rounds) went from 5.85 to 3.79 ms, about 1.0 ns/cell of the up to 2.6 the profile bounded.
+
+500 steps, the rate over the run with the re-sorts paid (jobs 32529712, 32530154), M cells/s:
+
+| n | spacings | step-2x | lever 1 | levers 1 + 2 | against step-2x |
+|---|---|---|---|---|---|
+| 128³ | 0.03 | 193.5 | 204.2 | 211.3 | 1.09 |
+| 128³ | 0.1 | 139.9 | 151.7 | 161.4 | 1.15 |
+| 128³ | 0.3 | 84.2 | 93.8 | 96.9 | 1.15 |
+| 256³ | 0.1 | 194.8 | 200.5 | 216.7 | 1.11 |
+
+Rates, ten steps (steps 2–10 averaged, two rounds, no fences; jobs 32530145, 32530148):
+
+| n | input | spacings | step-2x M cells/s | lever 1 | levers 1 + 2 | lever 1 / step-2x | levers 1 + 2 / step-2x | step-2x ns/cell | lever 1 | levers 1 + 2 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 128³ | jittered | 0.03 | 178.6 | 191.2 | 197.2 | 1.071 | 1.104 | 5.60 | 5.23 | 5.07 |
+| 128³ | jittered | 0.1 | 109.1 | 121.6 | 125.1 | 1.115 | 1.146 | 9.17 | 8.22 | 8.00 |
+| 128³ | jittered | 0.3 | 61.4 | 72.5 | 73.9 | 1.180 | 1.203 | 16.27 | 13.79 | 13.53 |
+| 256³ | jittered | 0.03 | 243.9 | 251.0 | 259.5 | 1.029 | 1.064 | 4.10 | 3.98 | 3.85 |
+| 256³ | jittered | 0.1 | 170.1 | 181.0 | 186.7 | 1.064 | 1.097 | 5.88 | 5.52 | 5.36 |
+| 256³ | jittered | 0.3 | 93.7 | 104.1 | 106.6 | 1.111 | 1.138 | 10.68 | 9.61 | 9.38 |
+
+Bits. Topology is exact in every run. The geometry, faces and lists checksums of both levers equal step-2x's on seven inputs (jittered, uniform, clustered, halo, lattice, wave, cosmicweb) at 0.03, 0.1 and 0.3 spacings, five steps each: 105 of 105 (job 32530150, lever 1 and levers 1 + 2; again in the proof, job 32530159). Which flips win a round still follows the work list's order, so `cells_checksum` (face numbers) differs between runs, as before.
+
+Memory. 2045 B/cell for the moving step at 128³ (the arrays at the peak, the bench's 48 included; job 32530157), unchanged by both levers: `small_rounds` adds 80 bytes in all.
+
+Tests (job 32530159 on the A100, 32530162 on a CPU node, on `ecb9992`): A100 ctest 23 of 23 (`modes`: hybrid equals cpu); every step against a fresh exact build on seven inputs at three spacings (262,144 cells, four steps) and on jittered input at 128³: 93 of 93; S2's jump and flow cases with `--fallback=local`: 48 of 48; CI's host steps: comments and format ok, gcc 15 with sanitizers off and on 23 of 23 each, clang-tidy 18 without warnings on `voronoi_bench.cpp`, `repair_test.cpp`, `modes_test.cpp`.
+
+Few flips (Sedov-like steps; 128³ jittered, kernels fenced, job 32530305): at 0.003 spacings (6,122 flips a step) the repair takes 3.43 → 2.80 ms and the step 8.99 → 8.35 ms; at 0.01 (20,320 flips) 4.13 → 3.19 ms and 10.15 → 9.14 ms. The screen (1.6 ms) and the full-mesh passes are now most of such a repair.
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
