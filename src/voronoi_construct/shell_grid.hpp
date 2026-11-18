@@ -42,6 +42,127 @@ KOKKOS_INLINE_FUNCTION double dot(Vec2 a, Vec2 b) { return a.x * b.x + a.y * b.y
 template <int D>
 using VecN = std::conditional_t<D == 2, Vec2, Vec3>;
 
+// Operations rounded one by one, never fused into a multiply-add, so what is computed with them has the same bits
+// wherever it runs: in any kernel it is inlined into, on the host, and on a GPU whose compiler fuses a * b + c by
+// default (nvcc --fmad=true; TESTING.md, "Bits across backends").
+// Used by: the stored circumcentres (tet_mesh, tet_repair), Arithmetic below.
+namespace rounded {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+KOKKOS_INLINE_FUNCTION double mul(double a, double b) { return __dmul_rn(a, b); }
+KOKKOS_INLINE_FUNCTION double add(double a, double b) { return __dadd_rn(a, b); }
+KOKKOS_INLINE_FUNCTION double sub(double a, double b) { return __dsub_rn(a, b); }
+#else
+// a * b, rounded. A host compiler fuses only where the target has FMA (__FP_FAST_FMA); there the product is stored.
+KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
+#if defined(__FP_FAST_FMA)
+    const volatile double r = a * b;
+    return r;
+#else
+    return a * b;
+#endif
+}
+KOKKOS_INLINE_FUNCTION double add(double a, double b) { return a + b; }
+KOKKOS_INLINE_FUNCTION double sub(double a, double b) { return a - b; }
+#endif
+// The vector operations of shell_grid.hpp, each component rounded on its own.
+KOKKOS_INLINE_FUNCTION Vec3 add(Vec3 a, Vec3 b) { return {add(a.x, b.x), add(a.y, b.y), add(a.z, b.z)}; }
+KOKKOS_INLINE_FUNCTION Vec3 sub(Vec3 a, Vec3 b) { return {sub(a.x, b.x), sub(a.y, b.y), sub(a.z, b.z)}; }
+KOKKOS_INLINE_FUNCTION Vec3 mul(Vec3 a, double s) { return {mul(a.x, s), mul(a.y, s), mul(a.z, s)}; }
+KOKKOS_INLINE_FUNCTION Vec2 add(Vec2 a, Vec2 b) { return {add(a.x, b.x), add(a.y, b.y)}; }
+KOKKOS_INLINE_FUNCTION Vec2 sub(Vec2 a, Vec2 b) { return {sub(a.x, b.x), sub(a.y, b.y)}; }
+KOKKOS_INLINE_FUNCTION Vec2 mul(Vec2 a, double s) { return {mul(a.x, s), mul(a.y, s)}; }
+// a x b and a . b, each operation rounded.
+KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
+    return {sub(mul(a.y, b.z), mul(a.z, b.y)), sub(mul(a.z, b.x), mul(a.x, b.z)), sub(mul(a.x, b.y), mul(a.y, b.x))};
+}
+KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x), mul(a.y, b.y)), mul(a.z, b.z)); }
+KOKKOS_INLINE_FUNCTION double dot(Vec2 a, Vec2 b) { return add(mul(a.x, b.x), mul(a.y, b.y)); }
+}  // namespace rounded
+
+// The arithmetic of the geometry kernels, a template argument: Fused writes a * b + c as it stands, so a compiler may
+// fuse it (nvcc does by default; the fastest, and main's bits); Rounded rounds every operation on its own (`rounded`),
+// so a GPU gives the host's bits. Mesh picks one at run time (Layout::same_bits_as_host); both are compiled in.
+// Used by: wrap, FaceGeometry, faces, tet_volumes, tet_cells, tri_mesh, tri_repair, the clipping's per-thread kernel.
+template <bool exact_rounding>
+struct Arithmetic {
+    static constexpr bool is_rounded = exact_rounding;
+    KOKKOS_INLINE_FUNCTION static double mul(double a, double b) {
+        if constexpr (is_rounded)
+            return rounded::mul(a, b);
+        else
+            return a * b;
+    }
+    KOKKOS_INLINE_FUNCTION static double add(double a, double b) {
+        if constexpr (is_rounded)
+            return rounded::add(a, b);
+        else
+            return a + b;
+    }
+    KOKKOS_INLINE_FUNCTION static double sub(double a, double b) {
+        if constexpr (is_rounded)
+            return rounded::sub(a, b);
+        else
+            return a - b;
+    }
+    // The vector operations (Vec3 and Vec2 only: a template would also take an int).
+    KOKKOS_INLINE_FUNCTION static Vec3 add(Vec3 a, Vec3 b) {
+        if constexpr (is_rounded)
+            return rounded::add(a, b);
+        else
+            return a + b;
+    }
+    KOKKOS_INLINE_FUNCTION static Vec3 sub(Vec3 a, Vec3 b) {
+        if constexpr (is_rounded)
+            return rounded::sub(a, b);
+        else
+            return a - b;
+    }
+    KOKKOS_INLINE_FUNCTION static Vec3 mul(Vec3 a, double s) {
+        if constexpr (is_rounded)
+            return rounded::mul(a, s);
+        else
+            return a * s;
+    }
+    KOKKOS_INLINE_FUNCTION static Vec2 add(Vec2 a, Vec2 b) {
+        if constexpr (is_rounded)
+            return rounded::add(a, b);
+        else
+            return a + b;
+    }
+    KOKKOS_INLINE_FUNCTION static Vec2 sub(Vec2 a, Vec2 b) {
+        if constexpr (is_rounded)
+            return rounded::sub(a, b);
+        else
+            return a - b;
+    }
+    KOKKOS_INLINE_FUNCTION static Vec2 mul(Vec2 a, double s) {
+        if constexpr (is_rounded)
+            return rounded::mul(a, s);
+        else
+            return a * s;
+    }
+    KOKKOS_INLINE_FUNCTION static Vec3 cross(Vec3 a, Vec3 b) {
+        if constexpr (is_rounded)
+            return rounded::cross(a, b);
+        else
+            return shell_voronoi::cross(a, b);
+    }
+    KOKKOS_INLINE_FUNCTION static double dot(Vec3 a, Vec3 b) {
+        if constexpr (is_rounded)
+            return rounded::dot(a, b);
+        else
+            return shell_voronoi::dot(a, b);
+    }
+    KOKKOS_INLINE_FUNCTION static double dot(Vec2 a, Vec2 b) {
+        if constexpr (is_rounded)
+            return rounded::dot(a, b);
+        else
+            return shell_voronoi::dot(a, b);
+    }
+};
+using Fused = Arithmetic<false>;
+using Rounded = Arithmetic<true>;
+
 // A cylinder around the cell, for the filtered walks (#60): axis u through the generator and the farthest vertex,
 // extent [low, high] along u, radius `radius` about it. A particle at d can cut only if d.d / 2 < bound(d).
 struct Cylinder {

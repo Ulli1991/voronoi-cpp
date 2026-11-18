@@ -179,6 +179,7 @@ voronoi::Layout layout_flags(int argc, char** argv) {
         layout.owner_bit |= std::string(argv[i]) == "--owner-bit";
         layout.faces_on_read |= std::string(argv[i]) == "--faces-on-read";
         layout.float_centroids |= std::string(argv[i]) == "--float-centroids";
+        layout.same_bits_as_host |= std::string(argv[i]) == "--same-bits";
     }
     return layout;
 }
@@ -250,6 +251,8 @@ Points bench_points(const std::string& kind, int n, const Box& box) {
     return points;
 }
 
+bool same_bits = false;  // --same-bits: the rebuild's clipping tail in the host's bits (step: the Layout's)
+
 // The `rebuild` mode: times the cell list and the warp clipping on one point set and checks the cells.
 // args: rebuild <n> <distribution> [repeats]. Returns the failure count.
 // Used by: main.
@@ -278,7 +281,7 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     KernelTimes::total.clear();
     const double construct_ms = median_ms(repeats, [&] {
         const Phase phase("clip");
-        shell_voronoi::construct_warp(exec, grid, cells);
+        shell_voronoi::construct_warp(exec, grid, cells, same_bits);
     });
     KernelTimes::report(repeats + 1, n);  // with --kernels: per label, the warm-up included
     std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
@@ -907,6 +910,7 @@ int main(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     if (has_flag(argc, argv, "--memory")) DeviceMemory<Memory>::start();
     closure_check = has_flag(argc, argv, "--closure");
+    same_bits = has_flag(argc, argv, "--same-bits");
     if (has_flag(argc, argv, "--kernels")) KernelTimes::start();
     if (has_flag(argc, argv, "--nvtx") || has_flag(argc, argv, "--nvtx=phases"))
         Nvtx::start(has_flag(argc, argv, "--nvtx"));
@@ -929,7 +933,7 @@ int main(int argc, char** argv) {
            "       voronoi_bench step <n> <distribution> <displacement> [steps] [--verify] [--checksum]\n"
            "                          [--memory] [--kernels] [--measure] [--order=every]\n"
            "                          [--curve=morton|hilbert|moore|gray|row|rcm] [--every=k] [--far=share]\n"
-           "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids]\n"
+           "                          [--owner-faces] [--owner-bit] [--faces-on-read] [--float-centroids] [--same-bits]\n"
            "                          [--closure] [--dump-cells=path]\n"
            "                          [--jump-share=f --jump-spacings=d] [--fallback=cheapest|local|host|rebuild]\n"
            "                          [--no-start]\n"

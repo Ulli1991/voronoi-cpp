@@ -84,6 +84,7 @@ struct Screen {
     double step;
     int px, py, capacity;
     double quarter_x, quarter_y;  // of a period: offsets below these from one corner are in one image
+    bool rounded = false;         // centres in tet_mesh::Rounded arithmetic (Layout::same_bits_as_host)
 
     KOKKOS_INLINE_FUNCTION void push(int edge) const {
         const int at = Kokkos::atomic_fetch_inc(&used(0));
@@ -97,7 +98,9 @@ struct Screen {
         const tri_mesh::Circle circle(ax, ay, bx, by);
         const double la = circle.la, lb = circle.lb, mx = circle.mx, my = circle.my, det = circle.det;
         area += det;
-        tet_mesh::store(centre, t, circle.centre(x0, y0, step));
+        tet_mesh::store(centre, t,
+                        rounded ? tri_mesh::CircleAs<tet_mesh::Rounded>(ax, ay, bx, by).centre(x0, y0, step)
+                                : circle.centre(x0, y0, step));
         const double spread = Kokkos::abs(ax * by) + Kokkos::abs(ay * bx);
         const bool near = Kokkos::abs(ax) < quarter_x && Kokkos::abs(bx) < quarter_x && Kokkos::abs(ay) < quarter_y &&
                           Kokkos::abs(by) < quarter_y;
@@ -136,7 +139,8 @@ struct Screen {
 // Used by: Mesh<2>::update and rebuild (first step of the repair).
 template <class ExecSpace>
 void screen(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point, const ep::BoxN<2>& box,
-            const Triangles<typename ExecSpace::memory_space>& mesh, State<typename ExecSpace::memory_space>& state) {
+            const Triangles<typename ExecSpace::memory_space>& mesh, State<typename ExecSpace::memory_space>& state,
+            bool rounded = false) {
     using Memory = typename ExecSpace::memory_space;
     for (;;) {
         Kokkos::deep_copy(exec, state.used, 0);
@@ -150,7 +154,8 @@ void screen(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_s
                                     static_cast<int>(box.period[1]),
                                     static_cast<int>(state.list.extent(0)),
                                     0.25 * static_cast<double>(box.period[0]),
-                                    0.25 * static_cast<double>(box.period[1])};
+                                    0.25 * static_cast<double>(box.period[1]),
+                                    rounded};
         long long failing = 0, bad = 0;
         double area = 0;
         Kokkos::parallel_reduce("tri_repair::screen", Kokkos::RangePolicy<ExecSpace>(exec, 0, mesh.count()), kernel, failing, bad, area);
@@ -409,8 +414,9 @@ Stats repair(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
 // The circumcentres of the triangles that flipped.
 // Used by: Mesh<2>::geometry.
 template <class ExecSpace>
-void centres(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point, const ep::BoxN<2>& box,
-             const Triangles<typename ExecSpace::memory_space>& mesh, const State<typename ExecSpace::memory_space>& state) {
+void centres(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_space, 2>& point,
+             const ep::BoxN<2>& box, const Triangles<typename ExecSpace::memory_space>& mesh,
+             const State<typename ExecSpace::memory_space>& state, bool rounded = false) {
     const auto corners = mesh.corners;
     const auto centre = mesh.centre;
     const auto touched = state.touched;
@@ -420,9 +426,11 @@ void centres(const ExecSpace& exec, const ep::Points<typename ExecSpace::memory_
         "tri_repair::centres", Kokkos::RangePolicy<ExecSpace>(exec, 0, state.touched_count), KOKKOS_LAMBDA(int s) {
             const int t = touched(s), v0 = corners(t, 0), v1 = corners(t, 1), v2 = corners(t, 2);
             const int x0 = point(v0, 0), y0 = point(v0, 1);
-            const tri_mesh::Circle circle(tri_mesh::steps(x0, point(v1, 0), px), tri_mesh::steps(y0, point(v1, 1), py),
-                                          tri_mesh::steps(x0, point(v2, 0), px), tri_mesh::steps(y0, point(v2, 1), py));
-            tet_mesh::store(centre, t, circle.centre(x0, y0, step));
+            const double ax = tri_mesh::steps(x0, point(v1, 0), px), ay = tri_mesh::steps(y0, point(v1, 1), py);
+            const double bx = tri_mesh::steps(x0, point(v2, 0), px), by = tri_mesh::steps(y0, point(v2, 1), py);
+            tet_mesh::store(centre, t,
+                            rounded ? tri_mesh::CircleAs<tet_mesh::Rounded>(ax, ay, bx, by).centre(x0, y0, step)
+                                    : tri_mesh::Circle(ax, ay, bx, by).centre(x0, y0, step));
         });
 }
 

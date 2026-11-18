@@ -279,17 +279,26 @@ KOKKOS_INLINE_FUNCTION int sort_corners(int* v) {
     return parity;
 }
 
+// The arithmetic policies of the geometry (shell_grid.hpp): Fused, Rounded, and the rounded operations.
+namespace rounded = shell_voronoi::rounded;
+using shell_voronoi::Arithmetic;
+using shell_voronoi::Fused;
+using shell_voronoi::Rounded;
+
 using Box = exact_predicates::Box;
 
 // A coordinate difference in a periodic box, to the nearest image; multiplies by 1 / side, so it differs from a
 // division only if d is within an ulp of half a side.
+template <class A = Fused>
 KOKKOS_INLINE_FUNCTION double wrap(double d, double side, double inverse) {
-    return d - side * Kokkos::nearbyint(d * inverse);
+    return A::sub(d, A::mul(side, Kokkos::nearbyint(A::mul(d, inverse))));
 }
+
 // The 2D wrap of a vector d to the nearest image in `box`.
 // Used by: tri_mesh::faces.
+template <class A = Fused>
 KOKKOS_INLINE_FUNCTION Vec2 wrap(Vec2 d, const exact_predicates::BoxN<2>& box) {
-    return {wrap(d.x, box.side[0], box.inverse[0]), wrap(d.y, box.side[1], box.inverse[1])};
+    return {wrap<A>(d.x, box.side[0], box.inverse[0]), wrap<A>(d.y, box.side[1], box.inverse[1])};
 }
 
 // x_b - x_a of snapped positions, in the nearest image, as a whole number of grid steps times the step. Their plain
@@ -1542,39 +1551,6 @@ KOKKOS_INLINE_FUNCTION Vec3 circumcentre(const X& x, const Box& box, const int* 
     return {double(n[0]) * unit, double(n[1]) * unit, double(n[2]) * unit};
 }
 
-// Operations rounded one by one (no fused multiply-add), so inlined into different kernels they give the same bits.
-namespace rounded {
-// a * b, rounded. Used by: rounded_offsets, rounded_sliver, rounded_circumcentre, and cross/dot below.
-KOKKOS_INLINE_FUNCTION double mul(double a, double b) {
-#if defined(__CUDA_ARCH__)
-    return __dmul_rn(a, b);
-#else
-    const volatile double r = a * b;  // stored, so it cannot be fused into a later sum
-    return r;
-#endif
-}
-// a + b, rounded. Used by: rounded_circumcentre, dot.
-KOKKOS_INLINE_FUNCTION double add(double a, double b) {
-#if defined(__CUDA_ARCH__)
-    return __dadd_rn(a, b);
-#else
-    return a + b;
-#endif
-}
-// a - b, rounded. Used by: rounded_offsets, cross.
-KOKKOS_INLINE_FUNCTION double sub(double a, double b) {
-#if defined(__CUDA_ARCH__)
-    return __dsub_rn(a, b);
-#else
-    return a - b;
-#endif
-}
-// Cross product of a and b, each operation rounded. Used by: rounded_sliver, rounded_circumcentre.
-KOKKOS_INLINE_FUNCTION Vec3 cross(Vec3 a, Vec3 b) {
-    return {sub(mul(a.y, b.z), mul(a.z, b.y)), sub(mul(a.z, b.x), mul(a.x, b.z)), sub(mul(a.x, b.y), mul(a.y, b.x))};
-}
-KOKKOS_INLINE_FUNCTION double dot(Vec3 a, Vec3 b) { return add(add(mul(a.x, b.x), mul(a.y, b.y)), mul(a.z, b.z)); }
-}  // namespace rounded
 
 // The pieces of a stored circumcentre (Mesh::centre), each operation rounded on its own (`rounded`).
 
@@ -1711,9 +1687,15 @@ struct FaceGeometry {
     Box box;
     Kokkos::View<const double* [4], Kokkos::LayoutRight, MemorySpace> centre;
     Ints owner, neighbour, ring_start, ring_length, ring, slot;
+    bool rounded = false;  // Rounded arithmetic (Layout::same_bits_as_host), else Fused
 
     // Face f's area and centroid; returns area . (neighbour - owner), at least 0.
     KOKKOS_INLINE_FUNCTION double face(int f, Vec3& area, Vec3& centroid) const {
+        return rounded ? face_as<Rounded>(f, area, centroid) : face_as<Fused>(f, area, centroid);
+    }
+    // The same in arithmetic A (Fused or Rounded).
+    template <class A>
+    KOKKOS_INLINE_FUNCTION double face_as(int f, Vec3& area, Vec3& centroid) const {
         const int s = slot.data() ? slot(f) : f;
         const int i = owner(s), j = neighbour(s);
         const int begin = ring_start(s), end = begin + ring_length(s);
@@ -1728,21 +1710,21 @@ struct FaceGeometry {
         double weight = 0;
         for (int m = begin + 2; m < end; ++m) {
             const Vec3 v = vertex(m);
-            const Vec3 twice = cross(previous - first, v - first);
-            twice_area = twice_area + twice;
-            const double w = Kokkos::abs(dot(twice, dj));
+            const Vec3 twice = A::cross(A::sub(previous, first), A::sub(v, first));
+            twice_area = A::add(twice_area, twice);
+            const double w = Kokkos::abs(A::dot(twice, dj));
             weight += w;
-            weighted = weighted + (previous + v) * w;
+            weighted = A::add(weighted, A::mul(A::add(previous, v), w));
             previous = v;
         }
-        area = twice_area * 0.5;
-        double projected = dot(area, dj);
+        area = A::mul(twice_area, 0.5);
+        double projected = A::dot(area, dj);
         if (projected < 0) {
-            area = area * -1.0;
+            area = A::mul(area, -1.0);
             projected = -projected;
         }
-        // The last product rounded on its own: a caller adding to it must not fuse it (the stored bits).
-        const Vec3 sum = first + weighted * (1.0 / weight);
+        // The last product rounded on its own in both: a caller adding to it must not fuse it (the stored bits).
+        const Vec3 sum = A::add(first, A::mul(weighted, 1.0 / weight));
         centroid =
             weight > 0 ? Vec3{R::mul(sum.x, 1.0 / 3.0), R::mul(sum.y, 1.0 / 3.0), R::mul(sum.z, 1.0 / 3.0)} : first;
         return projected;
@@ -1759,10 +1741,10 @@ FaceGeometry<MemorySpace, X> face_geometry(const X& x, const Box& box, const Mes
 // 2. Face area vectors (owner to neighbour), centroids (relative to the owner) and, if out.volume is allocated,
 // cell volumes (summed by atomics), one thread per owned face; face f is slot `slot(f)` of the mesh's faces if given.
 // Used by: Mesh<3>::geometry and the stored faces of Mesh<3> (area(), face_centroid()), after update_face_rings.
-template <class ExecSpace, class X>
-void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
-           const Geometry<typename ExecSpace::memory_space>& out,
-           const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot = {}) {
+template <class A, class ExecSpace, class X>
+void faces_as(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
+              const Geometry<typename ExecSpace::memory_space>& out,
+              const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot) {
     const bool with_volume = out.volume.extent(0) > 0;
     const bool with_rows = out.rows.extent(0) > 0;
     const bool with_float = out.centroid32.extent(0) > 0;
@@ -1773,7 +1755,7 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
         "tet_mesh::faces", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 6>>(exec, 0, mesh.owner.extent(0)),
         KOKKOS_LAMBDA(int f) {
             Vec3 area, centroid;
-            const double projected = geometry.face(f, area, centroid);
+            const double projected = geometry.template face_as<A>(f, area, centroid);
             out.area(f, 0) = area.x;
             out.area(f, 1) = area.y;
             out.area(f, 2) = area.z;
@@ -1796,10 +1778,20 @@ void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typenam
                 for (int c = 0; c < 8; ++c) out.rows(f, c) = row[c];
             }
             if (!with_volume) return;
-            const double pyramid = projected * (1.0 / 6.0);
+            const double pyramid = A::mul(projected, 1.0 / 6.0);
             Kokkos::atomic_add(&out.volume(i), pyramid);
             Kokkos::atomic_add(&out.volume(j), pyramid);
         });
+}
+// The same in the arithmetic `rounded` picks (Rounded, else Fused). Used by: Mesh<3>::geometry, area(), face_centroid().
+template <class ExecSpace, class X>
+void faces(const ExecSpace& exec, const X& x, const Box& box, const Mesh<typename ExecSpace::memory_space>& mesh,
+           const Geometry<typename ExecSpace::memory_space>& out,
+           const Kokkos::View<const int*, typename ExecSpace::memory_space>& slot = {}, bool rounded = false) {
+    if (rounded)
+        faces_as<Rounded>(exec, x, box, mesh, out, slot);
+    else
+        faces_as<Fused>(exec, x, box, mesh, out, slot);
 }
 
 // What the checks of an update need without the faces: the live tetrahedra of the first `count` slots, the sum of
@@ -1810,7 +1802,7 @@ template <class ExecSpace, class X>
 double tet_volumes(const ExecSpace& exec, const X& x, const Box& box,
                    const Mesh<typename ExecSpace::memory_space>& mesh,
                    const Kokkos::View<const char*, typename ExecSpace::memory_space>& alive, int count, int& live,
-                   bool& small) {
+                   bool& small, bool rounded = false) {
     double total = 0;
     double largest = 0;
     const double period = Kokkos::min(Kokkos::min(box.period[0], box.period[1]), box.period[2]);
@@ -1822,10 +1814,18 @@ double tet_volumes(const ExecSpace& exec, const X& x, const Box& box,
             const int v[4] = {mesh.vertex(t, 0), mesh.vertex(t, 1), mesh.vertex(t, 2), mesh.vertex(t, 3)};
             Vec3 d[3];
             rounded_offsets(x, box, v, d);
-            sum += dot(d[0], cross(d[1], d[2])) * unit;
+            double rr;      // the squared circumradius in grid steps; a flat one's is infinite: too large
+            if (rounded) {  // the host's bits, so the same path on every backend
+                const double volume6 = R::dot(d[0], R::cross(d[1], d[2]));
+                sum += R::mul(volume6, unit);
+                const Vec3 c = rounded_circumcentre(d, volume6);
+                rr = R::dot(c, c);
+            } else {
+                sum += dot(d[0], cross(d[1], d[2])) * unit;
+                const Vec3 c = detail::circumcentre(d[0], d[1], d[2]);
+                rr = dot(c, c);
+            }
             ++tets;
-            const Vec3 c = detail::circumcentre(d[0], d[1], d[2]);  // grid steps; a flat one's is infinite: too large
-            const double rr = dot(c, c);
             r2 = Kokkos::fmax(r2, rr == rr ? rr : Kokkos::Experimental::infinity_v<double>);
         },
         total, live, Kokkos::Max<double>(largest));

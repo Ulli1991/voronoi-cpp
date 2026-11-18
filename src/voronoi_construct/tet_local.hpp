@@ -91,11 +91,12 @@ struct Table {
 
 // Replace the tetrahedra around the stuck entries of the last tet_repair::repair by local Delaunay cells: the seeds
 // (their particles), first ring and the seeds' new neighbours, clipped on `grid`; a second attempt clips exactly, a
-// third also widens by a ring and every cell's new neighbours. Used by: voronoi::Mesh<3>::update.
+// third also widens by a ring and every cell's new neighbours. same_bits: rounded cells in the host's arithmetic
+// (Layout::same_bits_as_host). Used by: voronoi::Mesh<3>::update.
 template <class ExecSpace>
 Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
              tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
-             tet_repair::State<typename ExecSpace::memory_space>& s) {
+             tet_repair::State<typename ExecSpace::memory_space>& s, bool same_bits = false) {
     using Memory = typename ExecSpace::memory_space;
     using Range = Kokkos::RangePolicy<ExecSpace>;
     using Ints = Kokkos::View<int*, Memory>;
@@ -168,10 +169,16 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         if (count == 0) return;
         const shell_voronoi::Selection<Memory> selection{slots, flags};
         namespace sv = shell_voronoi::detail;
-        if (exact)
+        if (exact) {
             sv::construct_cells<sv::ExactCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
-        else
-            sv::construct_cells<sv::RoundedCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
+        } else {
+            if (same_bits)
+                sv::construct_cells<sv::RoundedCell, shell_voronoi::Rounded>(exec, grid, stencil, cells, sv::Pass::all,
+                                                                              selection);
+            else
+                sv::construct_cells<sv::RoundedCell>(exec, grid, stencil, cells, sv::Pass::all, selection);
+            sv::exact_where_failed(exec, grid, stencil, cells, selection);  // as shell_voronoi::construct
+        }
         const auto& sel = slots;  // copied into the kernels
         Kokkos::parallel_for(
             "tet_local::clipped", Range(exec, 0, count), KOKKOS_LAMBDA(int c) { clipped(order(sel(c))) = 1; });

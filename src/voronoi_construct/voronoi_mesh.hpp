@@ -182,6 +182,10 @@ struct Layout {
     // Face centroids stored as float (12 B a face, face_centroid32()), not double; areas stay double, so cells close
     // as before; cell centroids are summed from the float rows. 3D, stored faces.
     bool float_centroids = false;
+    // The geometry (faces, cell sums, the volume check) and the clipping's per-thread kernel round every operation on
+    // its own (tet_mesh::Rounded): a GPU gives the host's bits, at some cost in the step (TESTING.md, "Bits across
+    // backends"). Off: written arithmetic, which nvcc fuses (the fastest). voronoi::Engine turns it on for hybrid.
+    bool same_bits_as_host = false;
     bool resorts() const { return every > 0 || far > 0; }
 };
 
@@ -251,7 +255,8 @@ public:
             exec_.fence();
             const double index_ms = clock.seconds() * 1e3;
             try {  // out of memory before it writes (its arrays are freed): the step rebuilds
-                local_ = tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_);
+                local_ = tet_local::repair(exec_, shell_voronoi::make_grid(list_), tets_, state_,
+                                           layout_.same_bits_as_host);
             } catch (const std::exception&) {
                 local_ = tet_local::Stats{};
             }
@@ -320,11 +325,11 @@ public:
             index(positions_);
             auto cells = shell_voronoi::Cells<Memory>::with_rings(n_, ring_entries_ > 0 ? ring_entries_ : 64LL * n_);
             const auto grid = shell_voronoi::make_grid(list_);
-            shell_voronoi::construct_warp(exec_, grid, cells);
+            shell_voronoi::construct_warp(exec_, grid, cells, layout_.same_bits_as_host);
             report.start = tet_start::build(exec_, grid, cells, tets_);
             if (!report.start.exact && cells.needed() > cells.capacity()) {
                 cells = shell_voronoi::Cells<Memory>::with_rings(n_, cells.needed() + cells.needed() / 16);
-                shell_voronoi::construct_warp(exec_, grid, cells);
+                shell_voronoi::construct_warp(exec_, grid, cells, layout_.same_bits_as_host);
                 report.start = tet_start::build(exec_, grid, cells, tets_);
             }
             ring_entries_ = cells.capacity();
@@ -371,6 +376,12 @@ public:
         cells_current_ = false;
     }
     const Layout& layout() const { return layout_; }
+    // Layout::same_bits_as_host alone, as Mesh<2> has it. Used by: voronoi::Engine.
+    void set_same_bits_as_host(bool on) {
+        Layout l = layout_;
+        l.same_bits_as_host = on;
+        set_layout(l);
+    }
 
     // After an update that re-sorted (Report::resorted): cell i is the particle the caller passed as permutation()(i).
     // The caller renumbers its per-particle arrays, positions too, before the next update (permute does it).
@@ -447,10 +458,11 @@ public:
                 tet_mesh::cells_incremental(
                     exec_, positions_, box_, owner(), neighbour(), tets_, state_.alive,
                     Kokkos::subview(state_.touched_list, std::make_pair(0, state_.touched_entries)), rings_, geometry,
-                    cells_, reinterpret_cast<char*>(spare.data()), layout_.owner_bit);
+                    cells_, reinterpret_cast<char*>(spare.data()), layout_.owner_bit, layout_.same_bits_as_host);
             else
                 tet_mesh::cells(exec_, positions_, box_, owner(), neighbour(), geometry, cells_,
-                                scratch(tet_mesh::cells_scratch_bytes(faces())).data(), layout_.owner_bit);
+                                scratch(tet_mesh::cells_scratch_bytes(faces())).data(), layout_.owner_bit,
+                                layout_.same_bits_as_host);
         };
         if (faces_stored_)
             lists(geometry_);
@@ -507,10 +519,13 @@ public:
     // face_geometry().face(f, area, centroid), from its ring; the bits area() and face_centroid() hold. Valid until the
     // next update, like the views below.
     tet_mesh::FaceGeometry<Memory> face_geometry() const {
-        if (!layout_.owner_faces) return tet_mesh::face_geometry(positions_, box_, tets_);
-        return tet_mesh::face_geometry(
-            positions_, box_, tets_,
-            View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current], std::make_pair(0, faces()))));
+        auto g = layout_.owner_faces
+                     ? tet_mesh::face_geometry(positions_, box_, tets_,
+                                               View<const int*>(Kokkos::subview(owner_faces_.slot[owner_faces_.current],
+                                                                                std::make_pair(0, faces()))))
+                     : tet_mesh::face_geometry(positions_, box_, tets_);
+        g.rounded = layout_.same_bits_as_host;
+        return g;
     }
     // Stored by update(), or with Layout::faces_on_read here on the first call after an update.
     Rows area() const {
@@ -572,7 +587,7 @@ private:
         auto out = geometry_;
         if (cells_current_) out.volume = {};
         const auto slot = face_geometry().slot;
-        tet_mesh::faces(exec_, positions_, box_, tets_, out, slot);
+        tet_mesh::faces(exec_, positions_, box_, tets_, out, slot, layout_.same_bits_as_host);
         faces_stored_ = true;
     }
     // On the torus V - E + F - T = 0 and F = 2T: a mesh has cells + tetrahedra edges, each one face.
@@ -658,7 +673,7 @@ private:
         bool small = false;
         if (!stores_faces())
             total_volume_ = tet_mesh::tet_volumes(exec_, positions_, box_, tets_, View<const char*>(state_.alive),
-                                                  state_.count, live_tets_, small);
+                                                  state_.count, live_tets_, small, layout_.same_bits_as_host);
         if (!small) {
             store_faces();
             total_volume_ = detail::total_volume(exec_, geometry_.volume, state_.alive, state_.count, live_tets_);
