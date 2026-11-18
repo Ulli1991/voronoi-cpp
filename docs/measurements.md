@@ -1242,6 +1242,17 @@ Tests (job 32530159 on the A100, 32530162 on a CPU node, on `ecb9992`): A100 cte
 
 Few flips (Sedov-like steps; 128³ jittered, kernels fenced, job 32530305): at 0.003 spacings (6,122 flips a step) the repair takes 3.43 → 2.80 ms and the step 8.99 → 8.35 ms; at 0.01 (20,320 flips) 4.13 → 3.19 ms and 10.15 → 9.14 ms. The screen (1.6 ms) and the full-mesh passes are now most of such a repair.
 
+**After levers 1 and 2** (head `d4f61d1`: lever 5a, CUB's scan for the per-cell list starts; M1, 32-bit repair locks; M2, the repair's dirty flags as bytes). Lever 3 (`dirty_rings` with the ring in registers, or one walk per thread) was slower and dropped; see [tried.md](tried.md#moving-step).
+
+| 128³ jittered, M cells/s | 0.03 | 0.1 | 0.3 |
+|---|---|---|---|
+| ten steps, levers 1 + 2 → head (job 32540488) | 198.5 → 208.0 | 125.4 → 131.1 | 74.4 → 78.6 |
+| 500 steps, levers 1 + 2 → head (job 32540489) | 217.1 → 227.8 | 163.6 → 169.3 | 97.6 → 102.4 |
+
+At 256³ (0.03 / 0.1 / 0.3 spacings) ten steps 259.6 / 187.0 / 107.0 → 263.9 / 191.1 / 109.8 M cells/s; 500 steps at 0.1 217.7 → 221.1 (job 32540490). Against step-2x over 500 steps: 1.18 / 1.21 / 1.22× at 128³ (the step-2x rates of job 32529712; runs of the same build differ by up to 5 % at 0.03 between jobs), 1.14× at 256³. Peak memory of the moving step at 128³: 2045 → 1990 B/cell (the bench's 48 included). Bits: geometry, faces and lists checksums equal to step-2x on seven inputs at three spacings (105 of 105, job 32530569); every step against a fresh build at 262,144 cells, seven inputs, three spacings, six steps: 18 of 18 runs pass (job 32540506).
+
+The screen's register cap, measured (Nsight Compute, job 32540491; 64 against 76 registers): 43.8 against 32.5 % of warps active, 6.98 against 5.19 warps per scheduler; the spills are 594 B/cell of local loads (98 % L1 hits) and 391 B/cell of local stores (to L2), and add 8 B/cell of DRAM traffic. More warps hide the gathers' latency, which is what the screen waits on (long scoreboard 68 %).
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
