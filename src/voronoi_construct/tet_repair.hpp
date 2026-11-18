@@ -36,7 +36,8 @@ struct State {
     Kokkos::View<char*, MemorySpace> touched;  // rewritten by a flip since last cleared
     // The tetrahedra flips created since the last move: touched_entries of them, -1 if more than fit.
     Kokkos::View<int*, MemorySpace> touched_list;
-    Kokkos::View<int*, MemorySpace> dirty;   // 1 while listed in `listed`
+    // Nonzero while listed in `listed`: a byte per tetrahedron, its size a multiple of 4 (mark sets it by a 32-bit atomic).
+    Kokkos::View<char*, MemorySpace> dirty;
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
     // Votes: the rounds since the locks were last cleared in the high bits, a bijective hash of the plan index in the
     // low `vote_bits`, so earlier rounds always lose. 32 bits: cleared when either part outgrows its bits (lock_votes).
@@ -380,7 +381,10 @@ KOKKOS_INLINE_FUNCTION void list_stuck(const Counters& counters, const Stuck& st
 // List t as dirty unless it already is. Used by: move_screened, repair, tet_flips::detail::mark_stuck/finish.
 template <class State>
 KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
-    if (Kokkos::atomic_exchange(&s.dirty(t), 1) == 0) s.listed(tet_mesh::claim(&s.counters(counter::listed), 1)) = t;
+    // An atomic or on the 32-bit word holding t's byte (little-endian: byte k is bits 8k to 8k + 7).
+    unsigned* word = reinterpret_cast<unsigned*>(s.dirty.data()) + (t >> 2);
+    const unsigned bit = 1u << (8 * (t & 3));
+    if ((Kokkos::atomic_fetch_or(word, bit) & bit) == 0) s.listed(tet_mesh::claim(&s.counters(counter::listed), 1)) = t;
 }
 
 // One flip round's steps, one item each: for the per-step kernels of large rounds and for the one team that runs small
@@ -605,7 +609,7 @@ void reserve(tet_mesh::Mesh<MemorySpace>& m, State<MemorySpace>& s, int capacity
     Kokkos::resize(m.edges, capacity);
     Kokkos::resize(s.alive, capacity);
     Kokkos::resize(s.touched, capacity);
-    Kokkos::resize(s.dirty, capacity);
+    Kokkos::resize(s.dirty, (capacity + 3) / 4 * 4);
     Kokkos::resize(s.listed, capacity);
     Kokkos::resize(s.lock, capacity);
 }
@@ -624,7 +628,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
     s.point = ep::Points<Memory>("tet_repair_point", n, box);
     s.alive = Kokkos::View<char*, Memory>("tet_repair_alive", 0);  // sized by reserve
     s.touched = Kokkos::View<char*, Memory>("tet_repair_touched", 0);
-    s.dirty = Kokkos::View<int*, Memory>("tet_repair_dirty", 0);
+    s.dirty = Kokkos::View<char*, Memory>("tet_repair_dirty", 0);
     s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", 0);
     s.lock = Kokkos::View<unsigned*, Memory>("tet_repair_lock", 0);
     s.free_slots = Kokkos::View<int*, Memory>("tet_repair_free", capacity / 64 + 1024);  // grows in repair
