@@ -74,7 +74,7 @@ case "$mode" in
 kernels)
     for kind in jittered uniform; do
         for d in 0.03 0.1 0.3; do
-            for name in "${names[@]}"; do run "$name" step 2097152 "$kind" "$d" 10 --kernels; done
+            for name in "${names[@]}"; do run "$name" step 2097152 "$kind" "$d" 10 --kernels "${args[@]}"; done
         done
     done
     ;;
@@ -83,7 +83,7 @@ rates)
         for kind in jittered uniform clustered halo; do
             for d in 0.03 0.1 0.3; do
                 for rep in 1 2; do
-                    for name in "${names[@]}"; do run "$name" step "$n" "$kind" "$d" 10; done
+                    for name in "${names[@]}"; do run "$name" step "$n" "$kind" "$d" 10 "${args[@]}"; done
                 done
             done
         done
