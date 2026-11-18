@@ -161,13 +161,13 @@ enum class Fallback { cheapest, host, rebuild };
 constexpr long long host_budget = 1LL << 20;
 using Curve = mesh_order::Curve;
 
-// Memory layout of Mesh<3> (#34). A re-sort renumbers the cells along `curve`, then tetrahedra and faces; it is due once
-// the device flips since the last sort reach `flips` per cell (default 1), every `every` updates, or when over `far` of
-// the faces join cells 64+ ids apart (0: off). `at_build`: builds sort too. Ids change: Report::resorted, permutation().
+// Memory layout of Mesh<3> (#34). A re-sort renumbers cells along `curve`, then tetrahedra and faces; it is due every
+// `every` updates (default 25), once device flips since the last reach `flips` per cell (flip counts vary run to run),
+// or when over `far` of faces join cells 64+ ids apart (0: off). `at_build`: builds too. See Report::resorted.
 struct Layout {
     Curve curve = Curve::hilbert;
-    double flips = 1;
-    int every = 0;
+    double flips = 0;
+    int every = 25;
     double far = 0;
     bool at_build = false;
     bool owner_faces = false;  // faces numbered by owner (Mesh::owned_start), then by their slot

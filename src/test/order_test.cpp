@@ -201,10 +201,10 @@ int main(int argc, char** argv) {
         plain.set_layout(never_sorted());
         long long resorts = 0, wrong_sets = 0, wrong_positions = 0, steps = 0;
         double worst_volume = 0;
-        for (int s = 0; s <= 120 && resorts < 2; ++s, ++steps) {
+        for (int s = 0; s <= 60 && resorts < 2; ++s, ++steps) {
             if (s > 0) {
-                flow.advect(points, 0.3 * spacing);
-                flow.advect(followed, 0.3 * spacing);
+                flow.advect(points, 0.1 * spacing);
+                flow.advect(followed, 0.1 * spacing);
             }
             plain.update(to_device(scaled(points, box)));
             Positions x = to_device(scaled(followed, box));
@@ -221,10 +221,11 @@ int main(int argc, char** argv) {
                 label.swap(relabel);
             }
             const auto snapped = to_host(sorted.positions());
+            const auto& sides = sorted.sides();
             for (int i = 0; i < n; ++i)
                 for (int a = 0; a < 3; ++a)
-                    wrong_positions += snapped(i, a) != exact_predicates::snap(points[label[i]][a] * box, sorted.sides(),
-                                                                               a) * sorted.sides().step;
+                    wrong_positions +=
+                        snapped(i, a) != exact_predicates::snap(points[label[i]][a] * box, sides, a) * sides.step;
             std::vector<int> identity(n);
             std::iota(identity.begin(), identity.end(), 0);
             const auto a = cells_by_label(plain, identity), b = cells_by_label(sorted, label);
@@ -233,7 +234,8 @@ int main(int argc, char** argv) {
                 worst_volume = std::max(worst_volume, std::abs(a[i].volume - b[i].volume) / a[i].volume);
             }
         }
-        check.expect(resorts == 2, "default layout: re-sorted twice within " + std::to_string(steps) + " updates");
+        check.expect(resorts == 2 && steps == 51,
+                     "default layout: re-sorted at updates 25 and 50 (" + std::to_string(steps) + " updates)");
         check.expect(wrong_positions == 0, "default layout: cell i sits at the caller's particle permutation()(i)");
         check.expect(wrong_sets == 0 && worst_volume < 1e-12,
                      "default layout: every particle keeps its neighbours and volume (" + sci(worst_volume) + ")");

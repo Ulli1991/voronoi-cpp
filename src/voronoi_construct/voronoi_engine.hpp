@@ -114,6 +114,11 @@ public:
     auto cell_face() const {
         return host([](const auto& m) { return m.cell_face(); });
     }
+    // 3D, after an update with Report::resorted: cell i is the caller's particle permutation()(i) (Mesh<3>::permutation).
+    template <int E = D, class = std::enable_if_t<E == 3>>
+    auto permutation() const {
+        return host([](const auto& m) { return m.permutation(); });
+    }
 
     // f(mesh) with the Mesh<D, space> this engine runs; f must accept both kinds.
     template <class F>
