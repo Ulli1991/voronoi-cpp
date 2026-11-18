@@ -15,7 +15,34 @@ struct CellFaces {
     Kokkos::View<int*, MemorySpace> cursor;  // fill positions while building
     Kokkos::View<double*, MemorySpace> volume;
     Kokkos::View<double* [D], Kokkos::LayoutRight, MemorySpace> centroid;
+    Kokkos::View<char*, MemorySpace> scan_temp;  // CUB's temporary storage of scan_starts
 };
+
+// start[0, n] := its exclusive prefix sum, in place (counts in start(0..n-1), start(n) = 0 on entry): CUB's scan on CUDA
+// (a tenth of a Kokkos scan's time), a Kokkos scan elsewhere. `temp`: CUB's temporary storage, grown when needed.
+// Used by: cells, detail::finish_incremental.
+template <class ExecSpace>
+void scan_starts(const ExecSpace& exec, const Kokkos::View<int*, typename ExecSpace::memory_space>& start, int n,
+                 Kokkos::View<char*, typename ExecSpace::memory_space>& temp) {
+#if defined(KOKKOS_ENABLE_CUDA)
+    if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
+        std::size_t bytes = 0;
+        cub::DeviceScan::ExclusiveSum(nullptr, bytes, start.data(), start.data(), n + 1, exec.cuda_stream());
+        if (temp.extent(0) < bytes) Kokkos::realloc(Kokkos::WithoutInitializing, temp, bytes + bytes / 4);
+        bytes = temp.extent(0);
+        cub::DeviceScan::ExclusiveSum(temp.data(), bytes, start.data(), start.data(), n + 1, exec.cuda_stream());
+        return;
+    }
+#endif
+    (void)temp;
+    Kokkos::parallel_scan(
+        "tet_mesh::cell_face_start", Kokkos::RangePolicy<ExecSpace>(exec, 0, n + 1),
+        KOKKOS_LAMBDA(int i, int& sum, bool final) {
+            const int count = start(i);
+            if (final) start(i) = sum;
+            sum += count;
+        });
+}
 
 // A list entry is a face number, with bit 31 set when the cell does not own the face if the owner bit is on (3D
 // Layout::owner_bit); readers take the face with list_face. Used by: every reader of CellFaces::face.
@@ -329,15 +356,8 @@ void cells(const ExecSpace& exec, const X& x, const exact_predicates::BoxN<D>& b
             Kokkos::atomic_inc(&start(owner(f)));
             Kokkos::atomic_inc(&start(neighbour(f)));
         });
-    Kokkos::parallel_scan(
-        "tet_mesh::cell_face_start", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int i, int& sum, bool final) {
-            const int count = i < n ? start(i) : 0;
-            if (final) {
-                start(i) = sum;
-                if (i < n) cursor(i) = sum;
-            }
-            sum += count;
-        });
+    scan_starts(exec, out.start, n, out.scan_temp);
+    Kokkos::deep_copy(exec, Kokkos::subview(cursor, std::make_pair(0, n)), Kokkos::subview(start, std::make_pair(0, n)));
     Kokkos::parallel_for(
         "tet_mesh::cell_face_fill", Range(exec, 0, faces), KOKKOS_LAMBDA(int f) {
             const int o = owner(f), j = neighbour(f);
@@ -412,10 +432,14 @@ void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicate
     const auto marked = lists.marked;
     const auto start = out.start, cursor = out.cursor, face = out.face;
     const int side = bit ? not_owned : 0;
-    // The marked cells' counts in `start`, the others' from the old list.
+    // The counts in `start`: the marked cells' kept entries (fresh ones below), the others' old lists; 0 at n.
     Kokkos::parallel_for(
-        "tet_mesh::marked_counts", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
-            if (!marked(i)) return;
+        "tet_mesh::marked_counts", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int i) {
+            if (i == n) start(i) = 0;
+            if (i == n || !marked(i)) {
+                if (i < n) start(i) = old_start(i + 1) - old_start(i);
+                return;
+            }
             int kept = 0;
             for (int a = old_start(i); a < old_start(i + 1); ++a) kept += renumber(list_face(old_face(a))) >= 0;
             start(i) = kept;
@@ -427,12 +451,7 @@ void finish_incremental(const ExecSpace& exec, const X& x, const exact_predicate
             Kokkos::atomic_inc(&start(owner(f)));
             Kokkos::atomic_inc(&start(neighbour(f)));
         });
-    Kokkos::parallel_scan(
-        "tet_mesh::cell_face_start", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int i, int& sum, bool final) {
-            const int count = i == n ? 0 : marked(i) ? start(i) : old_start(i + 1) - old_start(i);
-            if (final) start(i) = sum;
-            sum += count;
-        });
+    scan_starts(exec, out.start, n, out.scan_temp);
     Kokkos::parallel_for(
         "tet_mesh::marked_fill", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
             if (!marked(i)) return;
