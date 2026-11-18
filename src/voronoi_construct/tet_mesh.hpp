@@ -793,6 +793,7 @@ struct FaceRings {
     Kokkos::View<char*, MemorySpace> cub_temp;          // CUB's temporary storage (detail::select_flagged)
     Borrowed dirty;                                     // faces to walk this step, in the spare pool
     Kokkos::View<int, MemorySpace> listed;              // their number
+    Kokkos::View<int, MemorySpace> appended;            // ring entries they appended to the pool
     int faces = -1;       // -1: none yet, every face is walked
     int in_use = 0;       // pool[in_use] holds the rings
     int used = 0;         // its entries in use, superseded rings included
@@ -825,6 +826,7 @@ FaceRings<MemorySpace> make_face_rings(int tets, int faces, int entries) {
     r.ids = Ints(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("face_rings_ids")), faces + faces / 4);
     r.counts = Ints("face_rings_counts", 8);
     r.listed = Kokkos::View<int, MemorySpace>("face_rings_listed");
+    r.appended = Kokkos::View<int, MemorySpace>("face_rings_appended");
     return r;
 }
 
@@ -1338,56 +1340,45 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
     rings.dirty = all ? Borrowed() : Borrowed(rings.pool[1 - rings.in_use].data() + rings.kept_ints, faces);
     const auto dirty = rings.dirty;
 
-    // Dirty faces (a touched tetrahedron on their ring): ring_start ~representative, listed once in `dirty`, the old
-    // ring's start in `was` (the list's room after it).
+    // Dirty faces (a touched tetrahedron on their ring), each once: ring_start ~representative marks it, `dirty` lists
+    // it, and the thread that marked it walks its ring once and writes it canonically into the old room if it fits,
+    // else appends it. Its new start goes to `was` (-1: no room; it stays marked for the compaction).
     Kokkos::deep_copy(exec, listed, 0);
-    int dirty_faces = 0;
+    Kokkos::deep_copy(exec, rings.appended, 0);
+    int dirty_faces = 0, dirty_entries = 0;
     const Borrowed was = all ? Borrowed() : Borrowed(rings.dirty.data() + faces, faces);
     if (!all) {
         const bool from_list = touched_list.data() != nullptr;
+        const auto pool = rings.pool[rings.in_use];
+        const auto appended = rings.appended;
+        const int base = rings.used, room = static_cast<int>(pool.extent(0));
         // A thread per edge of each touched tetrahedron, so a warp's walks are alike (one thread per tetrahedron: 1.9x
         // slower). 64-bit indices: six per tetrahedron overflow int past 357M tetrahedra.
         Kokkos::parallel_reduce(
-            "tet_mesh::dirty_faces",
+            "tet_mesh::dirty_rings",
             Kokkos::RangePolicy<ExecSpace, Kokkos::IndexType<long long>>(
                 exec, 0, 6LL * (from_list ? static_cast<long long>(touched_list.extent(0)) : count)),
-            KOKKOS_LAMBDA(long long e, int& sum) {
+            KOKKOS_LAMBDA(long long e, int& listed_faces, int& sum) {
                 const int s = static_cast<int>(e / 6), k = static_cast<int>(e - 6 * s);
                 const int t = from_list ? touched_list(s) : s;
                 // The list keeps tetrahedra a later flip of the step freed; their adjacency is stale.
                 if ((!from_list && !touched(t)) || (alive.data() && !alive(t))) return;
                 int ka, kb, representative = -1;
                 edge_ends(k, ka, kb);
-                const int f =
-                    edge_face(mesh, numbers, touched, t, mesh.vertex(t, ka), mesh.vertex(t, kb), representative);
+                const int a = mesh.vertex(t, ka), b = mesh.vertex(t, kb), i = Kokkos::min(a, b), j = Kokkos::max(a, b);
+                const int f = edge_face(mesh, numbers, touched, t, a, b, representative);
                 if (f < 0) return;
-                const int old = Kokkos::atomic_exchange(&ring_start(f), ~representative);
-                if (old < 0) return;
-                const int at = claim(&listed(), 1);
-                dirty(at) = f;
-                was(at) = old;
-                ++sum;
-            },
-            dirty_faces);
-    }
-    // The dirty faces' rings, a thread each: walked once, written canonically into the old room if they fit, else
-    // appended; a ring without room stays dirty (ring_start ~representative) for the compaction.
-    int dirty_entries = 0;
-    if (!all) {
-        const auto pool = rings.pool[rings.in_use];
-        const int base = rings.used, room = static_cast<int>(pool.extent(0));
-        Kokkos::deep_copy(exec, listed, 0);
-        Kokkos::parallel_reduce(
-            "tet_mesh::append_rings", Range(exec, 0, dirty_faces),
-            KOKKOS_LAMBDA(int s, int& sum) {
-                const int f = dirty(s), representative = ~ring_start(f), i = owner(f), j = neighbour(f);
-                const int old_start = was(s), old_length = ring_length(f);
+                const int old_start = Kokkos::atomic_exchange(&ring_start(f), ~representative);
+                if (old_start < 0) return;
+                const int listed_at = claim(&listed(), 1);
+                ++listed_faces;
+                const int old_length = ring_length(f);
                 int at = -1;
                 auto place = [&](int length) -> int* {
                     if (old_length >= length) {
                         at = old_start;
                     } else {
-                        at = base + claim(&listed(), length);
+                        at = base + claim(&appended(), length);
                         sum += length;
                     }
                     return at + length <= room ? &pool(at) : nullptr;
@@ -1426,11 +1417,16 @@ int update_face_rings(const ExecSpace& exec, Mesh<typename ExecSpace::memory_spa
                     for (int r = 0, k = best; r < steps; ++r, k = (k + step) % steps) out[r] = ring[k];
                 }
                 ring_length(f) = length;
-                if (at + length <= room) ring_start(f) = at;
+                was(listed_at) = at + length <= room ? at : -1;
                 // Faces without an old number: ~f in the list.
-                if (touched(representative)) dirty(s) = ~f;
+                dirty(listed_at) = touched(representative) ? ~f : f;
             },
-            dirty_entries);
+            dirty_faces, dirty_entries);
+        // The starts last: a face's mark must stay until every thread around its edge has seen it.
+        Kokkos::parallel_for(
+            "tet_mesh::dirty_starts", Range(exec, 0, dirty_faces), KOKKOS_LAMBDA(int s) {
+                if (was(s) >= 0) ring_start(dirty(s) < 0 ? ~dirty(s) : dirty(s)) = was(s);
+            });
     }
     if (!all && rings.used + dirty_entries <= static_cast<int>(rings.pool[rings.in_use].extent(0))) {
         rings.used += dirty_entries;
