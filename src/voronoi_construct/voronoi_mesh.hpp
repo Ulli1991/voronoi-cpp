@@ -145,7 +145,7 @@ struct Report {
     long long host_rebuilds = 0;
     int local_cells = 0;      // cells the local repair clipped exactly (tet_local), 0 if it did not run
     int local_tets = 0;       // tetrahedra it created
-    int local_attempts = 0;   // its attempts (2: widened once)
+    int local_attempts = 0;   // its attempts (2: exact cells, 3: also widened)
     bool local_done = false;  // the local repair finished the mesh
     int faces = 0;
     bool resorted = false;  // cell ids changed: cell i is the particle the caller passed as Mesh::permutation()(i)

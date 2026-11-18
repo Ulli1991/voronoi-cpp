@@ -25,7 +25,7 @@ constexpr int none = 0, seeds = 1, large = 2, cells = 3, stitch = 4, check = 5;
 // What repair() did (counts of its last attempt). Used by: Mesh::update (Report::local_*), the bench.
 struct Stats {
     int why = why::none, why_first = why::none;  // of the last attempt, of the first
-    int seeds = 0;                // cells whose new neighbours were added (the seeds; all on a second attempt)
+    int seeds = 0;                // cells whose new neighbours were added (the seeds; all on a third attempt)
     int cells = 0;                 // cells clipped exactly (the affected set)
     int removed = 0, created = 0;  // tetrahedra replaced
     int attempts = 0;
@@ -89,9 +89,9 @@ struct Table {
 
 }  // namespace detail
 
-// Replace the tetrahedra around the stuck entries of the last tet_repair::repair by exact local Delaunay cells: seeds
-// (their particles), first ring, the seeds' new neighbours (a jumped particle's), clipped on `grid` (the cell list of
-// the positions); widened by a ring and all new neighbours on a second attempt. Used by: voronoi::Mesh<3>::update.
+// Replace the tetrahedra around the stuck entries of the last tet_repair::repair by local Delaunay cells: the seeds
+// (their particles), first ring and the seeds' new neighbours, clipped on `grid`; a second attempt clips exactly, a
+// third also widens by a ring and every cell's new neighbours. Used by: voronoi::Mesh<3>::update.
 template <class ExecSpace>
 Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace::memory_space>& grid,
              tet_mesh::Mesh<typename ExecSpace::memory_space>& m,
@@ -162,7 +162,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         return count;
     };
     // Cells of the selected slots, appended to the pool; listed = every flagged particle (faces to the others are
-    // kept). Rounded cells on a first attempt (a guess the device repair checks), exact ones on the second.
+    // kept). Rounded cells first (a guess the device repair checks), then exact ones.
     bool exact = false;
     auto clip = [&](int count) {
         if (count == 0) return;
@@ -205,8 +205,8 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         return bad;
     };
 
-    for (int attempt = 0; attempt < 2 && !stats.done; ++attempt) {
-        if (attempt > 0) stats.why_first = stats.why;
+    for (int attempt = 0; attempt < 3 && !stats.done; ++attempt) {
+        if (attempt == 1) stats.why_first = stats.why;
         stats.seeds = stats.cells = stats.removed = stats.created = stats.why = 0;
         stats.attempts = attempt + 1;
         Kokkos::Timer timer;
@@ -237,7 +237,7 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
                 });
         }
         ring(flag::seed);
-        if (attempt > 0) ring(flag::affected);  // wider: one more ring of old neighbours
+        if (attempt > 1) ring(flag::affected);  // wider: one more ring of old neighbours
         const int first_count = select(flag::affected, true);
         lap(stats.select_ms);
         if (static_cast<long long>(first_count) * largest_share > n) {  // a rebuild is cheaper
@@ -246,8 +246,8 @@ Stats repair(const ExecSpace& exec, const shell_voronoi::Grid<typename ExecSpace
         }
         if (cells.capacity() < 64LL * first_count + 4096) cells.reallocate(96LL * first_count + 65536);
         clip(first_count);
-        // A jumped particle's new neighbourhood (on the second attempt every cell's), then their cells.
-        stats.seeds = select(attempt > 0 ? flag::affected : flag::seed, false);
+        // A jumped particle's new neighbourhood (on the third attempt every cell's), then their cells.
+        stats.seeds = select(attempt > 1 ? flag::affected : flag::seed, false);
         if (stats.seeds == 0) {
             stats.why = why::seeds;
             break;
