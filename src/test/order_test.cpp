@@ -124,6 +124,8 @@ int main(int argc, char** argv) {
         voronoi::Layout layout;
         layout.curve = curve;
         layout.every = 2;
+        layout.flips = 0;
+        layout.at_build = true;
         layout.owner_faces = curve == Curve::hilbert || curve == Curve::rcm;
         layout.owner_bit = curve != Curve::morton;
         sorted.set_layout(layout);
@@ -180,6 +182,55 @@ int main(int argc, char** argv) {
         check.expect(
             worst_volume < 1e-12 && worst_centroid < 1e-12,
             name + "volumes and centroids equal to rounding (" + sci(worst_volume) + ", " + sci(worst_centroid) + ")");
+    }
+
+    {  // the default layout re-sorts by itself on a long run; a caller that follows permute() keeps every particle
+        Points points = start_points, followed = start_points;
+        std::vector<int> label(n);
+        std::iota(label.begin(), label.end(), 0);
+        Mesh plain(Exec{}, box), sorted(Exec{}, box);
+        voronoi::Layout never;
+        never.flips = never.every = 0;
+        never.far = 0;
+        plain.set_layout(never);
+        long long resorts = 0, wrong_sets = 0, wrong_positions = 0, steps = 0;
+        double worst_volume = 0;
+        for (int s = 0; s <= 400 && resorts < 2; ++s, ++steps) {
+            if (s > 0) {
+                flow.advect(points, 0.3 * spacing);
+                flow.advect(followed, 0.3 * spacing);
+            }
+            plain.update(to_device(scaled(points, box)));
+            Positions x = to_device(scaled(followed, box));
+            const voronoi::Report r = sorted.update(x);
+            plain.update_cells();
+            sorted.update_cells();
+            if (r.resorted) {
+                ++resorts;
+                const auto p = to_host(sorted.permutation());
+                Points moved(n);
+                std::vector<int> relabel(n);
+                for (int i = 0; i < n; ++i) moved[i] = followed[p(i)], relabel[i] = label[p(i)];
+                followed.swap(moved);
+                label.swap(relabel);
+            }
+            const auto snapped = to_host(sorted.positions());
+            for (int i = 0; i < n; ++i)
+                for (int a = 0; a < 3; ++a)
+                    wrong_positions += snapped(i, a) != exact_predicates::snap(points[label[i]][a] * box, sorted.sides(),
+                                                                               a) * sorted.sides().step;
+            std::vector<int> identity(n);
+            std::iota(identity.begin(), identity.end(), 0);
+            const auto a = cells_by_label(plain, identity), b = cells_by_label(sorted, label);
+            for (int i = 0; i < n; ++i) {
+                wrong_sets += a[i].neighbours != b[i].neighbours;
+                worst_volume = std::max(worst_volume, std::abs(a[i].volume - b[i].volume) / a[i].volume);
+            }
+        }
+        check.expect(resorts == 2, "default layout: re-sorted twice within " + std::to_string(steps) + " updates");
+        check.expect(wrong_positions == 0, "default layout: cell i sits at the caller's particle permutation()(i)");
+        check.expect(wrong_sets == 0 && worst_volume < 1e-12,
+                     "default layout: every particle keeps its neighbours and volume (" + sci(worst_volume) + ")");
     }
 
     {  // faces by owner and the owner bit, without a re-sort: the same ids, the same bits

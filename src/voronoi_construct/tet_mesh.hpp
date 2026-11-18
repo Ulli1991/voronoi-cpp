@@ -76,6 +76,9 @@ struct Geometry {
     // Optional (Layout::float_centroids): face centroids as float, relative to the owner; `centroid` is then empty.
     using Centroids32 = Kokkos::View<float* [D], Kokkos::LayoutRight, MemorySpace>;
     Centroids32 centroid32;
+    // Optional (3D): |A . d| per face, d between the generators: 2D times the volume of either cell's pyramid over it
+    // (-d is exact, so both cells' sums read it). Lets update_cells skip the area and, for the owner, the positions.
+    Kokkos::View<double*, MemorySpace> pyramid;
 };
 
 // The corners of local edge k: (0,1) (0,2) (0,3) (1,2) (1,3) (2,3).
@@ -1748,6 +1751,7 @@ void faces_as(const ExecSpace& exec, const X& x, const Box& box, const Mesh<type
     const bool with_volume = out.volume.extent(0) > 0;
     const bool with_rows = out.rows.extent(0) > 0;
     const bool with_float = out.centroid32.extent(0) > 0;
+    const bool with_pyramid = out.pyramid.extent(0) > 0;
     const auto geometry = face_geometry(x, box, mesh, slot);
     if (with_volume) Kokkos::deep_copy(exec, out.volume, 0.0);
     // At most 80 registers (78 unbounded): 6 blocks of 128 per SM, 7 % faster on the A100; 64 registers spill.
@@ -1768,6 +1772,7 @@ void faces_as(const ExecSpace& exec, const X& x, const Box& box, const Mesh<type
                 out.centroid(f, 1) = centroid.y;
                 out.centroid(f, 2) = centroid.z;
             }
+            if (with_pyramid) out.pyramid(f) = Kokkos::abs(projected);
             if (!with_rows && !with_volume) return;
             const int s = geometry.slot.data() ? geometry.slot(f) : f;
             const int i = mesh.owner(s), j = mesh.neighbour(s);

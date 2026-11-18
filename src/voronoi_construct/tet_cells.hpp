@@ -65,6 +65,25 @@ KOKKOS_INLINE_FUNCTION double pyramid(const X& x, const exact_predicates::BoxN<D
     return Kokkos::abs(Ar::dot(A, d));
 }
 
+// Cell i's pyramid over face f from Geometry::pyramid, when stored: the same bits as pyramid() (the other particle is
+// the owner unless i is, as the owner is the lower id), without reading the area or, for the owner, any position.
+template <int D, class Ar, class X, class Faces, class Ints>
+KOKKOS_INLINE_FUNCTION bool stored_pyramid(const X&, const exact_predicates::BoxN<D>&, const Faces&, const Ints&, int,
+                                           int, double&, VecN<D>&) {
+    return false;
+}
+template <int D, class Ar, class X, class Memory, class Ints>
+KOKKOS_INLINE_FUNCTION bool stored_pyramid(const X& x, const exact_predicates::BoxN<D>& box,
+                                           const Geometry<Memory, D>& g, const Ints& owner, int i, int f, double& p,
+                                           VecN<D>& c) {
+    if (g.pyramid.extent(0) == 0) return false;
+    c = g.centroid32.extent(0) > 0 ? row<D>(g.centroid32, f) : row<D>(g.centroid, f);
+    const int j = owner(f);
+    if (j != i) c = Ar::add(c, snapped_difference<D>(row<D>(x, j) - row<D>(x, i), box));
+    p = g.pyramid(f);
+    return true;
+}
+
 // Sort cell i's list entries [begin, end) by the other particle, the XOR of
 // the face's two particles and i. `other`: room for the keys.
 template <class Ints, class Others, class Const>
@@ -112,6 +131,8 @@ struct CellLists {
     }
     KOKKOS_INLINE_FUNCTION double side(int i, int entry, VecN<D>& c) const {
         const int f = list_face(entry);
+        double p;
+        if (stored_pyramid<D, Ar>(x, box, faces, owner, i, f, p, c)) return p;
         return pyramid<D, Ar>(x, box, faces, i, owner(f) ^ neighbour(f) ^ i, f, c);
     }
     KOKKOS_INLINE_FUNCTION void finish(int i, double v, VecN<D> moment) const {

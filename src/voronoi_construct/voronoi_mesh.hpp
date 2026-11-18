@@ -326,7 +326,8 @@ public:
         const int halves = layout_.float_centroids ? stored : 0;
         geometry_ = {Areas("face_area", stored), Areas("face_centroid", stored - halves),
                      View<double*>("cell_volume", n_), tet_mesh::FaceRows<Memory>("face_rows", float_rows ? faces : 0),
-                     typename tet_mesh::Geometry<Memory>::Centroids32("face_centroid32", halves)};
+                     typename tet_mesh::Geometry<Memory>::Centroids32("face_centroid32", halves),
+                     View<double*>("face_pyramid", stored)};
         cells_ = {View<int*>("cell_face_start", n_ + 1), View<int*>("cell_face", 0), View<int*>("cell_face_cursor", n_),
                   geometry_.volume, Areas("cell_centroid", n_)};
         lap(timer, timings, &Timings::build);
@@ -551,6 +552,7 @@ private:
         const int count = faces();
         if (count > static_cast<int>(geometry_.area.extent(0))) {
             Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.area, count + count / 32);
+            Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.pyramid, count + count / 32);
             if (layout_.float_centroids)
                 Kokkos::realloc(Kokkos::WithoutInitializing, geometry_.centroid32, count + count / 32);
             else
