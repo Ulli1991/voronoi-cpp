@@ -670,15 +670,13 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
     const auto counters = s.counters;
     const auto slivers = s.freed;                       // free until the repair starts; counter::freed counts them
     const double snap = box.step * 1.7320508075688772;  // largest move by snapping
-    // At most 64 registers (72 unbounded): 8 blocks of 128 per SM, 6 % faster on the A100.
+    // At most 64 registers: 8 blocks of 128 per SM. The kernel spills at this cap (985 B/cell of local traffic at 128³,
+    // 0.1 spacings) and is still 4 to 7 % faster than without it (76 registers, no spills): occupancy pays more here.
     Kokkos::parallel_for(
         "tet_repair::screen", Kokkos::RangePolicy<ExecSpace, Kokkos::LaunchBounds<128, 8>>(exec, 0, s.count),
         KOKKOS_LAMBDA(int t) {
             st.dirty(t) = 0;
             if (!st.alive(t)) return;
-            auto from = [&](int v) {
-                return tet_mesh::from_point(centre, t, tet_mesh::GridPoint(x, v, box), box.step);
-            };
             // Corners sorted by particle id and the centre in rounded arithmetic, as tet_mesh::stored_centre for
             // created tetrahedra: the same bits whichever kernel and corner order computed it.
             int v[4] = {vertex(t, 0), vertex(t, 1), vertex(t, 2), vertex(t, 3)};
@@ -696,16 +694,22 @@ void move_screened(const ExecSpace& exec, const X& x, const ep::Box& box,
             // Well shaped and clearly positive (in the stored corner order), else decide exactly.
             bool suspect = !(parity * volume6 > 1e-3 * shape);
             const Vec3 c = tet_mesh::rounded_circumcentre(d, volume6);
-            tet_mesh::store_centre(x, box, v[0], c, centre, t);
-            const double r2 = centre(t, 3);
+            // The row as stored, kept in registers: the tests below read no centre back.
+            const tet_mesh::CentreRow row = tet_mesh::store_centre(x, box, v[0], c, centre, t);
+            const double r2 = row.c[3];
             const double margin = 1e-6 * r2 + 8 * snap * (Kokkos::sqrt(r2) + snap);
             for (int k = 0; k < 4 && !suspect; ++k) {
                 const int u = adjacent(t, k);
                 // A triangle fails from both sides or from neither: the side with the lower index decides.
                 if (u < t) continue;
-                const int far = tet_mesh::far_vertex(m, t, u);
+                // The particle of u that t lacks (t's corners are in registers).
+                int far = -1;
+                for (int j = 0; j < 4; ++j) {
+                    const int w = vertex(u, j);
+                    if (far < 0 && w != v[0] && w != v[1] && w != v[2] && w != v[3]) far = w;
+                }
                 if (far < 0) continue;
-                const Vec3 e = from(far);
+                const Vec3 e = tet_mesh::from_point(row, tet_mesh::GridPoint(x, far, box), box.step);
                 suspect = dot(e, e) < r2 + margin;
             }
             if (suspect) detail::mark(st, t);

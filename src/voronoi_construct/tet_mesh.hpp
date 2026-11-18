@@ -1636,11 +1636,18 @@ KOKKOS_INLINE_FUNCTION Vec3 rounded_circumcentre(const Vec3* d, double volume6) 
             R::mul(R::add(R::add(R::mul(bc.z, aa), R::mul(ca.z, bb)), R::mul(ab.z, cc)), scale)};
 }
 
+// A stored centre row (Mesh::centre) kept in registers by the kernel that wrote it.
+struct CentreRow {
+    double c[4];
+};
+
 // Stores centre c relative to corner v0 (grid steps) as Mesh::centre row t: wrapped into [0, period) and rounded once,
 // so equal centres get equal bits whatever corner and image they came from (#45); and the squared radius (box units).
+// Returns the row as stored.
 template <class X, class Centre>
-KOKKOS_INLINE_FUNCTION void store_centre(const X& x, const Box& box, int v0, Vec3 c, const Centre& centre, int t) {
+KOKKOS_INLINE_FUNCTION CentreRow store_centre(const X& x, const Box& box, int v0, Vec3 c, const Centre& centre, int t) {
     const double g[3] = {c.x, c.y, c.z};
+    CentreRow row;
     for (int a = 0; a < 3; ++a) {
         const double k = Kokkos::nearbyint(R::mul(x(v0, a), box.per_step)), period = static_cast<double>(box.period[a]);
         double at = R::add(k, g[a]);
@@ -1649,9 +1656,12 @@ KOKKOS_INLINE_FUNCTION void store_centre(const X& x, const Box& box, int v0, Vec
             at = R::add(R::sub(k, R::mul(n, period)), g[a]);
             if (at >= period) at = R::add(R::sub(k, R::mul(n + 1, period)), g[a]);
         }
+        row.c[a] = at;
         centre(t, a) = at;
     }
-    centre(t, 3) = R::mul(R::mul(R::dot(c, c), box.step), box.step);
+    row.c[3] = R::mul(R::mul(R::dot(c, c), box.step), box.step);
+    centre(t, 3) = row.c[3];
+    return row;
 }
 
 // Whole grid steps k and periods of a point, for from_point. Used by: faces, tet_repair::move_screened.
@@ -1673,6 +1683,16 @@ KOKKOS_INLINE_FUNCTION Vec3 from_point(const Centre& centre, int t, const GridPo
     double d[3];
     for (int a = 0; a < 3; ++a) {  // both in [0, period): one shift at most, and no division
         const double e = centre(t, a) - q.k[a], p = q.period[a];
+        d[a] = (e > 0.5 * p ? e - p : e < -0.5 * p ? e + p : e) * step;
+    }
+    return {d[0], d[1], d[2]};
+}
+
+// The same from a row in registers (store_centre's result). Used by: tet_repair::move_screened.
+KOKKOS_INLINE_FUNCTION Vec3 from_point(const CentreRow& row, const GridPoint& q, double step) {
+    double d[3];
+    for (int a = 0; a < 3; ++a) {
+        const double e = row.c[a] - q.k[a], p = q.period[a];
         d[a] = (e > 0.5 * p ? e - p : e < -0.5 * p ? e + p : e) * step;
     }
     return {d[0], d[1], d[2]};
