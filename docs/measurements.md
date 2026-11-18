@@ -366,6 +366,106 @@ in the smooth flow it shows in single steps (cosmic web at 1 spacing, clustered 
 Rebuild shows whenever a few particles jump 2 spacings or more (60 ns per cell; the rate falls from about 96 M cells/s at 0.1 spacings, paper stages.csv, to 14),
 and on the surface at large steps, where it is the whole cost (8 to 41 µs per cell).
 
+### Local repair of stuck regions on the device (S2, 2026-11-18)
+
+`tet_local::repair` (branch `local-repair`, `Fallback::local`, and `cheapest` up to n / 64 stuck entries) replaces
+the tetrahedra around the stuck entries instead of rebuilding the mesh:
+- **Affected set.** The particles of the stuck tetrahedra and of those across their stuck triangles (seeds), their
+  first ring in the current tetrahedra, and the seeds' new neighbours: a jumped particle's old and new
+  neighbourhoods.
+- **Cells.** Those cells are clipped on the cell list of the current positions with the existing thread kernel
+  (`shell_voronoi::detail::construct_cells`, face rings, the 2R certification): rounded cells first, exact ones
+  (`ExactCell`) on a second attempt, exact and one ring wider (old and new neighbours of every cell) on a third.
+- **Stitch.** The old tetrahedra with an affected corner go; the cells emit each tetrahedron with an affected corner
+  once (by its lowest affected particle); a hash table of triangles checks that every new face meets exactly one other
+  new face or one kept boundary face. The tetrahedra are written back by `tet_flips::write_region` (shared with the
+  host finish: border, edge representatives, touched list for the incremental face numbering of #53).
+- **Check.** The device repair runs on the new tetrahedra and their neighbours with the exact predicates; an entry left
+  stuck starts the next attempt, and after the third, or past n / 8 affected cells, the step rebuilds. An allocation
+  failure before the write-back also rebuilds.
+
+One A100 40 GB (gpu1), 1305 MHz application clock (nvidia-smi in every job). main is dcb9b3d with the bench options of
+`fallback-cases` (`voronoi_bench_ref`), the branch 4dd3ab8 (`voronoi_bench_new`), in the same jobs. Means over steps 2
+to 12 of a flow at 0.1 spacings per step with a share of points jumping each step (`--jump-share`, `--jump-spacings`),
+or of the smooth flow; the rate is cells over the whole step (repair, fallback, rebuild, geometry, cells).
+`scripts/local_repair_a100.sh`; raw logs in `docs/data/raw/local-repair-*`.
+
+**Correctness.** Every step compared with a fresh exact rebuild of the same points (`--verify`: no failing
+triangle, Delaunay neighbours and faces equal, cell volumes equal to 1e-10; the few faces of zero area that the
+check's clipping drops are main's too):
+- job 32513179, local repair forced, 6 steps each: two jumpers at 1, 2 and 4 spacings, shares 1e-4, 1e-3 and 1e-2 at
+  4 spacings, cosmic web at 1 spacing and clustered at 0.5: 48 of 48 steps pass; 29 steps were repaired locally (up to
+  174254 cells), 1e-2 rebuilt (past n / 8), cosmic web and clustered did not stick in these 6 steps;
+- job 32513187, default policy, 16 steps of cosmic web at 1 spacing (2 local repairs) and of clustered at 0.5 (none
+  stuck): 32 of 32 pass; CLUSTERED_RESULT;
+- job 32513186, surface 64³ at 0.3 spacings, local forced: 6 of 6 pass (one local repair: 8 stuck entries, 101 cells, 119 ms);
+- earlier binaries of the branch: jobs 32417473 and 32417793, 81 of 81 steps.
+
+**Speed, 128³** (job 32513180; M cells/s; main's default against the branch's default, `cheapest`):
+
+| case | main | branch | branch, local forced | stuck entries | cells repaired | local repair ms (index, clip, stitch, check) |
+|---|---|---|---|---|---|---|
+| 2 jumpers, 1 spacing | 18.4 (host 3, rebuild 7 of 11 steps) | 62.3 | 58.2 | 13 | 81 | 10.5 (2.9, 2.8, 1.4, 0.9) |
+| 2 jumpers, 2 spacings | 13.2 (rebuild every step) | 54.3 | 56.7 | 30 | 132 | 13.7 (3.1, 4.1, 1.6, 1.1) |
+| 2 jumpers, 4 spacings | 13.5 | 51.2 | 51.6 | 39 | 177 | 15.9 (2.0, 5.8, 1.9, 1.1) |
+| share 1e-4, 4 spacings | 12.2 | 35.6 | 37.1 | 3790 | 18000 | 21.8 (2.2, 9.9, 2.6, 2.6) |
+| share 1e-3, 4 spacings | 11.1 | 11.5 (rebuild) | 13.4 | 37800 | 157000 | 83 (2.3, 47, 7.1, 18) |
+| share 1e-2, 4 spacings | 7.6 | 7.9 (rebuild) | 7.7 (rebuild, past n / 8) | 376000 | — | — |
+| cosmic web, flow 1 spacing | 39.2 | 37.3 | 36.8 | 1 (2 of 11 steps) | 10 | 3.2 |
+| clustered, flow 0.5 spacings | 65.5 (host in 1 step) | 62.8 | 66.6 | 1 (1 of 11 steps) | 5 | 1.8 |
+
+The flows stick in different steps from run to run (the flips follow atomics), so their rows compare runs, not steps.
+After a local repair the geometry pass is cheaper than after a rebuild (7.8 against 12.6 ms), which only renumbers
+the touched faces.
+
+**Speed, 256³** (job 32513182; M cells/s):
+
+| case | main | branch | branch, local forced | cells repaired |
+|---|---|---|---|---|
+| 2 jumpers, 1 spacing | 73.4 (host finish in 9 of 11 steps, 117 ms mean) | 124.5 | 122.9 | 56 |
+| 2 jumpers, 2 spacings | 15.6 (host every step, 610 ms mean; 2 rebuilt) | 118.6 | 119.1 | 130 |
+| 2 jumpers, 4 spacings | 5.5 (host 1.0 s, then a rebuild of 1.84 s, every step) | 115.8 | 115.8 | 174 |
+| share 1e-4, 4 spacings | 8.5 | 58.9 | 60.3 | 208000 |
+| share 1e-3, 4 spacings | 8.0 | 8.1 (rebuild) | 8.1 (55 % of steps rebuilt) | 631000 |
+| share 1e-2, 4 spacings | 6.5 | 6.4 (rebuild) | 6.2 (rebuild, past n / 8) | — |
+| cosmic web, flow 1 spacing | 69.9 | 67.7 | 69.1 | 17 |
+| clustered, flow 0.5 spacings | 105.8 | 105.8 | 106.4 | — |
+
+At 256³ a local repair of a few cells costs 22 to 30 ms, of which the cell list (5 ms) and the stitch's scan of all
+110 million tetrahedra (8 ms) do not depend on the cells repaired. At share 1e-3 (1.39 million cells) the rounded
+cells' stitch fails in most steps and the exact second attempt (0.7 s) closes it in most, but not all
+(job 32513188: 4 of 6 steps local, the rest rebuilt after a third attempt would pass n / 8).
+
+**Crossover, 128³** (job 32513181; local forced against rebuild forced, M cells/s):
+
+| share (4 spacings) | stuck entries | cells repaired | local | rebuild |
+|---|---|---|---|---|
+| 1e-5 | 370 | 1806 | 45.6 | 11.8 |
+| 1e-4 | 3750 | 17955 | 28.8 | 12.2 |
+| 3e-4 | 11400 | 53607 | 26.5 | 11.7 |
+| 1e-3 | 37800 | 173101 | 14.4 | 10.9 |
+| 3e-3 | 113000 | (797000, past n / 8: rebuilt) | 10.1 | 10.1 |
+| 1e-2, 3e-2 | 0.38 M, 1.1 M | past n / 8: rebuilt | 7.6, 4.9 | 7.7, 5.0 |
+
+Before the n / 8 limit (job 32417474, same code otherwise) local took 4.5 M cells/s at 3e-3 (798000 cells) and 2.1 at
+1e-2 (1.6 million) against 10.7 and 8.1 for a rebuild: the thread kernel clips a cell several times slower than the
+rebuild's warp kernel, so the crossover is near 10 % of the cells repaired (about 200000 at 128³), between shares of
+1e-3 and 3e-3. `cheapest` takes the local path up to n / 64 stuck entries (32768 at 128³; at 1e-3, 37800, it rebuilds,
+where local would be 1.3× faster); past n / 8 affected cells the local path itself rebuilds.
+
+**Default path unchanged.** With nothing stuck no new code runs. Seven inputs (jittered, uniform, clustered, halo,
+lattice, wave, blue noise) at 0.03, 0.1 and 0.3 spacings, 10 steps, main and branch twice each, alternating (job
+32513184): `geometry_checksum`, `faces_checksum` and `lists_checksum` equal in all 21 cases and all 10 steps. Median
+step rates differ by −0.56 to +1.24 % (lattice at 0.3, faster), all others within ±0.9 %; means −0.86 to +2.53 %.
+
+**Tests.** A100 ctest 22 of 22 (job 32513189), with six new cases `fallback.local.jumpers.{2,33}.{1,2,4}` (2 or 33
+particles jumping 1 to 4 spacings at 32³, each step repaired locally without a rebuild and checked against an oracle
+and a fresh build) and `Fallback::local` in the shells, large and growth cases. CI's host steps on gpu1 (job
+32513191): comments and format pass (format fixed after the job, `ae4c431`), ctest 22 of 22 with sanitizers off and on,
+clang-tidy 18 clean on `voronoi_bench.cpp`, `mesh_cases/fallback.cpp` and `repair_test.cpp` with the headers. A100
+fuzz, profile huge, 15 minutes (job 32513190): 10 cases, 2 exact, 6 refused for causes the input has, 2 out of time
+(seeds 4000000000002 and 4000000000010, which run out of 900 s alone on main as well, job 32428400), no WRONG or CRASH.
+
 ### Long runs
 
 Job 31953232 (128³, 0.1 spacings per step): the step falls from 118 M cells/s at step 100 to 59 at step 500. Issue: https://github.com/Ulli1991/voronoi-cpp/issues/34. On Sedov the loss is at most 4.5 % over a run.
