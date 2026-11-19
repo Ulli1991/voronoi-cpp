@@ -1265,6 +1265,15 @@ The screen's register cap, measured (Nsight Compute, job 32540491; 64 against 76
 
 At 0.3 spacings (128³) one re-sort is 11.6 → 5.4 ms, and 500 steps 102.4 → 103.9 M cells/s (every 25) and 73.4 → 73.6 (every 100). The step after a re-sort still walks every ring and builds every list; that is the rest of what luna-cpp measured as about one step. Bits: the same geometry, faces and lists checksums as before on seven inputs at three spacings with a re-sort every 2 updates (job 32540927); A100 ctest 23 of 23 (job 32540912).
 
+**The branch's head** (`6f87d0b`: levers 1, 2 and 5a, M2, the re-sort in place; M1 reverted). Against levers 1 + 2 in one job each (jobs 32543851–53), M cells/s:
+
+| | 128³ 0.03 / 0.1 / 0.3 | 256³ 0.03 / 0.1 / 0.3 |
+|---|---|---|
+| ten steps | 197.7 / 125.1 / 73.7 → 201.6 / 127.4 / 74.7 | 259.5 / 186.7 / 107.0 → 262.7 / 189.7 / 108.5 |
+| 500 steps, re-sort every 25 | 214.1 / 160.5 / 98.0 → 229.7 / 169.6 / 101.2 | |
+
+Tests on this head (jobs 32543848, 32543849, 32544828): A100 test suite 23 of 23; every step against a fresh exact build, 93 of 93 and S2's 48 of 48; geometry, faces and lists checksums equal to step-2x, 105 of 105; CI's host steps clean (comments, format, gcc 15 with sanitizers off and on 23 of 23, clang-tidy 18 without warnings), and the sanitizer suite again three times as CI runs it, 23 of 23 each. Against step-2x over 500 steps at 128³ (job 32529712): 1.19 / 1.21 / 1.20×; at 256³, 0.1 spacings, in one job (32544490): 196.3 → 228.8 M cells/s (1.17×), a re-sort 101 → 34 ms. Peak of a run with re-sorts at 128³: 2375 → 2025 B/cell (job 32543853).
+
 ## Removed, and where to find it
 
 Scripts and files nothing maintained uses; each line names the last commit that had it (`git show <commit>:<path>`).
