@@ -350,7 +350,9 @@ public:
         const int entries = static_cast<int>(tets_.ring.extent(0));
         tets_.owner = tets_.neighbour = tets_.ring_start = tets_.ring_length = tets_.ring = {};
         state_ = tet_repair::prepare(exec_, positions_, box_, tets_, tets + tets / 8, n_ / 4 + 1024);
-        rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 2);
+        // Each ring pool holds 1.25 times the start's entries (1.5 until 2026-11-19): 83 B/cell less, 0.5 to 2.3 % slower
+        // over 500 steps, as appended rings reach the end sooner and the compaction runs more often (tried.md, M3).
+        rings_ = tet_mesh::make_face_rings<Memory>(tets + tets / 8, faces, entries + entries / 4);
         using Areas = typename tet_mesh::Geometry<Memory>::Areas;
         const int stored = stores_faces() ? faces : 0;
         const int halves = layout_.float_centroids ? stored : 0;
