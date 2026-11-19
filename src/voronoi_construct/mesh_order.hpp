@@ -190,6 +190,17 @@ public:
                 scratch_ = own_scratch_;
             }
         }
+#elif defined(KOKKOS_ENABLE_HIP)
+        if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {  // the CUDA branch with hipCUB (rocPRIM)
+            keys_ = Keys(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), capacity);
+            ids_ = Ids(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_ids")), capacity);
+            hipcub::DoubleBuffer<std::uint64_t> k(nullptr, nullptr);
+            hipcub::DoubleBuffer<int> v(nullptr, nullptr);
+            std::size_t bytes = 0;
+            (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0, 64, exec.hip_stream());
+            scratch_ = Kokkos::View<char*, Memory>(
+                Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_sort")), bytes);
+        }
 #else
         (void)capacity, (void)arena;
 #endif
@@ -205,6 +216,21 @@ public:
             cub::DoubleBuffer<int> v(ids.data(), ids_.data());
             std::size_t bytes = scratch_.extent(0);
             cub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, k, v, n, 0, bits, exec_.cuda_stream());
+            if (k.selector) {
+                Kokkos::deep_copy(exec_, keys, Kokkos::subview(keys_, std::make_pair(0, n)));
+                Kokkos::deep_copy(exec_, ids, Kokkos::subview(ids_, std::make_pair(0, n)));
+            }
+            return;
+        }
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+        if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {
+            hipcub::DoubleBuffer<std::uint64_t> k(keys.data(), keys_.data());
+            hipcub::DoubleBuffer<int> v(ids.data(), ids_.data());
+            std::size_t bytes = scratch_.extent(0);
+            if (hipcub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, k, v, n, 0, bits, exec_.hip_stream()) !=
+                hipSuccess)
+                throw std::runtime_error("mesh_order::PairSort: hipcub radix sort failed");
             if (k.selector) {
                 Kokkos::deep_copy(exec_, keys, Kokkos::subview(keys_, std::make_pair(0, n)));
                 Kokkos::deep_copy(exec_, ids, Kokkos::subview(ids_, std::make_pair(0, n)));

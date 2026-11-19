@@ -16,6 +16,9 @@
 #if defined(KOKKOS_ENABLE_CUDA)
 #include <cub/device/device_radix_sort.cuh>
 #endif
+#if defined(KOKKOS_ENABLE_HIP)
+#include <hipcub/device/device_radix_sort.hpp>
+#endif
 
 // The 1D path of voronoi::Mesh<1> (included by voronoi_mesh.hpp): snap -> sort -> geometry, no clipping or repair.
 // Called by the finite-volume code of luna-cpp; feeds it faces, volumes and centroids.
@@ -121,6 +124,21 @@ public:
             bytes = scratch_.extent(0);
             cub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, keys.data(), line.key.data(), ids.data(), line.order.data(),
                                             n, 0, bits, exec.cuda_stream());
+            return;
+        }
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+        if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {  // the CUDA branch with hipCUB (rocPRIM)
+            std::size_t bytes = 0;
+            (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, keys.data(), line.key.data(), ids.data(),
+                                                     line.order.data(), n, 0, bits, exec.hip_stream());
+            if (scratch_.extent(0) < bytes)
+                scratch_ = Kokkos::View<char*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("sorted_mesh_sort")), bytes);
+            bytes = scratch_.extent(0);
+            if (hipcub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, keys.data(), line.key.data(), ids.data(),
+                                                   line.order.data(), n, 0, bits, exec.hip_stream()) != hipSuccess)
+                throw std::runtime_error("sorted_mesh::Sorter: hipcub radix sort failed");
             return;
         }
 #endif
