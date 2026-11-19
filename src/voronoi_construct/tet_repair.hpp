@@ -39,8 +39,9 @@ struct State {
     // Nonzero while listed in `listed`: a byte per tetrahedron, its size a multiple of 4 (mark sets it by a 32-bit atomic).
     Kokkos::View<char*, MemorySpace> dirty;
     Kokkos::View<int*, MemorySpace> listed;  // the dirty tetrahedra
-    // Votes: round in the high 32 bits, a bijective hash of the plan index below, so earlier rounds always lose.
-    Kokkos::View<unsigned long long*, MemorySpace> lock;
+    // Votes: the rounds since the locks were last cleared in the high bits, a bijective hash of the plan index in the
+    // low `vote_bits`, so earlier rounds always lose. 32 bits: cleared when either part outgrows its bits (lock_votes).
+    Kokkos::View<unsigned*, MemorySpace> lock;
     Kokkos::View<int*, MemorySpace> free_slots;  // popped from the top
     Kokkos::View<int* [2], MemorySpace> work;    // failing triangles of a round
     Kokkos::View<detail::Packed*, MemorySpace> plans;
@@ -57,6 +58,8 @@ struct State {
     int free_count = 0;
     int touched_entries = 0;
     unsigned long long round = 0;
+    unsigned long long lock_base = 0;  // `round` when the locks were last cleared
+    int vote_bits = 0;                 // low bits of a vote that hash the plan index
     bool screen_counts = false;  // host_counters hold move_screened's counts, which repair starts from
 #if defined(VORONOI_MEASURE)
     int screened = 0;       // measurement build only: tetrahedra the screen listed, last repair
@@ -353,13 +356,15 @@ KOKKOS_INLINE_FUNCTION void apply_flip(const M& m, const Point& point, const Pac
     link_back(m, slot, fresh, adjacent, outer);
 }
 
-// The vote of plan i: a bijective hash of i, so winners of overlapping plans do not follow the work list's order.
+// The vote of plan i < 2^bits: a bijective hash of i on `bits` bits (odd multipliers and right xor-shifts, each a
+// bijection modulo 2^bits), so winners of overlapping plans do not follow the work list's order.
 // Used by: repair (vote and apply steps).
-KOKKOS_INLINE_FUNCTION unsigned long long priority(int i) {
-    unsigned x = static_cast<unsigned>(i) * 0x9e3779b1u;  // odd multiplier: a bijection
-    x ^= x >> 16;
-    x *= 0x85ebca6bu;
-    x ^= x >> 13;
+KOKKOS_INLINE_FUNCTION unsigned priority(int i, int bits) {
+    const unsigned mask = (1u << bits) - 1;
+    unsigned x = (static_cast<unsigned>(i) * 0x9e3779b1u) & mask;
+    x ^= x >> (bits / 2);
+    x = (x * 0x85ebca6bu) & mask;
+    x ^= x >> (bits / 3 + 1);
     return x;
 }
 
@@ -423,7 +428,7 @@ struct Round {
     }
 
     // 2-3. Plan work item i and vote with `vote` on the tetrahedra it rewrites and their neighbours.
-    KOKKOS_INLINE_FUNCTION void plan(int i, unsigned long long vote) const {
+    KOKKOS_INLINE_FUNCTION void plan(int i, unsigned vote) const {
         const int t = work(i, 0), k = work(i, 1);
         Packed p{Packed::none, {-1, -1, -1}, {0, 0, 0, 0, 0}};
         const int u = m.adjacent(t, k);
@@ -444,7 +449,7 @@ struct Round {
 
     // 4. Apply plan i if it won every vote; losers stay dirty for the next round. Slots: the old ones, then a free one
     // (of the `free_top` at the round's start) or a new one after `count`; a flip with no room retries next round.
-    KOKKOS_INLINE_FUNCTION void apply(int i, unsigned long long vote, int free_top, int count) const {
+    KOKKOS_INLINE_FUNCTION void apply(int i, unsigned vote, int free_top, int count) const {
         const Packed p = plans(i);
         if (p.kind <= 0) return;
         const bool two = p.kind == Packed::flip23;  // 2->3: two old tetrahedra, three new
@@ -507,11 +512,12 @@ constexpr int rounds = 0, checked = 1, flips23 = 2, flips32 = 3, free_count = 4,
 // of a round are separated by team barriers instead of launches, and the sizes the host reads after each round stay on
 // the device. Stops when a round finds no failing triangle, the list outgrows `limit` or the work and stuck lists, a
 // flip found no slot, or the free list has no room for the slots a round freed (left unreleased for the host).
-// Starts from the host's sizes; results in `out` (see small::). Used by: repair.
+// Starts from the host's sizes; round r's votes are (first_since + r) << bits above the hash (the host keeps that within 32
+// bits for max_rounds). Results in `out` (see small::). Used by: repair.
 template <class ExecSpace>
 void small_rounds(const ExecSpace& exec, const Round<typename ExecSpace::memory_space>& round,
                   const Kokkos::View<long long*, typename ExecSpace::memory_space>& out, int dirty_count, int free_top,
-                  int count, unsigned long long first_round, int max_rounds, int limit) {
+                  int count, unsigned first_since, int bits, int max_rounds, int limit) {
     using Policy = Kokkos::TeamPolicy<ExecSpace>;
     using Member = typename Policy::member_type;
     const auto& st = round.st;
@@ -543,12 +549,12 @@ void small_rounds(const ExecSpace& exec, const Round<typename ExecSpace::memory_
                 dirty = 0;  // unlisted above
                 break;
             }
-            const unsigned long long token = (first_round + done + 1) << 32;
+            const unsigned token = (first_since + static_cast<unsigned>(done)) << bits;
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, work),
-                                 [&](int i) { round.plan(i, token | priority(i)); });
+                                 [&](int i) { round.plan(i, token | priority(i, bits)); });
             team.team_barrier();
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, work),
-                                 [&](int i) { round.apply(i, token | priority(i), free_count, used); });
+                                 [&](int i) { round.apply(i, token | priority(i, bits), free_count, used); });
             team.team_barrier();
             checked += work;
             flips23 += c(counter::flips23);
@@ -624,7 +630,7 @@ State<typename ExecSpace::memory_space> prepare(const ExecSpace& exec, const X& 
     s.touched = Kokkos::View<char*, Memory>("tet_repair_touched", 0);
     s.dirty = Kokkos::View<char*, Memory>("tet_repair_dirty", 0);
     s.listed = Kokkos::View<int*, Memory>("tet_repair_listed", 0);
-    s.lock = Kokkos::View<unsigned long long*, Memory>("tet_repair_lock", 0);
+    s.lock = Kokkos::View<unsigned*, Memory>("tet_repair_lock", 0);
     s.free_slots = Kokkos::View<int*, Memory>("tet_repair_free", capacity / 64 + 1024);  // grows in repair
     reserve(m, s, capacity);
     s.work = Kokkos::View<int* [2], Memory>("tet_repair_work", work_capacity);
@@ -809,6 +815,19 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
         return false;
     };
     bool small_ok = true;  // see the small rounds below
+    // The high part of the next round's votes for plans below `bound`, for `more` rounds: the rounds since the locks
+    // were cleared, above the hash's bits. Clears the locks (one fill) when the hash needs more bits or the rounds
+    // outgrow theirs; at most 30 bits of hash, so at least three rounds between clears.
+    auto lock_votes = [&](int bound, int more) {
+        int bits = 16;
+        while (bits < 30 && (1LL << bits) < bound) ++bits;
+        if (bits > s.vote_bits || s.round + more - s.lock_base >= (1ULL << (32 - s.vote_bits)) - 1) {
+            s.vote_bits = Kokkos::max(bits, s.vote_bits);
+            Kokkos::deep_copy(exec, s.lock, 0u);
+            s.lock_base = s.round;
+        }
+        return static_cast<unsigned>(s.round + 1 - s.lock_base);
+    };
     // The slots `freed_count` flips freed (s.freed) onto the free list after its first `base` entries.
     auto release = [&](int base, int freed_count) {
         // The free list holds only the slots 3->2 flips freed: sized to its use, not to the tetrahedra.
@@ -842,7 +861,11 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
 
         // A short dirty list: rounds back to back on one team, one wait for all of them.
         if (ahead && small_ok && dirty_count > 0 && dirty_count <= small_limit) {
-            detail::small_rounds(exec, step, s.small, dirty_count, s.free_count, s.count, s.round, rounds - round,
+            // At most 64 rounds a launch, and no more than the round bits of the votes hold.
+            const unsigned since = lock_votes(4 * small_limit, 64);
+            const int most = static_cast<int>(Kokkos::min<long long>(
+                Kokkos::min(rounds - round, 64), (1LL << (32 - s.vote_bits)) - static_cast<long long>(since)));
+            detail::small_rounds(exec, step, s.small, dirty_count, s.free_count, s.count, since, s.vote_bits, most,
                                  small_limit);
             Kokkos::deep_copy(exec, s.host_small, s.small);
             read();
@@ -895,7 +918,11 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
             if (retry()) break;
             continue;
         }
-        const unsigned long long token = (s.round + 1) << 32;
+        // lock_votes may widen s.vote_bits: call it first, then shift by the new width. (One expression read the old
+        // width on gcc 15: the first round after a widening shifted by 0, two plans voted alike and both flipped.)
+        const unsigned since = lock_votes(bound, 1);
+        const int bits = s.vote_bits;
+        const unsigned token = since << bits;
 
         // 2-4. Plan, vote, apply; losers stay dirty for the next round.
         if (!ahead) grow(0, host(counter::stuck) + bound);  // at most one stuck entry per plan
@@ -905,13 +932,13 @@ Stats repair(const ExecSpace& exec, tet_mesh::Mesh<typename ExecSpace::memory_sp
                 if (unlist_in_plan && i < dirty_count) dirty(listed(i)) = 0;
                 if (unlist_in_plan && i == 0)
                     for (int k = counter::listed; k < counter::created; ++k) counters(k) = 0;
-                if (i < counters(counter::work)) voting.plan(i, token | detail::priority(i));
+                if (i < counters(counter::work)) voting.plan(i, token | detail::priority(i, bits));
             });
         const int free_top = s.free_count;
         const int count = s.count;
         Kokkos::parallel_for(
             "tet_repair::apply", Range(exec, 0, bound), KOKKOS_LAMBDA(int i) {
-                if (i < counters(counter::work)) voting.apply(i, token | detail::priority(i), free_top, count);
+                if (i < counters(counter::work)) voting.apply(i, token | detail::priority(i, bits), free_top, count);
             });
         read();
         const int items = host(counter::work);

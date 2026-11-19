@@ -20,6 +20,6 @@ for threads in 1 2; do
         OMP_NUM_THREADS=$threads "$dir/mesh_cases_test" "$group" >"$log" 2>&1
         rc=$?
         echo "threads $threads repeat $r exit $rc: last case $(grep '^case ' "$log" | tail -1)"
-        ((rc)) && grep -m1 -A12 "runtime error" "$log"
+        ((rc)) && { grep -m1 -A12 "runtime error" "$log"; grep "^DIAG" "$log"; cp "$log" "$log.t$threads.r$r"; }
     done
 done
