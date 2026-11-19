@@ -1276,6 +1276,16 @@ Tests on this head (jobs 32543848, 32543849, 32544828): A100 test suite 23 of 23
 
 **Ring pools at 1.25× (memory M3, `533cafd`, the owner's decision of 2026-11-19).** Each ring pool holds 1.25 instead of 1.5 times the start's ring entries: peak of a run with re-sorts at 128³ 2025 → 1942 B/cell (job 32574211); 500 steps 0.5 to 2.3 % slower (measured on the head before the re-sort in place, jobs 32540489, 32540490), as appended rings reach the pool's end sooner and the compaction runs more often. Proof (jobs 32574209, 32574210): A100 test suite 23 of 23, verify 141 of 141, checksums 105 of 105 against step-2x, the sanitizer suite three times as CI runs it, 23 of 23 each.
 
+**M1 back with its fix** (`d70de85`, 2026-11-19). The rare sanitizer failure (a ring walk that never closes after the host or local fallback) was M1's: in the first round after the vote hash widened, the round part of the votes was shifted by the old width, so two plans could vote alike, both win and flip the same tetrahedra. With `lock_votes` called in a statement of its own, `fallback.local.jumpers` at 2 threads runs clean (0 of 6 runs failed, 3 of 3 before; jobs 32583372, 32586791) and so does the sanitizer suite three times (23 of 23 each, job 32589335). Against the head before it (`533cafd`), 128³ jittered at 0.03 / 0.1 / 0.3 spacings, M cells/s (jobs 32589343, 32589344, 32589345):
+
+| | before | with M1 |
+|---|---|---|
+| ten steps | 195.2 / 123.7 / 73.4 | 199.4 / 126.7 / 74.5 |
+| 500 steps, re-sort every 25 | 230.3 / 168.9 / 99.3 | 234.3 / 172.6 / 101.7 |
+| peak with re-sorts, B/cell | 1942 | 1911 |
+
+Proof on `d70de85` (job 32589342): A100 test suite 23 of 23; every step against a fresh exact build, 141 of 141; geometry, faces and lists checksums equal to step-2x, 105 of 105.
+
 
 ## Removed, and where to find it
 
