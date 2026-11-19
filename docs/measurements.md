@@ -1273,6 +1273,7 @@ At 0.3 spacings (128³) one re-sort is 11.6 → 5.4 ms, and 500 steps 102.4 → 
 | 500 steps, re-sort every 25 | 214.1 / 160.5 / 98.0 → 229.7 / 169.6 / 101.2 | |
 
 Tests on this head (jobs 32543848, 32543849, 32544828): A100 test suite 23 of 23; every step against a fresh exact build, 93 of 93 and S2's 48 of 48; geometry, faces and lists checksums equal to step-2x, 105 of 105; CI's host steps clean (comments, format, gcc 15 with sanitizers off and on 23 of 23, clang-tidy 18 without warnings), and the sanitizer suite again three times as CI runs it, 23 of 23 each. Against step-2x over 500 steps at 128³ (job 32529712): 1.19 / 1.21 / 1.20×; at 256³, 0.1 spacings, in one job (32544490): 196.3 → 228.8 M cells/s (1.17×), a re-sort 101 → 34 ms. Peak of a run with re-sorts at 128³: 2375 → 2025 B/cell (job 32543853).
+
 **Ring pools at 1.25× (memory M3, `533cafd`, the owner's decision of 2026-11-19).** Each ring pool holds 1.25 instead of 1.5 times the start's ring entries: peak of a run with re-sorts at 128³ 2025 → 1942 B/cell (job 32574211); 500 steps 0.5 to 2.3 % slower (measured on the head before the re-sort in place, jobs 32540489, 32540490), as appended rings reach the pool's end sooner and the compaction runs more often. Proof (jobs 32574209, 32574210): A100 test suite 23 of 23, verify 141 of 141, checksums 105 of 105 against step-2x, the sanitizer suite three times as CI runs it, 23 of 23 each.
 
 
