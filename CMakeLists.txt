@@ -33,6 +33,7 @@ voronoi_program(mesh2d_bench src/bench/mesh2d_bench.cpp)
 voronoi_program(library_bench src/bench/library_bench.cpp)
 voronoi_program(geometry_derivative_bench src/bench/geometry_derivative_bench.cpp)
 voronoi_program(cell_list_bench src/bench/cell_list_bench.cpp)  # the cell list as a neighbour search (MI300A study)
+voronoi_program(ngb_csr_bench src/bench/ngb_csr_bench.cpp)  # CSR neighbour lists with per-particle h (GIZMO use case)
 # CPU and GPU in one build (Kokkos with OpenMP and CUDA): the probe of docs/ideas.md, "CPU and GPU together".
 if(Kokkos_ENABLE_OPENMP AND Kokkos_ENABLE_CUDA)
     voronoi_program(backends_probe src/bench/backends_probe.cpp)
