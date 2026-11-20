@@ -18,7 +18,7 @@ export OMP_NUM_THREADS=2 OMP_PROC_BIND=false UBSAN_OPTIONS=halt_on_error=1 ASAN_
 python3 scripts/check_comments.py && echo "comments: ok"
 PATH=/mpcdf/soft/SLE_15/packages/x86_64/clang/18.1.8/bin:$PATH python3.11 scripts/check_format.py "$base" && echo "format: ok"
 for san in OFF ON; do
-    dir=build-jobs/ci-$san
+    dir=${CI_BUILD_ROOT:-build-jobs}/ci-$san  # about 8 GB each: set CI_BUILD_ROOT to a /ptmp directory
     cmake -S . -B $dir -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DVORONOI_SANITIZERS=$san \
         -DKokkos_DIR=/u/uli/kokkos-gcc15/lib64/cmake/Kokkos >/dev/null
     cmake --build $dir --parallel ${SLURM_CPUS_PER_TASK:-36} 2>&1 | grep -E "error|warning: " | head -20
@@ -27,7 +27,7 @@ for san in OFF ON; do
 done
 echo "== clang-tidy 18"
 for source in "$@"; do
-    /mpcdf/soft/SLE_15/packages/x86_64/clang/18.1.8/bin/clang-tidy -p build-jobs/ci-OFF "$source" 2>&1 |
+    /mpcdf/soft/SLE_15/packages/x86_64/clang/18.1.8/bin/clang-tidy -p "${CI_BUILD_ROOT:-build-jobs}/ci-OFF" "$source" 2>&1 |
         grep -E "warning:|error:" | grep -v "Kokkos\|/u/uli/kokkos" | head -40
     echo "clang-tidy done: $source"
 done
