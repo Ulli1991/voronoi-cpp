@@ -9,20 +9,38 @@
 #include <utility>
 #include <vector>
 
-// Clipping, the CUDA warp-per-cell variant of shell_voronoi::construct: one warp builds one cell in shared memory.
-// Called by Mesh<3>::update (start, rebuild) and Mesh::clip; feeds tet_start::build. Overflow/uncertified cells
-// are rebuilt by the per-thread kernel.
+// Clipping, the warp-per-cell variant of shell_voronoi::construct (CUDA, and HIP with one wavefront per cell): one warp
+// builds one cell in shared memory. Called by Mesh<3>::update (start, rebuild) and Mesh::clip; feeds tet_start::build.
+// Overflow/uncertified cells are rebuilt by the per-thread kernel.
 namespace shell_voronoi {
 namespace warp {
 
+#if defined(KOKKOS_ENABLE_HIP)
+// A wavefront: 64 lanes on CDNA (MI300A), 32 on RDNA.
+constexpr int lanes = Kokkos::Impl::HIPTraits::WarpSize;
+#else
 constexpr int lanes = 32;
+#endif
+static_assert(lanes == 32 || lanes == 64, "a lane mask is one 32- or 64-bit word");
+// One bit per lane of the warp (ballots, free slots of a lane round).
+using LaneMask = std::conditional_t<lanes == 64, std::uint64_t, std::uint32_t>;
 constexpr int max_planes = 64;
 constexpr int max_vertices = 64;
 constexpr int per_lane = max_vertices / lanes;  // vertices (and planes) each lane owns
+#if defined(KOKKOS_ENABLE_HIP)
+// Four cells (wavefronts) per block, 19 KB of block scratch; 2 blocks per CU in the launch bounds, which leaves the
+// registers uncapped (no spills); the big kernel likewise.
+constexpr int cells_per_block = 4;
+constexpr int min_blocks_per_sm = 2;
+constexpr int big_min_blocks_per_sm = 2;
+#else
 // Four cells (warps) per block: their polyhedra take 18 KB of block scratch.
 constexpr int cells_per_block = 4;
 // Caps the registers so that 5 blocks fit per SM: about 4 % faster on an A100.
 constexpr int min_blocks_per_sm = 5;
+// Big polyhedra take twice the scratch: 4 blocks fit an SM.
+constexpr int big_min_blocks_per_sm = 4;
+#endif
 constexpr std::uint8_t none = 255;
 // The filtered kernel's second capacity (#60): needle cells past 64 live vertices, as many planes.
 constexpr int big_capacity = 128;
@@ -77,9 +95,14 @@ KOKKOS_INLINE_FUNCTION double larger(double a, double b) { return a > b ? a : b;
 KOKKOS_INLINE_FUNCTION int find_byte(std::uint32_t packed, int value) {
     return byte(packed, 0) == value ? 0 : byte(packed, 1) == value ? 1 : byte(packed, 2) == value ? 2 : 3;
 }
-// Bits 32 k to 32 k + 31 of a vertex mask: those of lane l's k-th vertex. Used by: clip.
-KOKKOS_INLINE_FUNCTION std::uint32_t half(std::uint64_t mask, int k) {
-    return static_cast<std::uint32_t>(mask >> (32 * k));
+// Bits lanes k to lanes k + lanes - 1 of a vertex mask: those of lane l's k-th vertex. Used by: clip.
+KOKKOS_INLINE_FUNCTION LaneMask half(std::uint64_t mask, int k) {
+    if constexpr (lanes == 64) {
+        (void)k;  // a 64-slot mask is one round
+        return mask;
+    } else {
+        return static_cast<std::uint32_t>(mask >> (32 * k));
+    }
 }
 // Bit v of a vertex mask, from its halves. Used by: clip (whether a neighbour is removed).
 KOKKOS_INLINE_FUNCTION bool bit(std::uint32_t low, std::uint32_t high, int v) {
@@ -93,7 +116,12 @@ struct Mask128 {
 template <int V>
 using Mask = std::conditional_t<V == 64, std::uint64_t, Mask128>;
 // The same for a big mask.
-KOKKOS_INLINE_FUNCTION std::uint32_t half(const Mask128& mask, int k) { return half(mask.word[k >> 1], k & 1); }
+KOKKOS_INLINE_FUNCTION LaneMask half(const Mask128& mask, int k) {
+    if constexpr (lanes == 64)
+        return mask.word[k];
+    else
+        return half(mask.word[k >> 1], k & 1);
+}
 // Bit v of a mask. Used by: the kernel's loops over a lane's slots.
 KOKKOS_INLINE_FUNCTION bool test(std::uint64_t mask, int v) { return mask >> v & 1; }
 KOKKOS_INLINE_FUNCTION bool test(const Mask128& mask, int v) { return mask.word[v >> 6] >> (v & 63) & 1; }
@@ -109,21 +137,104 @@ KOKKOS_INLINE_FUNCTION Mask128 replace(const Mask128& live, const Mask128& remov
     return {{(live.word[0] & ~removed.word[0]) | made.word[0], (live.word[1] & ~removed.word[1]) | made.word[1]}};
 }
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 // The warp building a cell is the team's vector range: lane l is threadIdx.x.
 __device__ inline int lane() { return threadIdx.x; }
+#if defined(__CUDA_ARCH__)
 constexpr unsigned all_lanes = 0xffffffffu;
+// The warp primitives the kernel uses, all lanes taking part: the CUDA intrinsics with the full mask.
+__device__ inline LaneMask ballot(bool p) { return __ballot_sync(all_lanes, p); }
+__device__ inline bool any(bool p) { return __any_sync(all_lanes, p); }
+__device__ inline void sync_lanes() { __syncwarp(all_lanes); }
+// Before a lane-0 step whose result lane0() broadcasts: nothing to do, the _sync intrinsics converge the warp.
+__device__ inline void converge() {}
+// Lane 0's value, on every lane.
+template <class T>
+__device__ T lane0(T v) {
+    return __shfl_sync(all_lanes, v, 0);
+}
+template <class T>
+__device__ T shfl(T v, int from) {
+    return __shfl_sync(all_lanes, v, from);
+}
+template <class T>
+__device__ T shfl_xor(T v, int mask) {
+    return __shfl_xor_sync(all_lanes, v, mask);
+}
+template <class T>
+__device__ T shfl_up(T v, int by) {
+    return __shfl_up_sync(all_lanes, v, by);
+}
+__device__ inline int popc(LaneMask m) { return __popc(m); }
+// Lowest set bit, 1-based (0 if none).
+__device__ inline int ffs(LaneMask m) { return __ffs(m); }
+// Or over the lanes of a 64-bit value.
+__device__ inline std::uint64_t reduce_or(std::uint64_t word) {
+    return __reduce_or_sync(all_lanes, static_cast<unsigned>(word)) |
+           std::uint64_t(__reduce_or_sync(all_lanes, static_cast<unsigned>(word >> 32))) << 32;
+}
+#else
+// HIP: a wavefront runs its lanes in lockstep; the ballot is one bit per lane of the wavefront.
+__device__ inline LaneMask ballot(bool p) { return __ballot(p); }
+__device__ inline bool any(bool p) { return __any(p); }
+// Orders the lanes' shared memory accesses around it, as __syncwarp (a wavefront is in lockstep).
+__device__ inline void sync_lanes() {
+    __builtin_amdgcn_fence(__ATOMIC_RELEASE, "wavefront");
+    __builtin_amdgcn_wave_barrier();
+    __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, "wavefront");
+}
+// A shuffle does not make the lanes meet, so a broadcast of what lane 0 computed alone waits for all lanes first;
+// without that the work counter of Kernel was read before lane 0 had taken a cell (illegal addresses on gfx942).
+__device__ inline void converge() { sync_lanes(); }
+template <class T>
+__device__ T shfl(T v, int from) {
+    return __shfl(v, from, lanes);
+}
+// Lane 0's value, on every lane (a 32-bit one as a wavefront-uniform scalar).
+template <class T>
+__device__ T lane0(T v) {
+    sync_lanes();
+    if constexpr (sizeof(T) == 4)
+        return __builtin_bit_cast(T, __builtin_amdgcn_readfirstlane(__builtin_bit_cast(int, v)));
+    else
+        return shfl(v, 0);
+}
+template <class T>
+__device__ T shfl_xor(T v, int mask) {
+    return __shfl_xor(v, mask, lanes);
+}
+template <class T>
+__device__ T shfl_up(T v, int by) {
+    return __shfl_up(v, by, lanes);
+}
+__device__ inline int popc(LaneMask m) {
+    if constexpr (lanes == 64)
+        return __popcll(m);
+    else
+        return __popc(m);
+}
+__device__ inline int ffs(LaneMask m) {
+    if constexpr (lanes == 64)
+        return __ffsll(static_cast<unsigned long long>(m));
+    else
+        return __ffs(static_cast<unsigned>(m));
+}
+__device__ inline std::uint64_t reduce_or(std::uint64_t word) {
+    for (int o = lanes / 2; o > 0; o >>= 1) word |= shfl_xor(static_cast<unsigned long long>(word), o);
+    return word;
+}
+#endif
 
 // One bit per vertex: vertex l + k * lanes is bit l + k * lanes.
 __device__ inline std::uint64_t vertex_ballot(const bool (&out)[per_lane]) {
     std::uint64_t bits = 0;
-    for (int k = 0; k < per_lane; ++k) bits |= std::uint64_t(__ballot_sync(all_lanes, out[k])) << (k * lanes);
+    for (int k = 0; k < per_lane; ++k) bits |= std::uint64_t(ballot(out[k])) << (k * lanes);
     return bits;
 }
 __device__ inline Mask128 vertex_ballot(const bool (&out)[big_capacity / lanes]) {
     Mask128 bits{{0, 0}};
     for (int k = 0; k < big_capacity / lanes; ++k)
-        bits.word[k >> 1] |= std::uint64_t(__ballot_sync(all_lanes, out[k])) << ((k & 1) * lanes);
+        bits.word[k * lanes / 64] |= std::uint64_t(ballot(out[k])) << (k * lanes % 64);
     return bits;
 }
 // Live slots. Used by: clip, the kernel's counts.
@@ -134,11 +245,12 @@ __device__ inline int population(const Mask128& mask) { return __popcll(mask.wor
 // Used by: build (the longest per-lane work list).
 template <class T>
 __device__ T warp_max(T v) {
-    for (int o = lanes / 2; o > 0; o >>= 1) v = Kokkos::max(v, __shfl_xor_sync(all_lanes, v, o));
+    for (int o = lanes / 2; o > 0; o >>= 1) v = Kokkos::max(v, shfl_xor(v, o));
     return v;
 }
 
 // Largest of the lanes' non-negative values: their bit patterns order like unsigned integers.
+#if defined(__CUDA_ARCH__)
 __device__ inline float warp_max_nonnegative(float v) {
     return __uint_as_float(__reduce_max_sync(all_lanes, __float_as_uint(v)));
 }
@@ -149,12 +261,19 @@ __device__ inline double warp_max_nonnegative(double v) {
     const unsigned low = __reduce_max_sync(all_lanes, high_word == high ? low_word : 0u);
     return __longlong_as_double(static_cast<long long>(static_cast<unsigned long long>(high) << 32 | low));
 }
+#else
+__device__ inline float warp_max_nonnegative(float v) { return __uint_as_float(warp_max(__float_as_uint(v))); }
+__device__ inline double warp_max_nonnegative(double v) {
+    return __longlong_as_double(
+        static_cast<long long>(warp_max(static_cast<unsigned long long>(__double_as_longlong(v)))));
+}
+#endif
 
 // Sum of v over all lanes of the warp (xor-shuffle butterfly); every lane gets the result.
 // Used by: the cell integrals (volume, moment, area sums, face count) at the end of the warp kernel.
 template <class T>
 __device__ T warp_sum(T v) {
-    for (int o = lanes / 2; o > 0; o >>= 1) v += __shfl_xor_sync(all_lanes, v, o);
+    for (int o = lanes / 2; o > 0; o >>= 1) v += shfl_xor(v, o);
     return v;
 }
 
@@ -162,10 +281,10 @@ __device__ T warp_sum(T v) {
 __device__ inline int exclusive_scan(int v, int& total) {
     int inclusive = v;
     for (int o = 1; o < lanes; o <<= 1) {
-        const int up = __shfl_up_sync(all_lanes, inclusive, o);
+        const int up = shfl_up(inclusive, o);
         if (lane() >= o) inclusive += up;
     }
-    total = __shfl_sync(all_lanes, inclusive, lanes - 1);
+    total = shfl(inclusive, lanes - 1);
     return inclusive - v;
 }
 
@@ -179,7 +298,7 @@ __device__ inline void store_byte(std::uint32_t& packed, int k, int value) {
 // Used by: Kernel (cell setup).
 template <int V>
 __device__ inline void start_cube(PolyhedronOf<V>& c, double h, int& planes, Mask<V>& live) {
-    __syncwarp(all_lanes);  // the previous cell's face walks read these slots (#46)
+    sync_lanes();  // the previous cell's face walks read these slots (#46)
     const int l = lane();
     if (l < box_planes) {
         const int axis = l / 2;
@@ -202,7 +321,7 @@ __device__ inline void start_cube(PolyhedronOf<V>& c, double h, int& planes, Mas
     c.y[l] = l >= 8 ? 0.0 : sy ? -h : h;
     c.z[l] = l >= 8 ? 0.0 : sz ? -h : h;
     for (int k = 1; k < V / lanes; ++k) c.x[l + k * lanes] = c.y[l + k * lanes] = c.z[l + k * lanes] = 0.0;
-    __syncwarp(all_lanes);
+    sync_lanes();
     planes = box_planes;
     if constexpr (V == 64)
         live = 0xff;
@@ -223,9 +342,7 @@ __device__ inline bool compact_planes(PolyhedronOf<V>& c, int& planes, const Mas
         for (int e = 0; e < 3; ++e)
             used.word[byte(c.corner[w], e) >> 6] |= std::uint64_t(1) << (byte(c.corner[w], e) & 63);
     }
-    for (auto& word : used.word)
-        word = __reduce_or_sync(all_lanes, static_cast<unsigned>(word)) |
-               std::uint64_t(__reduce_or_sync(all_lanes, static_cast<unsigned>(word >> 32))) << 32;
+    for (auto& word : used.word) word = reduce_or(word);
     const int count = population(used);
     if (count == planes) return false;
     auto renumber = [&](int p) {
@@ -240,7 +357,7 @@ __device__ inline bool compact_planes(PolyhedronOf<V>& c, int& planes, const Mas
         if (to[k] < 0) continue;
         x[k] = c.nx[p], y[k] = c.ny[p], z[k] = c.nz[p], neighbour[k] = c.neighbour[p];
     }
-    __syncwarp(all_lanes);
+    sync_lanes();
     for (int k = 0; k < per; ++k)
         if (to[k] >= 0) c.nx[to[k]] = x[k], c.ny[to[k]] = y[k], c.nz[to[k]] = z[k], c.neighbour[to[k]] = neighbour[k];
     for (int k = 0; k < per; ++k) {
@@ -249,7 +366,7 @@ __device__ inline bool compact_planes(PolyhedronOf<V>& c, int& planes, const Mas
         const std::uint32_t corner = c.corner[w];
         c.corner[w] = pack(renumber(byte(corner, 0)), renumber(byte(corner, 1)), renumber(byte(corner, 2)));
     }
-    __syncwarp(all_lanes);
+    sync_lanes();
     planes = count;
     return true;
 }
@@ -285,11 +402,12 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
         if constexpr (!checked) return plane_overflow;
         if (!compact_planes<V>(c, planes, live)) return plane_overflow;
     }
-    __syncwarp(all_lanes);
+    sync_lanes();
 
     // Each edge from a removed vertex to a kept one becomes a new vertex; one ballot per edge numbers them.
-    const unsigned below = (1u << l) - 1;
-    [[maybe_unused]] const std::uint32_t removed_low = half(removed, 0), removed_high = half(removed, 1);
+    const LaneMask below = (LaneMask(1) << l) - 1;
+    [[maybe_unused]] const std::uint32_t removed_low = static_cast<std::uint32_t>(half(removed, 0)),
+                                         removed_high = static_cast<std::uint32_t>(half(removed, 1));
     int created = 0;
     for (int k = 0; k < per_lane; ++k) {
         if (half(removed, k) == 0) continue;
@@ -302,15 +420,15 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
         for (int e = 0; e < 3; ++e) {
             const int u = byte(adjacent, e);
             bool crossing;
-            if constexpr (V == 64)
+            if constexpr (V == 64 && lanes == 32)
                 crossing = out[k] && !bit(removed_low, removed_high, u);
             else
                 crossing = out[k] && !test(removed, u);
-            const unsigned crossings = __ballot_sync(all_lanes, crossing);
-            const int number = created + __popc(crossings & below);
+            const LaneMask crossings = ballot(crossing);
+            const int number = created + popc(crossings & below);
             if (crossing && number < max_vertices)
                 c.crossing[number] = pack(w, u, byte(corner, e)) | std::uint32_t(byte(corner, (e + 1) % 3)) << 24;
-            created += __popc(crossings);
+            created += popc(crossings);
         }
     }
     const int in_use = population(live);
@@ -319,11 +437,11 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
     if (in_use + created > max_vertices) return vertex_overflow;
     if (kept + created < 4) return degenerate;
     const int plane = planes;
-    __syncwarp(all_lanes);
+    sync_lanes();
 
     // New vertex j lies on the edge from removed w to kept u, between planes a and b; the lane owning the j-th free slot
     // builds it there.
-    const int low_free = lanes - __popc(half(live, 0));
+    const int low_free = lanes - popc(half(live, 0));
     bool made[per_lane] = {}, past = false;
     int kept_end[per_lane], a[per_lane], b[per_lane];
     int free_before = 0;  // free slots in the lanes' earlier rounds (V > 64)
@@ -335,13 +453,13 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
 #endif
     for (int k = 0; k < per_lane; ++k) {
         if constexpr (V > 64) {
-            if (k > 0) free_before += lanes - __popc(half(live, k - 1));
+            if (k > 0) free_before += lanes - popc(half(live, k - 1));
             if (k > 0 && free_before >= created) break;
         } else if (k > 0 && low_free >= created) {
             break;
         }
-        const std::uint32_t free = ~half(live, k);
-        const int s = l + k * lanes, j = (V > 64 ? free_before : k > 0 ? low_free : 0) + __popc(free & below);
+        const LaneMask free = ~half(live, k);
+        const int s = l + k * lanes, j = (V > 64 ? free_before : k > 0 ? low_free : 0) + popc(free & below);
         if (!(free >> l & 1) || j >= created) continue;
         made[k] = true;
         const std::uint32_t edge = c.crossing[j];
@@ -404,8 +522,8 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
     const Mask<V> made_slots = vertex_ballot(made);
     // The filter's bound needs new vertices on their edges: a kept end within the tolerance outside puts one past it.
     if constexpr (checked)
-        if (__any_sync(all_lanes, past)) return degenerate;
-    __syncwarp(all_lanes);
+        if (any(past)) return degenerate;
+    sync_lanes();
     // Across (a, b) is u, across (b, plane) the new vertex whose hole edge starts at b, across (plane, a) the one whose
     // hole edge ends at a.
     for (int k = 0; k < per_lane; ++k)
@@ -429,9 +547,9 @@ __device__ inline void sort_candidates(float& key, int& slot, int& packed_image)
     const int l = lane();
     for (int size = 2; size <= lanes; size <<= 1) {
         for (int stride = size / 2; stride > 0; stride >>= 1) {
-            const float other_key = __shfl_xor_sync(all_lanes, key, stride);
-            const int other_slot = __shfl_xor_sync(all_lanes, slot, stride);
-            const int other_image = __shfl_xor_sync(all_lanes, packed_image, stride);
+            const float other_key = shfl_xor(key, stride);
+            const int other_slot = shfl_xor(slot, stride);
+            const int other_image = shfl_xor(packed_image, stride);
             const bool ascending = (l & size) == 0;
             const bool lower = (l & stride) == 0;
             const bool other_smaller = other_key < key || (other_key == key && other_slot < slot);
@@ -476,8 +594,8 @@ __device__ inline Cylinder cylinder(const PolyhedronOf<V>& c, const Mask<V>& liv
         if (test(live, w) && r2 > mine) mine = r2, far = w;
     }
     const double most = warp_max(mine);
-    const unsigned holders = __ballot_sync(all_lanes, far >= 0 && mine == most);
-    far = __shfl_sync(all_lanes, far, holders ? __ffs(holders) - 1 : 0);
+    const LaneMask holders = ballot(far >= 0 && mine == most);
+    far = shfl(far, holders ? ffs(holders) - 1 : 0);
     Cylinder z;
     const double r = Kokkos::sqrt(Kokkos::max(most, 0.0));
     z.u = far >= 0 && r > 0 ? Vec3{c.x[far], c.y[far], c.z[far]} * (1.0 / r) : Vec3{1, 0, 0};
@@ -567,9 +685,15 @@ __device__ inline bool box_meets_a_ball(const PolyhedronOf<V>& c, const Mask<V>&
     return false;
 }
 #endif
-#endif  // __CUDA_ARCH__
+#endif  // __CUDA_ARCH__ || __HIP_DEVICE_COMPILE__
 
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
 #if defined(KOKKOS_ENABLE_CUDA)
+using Gpu = Kokkos::Cuda;  // the execution space of the warp kernel
+#else
+using Gpu = Kokkos::HIP;
+#endif
+
 // What a build records per cell besides status, volume and centroid.
 enum class Output { faces, rings, volumes };
 
@@ -583,7 +707,7 @@ struct Kernel {
     using Cell = PolyhedronOf<V>;
     static constexpr int per_lane = V / lanes;
     static constexpr bool with_rings = output == Output::rings, with_faces = output != Output::volumes;
-    using Member = typename Kokkos::TeamPolicy<Kokkos::Cuda>::member_type;
+    using Member = typename Kokkos::TeamPolicy<Gpu>::member_type;
     Grid<MemorySpace> grid;
     Cells<MemorySpace> out;
     double half_width;
@@ -599,14 +723,15 @@ struct Kernel {
     Kokkos::View<const int*, MemorySpace> list;
 
     KOKKOS_FUNCTION void operator()(const Member& member) const {
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
         auto* base = static_cast<Cell*>(member.team_shmem().get_shmem(cells_per_block * sizeof(Cell)));
         Cell& c = base[member.team_rank()];
         if (lane() == 0) c.face_at = c.face_end = 0;
         while (true) {
+            converge();
             int taken = 0;
             if (lane() == 0) taken = Kokkos::atomic_fetch_add(&next_cell(), 1);
-            const int t = __shfl_sync(all_lanes, taken, 0);
+            const int t = lane0(taken);
             if constexpr (filtered) {
                 if (t >= static_cast<int>(list.extent(0))) return;
                 build(c, list(t));
@@ -620,7 +745,7 @@ struct Kernel {
 #endif
     }
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     // Build cell t (a slot) in polyhedron c, with all lanes of the warp.
     __device__ __forceinline__ void build(Cell& c, int t) const {
         const int l = lane();
@@ -659,7 +784,7 @@ struct Kernel {
             float key = l < buffered ? c.candidate_distance2[l] : 3.0e38f;
             int slot = l < buffered ? c.candidate_slot[l] : 0x7fffffff;
             int packed = l < buffered ? c.candidate_image[l] : 0;
-            __syncwarp(all_lanes);
+            sync_lanes();
             sort_candidates(key, slot, packed);
             // Lane i loads candidate i at once; the loop broadcasts it.
             Vec3 mine{0, 0, 0};
@@ -680,11 +805,10 @@ struct Kernel {
 #endif
             float reach = 4.0f * static_cast<float>(radius2 * unit2) * 1.0001f;
             for (int i = 0; i < buffered && status == ok; ++i) {
-                const float k = __shfl_sync(all_lanes, key, i);
+                const float k = shfl(key, i);
                 if (k >= reach) break;
-                const int q = __shfl_sync(all_lanes, slot, i);
-                const Vec3 d{__shfl_sync(all_lanes, mine.x, i), __shfl_sync(all_lanes, mine.y, i),
-                             __shfl_sync(all_lanes, mine.z, i)};
+                const int q = shfl(slot, i);
+                const Vec3 d{shfl(mine.x, i), shfl(mine.y, i), shfl(mine.z, i)};
 #if defined(VORONOI_MEASURE)
                 if (balls) {
                     double lo[3], hi[3];
@@ -759,15 +883,15 @@ struct Kernel {
                         }
                         p1 = meets_a_ball(c, live, wide_lo, wide_hi, 0x1p-30 * radius2);
                     }
-                    m[measure::walk_cells] += __popc(__ballot_sync(all_lanes, e < entries));
-                    m[measure::walk_open] += __popc(__ballot_sync(all_lanes, begin < end));
-                    m[measure::open_outside] += __popc(__ballot_sync(all_lanes, cell_outside));
+                    m[measure::walk_cells] += popc(ballot(e < entries));
+                    m[measure::walk_open] += popc(ballot(begin < end));
+                    m[measure::open_outside] += popc(ballot(cell_outside));
                     m[measure::in_open_outside] += warp_sum(cell_outside ? end - begin : 0);
                     m[measure::rounds] += warp_max(end - begin);
-                    m[measure::open_p1] += __popc(__ballot_sync(all_lanes, p1));
+                    m[measure::open_p1] += popc(ballot(p1));
                     m[measure::in_open_p1] += warp_sum(p1 ? end - begin : 0);
                     m[measure::rounds_p1] += warp_max(p1 ? end - begin : 0);
-                    m[measure::open_r8] += __popc(__ballot_sync(all_lanes, r8));
+                    m[measure::open_r8] += popc(ballot(r8));
                     m[measure::in_open_r8] += warp_sum(r8 ? end - begin : 0);
                     m[measure::rounds_r8] += warp_max(r8 ? end - begin : 0);
                 }
@@ -797,27 +921,26 @@ struct Kernel {
                     }
                     // The ball test loops over the live vertices with every lane, so it runs once all lanes are here.
                     if constexpr (filtered)
-                        if (__any_sync(all_lanes, take))
-                            take = in_vertex_ball<V>(c, live, offset, d2, bound.margin) && take;
-                    const unsigned taking = __ballot_sync(all_lanes, take);
+                        if (any(take)) take = in_vertex_ball<V>(c, live, offset, d2, bound.margin) && take;
+                    const LaneMask taking = ballot(take);
 #if defined(VORONOI_MEASURE)
                     if (measuring) {
-                        m[measure::tested] += __popc(__ballot_sync(all_lanes, q < end && q != t));
-                        m[measure::taken] += __popc(taking);
-                        m[measure::tested_outside] += __popc(__ballot_sync(all_lanes, outside));
-                        m[measure::taken_outside] += __popc(__ballot_sync(all_lanes, outside && take));
+                        m[measure::tested] += popc(ballot(q < end && q != t));
+                        m[measure::taken] += popc(taking);
+                        m[measure::tested_outside] += popc(ballot(outside));
+                        m[measure::taken_outside] += popc(ballot(outside && take));
                     }
 #endif
                     if (taking == 0) continue;
-                    if (buffered + __popc(taking) > lanes) flush();
+                    if (buffered + popc(taking) > lanes) flush();
                     if (take) {
-                        const int index = buffered + __popc(taking & ((1u << l) - 1));
+                        const int index = buffered + popc(taking & ((LaneMask(1) << l) - 1));
                         c.candidate_distance2[index] = static_cast<float>(d2 * unit2);
                         c.candidate_slot[index] = q;
                         c.candidate_image[index] = packed;
                     }
-                    buffered += __popc(taking);
-                    __syncwarp(all_lanes);
+                    buffered += popc(taking);
+                    sync_lanes();
                 }
                 if (buffered > 0) flush();
             }
@@ -847,12 +970,12 @@ struct Kernel {
                 if (test(live, v))
                     for (int e = 0; e < 3; ++e) touches |= byte(c.corner[v], e) < box_planes;
             }
-            if (__any_sync(all_lanes, touches)) status = uncertified;
+            if (any(touches)) status = uncertified;
         }
 
         // Outputs and the owner rule use particle ids: the planes' slots become the particles there.
         const int id = grid.order(t);
-        __syncwarp(all_lanes);  // lane 0 wrote the last plane's neighbour
+        sync_lanes();  // lane 0 wrote the last plane's neighbour
         for (int k = 0; k < per_lane; ++k) {
             const int plane = l + k * lanes;
             if (plane >= box_planes && plane < planes) c.neighbour[plane] = grid.order(c.neighbour[plane]);
@@ -866,14 +989,14 @@ struct Kernel {
                 least[l + k * lanes] = ~0u;
                 c.first[l + k * lanes] = none;
             }
-        __syncwarp(all_lanes);
+        sync_lanes();
         for (int k = 0; k < per_lane; ++k)
             if (test(live, l + k * lanes)) {
                 const std::uint32_t corner = c.corner[l + k * lanes];
                 for (int e = 0; e < 3; ++e)
                     atomicMin(&least[byte(corner, e)], std::uint32_t(c.neighbour[byte(corner, (e + 2) % 3)]));
             }
-        __syncwarp(all_lanes);
+        sync_lanes();
         for (int k = 0; k < per_lane; ++k)
             if (test(live, l + k * lanes)) {
                 const std::uint32_t corner = c.corner[l + k * lanes];
@@ -881,7 +1004,7 @@ struct Kernel {
                     if (std::uint32_t(c.neighbour[byte(corner, (e + 2) % 3)]) == least[byte(corner, e)])
                         c.first[byte(corner, e)] = static_cast<std::uint8_t>(l + k * lanes);
             }
-        __syncwarp(all_lanes);
+        sync_lanes();
 
         double volume = 0;
         Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
@@ -943,7 +1066,7 @@ struct Kernel {
                 ++owned_here;
             }
         }
-        if (status == ok && __any_sync(all_lanes, broken)) status = degenerate;
+        if (status == ok && any(broken)) status = degenerate;
 
         volume = warp_sum(volume);
         moment = {warp_sum(moment.x), warp_sum(moment.y), warp_sum(moment.z)};
@@ -1006,7 +1129,7 @@ struct Kernel {
                     face_neighbour[offset + m] = std::uint32_t(c.neighbour[owned_plane[m]]);
                     face_need[offset + m] = 2 + owned_length[m];
                 }
-            __syncwarp(all_lanes);
+            sync_lanes();
             for (int m = 0; m < per_lane; ++m)
                 if (m < owned_here) {
                     const std::uint32_t mine = std::uint32_t(c.neighbour[owned_plane[m]]);
@@ -1032,9 +1155,9 @@ struct Kernel {
                 c.face_at += owned;
             }
         }
-        if (__shfl_sync(all_lanes, fits, 0) == 0) status = face_overflow;
+        if (lane0(fits) == 0) status = face_overflow;
         if (status == ok) {
-            const long long base = __shfl_sync(all_lanes, block, 0);
+            const long long base = lane0(block);
             long long at = base + offset;
             for (int m = 0; m < owned_here; ++m) {
                 const int plane = owned_plane[m];
@@ -1094,7 +1217,7 @@ struct Kernel {
 #endif
 };
 
-#endif  // KOKKOS_ENABLE_CUDA
+#endif  // KOKKOS_ENABLE_CUDA || KOKKOS_ENABLE_HIP
 
 }  // namespace warp
 
@@ -1131,6 +1254,13 @@ Kokkos::View<int*, typename ExecSpace::memory_space> heavy_slots(const ExecSpace
     return list;
 }
 
+#if defined(KOKKOS_ENABLE_CUDA)
+// Streaming multiprocessors (CUDA) or compute units (HIP) of the device. Used by: construct_warp (persistent blocks).
+inline int multiprocessors(const Kokkos::Cuda& exec) { return exec.cuda_device_prop().multiProcessorCount; }
+#elif defined(KOKKOS_ENABLE_HIP)
+inline int multiprocessors(const Kokkos::HIP&) { return Kokkos::HIP::hip_device_prop().multiProcessorCount; }
+#endif
+
 }  // namespace detail
 
 // Build every cell with one warp per cell, then the needle cells with the filtered warp kernel (#60), then rebuild the
@@ -1142,8 +1272,8 @@ Kokkos::View<int*, typename ExecSpace::memory_space> heavy_slots(const ExecSpace
 template <class ExecSpace>
 void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory_space>& grid,
                     Cells<typename ExecSpace::memory_space>& out, bool rounded = false) {
-#if defined(KOKKOS_ENABLE_CUDA)
-    if constexpr (std::is_same_v<ExecSpace, Kokkos::Cuda>) {
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
+    if constexpr (std::is_same_v<ExecSpace, warp::Gpu>) {
         if (grid.n <= 0 || out.status.extent(0) != static_cast<std::size_t>(grid.n))
             throw std::invalid_argument("shell_voronoi::construct_warp: invalid grid or output size");
         const bool rings = out.with_rings(), cube = grid.cube();
@@ -1153,15 +1283,15 @@ void construct_warp(const ExecSpace& exec, const Grid<typename ExecSpace::memory
         const Stencil<Memory> stencil = make_stencil(exec);
         Kokkos::View<int, Memory> next_cell("shell_warp_next_cell");
         const int blocks = Kokkos::min((grid.n + warp::cells_per_block - 1) / warp::cells_per_block,
-                                       2 * warp::min_blocks_per_sm * exec.cuda_device_prop().multiProcessorCount);
+                                       2 * warp::min_blocks_per_sm * detail::multiprocessors(exec));
         // A block holds cells_per_block warps; each warp is a team's vector range.
-        Kokkos::TeamPolicy<Kokkos::Cuda,
+        Kokkos::TeamPolicy<warp::Gpu,
                            Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::min_blocks_per_sm>>
             policy(exec, blocks, warp::cells_per_block, warp::lanes);
         policy.set_scratch_size(0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::Polyhedron)));
-        // Big polyhedra take twice the scratch: 4 blocks fit an SM.
-        Kokkos::TeamPolicy<Kokkos::Cuda, Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, 4>> big_policy(
-            exec, blocks, warp::cells_per_block, warp::lanes);
+        Kokkos::TeamPolicy<warp::Gpu,
+                           Kokkos::LaunchBounds<warp::cells_per_block * warp::lanes, warp::big_min_blocks_per_sm>>
+            big_policy(exec, blocks, warp::cells_per_block, warp::lanes);
         big_policy.set_scratch_size(
             0, Kokkos::PerTeam(warp::cells_per_block * sizeof(warp::PolyhedronOf<warp::big_capacity>)));
         // Near-uniform input (every particle at the base level) takes the kernel without level changes.
