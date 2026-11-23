@@ -312,7 +312,7 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
                 const double ex = xu.x - xw.x, ey = xu.y - xw.y, ez = xu.z - xw.z;
                 v64_bits[holes] = vertex64::classify(sw, su, bw, bu, Kokkos::sqrt(ex * ex + ey * ey + ez * ez),
                                                      Kokkos::sqrt(cell.radius2), v64_err[holes]);
-                vertex64::count(v64_bits[holes]);
+                vertex64::count(cell.v64, v64_bits[holes]);
                 cell.v64.flag |= v64_bits[holes];
             }
 #endif

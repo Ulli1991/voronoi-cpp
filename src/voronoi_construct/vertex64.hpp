@@ -89,29 +89,38 @@ KOKKOS_INLINE_FUNCTION unsigned classify(double sw, double su, double bw, double
     return bits;
 }
 
-// Adds a cut's bits to the global counters (one call per new vertex).
-KOKKOS_INLINE_FUNCTION void count(unsigned bits) {
-    const Sinks& s = sinks();
-    if (s.counter == nullptr) return;
-    Kokkos::atomic_add(&s.counter[new_vertices], 1ull);
-    if (bits & strict) Kokkos::atomic_add(&s.counter[c_strict], 1ull);
-    if (bits & kept_outside) Kokkos::atomic_add(&s.counter[c_kept_outside], 1ull);
-    if (bits & beyond_bound) Kokkos::atomic_add(&s.counter[c_beyond_bound], 1ull);
-    if (bits & err9) Kokkos::atomic_add(&s.counter[c_err9], 1ull);
-    if (bits & err6) Kokkos::atomic_add(&s.counter[c_err6], 1ull);
-    if (bits & err3) Kokkos::atomic_add(&s.counter[c_err3], 1ull);
+// The counter of each bit, in Counter order after new_vertices.
+KOKKOS_INLINE_FUNCTION unsigned counted_bit(int k) {
+    return k == c_strict ? strict : k == c_kept_outside ? kept_outside : k == c_beyond_bound ? beyond_bound
+                                    : k == c_err9       ? err9
+                                    : k == c_err6       ? err6
+                                                        : err3;
 }
 
-// The per-cell record of a rounded build: bits, the worst cut and the final radius.
+// The per-cell record of a rounded build: bits, counts of its cuts, the worst cut and the final radius.
 struct Record {
     unsigned flag = 0;
     float worst = -1;
     int slot[4] = {0, 0, 0, 0};
     double vertex[3] = {0, 0, 0};
+    unsigned count[counters] = {};
 };
+
+// Adds a cut's bits to the cell's counts (one call per new vertex); write() adds them to the global counters, one
+// atomic per counter and cell (one per vertex contended too much on the A100).
+KOKKOS_INLINE_FUNCTION void count(Record& r, unsigned bits) {
+    ++r.count[new_vertices];
+    for (int k = 1; k < counters; ++k) r.count[k] += (bits & counted_bit(k)) != 0;
+}
 
 KOKKOS_INLINE_FUNCTION void write(int id, const Record& r, double radius) {
     const Sinks& s = sinks();
+    if (s.counter != nullptr)
+        for (int k = 0; k < counters; ++k)
+            if (r.count[k] != 0) {
+                KOKKOS_IF_ON_DEVICE((atomicAdd(&s.counter[k], static_cast<unsigned long long>(r.count[k]));))
+                KOKKOS_IF_ON_HOST((Kokkos::atomic_add(&s.counter[k], static_cast<unsigned long long>(r.count[k]));))
+            }
     if (id >= s.cap || s.flag == nullptr) return;
     s.flag[id] = r.flag;
     s.worst[id] = r.worst;

@@ -55,6 +55,7 @@ struct alignas(16) PolyhedronOf {
 #if defined(VORONOI_VERTEX64)
     // The diagnostic of #64 (vertex64.hpp): the cell's cut bits, its worst cut (bound / R as float bits) and where.
     unsigned v64_flag;
+    unsigned v64_count[vertex64::counters];
     int v64_worst;
     int v64_slot[3];
     double v64_vertex[3];
@@ -363,7 +364,9 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
                 c.side[w], c.side[u], vertex64::side_bound(d.x, d.y, d.z, c.x[w], c.y[w], c.z[w], offset),
                 vertex64::side_bound(d.x, d.y, d.z, c.x[u], c.y[u], c.z[u], offset),
                 Kokkos::sqrt(ex * ex + ey * ey + ez * ez), Kokkos::sqrt(radius2), err);
-            vertex64::count(bits);
+            atomicAdd(&c.v64_count[vertex64::new_vertices], 1u);
+            for (int m = 1; m < vertex64::counters; ++m)
+                if (bits & vertex64::counted_bit(m)) atomicAdd(&c.v64_count[m], 1u);
             if (bits != 0) atomicOr(&c.v64_flag, bits);
             const int key = __float_as_int(err);
             if (key > v64_mine) {
@@ -637,6 +640,7 @@ struct Kernel {
             c.v64_slot[0] = c.v64_slot[1] = c.v64_slot[2] = 0;
             c.v64_vertex[0] = c.v64_vertex[1] = c.v64_vertex[2] = 0;
         }
+        if (l < vertex64::counters) c.v64_count[l] = 0;
         __syncwarp(all_lanes);
 #endif
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
@@ -950,6 +954,7 @@ struct Kernel {
         if (l == 0) {
             vertex64::Record r;
             r.flag = c.v64_flag;
+            for (int m = 0; m < vertex64::counters; ++m) r.count[m] = c.v64_count[m];
             r.worst = __int_as_float(c.v64_worst);
             r.slot[0] = t;
             for (int k = 0; k < 3; ++k) {
