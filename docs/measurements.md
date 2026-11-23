@@ -1303,7 +1303,27 @@ Proof on `d70de85` (job 32589342): A100 test suite 23 of 23; every step against 
 | tangent in starts / builds / steps | 0.15 / 0.14 / 1.8 | 0.08 / 0.07 / 2.2 | 0.08 / 0.07 / 0.67 | 0.09 / 0.09 / 0.73 | 0.04 / 0.04 / 0.77 |
 | adjoint in starts / builds / steps | 0.60 / 0.55 / 7.2 | 0.31 / 0.28 / 8.9 | 0.22 / 0.21 / 1.9 | 0.29 / 0.26 / 2.3 | 0.14 / 0.13 / 2.5 |
 
-The 2D white-noise points are ordered by grid cell, the 3D ones by the build's re-sort. The 3D adjoint is the costly part: each tetrahedron walks the rings of its six faces again ([tried.md](tried.md#geometry-derivatives-63-2026-112223)).
+The 2D white-noise points are ordered by grid cell, the 3D ones by the build's re-sort. The table is e937786.
+
+**After the speed-of-light pass** (branch `geomderiv-adjoint`, job 32900302, same bench and GPU; [tried.md](tried.md#the-3d-derivatives-against-their-speed-of-light-branch-geomderiv-adjoint-2026-11-23)):
+
+| | 3D 128³ jittered | 3D 128³ white noise | 2D 2²⁰ jittered |
+|---|---|---|---|
+| tangent, G cell updates/s | 0.163 | 0.189 | 1.24 |
+| adjoint, G cell updates/s | 0.036 | 0.039 | 0.429 |
+| tangent / adjoint in starts | 0.10 / 0.45 | 0.05 / 0.24 | 0.08 / 0.24 |
+| tangent / adjoint in steps | 1.2 / 5.3 | 1.3 / 6.4 | 0.64 / 1.9 |
+
+Per kernel at 128³ jittered (Nsight Compute, job 32900302; e937786 in job 32895193). The speed of light is the DRAM bytes a kernel must move at the measured stream peak of 1.37 TB/s: about 1.9 KB/cell (1.4 ns/cell) for the whole adjoint, about 1.5 KB/cell (1.1 ns/cell) for the tangent.
+
+| kernel | ns/cell e937786 → now | DRAM B/cell now | registers | local (spill) B/cell e937786 → now | bound by |
+|---|---|---|---|---|---|
+| `vertex_bars` | 14.0 → 14.3 | 2729 | 125 | 675 → 0 | latency of the face lookups (long scoreboard 60 %, 23 % occupancy) |
+| `cell_adjoint` → `_faces` + `_vertices` | 18.6 → 3.2 + 9.0 | 3740 + 9107 | 96, 80 | 7253 → 0 | DRAM (86 %, 74 % of peak) |
+| `cell_bars` | 4.3 → 1.2 | 1025 | 112 | 0 | DRAM and latency |
+| `cell_tangent` | 7.8 → 3.8 | 4506 | 126 | 0 | DRAM (86 % of peak) |
+| `face_tangent` | 2.0 → 2.0 | 1339 | 126 | 0 | latency and FP64 |
+| `vertex_tangent` | 0.52 → 0.53 | 606 | 72 | 0 | DRAM (84 % of peak) |
 
 **Memory.** Scratch held by the object, B/cell: 3D 199 (jittered; 194 white noise): 4 doubles per cell and 3 per tetrahedron slot; 2D 68: 3 doubles per cell, 2 per triangle, an int per face. The caller's views come on top: 438 (3D) and 136 (2D) B/cell for dx, dV, dc, dA, dx_f, or the same for the bars. Against the moving step's peak of 1911 B/cell (128³) the scratch is +10 %; the derivative runs between updates, so whether it raises the peak depends on what the caller frees.
 

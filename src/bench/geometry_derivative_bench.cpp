@@ -144,6 +144,15 @@ int run(int n, const std::string& kind, int repeats) {
     const voronoi::GeometryDerivative<Mesh> derivative(mesh);
     const double tangent_ms = median_ms(repeats, [&] { derivative.tangent(dx, dV, dc, dA, dxf); });
     const double adjoint_ms = median_ms(repeats, [&] { derivative.adjoint(Vbar, cbar, Abar, xfbar, xbar); });
+    // One more call of each in a named region, for profilers (Nsight Compute --nvtx-include "gd_adjoint/").
+    Kokkos::Profiling::pushRegion("gd_tangent");
+    derivative.tangent(dx, dV, dc, dA, dxf);
+    Exec{}.fence();
+    Kokkos::Profiling::popRegion();
+    Kokkos::Profiling::pushRegion("gd_adjoint");
+    derivative.adjoint(Vbar, cbar, Abar, xfbar, xbar);
+    Exec{}.fence();
+    Kokkos::Profiling::popRegion();
     const double scratch = static_cast<double>(derivative.scratch_bytes()) / n;
     const double io = (static_cast<double>(n) * (2 * D + 1) + static_cast<double>(faces) * 2 * D) * 8 / n;
     auto g = [&](double ms) { return n / (ms * 1e6); };

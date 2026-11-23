@@ -67,13 +67,16 @@ struct Centre {
         for (int k = 0; k < D; ++k) ddbar[k] = e[k] * dot(cbar, n[k]);
     }
     // The bar of corner `corner`'s position from the bar of the absolute centre x_0 + c.
+    // (Selected in an unrolled loop, not indexed by `corner`: an index known only at run time puts the arrays in local
+    // memory.)
     KOKKOS_INLINE_FUNCTION VecN<D> corner_bar(VecN<D> cbar, int corner) const {
-        VecN<D> ddbar[D];
-        adjoint(cbar, ddbar);
-        if (corner > 0) return ddbar[corner - 1];
-        VecN<D> sum = cbar;
-        for (int k = 0; k < D; ++k) sum = sum - ddbar[k];
-        return sum;
+        VecN<D> sum = cbar, picked{};
+        for (int k = 0; k < D; ++k) {
+            const VecN<D> term = e[k] * dot(cbar, n[k]);
+            sum = sum - term;
+            if (k == corner - 1) picked = term;
+        }
+        return corner == 0 ? sum : picked;
     }
 };
 
@@ -97,13 +100,28 @@ KOKKOS_INLINE_FUNCTION void add_row(const V& v, int i, Vec2 w) {
     v(i, 1) += w.y;
 }
 
+// Corners v[0..3] in increasing order, as tet_mesh::sort_corners leaves them, by a network of five exchanges at fixed
+// places (an insertion sort indexes at run time, which puts v in local memory).
+KOKKOS_INLINE_FUNCTION void sort4(int* v) {
+    auto order = [](int& a, int& b) {
+        const int low = a < b ? a : b, high = a < b ? b : a;
+        a = low;
+        b = high;
+    };
+    order(v[0], v[1]);
+    order(v[2], v[3]);
+    order(v[0], v[2]);
+    order(v[1], v[3]);
+    order(v[1], v[2]);
+}
+
 // Tetrahedron t's linearised circumcentre, its corners v sorted as tet_mesh::stored_centre sorts them; the centre read
 // from Mesh::centre (exact for slivers), relative to corner 0 in grid steps.
 template <class X, class Vertex, class Centres>
 KOKKOS_INLINE_FUNCTION Centre<3> tet_centre(const X& x, const exact_predicates::Box& box, const Vertex& vertex,
                                             const Centres& centre, int t, int* v) {
     for (int k = 0; k < 4; ++k) v[k] = vertex(t, k);
-    tet_mesh::sort_corners(v);
+    sort4(v);
     Vec3 d[3];
     tet_mesh::rounded_offsets(x, box, v, d);
     double c[3];
@@ -130,14 +148,40 @@ KOKKOS_INLINE_FUNCTION Centre<2> triangle_centre(const Point& point, const exact
     return Centre<2>(d, Vec2{circle.my * scale, -circle.mx * scale});
 }
 
-// One 3D face as the fan of its ring (tet_mesh::FaceGeometry::face_as, written arithmetic), with the sums its derivative
-// needs. Filled by Faces3::walk.
-struct Fan {
-    int i = 0, j = 0, begin = 0, end = 0;  // owner, neighbour, ring entries [begin, end)
-    Vec3 dj{}, area{}, centroid{}, weighted{};
-    double weight = 0, sign = 1, projected = 0;  // the sum of |T_m . dj|, the orientation, area . dj (weighted: of
-                                                 // the vertices relative to the first)
+// What every vertex bar of a 3D face shares, from the totals of its area's and centroid's bars (face_bars) and its
+// stored area A and centroid x_f: in the fan of the ring from v_0 (Faces3::tangent), x_f = v_0 + S / (3 W) with
+// S = sum w_m (a_m + b_m), W = sum w_m = 2 |A . d| (a convex planar polygon), so S / W = 3 (x_f - v_0).
+struct FaceShare {
+    Vec3 half_Abar, sbar, xf, dj;  // half the area's bar, the bar of S, the centroid, the separation to the neighbour
+    Vec3 mean;                     // S / W = 3 (x_f - v_0), set by Faces3::vertex_bar
+    double weight;                 // W
 };
+
+// The bar of vertex k >= 1 of a fan of `length` vertices, r = v_k - v_0 and its ring neighbours rp, rn (also relative
+// to v_0), from its triangles k (a = rp, b = r; k >= 2) and k + 1 (a = r, b = rn; k <= length - 2), split into the part
+// through the area for orientation +1 (`area`, times the fan's orientation) and the rest (`rest`).
+KOKKOS_INLINE_FUNCTION void local_bar(const FaceShare& share, int k, int length, Vec3 rp, Vec3 r, Vec3 rn, Vec3& area,
+                                      Vec3& rest, double& largest, double& orientation) {
+    area = rest = Vec3{0, 0, 0};
+    auto triangle = [&](Vec3 a, Vec3 b, bool as_b) {  // the vertex is b (as_b) or a of triangle (v_0, a, b)
+        const Vec3 t = cross(a, b);
+        const double projected = dot(t, share.dj), w = Kokkos::abs(projected);
+        if (w > largest) {
+            largest = w;
+            orientation = sign_of(projected);
+        }
+        const Vec3 tw = share.dj * (dot(share.sbar, a + b - share.mean) * sign_of(projected));  // through w
+        if (as_b) {
+            area = area + cross(share.half_Abar, a);
+            rest = rest + cross(tw, a) + share.sbar * w;
+        } else {
+            area = area + cross(b, share.half_Abar);
+            rest = rest + cross(b, tw) + share.sbar * w;
+        }
+    };
+    if (k >= 2) triangle(rp, r, true);
+    if (k <= length - 2) triangle(r, rn, false);
+}
 
 // The 3D faces and their derivatives, from the mesh's FaceGeometry. Copy into kernels.
 template <class Memory>
@@ -147,37 +191,6 @@ struct Faces3 {
     KOKKOS_INLINE_FUNCTION int slot(int f) const { return g.slot.data() ? g.slot(f) : f; }
     KOKKOS_INLINE_FUNCTION Vec3 vertex(int m, const tet_mesh::GridPoint& q) const {
         return tet_mesh::from_point(g.centre, g.ring(m), q, g.box.step);
-    }
-    // Face f's area, centroid and fan sums.
-    KOKKOS_INLINE_FUNCTION Fan walk(int f) const {
-        Fan fan;
-        const int s = slot(f);
-        fan.i = g.owner(s);
-        fan.j = g.neighbour(s);
-        fan.begin = g.ring_start(s);
-        fan.end = fan.begin + g.ring_length(s);
-        const tet_mesh::GridPoint q(g.x, fan.i, g.box);
-        fan.dj = tet_mesh::snapped_difference<3>(tet_mesh::row(g.x, fan.j) - tet_mesh::row(g.x, fan.i), g.box);
-        const Vec3 first = vertex(fan.begin, q);
-        Vec3 a = vertex(fan.begin + 1, q) - first, twice{0, 0, 0};
-        for (int m = fan.begin + 2; m < fan.end; ++m) {
-            const Vec3 b = vertex(m, q) - first;
-            const Vec3 t = cross(a, b);
-            twice = twice + t;
-            const double w = Kokkos::abs(dot(t, fan.dj));
-            fan.weight += w;
-            fan.weighted = fan.weighted + (a + b) * w;
-            a = b;
-        }
-        fan.area = twice * 0.5;
-        fan.projected = dot(fan.area, fan.dj);
-        if (fan.projected < 0) {
-            fan.sign = -1;
-            fan.area = fan.area * -1.0;
-            fan.projected = -fan.projected;
-        }
-        fan.centroid = fan.weight > 0 ? first + fan.weighted * (1.0 / (3.0 * fan.weight)) : first;
-        return fan;
     }
     // dA and dx_f of face f from the vertices' changes dct (absolute, per tetrahedron) and dx (per cell).
     template <class DC, class DX>
@@ -210,41 +223,67 @@ struct Faces3 {
         dA = dtwice * (dot(twice, dj) < 0 ? -0.5 : 0.5);
         dxf = weight > 0 ? dfirst + (dweighted - weighted * (dweight / weight)) * (1.0 / (3.0 * weight)) : dfirst;
     }
-    // The bar of the vertex at ring entry fan.begin + target (relative to the owner) from the bars of the face's area and
-    // centroid: the transpose of tangent() for that vertex.
-    KOKKOS_INLINE_FUNCTION Vec3 vertex_bar(const Fan& fan, int target, Vec3 Abar, Vec3 xfbar) const {
-        const tet_mesh::GridPoint q(g.x, fan.i, g.box);
-        const Vec3 tbar = Abar * (0.5 * fan.sign);  // the bar of each T_m through the area
-        const bool weighted = fan.weight > 0;
-        const Vec3 sbar = weighted ? xfbar * (1.0 / (3.0 * fan.weight)) : Vec3{0, 0, 0};  // of the weighted sum
-        const Vec3 mean = weighted ? fan.weighted * (1.0 / fan.weight) : Vec3{0, 0, 0};
-        Vec3 bar = target == 0 ? xfbar : Vec3{0, 0, 0};  // x_f = v_0 + ...
-        const Vec3 first = vertex(fan.begin, q);
-        Vec3 a = vertex(fan.begin + 1, q) - first;
-        for (int m = 2; m < fan.end - fan.begin; ++m) {
-            const Vec3 b = vertex(fan.begin + m, q) - first;
-            if (target == 0 || target == m || target == m - 1) {
-                const Vec3 t = cross(a, b);
-                const double projected = dot(t, fan.dj), w = Kokkos::abs(projected);
-                const double wbar = dot(sbar, a + b - mean);
-                const Vec3 tb = tbar + fan.dj * (wbar * sign_of(projected));
-                const Vec3 abar = cross(b, tb) + sbar * w,
-                           bbar = cross(tb, a) + sbar * w;  // a = v_{m-1} - v_0, b = v_m - v_0
-                if (target == m - 1) bar = bar + abar;
-                if (target == m) bar = bar + bbar;
-                if (target == 0) bar = bar - abar - bbar;
-            }
+    // The bar of the vertex at ring entry k of face f (owner i) from the face's totals: the transpose of tangent() for
+    // that vertex. Vertex k >= 1 from its two ring neighbours; vertex 0 as the bar of x_f minus the others' (a translation
+    // of every vertex moves x_f with it and leaves A), one walk of the ring. The fan's orientation comes from the larger
+    // of the vertex's triangles, or from a walk when both are flat.
+    KOKKOS_INLINE_FUNCTION Vec3 vertex_bar(int f, int i, int k, const FaceShare& shared, Vec3 xfbar) const {
+        const int s = slot(f);
+        const int begin = g.ring_start(s), length = g.ring_length(s);
+        const tet_mesh::GridPoint q(g.x, i, g.box);
+        const Vec3 first = vertex(begin, q);
+        auto r = [&](int m) { return vertex(begin + m, q) - first; };
+        FaceShare share = shared;
+        share.mean = share.weight > 0 ? (share.xf - first) * 3.0 : Vec3{0, 0, 0};
+        if (k > 0) {
+            Vec3 area, rest;
+            double largest = 0, orientation = 1;
+            local_bar(share, k, length, r(k - 1), r(k), k + 1 < length ? r(k + 1) : Vec3{0, 0, 0}, area, rest, largest,
+                      orientation);
+            if (!(largest > 1e-12 * share.weight)) orientation = orientation_of(begin, length, q, share.dj);
+            return area * orientation + rest;
+        }
+        Vec3 area{0, 0, 0}, rest{0, 0, 0}, twice{0, 0, 0}, rp{0, 0, 0}, rk = r(1);
+        for (int m = 1; m < length; ++m) {
+            const Vec3 rn = m + 1 < length ? r(m + 1) : Vec3{0, 0, 0};
+            Vec3 a, b;
+            double largest = 0, orientation = 1;
+            local_bar(share, m, length, rp, rk, rn, a, b, largest, orientation);
+            area = area + a;
+            rest = rest + b;
+            if (m >= 2) twice = twice + cross(rp, rk);
+            rp = rk;
+            rk = rn;
+        }
+        return xfbar - area * (dot(twice, share.dj) < 0 ? -1.0 : 1.0) - rest;
+    }
+    // The fan's orientation, the sign of (sum of T_m) . d, as tangent() takes it.
+    KOKKOS_INLINE_FUNCTION double orientation_of(int begin, int length, const tet_mesh::GridPoint& q, Vec3 dj) const {
+        const Vec3 first = vertex(begin, q);
+        Vec3 a = vertex(begin + 1, q) - first, twice{0, 0, 0};
+        for (int m = 2; m < length; ++m) {
+            const Vec3 b = vertex(begin + m, q) - first;
+            twice = twice + cross(a, b);
             a = b;
         }
-        return bar;
+        return dot(twice, dj) < 0 ? -1.0 : 1.0;
     }
 };
 
-// The forward face values a cell sum reads: 3D from the ring (FaceGeometry::face, the stored bits), 2D the stored rows.
+// The forward face values the derivative reads in 3D: the stored rows when the Layout keeps them in double (area(),
+// face_centroid()), else from the ring (FaceGeometry::face): the same bits either way.
 template <class Memory>
 struct RingFaces {
     tet_mesh::FaceGeometry<Memory> g;
-    KOKKOS_INLINE_FUNCTION void operator()(int f, Vec3& A, Vec3& c) const { g.face(f, A, c); }
+    Kokkos::View<const double* [3], Kokkos::LayoutRight, Memory> area, centroid;  // empty: from the ring
+    KOKKOS_INLINE_FUNCTION void operator()(int f, Vec3& A, Vec3& c) const {
+        if (area.extent(0) == 0) {
+            g.face(f, A, c);
+            return;
+        }
+        A = tet_mesh::row(area, f);
+        c = tet_mesh::row(centroid, f);
+    }
 };
 // The same from stored rows (2D).
 template <class Rows>
@@ -457,8 +496,45 @@ KOKKOS_INLINE_FUNCTION int face_of_edge(const C& cells, const G& g, int lo, int 
     return -1;
 }
 
-// 3D adjoint: cell bars; per tetrahedron the bar of its vertex, gathered over its six faces; per cell x̄, gathered over
-// its faces and the tetrahedra around it. No atomics: every sum is one thread's, in a fixed order.
+// The bar of a tetrahedron's vertex through the face of each corner pair. Copy into kernels.
+template <class Memory, class X, class Vertex, class C, class Bar, class In>
+struct VertexBars {
+    Faces3<Memory> faces;
+    Vertex vertex;
+    C cells;
+    Bar cellbar;
+    In in;
+    X x;
+    exact_predicates::Box box;
+
+    // Tetrahedron t's corners in increasing order.
+    KOKKOS_INLINE_FUNCTION void corners(int t, int* v) const {
+        for (int k = 0; k < 4; ++k) v[k] = vertex(t, k);
+        sort4(v);
+    }
+    // Through the face of corner pair e (0..5: 01 02 03 12 13 23); corners picked, not indexed, to keep v in registers.
+    KOKKOS_INLINE_FUNCTION Vec3 edge(int t, const int* v, int e) const {
+        const int a = e < 3 ? 0 : e < 5 ? 1 : 2, b = e < 3 ? e + 1 : e < 5 ? e - 1 : 3;
+        auto pick = [&](int k) { return k == 0 ? v[0] : k == 1 ? v[1] : k == 2 ? v[2] : v[3]; };
+        int place = 0;
+        const int f = face_of_edge(cells, faces.g, pick(a), pick(b), t, place);
+        if (f < 0) return Vec3{0, 0, 0};
+        const int i = cells.owner(f), j = cells.neighbour(f);
+        Vec3 A;
+        FaceShare share;
+        cells.faces(f, A, share.xf);
+        share.dj = tet_mesh::snapped_difference<3>(tet_mesh::row(x, j) - tet_mesh::row(x, i), box);
+        const FaceBars<3> fb = face_bars<3>(cellbar, in, f, i, j, A, share.xf, share.dj);
+        share.weight = 2 * Kokkos::abs(dot(A, share.dj));
+        share.half_Abar = fb.Abar * 0.5;
+        share.sbar = share.weight > 0 ? fb.xfbar * (1.0 / (3.0 * share.weight)) : Vec3{0, 0, 0};
+        return faces.vertex_bar(f, i, place, share, fb.xfbar);
+    }
+};
+
+// 3D adjoint: cell bars; per tetrahedron the bar of its vertex, gathered over its six faces (from each face's stored
+// values and the vertex's ring neighbours; a walk only where it is the ring's first); per cell x̄, gathered over its faces
+// and over the tetrahedra around it. No atomics: every sum is one thread's, in a fixed order.
 template <class ExecSpace, class X, class Vertex, class Alive, class C, class Bar, class CTB, class In, class XBar>
 void adjoint3(const ExecSpace& exec, const Faces3<typename ExecSpace::memory_space>& faces, const Vertex& vertex,
               const Alive& alive, int tets, const C& cells, int n, const Bar& cellbar, const CTB& ctbar, const In& in,
@@ -469,35 +545,39 @@ void adjoint3(const ExecSpace& exec, const Faces3<typename ExecSpace::memory_spa
     const auto centre = faces.g.centre;
     const auto g = faces.g;
     cell_bars<3>(exec, cells, n, in, cellbar);
+    const VertexBars<typename ExecSpace::memory_space, X, Vertex, C, Bar, In> bars{faces, vertex, cells, cellbar,
+                                                                                   in,    x,      box};
     Kokkos::parallel_for(
         "geometry_derivative::vertex_bars", Range(exec, 0, tets), KOKKOS_LAMBDA(int t) {
             if (!alive(t)) return;
             int v[4];
-            for (int k = 0; k < 4; ++k) v[k] = vertex(t, k);
-            tet_mesh::sort_corners(v);
+            bars.corners(t, v);
             Vec3 bar{0, 0, 0};
-            for (int a = 0; a < 3; ++a)
-                for (int b = a + 1; b < 4; ++b) {
-                    int place = 0;
-                    const int f = face_of_edge(cells, g, v[a], v[b], t, place);
-                    if (f < 0) continue;
-                    const Fan fan = faces.walk(f);
-                    const FaceBars<3> fb = face_bars<3>(cellbar, in, f, fan.i, fan.j, fan.area, fan.centroid, fan.dj);
-                    bar = bar + faces.vertex_bar(fan, place, fb.Abar, fb.xfbar);
-                }
+            for (int e = 0; e < 6; ++e) bar = bar + bars.edge(t, v, e);
             tet_mesh::store(ctbar, t, bar);
         });
+    // x̄ in two passes, each a gather in a fixed order (one kernel spilled 7 KB/cell): over each cell's faces, then over
+    // the tetrahedra around it.
     Kokkos::parallel_for(
-        "geometry_derivative::cell_adjoint", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
+        "geometry_derivative::cell_adjoint_faces", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
             Vec3 bar{0, 0, 0};
             for (int e = cells.start(i); e < cells.start(i + 1); ++e) {
                 const int f = tet_mesh::list_face(cells.list(e));
-                const int o = cells.owner(f), j = cells.neighbour(f), other = o ^ j ^ i;
+                const int o = cells.owner(f), j = cells.neighbour(f);
                 Vec3 A, xf;
                 cells.faces(f, A, xf);
                 const Vec3 dj = tet_mesh::snapped_difference<3>(tet_mesh::row(x, j) - tet_mesh::row(x, o), box);
                 const FaceBars<3> fb = face_bars<3>(cellbar, in, f, o, j, A, xf, dj);
                 bar = bar + (o == i ? fb.owner : fb.neighbour);
+            }
+            add_row(xbar, i, bar);
+        });
+    Kokkos::parallel_for(
+        "geometry_derivative::cell_adjoint_vertices", Range(exec, 0, n), KOKKOS_LAMBDA(int i) {
+            Vec3 bar{0, 0, 0};
+            for (int e = cells.start(i); e < cells.start(i + 1); ++e) {
+                const int f = tet_mesh::list_face(cells.list(e));
+                const int other = cells.owner(f) ^ cells.neighbour(f) ^ i;
                 // The tetrahedra around edge i-other, each taken at its edge to the lowest of its other corners.
                 const int s = g.slot.data() ? g.slot(f) : f;
                 for (int m = g.ring_start(s); m < g.ring_start(s) + g.ring_length(s); ++m) {
@@ -705,14 +785,20 @@ private:
         return Rows<Columns>(grow(at + static_cast<std::size_t>(count) * Columns) + at, count);
     }
     geometry_derivative::Faces3<Memory> faces3() const { return {mesh_.face_geometry()}; }
-    // The cell sums' inputs: 3D faces from their rings (the stored bits, in every Layout), 2D the stored rows.
+    // The cell sums' inputs: 3D faces from the stored rows when kept in double, else from their rings (the same bits);
+    // 2D the stored rows.
     auto cells() const {
         if constexpr (D == 3) {
             using Faces = geometry_derivative::RingFaces<Memory>;
+            Faces faces{mesh_.face_geometry(), {}, {}};
+            const voronoi::Layout& layout = mesh_.layout();
+            if (!layout.float_centroids && (!layout.faces_on_read || MeshType::float_rows)) {  // rows stored in double
+                faces.area = mesh_.area();
+                faces.centroid = mesh_.face_centroid();
+            }
             return geometry_derivative::Cells<3, Memory, typename MeshType::Positions, Faces>{
-                mesh_.positions(), mesh_.sides(),     Faces{mesh_.face_geometry()},
-                mesh_.owner(),     mesh_.neighbour(), mesh_.cell_face_start(),
-                mesh_.cell_face()};
+                mesh_.positions(),       mesh_.sides(),    faces, mesh_.owner(), mesh_.neighbour(),
+                mesh_.cell_face_start(), mesh_.cell_face()};
         } else {
             using Faces = geometry_derivative::StoredFaces<typename MeshType::Rows>;
             return geometry_derivative::Cells<2, Memory, typename MeshType::Positions, Faces>{
