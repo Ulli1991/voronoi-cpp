@@ -890,7 +890,7 @@ struct Kernel {
         // A cell whose face areas do not close has a broken surface: built again exactly (#64).
         area_sum = {warp_sum(area_sum.x), warp_sum(area_sum.y), warp_sum(area_sum.z)};
         triangles = warp_sum(triangles);
-        if (status == ok && detail::unclosed(area_sum, triangles, radius2)) status = unclosed;
+        if (status == ok && detail::surface_open(area_sum, triangles, radius2)) status = unclosed;
         // A filtered cell's overflows stay heavy, for every output: the big kernel, then the thread kernel, filtered.
         if constexpr (filtered)
             if (status == plane_overflow || status == vertex_overflow) status = deferred;

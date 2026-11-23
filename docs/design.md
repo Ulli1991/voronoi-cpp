@@ -137,6 +137,17 @@ RoundedCell and ExactCell share the walk, the cut topology and the face walk of 
 
 ExactCell works in grid steps relative to the snapped generator. Vertex v is the circumcentre of the generator and the particles of its three planes, -w / (2 o); a particle at e lies inside that sphere iff e.w + |e|² o has the opposite sign of o (w and o are exact integers, stored rounded once), decided by a filter and, when that is uncertain, by the exact perturbed in-sphere sign. Neighbouring cells agree by construction: these are the cells of the unique perturbed Delaunay tetrahedralization. The start's patch is in tet_start.
 
+### Closure check (#64)
+
+A rounded cut removes a vertex only when it lies beyond the bisector by more than τ = 64 ε |d| R, so a kept vertex can lie up to τ outside. Its edge then meets the plane beyond the kept end, and the new vertex goes there, far away when both ends lie near τ. On points cospherical to within 1e-9 this leaves a few cells with broken surfaces, wrong by up to a third of their volume (research_notes/vertex64_2026-11-23.md). Every rounded cell (warp kernel and RoundedCell) therefore checks that its face area vectors sum to zero; one that does not gets status `unclosed` and is built again by `exact_where_failed` (not by the rounded retry).
+
+Why zero, and the tolerance: each face's area vector is the fan sum ½ Σ (p − f) × (x − f) over the stored vertices, and over a closed surface, each edge walked once in each direction, these sum to exactly zero whatever the positions. Only rounding remains in a correct cell. With every vertex within R of the generator (R² = radius2) and a fan of n_f steps per face (T = Σ n_f, F faces):
+- each fan triangle's cross product, of differences up to 2R each rounded once, is off by at most 4.01 u |a||b| per component, √3 × 4.01 u × 4R² < 28 u R² as a vector;
+- summing the triangles of a convex face, whose areas add up to at most the area of a disc of radius R, adds at most n_f u × 2πR²;
+- summing the F faces, whose areas add up to at most 4πR², adds at most (F + 5) u × 4πR² (5 for the warp's shuffle tree).
+
+With F + 5 ≤ 2T (T ≥ 12) the total is below (28 + 6.3 + 25.2) u T R² < 30 ε T R² (ε = 2u = 2⁻⁵²). The tolerance is twice that: |Σ A| > 64 ε T R² routes a cell, and NaN does too. A typical cell (T ≈ 80) is routed above about 1e-12 R², near 2e-13 of its surface area. A cell whose surface closes but has a misplaced vertex on a degenerate face is not caught (one measured on fcc at 1e-9: volume exact, centroid off 2.4e-3 cell sizes).
+
 ## Warp kernel (shell_voronoi_warp.hpp)
 
 One warp builds one cell. The polyhedron lives in the warp's slice of shared memory; lane l owns vertices l and l + 32 and planes l and l + 32. Every vertex stores its three planes and the three vertices across its edges, so a cut, the creation of new vertices and the walk around a face are each constant work per vertex, done by all lanes at once. Particles of a grid ring are tested 32 at a time and clipped nearest-first after a warp sort. Teams of 16 or 8 lanes per cell were 2× and 3.6× slower on an A100.

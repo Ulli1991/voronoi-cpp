@@ -23,7 +23,7 @@ inline double start_half_width(const ep::Box& box) { return 0.25 * box.shortest(
 // steps over convex faces in a ball of radius R (radius2 = R^2), is 30 eps T R^2 (docs/design.md, "Closure check");
 // twice that is the tolerance. A larger sum, or NaN, means a broken surface: a vertex placed far past its edge, or a
 // face left out. Used by: construct_pass (rounded cells), the warp kernel.
-KOKKOS_INLINE_FUNCTION bool unclosed(const Vec3& area_sum, int triangles, double radius2) {
+KOKKOS_INLINE_FUNCTION bool surface_open(const Vec3& area_sum, int triangles, double radius2) {
     const double tolerance = 64 * Kokkos::Experimental::epsilon_v<double> * triangles * radius2;
     return !(dot(area_sum, area_sum) <= tolerance * tolerance);
 }

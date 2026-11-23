@@ -524,7 +524,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if (status == ok && !(volume > 0)) status = degenerate;
             // A rounded cell whose surface does not close is built again exactly (#64).
             if constexpr (!Cell::exact)
-                if (status == ok && unclosed(area_sum, triangles, cell.radius2)) status = unclosed;
+                if (status == ok && surface_open(area_sum, triangles, cell.radius2)) status = unclosed;
 
             // A deferred cell that overflows stays deferred, for the next capacity.
             if (filtered && (status == plane_overflow || status == vertex_overflow) &&
