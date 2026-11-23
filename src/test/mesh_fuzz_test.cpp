@@ -4,6 +4,9 @@
 #include "check.hpp"
 #include "mesh_check.hpp"
 #include "mesh_fuzz.hpp"
+#if defined(VORONOI_VERTEX64)
+#include "vertex64.hpp"
+#endif
 
 #include <fcntl.h>
 #include <signal.h>
@@ -921,6 +924,16 @@ void work(Shared* shared, const std::string& results, long long last, long long 
     FILE* f = std::fopen(results.c_str(), "a");
     if (!f) std::exit(3);
     const Limits limits;
+#if defined(VORONOI_VERTEX64)
+    // #64 diagnostic: the rounded clipping's counters per seed, one line each in RESULTS.v64.
+    Kokkos::View<unsigned long long*, support::Memory> v64("v64_counter", vertex64::counters);
+    {
+        vertex64::Sinks s;
+        s.counter = v64.data();
+        vertex64::install(s, !std::is_same_v<support::Memory, Kokkos::HostSpace>);
+    }
+    FILE* v64_file = std::fopen((results + ".v64").c_str(), "a");
+#endif
     for (long long seed = shared->seed; seed <= last && now_seconds() < deadline; seed += stride) {
         shared->seed = seed;
         shared->beat = now_seconds();
@@ -934,7 +947,19 @@ void work(Shared* shared, const std::string& results, long long last, long long 
         }
         const Script s = make_script(static_cast<std::uint64_t>(seed));
         Outcome o;
+#if defined(VORONOI_VERTEX64)
+        Kokkos::deep_copy(v64, 0ull);
+#endif
         run_script(s, o, limits);
+#if defined(VORONOI_VERTEX64)
+        if (v64_file) {
+            const auto c = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, v64);
+            std::fprintf(v64_file, "%lld %s", seed, class_name[o.kind]);
+            for (int k = 0; k < vertex64::counters; ++k) std::fprintf(v64_file, " %llu", c(k));
+            std::fprintf(v64_file, "\n");
+            std::fflush(v64_file);
+        }
+#endif
         line(f, seed, class_name[o.kind], &s, &o, now_seconds() - t0);
     }
     shared->seed = last + stride;
@@ -1262,7 +1287,23 @@ int main(int argc, char** argv) {
         const Script s = mode == "one" ? make_script(std::stoull(argv[2])) : load(argv[2]);
         const std::string dump = option(argc, argv, "dump", "");
         if (!dump.empty()) save(s, dump);
+#if defined(VORONOI_VERTEX64)
+        Kokkos::View<unsigned long long*, support::Memory> v64("v64_counter", vertex64::counters);
+        {
+            vertex64::Sinks sinks;
+            sinks.counter = v64.data();
+            vertex64::install(sinks, !std::is_same_v<support::Memory, Kokkos::HostSpace>);
+        }
+#endif
         run_verbose(s);
+#if defined(VORONOI_VERTEX64)
+        {
+            const auto c = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, v64);
+            std::printf("v64 counters: new_vertices=%llu strict=%llu kept_outside=%llu beyond_bound=%llu "
+                        "err>1e-9R=%llu err>1e-6R=%llu err>1e-3R=%llu\n",
+                        c(0), c(1), c(2), c(3), c(4), c(5), c(6));
+        }
+#endif
         return 0;
     }
     Check c;

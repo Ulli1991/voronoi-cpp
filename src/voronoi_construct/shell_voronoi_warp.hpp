@@ -52,6 +52,13 @@ struct alignas(16) PolyhedronOf {
     int candidate_image[lanes];
     // Owned faces without rings: the warp claims face_block pool entries at a time; its block is [face_at, face_end).
     long long face_at, face_end;
+#if defined(VORONOI_VERTEX64)
+    // The diagnostic of #64 (vertex64.hpp): the cell's cut bits, its worst cut (bound / R as float bits) and where.
+    unsigned v64_flag;
+    int v64_worst;
+    int v64_slot[3];
+    double v64_vertex[3];
+#endif
 };
 using Polyhedron = PolyhedronOf<>;
 
@@ -319,6 +326,12 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
     bool made[per_lane] = {}, past = false;
     int kept_end[per_lane], a[per_lane], b[per_lane];
     int free_before = 0;  // free slots in the lanes' earlier rounds (V > 64)
+#if defined(VORONOI_VERTEX64)
+    const int v64_before = c.v64_worst;
+    int v64_mine = -1, v64_a = 0, v64_b = 0;
+    double v64_p[3] = {0, 0, 0};
+    __syncwarp(all_lanes);
+#endif
     for (int k = 0; k < per_lane; ++k) {
         if constexpr (V > 64) {
             if (k > 0) free_before += lanes - __popc(half(live, k - 1));
@@ -342,6 +355,28 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
         radius = larger(radius, px * px + py * py + pz * pz);
         a[k] = byte(edge, 2);
         b[k] = byte(edge, 3);
+#if defined(VORONOI_VERTEX64)
+        {
+            const double ex = c.x[u] - c.x[w], ey = c.y[u] - c.y[w], ez = c.z[u] - c.z[w];
+            float err = 0;
+            const unsigned bits = vertex64::classify(
+                c.side[w], c.side[u], vertex64::side_bound(d.x, d.y, d.z, c.x[w], c.y[w], c.z[w], offset),
+                vertex64::side_bound(d.x, d.y, d.z, c.x[u], c.y[u], c.z[u], offset),
+                Kokkos::sqrt(ex * ex + ey * ey + ez * ez), Kokkos::sqrt(radius2), err);
+            vertex64::count(bits);
+            if (bits != 0) atomicOr(&c.v64_flag, bits);
+            const int key = __float_as_int(err);
+            if (key > v64_mine) {
+                v64_mine = key;
+                v64_a = a[k] < box_planes ? -1 - a[k] : c.neighbour[a[k]];
+                v64_b = b[k] < box_planes ? -1 - b[k] : c.neighbour[b[k]];
+                v64_p[0] = px;
+                v64_p[1] = py;
+                v64_p[2] = pz;
+            }
+            atomicMax(&c.v64_worst, key);
+        }
+#endif
         c.corner[s] = pack(a[k], b[k], plane);
         // The edge (a, b) of w is (b, a) of u: the adjacency of u that starts at corner b leads back to w. Read from
         // c.corner, which no lane writes here, as other lanes may write other bytes of c.adjacent[u] (#46).
@@ -351,6 +386,18 @@ __device__ inline int clip(PolyhedronOf<V>& c, int& planes, Mask<V>& live, doubl
         c.ends[b[k]] = s;
         kept_end[k] = u;
     }
+#if defined(VORONOI_VERTEX64)
+    __syncwarp(all_lanes);
+    if (c.v64_worst > v64_before && v64_mine == c.v64_worst) {  // ties write the same kind of record
+        c.v64_slot[0] = v64_a;
+        c.v64_slot[1] = v64_b;
+        c.v64_slot[2] = neighbour;
+        c.v64_vertex[0] = v64_p[0];
+        c.v64_vertex[1] = v64_p[1];
+        c.v64_vertex[2] = v64_p[2];
+    }
+    __syncwarp(all_lanes);
+#endif
     const Mask<V> made_slots = vertex_ballot(made);
     // The filter's bound needs new vertices on their edges: a kept end within the tolerance outside puts one past it.
     if constexpr (checked)
@@ -583,6 +630,15 @@ struct Kernel {
         Mask<V> live{};
         double radius2 = 3 * half_width * half_width;
         start_cube<V>(c, half_width, planes, live);
+#if defined(VORONOI_VERTEX64)
+        if (l == 0) {
+            c.v64_flag = 0;
+            c.v64_worst = 0;
+            c.v64_slot[0] = c.v64_slot[1] = c.v64_slot[2] = 0;
+            c.v64_vertex[0] = c.v64_vertex[1] = c.v64_vertex[2] = 0;
+        }
+        __syncwarp(all_lanes);
+#endif
         int status = ok, rings = 0, clipped = 0, cuts = 0, buffered = 0;
         bool certified = false;
 #if defined(VORONOI_MEASURE)
@@ -889,6 +945,20 @@ struct Kernel {
         // A filtered cell's overflows stay heavy, for every output: the big kernel, then the thread kernel, filtered.
         if constexpr (filtered)
             if (status == plane_overflow || status == vertex_overflow) status = deferred;
+#if defined(VORONOI_VERTEX64)
+        __syncwarp(all_lanes);
+        if (l == 0) {
+            vertex64::Record r;
+            r.flag = c.v64_flag;
+            r.worst = __int_as_float(c.v64_worst);
+            r.slot[0] = t;
+            for (int k = 0; k < 3; ++k) {
+                r.slot[1 + k] = c.v64_slot[k];
+                r.vertex[k] = c.v64_vertex[k];
+            }
+            vertex64::write(id, r, Kokkos::sqrt(radius2));
+        }
+#endif
         if constexpr (!with_faces) {
             if (status == ok && !(volume > 0)) status = degenerate;
             if (l == 0) {
