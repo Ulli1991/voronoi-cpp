@@ -1286,6 +1286,43 @@ Tests on this head (jobs 32543848, 32543849, 32544828): A100 test suite 23 of 23
 
 Proof on `d70de85` (job 32589342): A100 test suite 23 of 23; every step against a fresh exact build, 141 of 141; geometry, faces and lists checksums equal to step-2x, 105 of 105.
 
+## Geometry derivatives (#63)
+
+`voronoi::GeometryDerivative` (branch `geometry-derivatives`, 2026-11-22/23): the tangent and adjoint of V, c, A, x_f in the generator positions ([usage](usage.md#geometry-derivatives)). Raw logs: /ptmp/uli/voronoi-cpp-geomderiv/logs/ (the job outputs and the checksum lists below).
+
+**Time** (job 32893188, gpudev, one A100 40 GB at 1305 MHz, double; `geometry_derivative_bench`, median of 7). G cell updates/s, and each call's time against three references measured in the same run:
+- *start*: `rebuild(x)` alone in the caller's order. In 3D that is the exact start (clipping with rings, `tet_start::build`) plus the face geometry; voronoi_bench's "exact start" rate (25.3 M cells/s in the README) covers clipping and tetrahedra and leaves the face geometry out, so it is faster.
+- *build*: `rebuild(x)` with the Hilbert re-sort (3D, `Layout::at_build`), then `update_cells()`: the mesh the derivative reads.
+- *step*: `update(x)` + `update_cells()` for 0.03 spacings of a smooth shear, after three such steps (voronoi_bench's step at 0.03 spacings, job 32839649: 10.1 ms, the same within 10 %).
+
+| | 3D 128³ jittered | 3D 128³ white noise | 2D 2²⁰ jittered | 2D 2²² jittered | 2D 2²² white noise |
+|---|---|---|---|---|---|
+| tangent, G cell updates/s | 0.102 | 0.111 | 1.20 | 1.33 | 1.27 |
+| adjoint, G cell updates/s | 0.026 | 0.028 | 0.415 | 0.432 | 0.390 |
+| start / build / step, G cell updates/s | 0.0158 / 0.0142 / 0.189 | 0.0086 / 0.0077 / 0.249 | 0.092 / 0.087 / 0.80 | 0.124 / 0.114 / 0.98 | 0.056 / 0.051 / 0.98 |
+| tangent in starts / builds / steps | 0.15 / 0.14 / 1.8 | 0.08 / 0.07 / 2.2 | 0.08 / 0.07 / 0.67 | 0.09 / 0.09 / 0.73 | 0.04 / 0.04 / 0.77 |
+| adjoint in starts / builds / steps | 0.60 / 0.55 / 7.2 | 0.31 / 0.28 / 8.9 | 0.22 / 0.21 / 1.9 | 0.29 / 0.26 / 2.3 | 0.14 / 0.13 / 2.5 |
+
+The 2D white-noise points are ordered by grid cell, the 3D ones by the build's re-sort. The 3D adjoint is the costly part: each tetrahedron walks the rings of its six faces again ([tried.md](tried.md#geometry-derivatives-63-2026-112223)).
+
+**Memory.** Scratch held by the object, B/cell: 3D 199 (jittered; 194 white noise): 4 doubles per cell and 3 per tetrahedron slot; 2D 68: 3 doubles per cell, 2 per triangle, an int per face. The caller's views come on top: 438 (3D) and 136 (2D) B/cell for dx, dV, dc, dA, dx_f, or the same for the bars. Against the moving step's peak of 1911 B/cell (128³) the scratch is +10 %; the derivative runs between updates, so whether it raises the peak depends on what the caller frees.
+
+**Accuracy** (`geometry_derivative_test`; host job 32820977, A100 job 32839649, the same to the digits shown):
+- tangent against central differences of fresh meshes, extrapolated from k = 16 and 4 grid steps: 3e-11 to 1.9e-9 (2D), 1.4e-10 to 2.1e-9 (3D) of the largest change;
+- dot test 1.3e-16 to 3.6e-13;
+- Σ dV 2e-18 to 2.4e-17 of Σ |dV|;
+- closure 8e-17 to 3e-14 of the largest dA;
+- translation 0.
+- At one k the error falls as k² (3D dx_f: 4.9e-6, 3.1e-7, 1.9e-8 at k = 64, 16, 4 on 16³ jittered): truncation on the smallest faces, not the derivative.
+- 2D against luna-cpp's `reference::Geometry2D` (job 32820093): tangent 2.2e-15, adjoint 8.8e-16.
+
+**Default path** (job 32839649, gpu1, against main `fe89f6e` exported to /ptmp/uli/voronoi-cpp-geomderiv/ref-fe89f6e):
+- A100 test suite 24 of 24;
+- every step against a fresh exact build, 84 of 84 PASS (seven inputs, 0.03, 0.1, 0.3 spacings, 262144 cells);
+- geometry, faces and lists checksums equal to main, 105 of 105 (seven inputs, three spacings, five steps, 128³).
+
+CI's host steps on the branch (job 32839650): comments, format, the test suite with sanitizers off and on (24 of 24 each). clang-tidy's two findings (a lambda form, an integer division in the bench) were fixed and checked again in jobs 32893973 and 32894405: comments, format, the test and the luna-cpp comparison pass, and the linter is clean on the new sources.
+
 
 ## Removed, and where to find it
 

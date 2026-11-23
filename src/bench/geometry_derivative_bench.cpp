@@ -49,8 +49,9 @@ Kokkos::View<double* [D], Kokkos::LayoutRight, Memory> make_points(const std::st
         std::uniform_real_distribution<double> unit(0.0, 1.0);
         const int side = static_cast<int>(std::lround(std::sqrt(n)));
         for (int i = 0; i < n; ++i) {
-            const double u = kind == "uniform" ? unit(rng) : (static_cast<double>(i / side) + 0.5 + 0.1 * (2 * unit(rng) - 1)) / side;
-            const double v = kind == "uniform" ? unit(rng) : (static_cast<double>(i % side) + 0.5 + 0.1 * (2 * unit(rng) - 1)) / side;
+            const int row = i / side, column = i % side;  // the lattice site of a jittered point
+            const double u = kind == "uniform" ? unit(rng) : (row + 0.5 + 0.1 * (2 * unit(rng) - 1)) / side;
+            const double v = kind == "uniform" ? unit(rng) : (column + 0.5 + 0.1 * (2 * unit(rng) - 1)) / side;
             h(i, 0) = u - std::floor(u);
             h(i, 1) = v - std::floor(v);
         }
@@ -94,11 +95,16 @@ int run(int n, const std::string& kind, int repeats) {
     auto x = make_points<D>(kind, n);
     n = static_cast<int>(x.extent(0));
     Mesh mesh(Exec{}, 1.0);
+    // The build three ways: rebuild() alone in the caller's order (3D: the exact start, clipping with rings and
+    // tet_start, then the face geometry; voronoi_bench's start), the same with the re-sort along the Hilbert curve
+    // (3D, at_build), and that plus update_cells(): the mesh the derivative reads.
+    const double start_ms = median_ms(repeats, [&] { mesh.rebuild(x); });
     if constexpr (D == 3) {
         voronoi::Layout layout;
         layout.at_build = true;  // cells in curve order from the build
         mesh.set_layout(layout);
     }
+    const double rebuild_ms = median_ms(repeats, [&] { mesh.rebuild(x); });
     const double build_ms = median_ms(repeats, [&] {
         mesh.rebuild(x);
         mesh.update_cells();
@@ -142,13 +148,14 @@ int run(int n, const std::string& kind, int repeats) {
     const double io = (static_cast<double>(n) * (2 * D + 1) + static_cast<double>(faces) * 2 * D) * 8 / n;
     auto g = [&](double ms) { return n / (ms * 1e6); };
     std::printf(
-        "geomderiv: D=%d n=%d kind=%s faces_per_cell=%.2f build_G=%.4f step_G=%.4f tangent_G=%.4f adjoint_G=%.4f "
-        "tangent_per_build=%.3f adjoint_per_build=%.3f tangent_per_step=%.3f adjoint_per_step=%.3f "
-        "scratch_B_per_cell=%.1f caller_views_B_per_cell=%.1f build_ms=%.3f step_ms=%.3f tangent_ms=%.3f "
-        "adjoint_ms=%.3f\n",
-        D, n, kind.c_str(), static_cast<double>(faces) / n, g(build_ms), g(step_ms), g(tangent_ms), g(adjoint_ms),
-        tangent_ms / build_ms, adjoint_ms / build_ms, tangent_ms / step_ms, adjoint_ms / step_ms, scratch, io, build_ms,
-        step_ms, tangent_ms, adjoint_ms);
+        "geomderiv: D=%d n=%d kind=%s faces_per_cell=%.2f start_G=%.4f build_G=%.4f step_G=%.4f tangent_G=%.4f "
+        "adjoint_G=%.4f tangent_per_start=%.3f adjoint_per_start=%.3f tangent_per_build=%.3f adjoint_per_build=%.3f "
+        "tangent_per_step=%.3f adjoint_per_step=%.3f scratch_B_per_cell=%.1f caller_views_B_per_cell=%.1f "
+        "start_ms=%.3f resorted_rebuild_ms=%.3f build_ms=%.3f step_ms=%.3f tangent_ms=%.3f adjoint_ms=%.3f\n",
+        D, n, kind.c_str(), static_cast<double>(faces) / n, g(start_ms), g(build_ms), g(step_ms), g(tangent_ms),
+        g(adjoint_ms), tangent_ms / start_ms, adjoint_ms / start_ms, tangent_ms / build_ms, adjoint_ms / build_ms,
+        tangent_ms / step_ms, adjoint_ms / step_ms, scratch, io, start_ms, rebuild_ms, build_ms, step_ms, tangent_ms,
+        adjoint_ms);
     return 0;
 }
 
