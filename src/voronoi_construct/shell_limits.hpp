@@ -14,8 +14,9 @@ enum Status : int {
     face_overflow = 4,  // the cell's chunk of the face or ring pool is full
     degenerate = 5,
     deferred = 6,  // the warp kernel's walk passed heavy_clips: built again by the filtered kernel, never an output
+    unclosed = 7,  // a rounded cell whose face area vectors do not sum to zero within rounding (#64): built again exactly
 };
-constexpr int status_count = 7;
+constexpr int status_count = 8;
 
 constexpr int max_planes = 48;                             // cutting planes, including the 6 box planes
 constexpr int max_vertices = 64;                           // one 64-bit mask marks vertices to remove

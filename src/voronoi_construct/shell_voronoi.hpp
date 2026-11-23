@@ -50,6 +50,8 @@ struct Cells {
     // cells walked, candidates clipped, cuts).
     Kokkos::View<double*, MemorySpace> closure;
     Kokkos::View<int* [3], MemorySpace> work;
+    // Rounded cells whose surface did not close (status unclosed), built again exactly by the last build (#64).
+    Kokkos::View<long long, Kokkos::HostSpace> unclosed_cells{"cell_unclosed_cells"};
 #if defined(VORONOI_MEASURE)
     // Measurement build only: per-cell counters of the warp kernel (measure::*), and the candidates of every
     // sample_every-th slot in clipping order, at most sample_cap each (docs/measure_2026-11-10.md).
@@ -291,7 +293,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             if ((pass == Pass::failed && (before == ok || before == face_overflow || before == deferred)) ||
                 (pass == Pass::overflowed && !overflow) ||
                 (pass == Pass::uncertain &&
-                 (before == ok || before == face_overflow || overflow || before == deferred)) ||
+                 (before == ok || before == face_overflow || overflow || before == deferred || before == unclosed)) ||
                 (pass == Pass::deferred && before != deferred))
                 return;
             const Vec3 p{positions(t, 0), positions(t, 1), positions(t, 2)};
@@ -432,7 +434,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
 
             // Faces: walk each plane's vertices in order, integrating the face area vector and centroid and the cell
             // volume and centroid.
-            int faces = 0, owned = 0, ring_used = 0;
+            int faces = 0, owned = 0, ring_used = 0, triangles = 0;
             double volume = 0, area_magnitude = 0;
             Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
             const double sliver = 64 * Kokkos::Experimental::epsilon_v<double> * cell.radius2_in_box(unit);
@@ -493,6 +495,7 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 } while (current != start);
                 if (status != ok) break;
                 area_sum = area_sum + area;
+                triangles += length;
                 // Faces below rounding level (cospherical generators) carry no flux and are left out of the face
                 // geometry; exact rings keep every face (topology).
                 const double magnitude = Kokkos::sqrt(dot(area, area));
@@ -519,6 +522,9 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 ++owned;
             }
             if (status == ok && !(volume > 0)) status = degenerate;
+            // A rounded cell whose surface does not close is built again exactly (#64).
+            if constexpr (!Cell::exact)
+                if (status == ok && unclosed(area_sum, triangles, cell.radius2)) status = unclosed;
 
             // A deferred cell that overflows stays deferred, for the next capacity.
             if (filtered && (status == plane_overflow || status == vertex_overflow) &&
@@ -740,15 +746,16 @@ void exact_where_failed(const ExecSpace& exec, const Grid<typename ExecSpace::me
                         const Selection<typename ExecSpace::memory_space>& selection = {}) {
     const auto status = out.status;
     const auto order = grid.order;
-    int failed = 0;
+    long long failed = 0;  // cells to build exactly, plus 2^32 per unclosed one among them
     Kokkos::parallel_reduce(
         "shell_voronoi::count_failed", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
-        KOKKOS_LAMBDA(int i, int& sum) {
+        KOKKOS_LAMBDA(int i, long long& sum) {
             const int s = status(order(selection.slot(i)));
-            sum += s != ok && s != face_overflow;
+            sum += static_cast<long long>(s != ok && s != face_overflow) + (static_cast<long long>(s == unclosed) << 32);
         },
         failed);
-    if (failed > 0) construct_cells<ExactCell>(exec, grid, stencil, out, Pass::failed, selection);
+    out.unclosed_cells() = failed >> 32;
+    if ((failed & 0xffffffffLL) > 0) construct_cells<ExactCell>(exec, grid, stencil, out, Pass::failed, selection);
 }
 
 // The cells the warp kernel gave up, with rounded cells: uncertified ones at the usual capacities, then every

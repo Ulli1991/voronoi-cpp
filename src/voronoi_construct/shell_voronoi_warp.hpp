@@ -826,7 +826,7 @@ struct Kernel {
         double volume = 0;
         Vec3 moment{0, 0, 0}, area_sum{0, 0, 0};
         double area_magnitude = 0;
-        int faces = 0;
+        int faces = 0, triangles = 0;
         bool broken = false;
         int owned_here = 0;
         int owned_plane[per_lane], owned_length[per_lane];
@@ -868,8 +868,9 @@ struct Kernel {
             const double pyramid = dot(area, first) * (1.0 / 3.0);
             volume += pyramid;
             moment = moment + centroid * (0.75 * pyramid);
-            if constexpr (!with_faces) continue;
             area_sum = area_sum + area;
+            triangles += steps;
+            if constexpr (!with_faces) continue;
             const double magnitude = Kokkos::sqrt(dot(area, area));
             if (magnitude <= sliver) continue;
             ++faces;
@@ -886,6 +887,10 @@ struct Kernel {
 
         volume = warp_sum(volume);
         moment = {warp_sum(moment.x), warp_sum(moment.y), warp_sum(moment.z)};
+        // A cell whose face areas do not close has a broken surface: built again exactly (#64).
+        area_sum = {warp_sum(area_sum.x), warp_sum(area_sum.y), warp_sum(area_sum.z)};
+        triangles = warp_sum(triangles);
+        if (status == ok && detail::unclosed(area_sum, triangles, radius2)) status = unclosed;
         // A filtered cell's overflows stay heavy, for every output: the big kernel, then the thread kernel, filtered.
         if constexpr (filtered)
             if (status == plane_overflow || status == vertex_overflow) status = deferred;
@@ -901,7 +906,6 @@ struct Kernel {
             }
             return;
         }
-        area_sum = {warp_sum(area_sum.x), warp_sum(area_sum.y), warp_sum(area_sum.z)};
         area_magnitude = warp_sum(area_magnitude);
         faces = warp_sum(faces);
         int owned = 0;

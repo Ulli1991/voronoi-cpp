@@ -18,6 +18,16 @@ namespace ep = exact_predicates;
 // every candidate that can cut the cell is unique in the periodic image.
 inline double start_half_width(const ep::Box& box) { return 0.25 * box.shortest(); }
 
+// Whether a rounded cell's surface fails to close (#64): the area vectors of its faces, each the fan sum over its stored
+// vertices, sum to exactly zero for any closed surface, so only rounding may remain. Its bound, for `triangles` fan
+// steps over convex faces in a ball of radius R (radius2 = R^2), is 30 eps T R^2 (docs/design.md, "Closure check");
+// twice that is the tolerance. A larger sum, or NaN, means a broken surface: a vertex placed far past its edge, or a
+// face left out. Used by: construct_pass (rounded cells), the warp kernel.
+KOKKOS_INLINE_FUNCTION bool unclosed(const Vec3& area_sum, int triangles, double radius2) {
+    const double tolerance = 64 * Kokkos::Experimental::epsilon_v<double> * triangles * radius2;
+    return !(dot(area_sum, area_sum) <= tolerance * tolerance);
+}
+
 // A cell under construction, in double relative to the generator: a vertex is cut when it lies beyond the
 // bisector by more than a rounding tolerance. Planes and Vertices are capacities; larger cells are built
 // again with bigger ones. Layout of both cell kinds: docs/design.md.
