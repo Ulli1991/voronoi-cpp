@@ -2,7 +2,7 @@
 // hydro::GeometryDerivative<2, Memory> against its test-only reference::Geometry2D (src/test/reference_geometry_2d.hpp):
 // tangent and adjoint on random directions and bars, jittered and uniform 64 x 64 meshes on the grid.
 
-// luna-cpp's interface first, by path: its file name is the library's, which the include path finds for the reference.
+// luna-cpp's interface (src/hydro/mesh_derivative.hpp, which includes this library's header) by path, then its reference.
 #include LUNA_GEOMETRY_DERIVATIVE
 #include LUNA_REFERENCE_2D
 

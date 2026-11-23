@@ -1325,6 +1325,17 @@ Per kernel at 128³ jittered (Nsight Compute, job 32900302; e937786 in job 32895
 | `face_tangent` | 2.0 → 2.0 | 1339 | 126 | 0 | latency and FP64 |
 | `vertex_tangent` | 0.52 → 0.53 | 606 | 72 | 0 | DRAM (84 % of peak) |
 
+**Each tetrahedron's face numbers kept** (branch `geomderiv-facenums`, job 32904684: main 7da61fb and the branch built
+alike in job 32904683 and run in the same A100 job; 128³):
+
+| | main | face numbers kept |
+|---|---|---|
+| adjoint, 3D jittered / white noise, G cell updates/s | 0.0357 / 0.0389 | 0.0397 / 0.0425 |
+| adjoint in moving steps, jittered / white noise | 5.3 / 6.4 | 4.8 / 5.9 |
+| `vertex_bars` + `face_numbers`, ns/cell | 14.3 + 0 | 10.5 + 1.7 |
+| scratch while the adjoint runs, B/cell (jittered) | 199 | 408 |
+| tangent; 2D | unchanged | unchanged |
+
 **Memory.** Scratch held by the object, B/cell: 3D 199 (jittered; 194 white noise): 4 doubles per cell and 3 per tetrahedron slot; 2D 68: 3 doubles per cell, 2 per triangle, an int per face. The caller's views come on top: 438 (3D) and 136 (2D) B/cell for dx, dV, dc, dA, dx_f, or the same for the bars. Against the moving step's peak of 1911 B/cell (128³) the scratch is +10 %; the derivative runs between updates, so whether it raises the peak depends on what the caller frees.
 
 **Accuracy** (`geometry_derivative_test`; host job 32820977, A100 job 32839649, the same to the digits shown):

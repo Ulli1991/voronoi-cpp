@@ -46,8 +46,10 @@ if(BUILD_TESTING)
     set(VORONOI_LUNA_DIR "" CACHE PATH "A luna-cpp checkout with src/test/reference_geometry_2d.hpp")
     if(VORONOI_LUNA_DIR)
         voronoi_program(geometry_derivative_luna src/test/geometry_derivative_luna.cpp)
+        # luna-cpp's interface (src/hydro/mesh_derivative.hpp, which includes the library's header), searched after ours.
+        target_include_directories(geometry_derivative_luna AFTER PRIVATE ${VORONOI_LUNA_DIR}/src/hydro)
         target_compile_definitions(geometry_derivative_luna PRIVATE
-            LUNA_GEOMETRY_DERIVATIVE="${VORONOI_LUNA_DIR}/src/hydro/geometry_derivative.hpp"
+            LUNA_GEOMETRY_DERIVATIVE="${VORONOI_LUNA_DIR}/src/hydro/mesh_derivative.hpp"
             LUNA_REFERENCE_2D="${VORONOI_LUNA_DIR}/src/test/reference_geometry_2d.hpp")
     endif()
     voronoi_program(mesh_cases_test src/test/mesh_cases_test.cpp)

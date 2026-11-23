@@ -543,7 +543,8 @@ struct VertexBars {
 template <class ExecSpace, class X, class Vertex, class Alive, class C, class Bar, class CTB, class In, class XBar>
 void adjoint3(const ExecSpace& exec, const Faces3<typename ExecSpace::memory_space>& faces, const Vertex& vertex,
               const Alive& alive, int tets, const C& cells, int n, const Bar& cellbar, const CTB& ctbar,
-              const TetFaces<typename ExecSpace::memory_space>& numbers, int face_count, const In& in, const XBar& xbar) {
+              const TetFaces<typename ExecSpace::memory_space>& numbers, int face_count, const In& in,
+              const XBar& xbar) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const X x = faces.g.x;
     const exact_predicates::Box box = faces.g.box;
@@ -757,7 +758,8 @@ public:
             using Numbers = geometry_derivative::TetFaces<Memory>;
             const Numbers numbers{
                 decltype(Numbers::face)(face, tets),
-                decltype(Numbers::place)(reinterpret_cast<std::uint8_t*>(face + static_cast<std::size_t>(tets) * 6), tets)};
+                decltype(Numbers::place)(reinterpret_cast<std::uint8_t*>(face + static_cast<std::size_t>(tets) * 6),
+                                         tets)};
             geometry_derivative::adjoint3<ExecSpace, typename MeshType::Positions>(
                 exec, faces3(), mesh_.tetrahedra().vertex, mesh_.repair_state().alive, tets, cells(), n, rows<4>(0, n),
                 rows<3>(after, tets), numbers, mesh_.faces(), bars, xbar);
