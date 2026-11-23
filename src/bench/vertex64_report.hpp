@@ -76,6 +76,7 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
     const auto status = support::to_host(cells.status);
     const auto volume = support::to_host(cells.volume);
     const auto centroid = support::to_host(cells.centroid);
+    const auto closure = support::to_host(cells.closure);  // size 0 unless built with diagnostics
     const auto order = support::to_host(grid.order);
     const auto positions = support::to_host(grid.positions);
     const auto& box = grid.box;
@@ -131,7 +132,13 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
     for (const int i : unpaired)
         if (!taken[i]) ids.push_back(i), kind.push_back(1), taken[i] = 1;
     std::mt19937_64 rng(64);
-    for (int k = 0, tries = 0; k < 4096 && tries < 100000; ++tries) {
+    // VERTEX64_ALL=1: every other cell, not a sample of 4096.
+    const bool all = std::getenv("VERTEX64_ALL") != nullptr;
+    if (all)
+        for (int i = 0; i < n; ++i)
+            if (!taken[i] && status(i) == shell_voronoi::ok && !(flag(i) & vertex64::built_exactly))
+                ids.push_back(i), kind.push_back(2), taken[i] = 1;
+    for (int k = 0, tries = 0; !all && k < 4096 && tries < 100000; ++tries) {
         const int i = static_cast<int>(rng() % static_cast<unsigned long long>(n));
         if (taken[i] || status(i) != shell_voronoi::ok || (flag(i) & vertex64::built_exactly)) continue;
         ids.push_back(i), kind.push_back(2), taken[i] = 1, ++k;
@@ -176,6 +183,8 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
     struct Worst {
         double volume = 0, centroid = 0, radius = 0, vertex = 0;
         long long count = 0, exact_failed = 0, box_plane = 0, past_1e9 = 0, past_1e6 = 0;
+        long long wrong_bit[7] = {};  // cells past 1e-6 in volume, centroid or radius, by bit
+        long long wrong_closed = 0;  // wrong cells whose closure is at most 1e-12 (a closure check would miss them)
     } w[3];
     std::FILE* out = dump.empty() ? nullptr : std::fopen(dump.c_str(), "w");
     if (out)
@@ -209,9 +218,12 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
         r.centroid = std::max(r.centroid, dc);
         r.radius = std::max(r.radius, dr);
         r.vertex = std::max(r.vertex, dx);
-        const double most = std::max(std::max(dv, dc), std::max(dr, dx));
+        const double most = std::max(std::max(dv, dc), dr);  // the outputs; dx is the transient vertex
         r.past_1e9 += most > 1e-9;
         r.past_1e6 += most > 1e-6;
+        if (most > 1e-6 && closure.extent(0) > 0 && closure(i) <= 1e-12) ++r.wrong_closed;
+        if (most > 1e-6)
+            for (int b = 0; b < 7; ++b) r.wrong_bit[b] += (flag(i) & bits[b]) != 0;
         if (out)
             std::fprintf(out, "%d,%d,%u,%.3e,%.17g,%.17g,%.3e,%.3e,%.17g,%.17g,%.3e,%.3e\n", i, kind[k], flag(i),
                          double(worst(i)), volume(i), evolume(i), dv, dc, radius(i), eradius(i), dr, dx);
@@ -221,10 +233,22 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
     for (int c = 0; c < 3; ++c)
         std::printf("v64 exact %s: cells=%lld exact_not_ok=%lld max_dvolume_rel=%.3e max_dcentroid_per_size=%.3e "
                     "max_dradius_rel=%.3e max_dvertex_per_R=%.3e (box-plane vertices skipped %lld) "
-                    "cells_past_1e-9=%lld past_1e-6=%lld\n",
+                    "output_past_1e-9=%lld output_past_1e-6=%lld\n",
                     kinds[c], w[c].count, w[c].exact_failed, w[c].volume, w[c].centroid, w[c].radius, w[c].vertex,
                     w[c].box_plane, w[c].past_1e9, w[c].past_1e6);
+    for (int c = 0; c < 3; ++c) {
+        std::printf("v64 wrong %s cells (output past 1e-6) by bit:", kinds[c]);
+        for (int b = 0; b < 7; ++b) std::printf(" %s=%lld", names[b], w[c].wrong_bit[b]);
+        std::printf(" closure_at_most_1e-12=%lld", w[c].wrong_closed);
+        std::printf("\n");
+    }
     std::printf("v64 exact rebuild of %zu cells: %.1f ms\n", ids.size(), exact_ms);
+    if (closure.extent(0) > 0) {
+        long long open12 = 0, open9 = 0;
+        for (int i = 0; i < n; ++i)
+            if (status(i) == shell_voronoi::ok) open12 += closure(i) > 1e-12, open9 += closure(i) > 1e-9;
+        std::printf("v64 closure: cells_past_1e-12=%lld past_1e-9=%lld of %d\n", open12, open9, n);
+    }
 }
 
 }  // namespace vertex64_report

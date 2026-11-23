@@ -150,6 +150,17 @@ Kernel times fenced per kernel (`--kernels`), 128³ jittered unless stated, agai
 | #45: circumcentres in grid steps | step −0.9 to −1.7 % | kept | equal centres must round equally | measurements.md, "After the fix of #45" |
 | #48: edge representatives from the tetrahedra, plus the face-count check | step −0.9 % | kept | a doubled face gave wrong cells; the check makes such errors impossible to miss | issue #48 |
 
+## Rounded clipping, a vertex on a cut edge (#64, 2026-11-23, measured, nothing changed)
+
+Plain warp rebuild (`construct_warp` with faces), one A100; derivation, counts and job ids in research_notes/vertex64_2026-11-23.md. Raw logs: /ptmp/uli/voronoi-cpp-vertex64/, job outputs in voronoi-cpp-joblogs/vertex64/.
+
+| Change | Effect | Kept? | Reason | Where |
+|---|---|---|---|---|
+| Diagnostic `VORONOI_VERTEX64` (counters, per-cell flags and worst cut, exact re-build of flagged cells) | warp rebuild at 128³ 1.55–1.85× slower when compiled in (jittered 49.3 → 79.7 ms, uniform 94.2 → 169.2, halo 124.3 → 206.3, cosmic web 148.9 → 250.7, fcc solid 66.1 → 116.0; surface 7276 → 7707); `clip_checksum` equal to the default build on 17 of 20 inputs, different on sc, fcc and shells at 1e-9 | kept, off by default (the default build has none of it) | per-vertex classification in the cut adds registers and shared atomics; a global atomic per vertex was first 5000× slower (contention), now one per counter and cell | jobs 32905677, 32906705; `331bb1c` |
+| Flag "both ends within the rounding bound of the plane" (the issue's proposal) | 0 cuts on every input (six 128³ inputs, #58 cases, 10 degenerate inputs, 17 #62 seeds, 5300 fuzz seeds on CPU and GPU) | not worth routing on | provably empty: a removed vertex has side > 64 ε \|d\| R, at least 7× the rounding bound 9u(S + o) < 18 u \|d\| R | research note |
+| Flag "kept end outside" (side[u] ∈ (0, τ]: t > 1, the vertex is placed beyond u) | 0 on the six 128³ inputs and the #58 cases; 65–94 % of cells on exact or near lattices (bcc, fcc, sc, shells); catches every wrong cell (2381 sc@1e-9, 295 shells@1e-9, 2 fcc@1e-9; 262,144 cells, every cell compared with an exact build) but 1–100 % of flagged cells are wrong | not as a router | the extrapolation happens on every near-cospherical vertex, almost always harmlessly; routing on it would rebuild most lattice cells exactly | jobs 32907235, 32907352 |
+| Cell closure > 1e-12 as a router (already computed by the warp kernel) | flags 3891 / 303 / 1 cells on sc / shells / fcc at 1e-9, 0 on every other input (six 128³ inputs incl. surface, uniform, wave, bcc, fcc lattices); misses 1 wrong cell (fcc@1e-9: volume exact, centroid 2.4e-3 cell sizes, radius +12 %) | candidate, not built | wrong cells from a far extrapolated vertex do not close; one with a misplaced vertex on a degenerate face closes and has only its centroid off | job 32907352 |
+
 ## CPU and GPU together (measured, not built)
 
 Upper bounds from Nsight traces (measurements.md, "CPU and GPU together: where the GPU waits"); none of these was implemented.

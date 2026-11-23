@@ -1,0 +1,98 @@
+[100%] Built target mesh_fuzz_test
+[100%] Built target voronoi_bench
+=== seed 91001608214
+label extreme fcc+faces+cosphere+near steps:3,6,0,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=383298 strict=0 kept_outside=26522 beyond_bound=7602 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 91003117362
+label pow2 sc+jit+cosphere steps:6,12,5,0,9,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=456860 strict=0 kept_outside=5919 beyond_bound=34 err>1e-9R=48216 err>1e-6R=8 err>1e-3R=0
+=== seed 91003988275
+label extreme hcp+jit+faces+step+coplanar steps:1,6,2,11,5,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=755099 strict=0 kept_outside=103 beyond_bound=19 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 91002082882
+label cube quasi+jit+faces+poly+dup steps:14,14,10,6,2,
+outcome WRONG:brute_volume
+v64 counters: new_vertices=541002 strict=0 kept_outside=2279 beyond_bound=899 err>1e-9R=14016 err>1e-6R=12 err>1e-3R=4
+=== seed 91003679558
+label extreme uniform+poly+step+void+cosphere+coplanar steps:9,10,9,3,0,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=702388 strict=0 kept_outside=262 beyond_bound=112 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 91003836206
+label pow2 uniform+shell+faces+line steps:12,4,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=296394 strict=0 kept_outside=4 beyond_bound=4 err>1e-9R=736 err>1e-6R=18 err>1e-3R=0
+=== seed 91002999916
+label extreme quasi+sheet+filament+faces+coplanar steps:7,14,6,3,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=1502716 strict=0 kept_outside=4558 beyond_bound=7 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 91003158902
+label extreme hcp+cusp+cusp+sheet steps:12,2,0,12,
+outcome WRONG:face_centroid
+v64 counters: new_vertices=239513 strict=0 kept_outside=2745 beyond_bound=8 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 92003949072
+label extreme uniform+jit+void+coplanar+line steps:9,0,10,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=137692 strict=0 kept_outside=10 beyond_bound=8 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 92002430746
+label cube poisson+coplanar steps:12,12,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=146864 strict=0 kept_outside=12 beyond_bound=10 err>1e-9R=1580 err>1e-6R=10 err>1e-3R=0
+=== seed 92002596727
+label extreme bcc+cube+poly+line+near steps:10,11,1,2,11,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=516140 strict=0 kept_outside=14991 beyond_bound=195 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 92001619850
+label extreme diamond+cusp+cosphere+coplanar steps:1,6,12,3,14,
+outcome WRONG:cell_centroid
+v64 counters: new_vertices=178732 strict=0 kept_outside=11872 beyond_bound=4 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 92000341041
+label extreme bcc+jit+cosphere steps:7,9,9,
+outcome WRONG:face_centroid
+v64 counters: new_vertices=179712 strict=0 kept_outside=146 beyond_bound=58 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 92001905473
+label extreme poisson+jit+poly+powerlaw+faces+coplanar+line steps:6,11,5,
+outcome WRONG:face_centroid
+v64 counters: new_vertices=592712 strict=0 kept_outside=57 beyond_bound=57 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 92001421665
+label extreme uniform+shell+step+cosphere steps:6,13,6,10,9,11,
+outcome WRONG:face_centroid
+v64 counters: new_vertices=315022 strict=0 kept_outside=28 beyond_bound=4 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+=== seed 92002557534
+label extreme sc+jit+filament+line steps:8,12,4,3,6,3,
+outcome WRONG:clip_volume
+v64 counters: new_vertices=473316 strict=0 kept_outside=4282 beyond_bound=26 err>1e-9R=15621 err>1e-6R=472 err>1e-3R=169
+=== seed 92003651920
+label long uniform+step+coplanar+cosphere steps:15,9,15,13,11,
+outcome WRONG:clip_volume
+v64 counters: new_vertices=1349946 strict=0 kept_outside=8769 beyond_bound=2996 err>1e-9R=1254 err>1e-6R=201 err>1e-3R=2
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  v64-omp
+Node list: raven05
+Job start: Mon Nov 23 15:35:57 CET 2026
+Job end:   Mon Nov 23 15:38:47 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-joblogs/vertex64
+Command:   /raven/u/uli/voronoi-cpp-joblogs/vertex64/build_omp.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32903810         v64-omp      1            16                             00:02:50      0:0
+  
+Maximum memory per node: 1.605747 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 12.3 %
+CO2 footprint: 1.5345 g (estimate based on total cluster power and electricity mix)
+  

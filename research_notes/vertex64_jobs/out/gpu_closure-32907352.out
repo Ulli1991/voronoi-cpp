@@ -1,0 +1,164 @@
+[100%] Built target voronoi_bench
+=== sc@1e-9 262144 v64 all
+warp: build_ms=0.161245 construct_ms=32.7199 construct_Mcells_s=8.01175 pipeline_Mcells_s=7.97246
+clip_checksum=4723853850769637652 clip_topology=4172187910447067778
+  certified=262144/262144 statuses=262144,0,0,0,0,0,0, volume_error=0.00151507 min_volume=2.54313e-06 max_closure=0.353553 faces_per_cell=12.7836 faces=2*owned:NO centroid_checks=6083 worst_centroid_error=2.37588e-14 violations=0 per_cell(rings,clipped,cuts)=4,25.8901,14.4386  FAIL
+v64 warp rebuild: new_vertices=15581372 strict=0 kept_outside=603367 beyond_bound=356855 err>1e-9R=1194144 err>1e-6R=11 err>1e-3R=11
+v64 cells: n=262144 strict=0 kept_outside=220074 beyond_bound=175195 err9=260692 err6=2 err3=2 built_exactly=11204
+v64 pairing: faces=3351141 owned=1674514 (2*owned NO) unpaired_cells=3417 of_them_kept_outside_err6_strict=2998 of_them_err9=3408
+v64 exact flagged: cells=250061 exact_not_ok=0 max_dvolume_rel=3.333e-01 max_dcentroid_per_size=9.375e-02 max_dradius_rel=7.947e-08 max_dvertex_per_R=1.549e-07 (box-plane vertices skipped 0) output_past_1e-9=41591 output_past_1e-6=2381
+v64 exact unpaired: cells=120 exact_not_ok=0 max_dvolume_rel=1.887e-15 max_dcentroid_per_size=1.159e-15 max_dradius_rel=9.934e-08 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=110 output_past_1e-6=0
+v64 exact sample: cells=870 exact_not_ok=0 max_dvolume_rel=5.440e-15 max_dcentroid_per_size=1.921e-15 max_dradius_rel=7.179e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=2381 beyond_bound=2262 err9=2381 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 251051 cells: 50.4 ms
+v64 closure: cells_past_1e-12=3891 past_1e-9=3719 of 262144
+=== fcc@1e-9 262144 v64 all
+warp: build_ms=0.181745 construct_ms=13.2991 construct_Mcells_s=19.2494 pipeline_Mcells_s=18.9899
+clip_checksum=8469983525494376688 clip_topology=8542069861905608765
+  certified=256000/256000 statuses=256000,0,0,0,0,0,0, volume_error=8.13809e-08 min_volume=3.90625e-06 max_closure=0.021006 faces_per_cell=12 faces=2*owned:NO centroid_checks=4976 worst_centroid_error=2.00187e-14 violations=0 per_cell(rings,clipped,cuts)=4,19.9663,13.7034  FAIL
+v64 warp rebuild: new_vertices=15373634 strict=0 kept_outside=574527 beyond_bound=228857 err>1e-9R=31611 err>1e-6R=30 err>1e-3R=29
+v64 cells: n=256000 strict=0 kept_outside=208308 beyond_bound=127433 err9=23838 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=3072001 owned=1536000 (2*owned NO) unpaired_cells=1 of_them_kept_outside_err6_strict=1 of_them_err9=1
+v64 exact flagged: cells=208648 exact_not_ok=0 max_dvolume_rel=2.083e-02 max_dcentroid_per_size=1.331e-02 max_dradius_rel=1.180e-01 max_dvertex_per_R=2.000e+00 (box-plane vertices skipped 26071) output_past_1e-9=2 output_past_1e-6=2
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=47352 exact_not_ok=0 max_dvolume_rel=5.204e-15 max_dcentroid_per_size=2.035e-15 max_dradius_rel=4.163e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=2 beyond_bound=2 err9=2 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=1
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 256000 cells: 126.3 ms
+v64 closure: cells_past_1e-12=1 past_1e-9=1 of 256000
+=== shells@1e-9 262144 v64 all
+warp: build_ms=0.191175 construct_ms=28.4602 construct_Mcells_s=9.25587 pipeline_Mcells_s=9.19411
+clip_checksum=9718441867956318890 clip_topology=17263279765358831328
+  certified=263424/263424 statuses=263424,0,0,0,0,0,0, volume_error=0.000182331 min_volume=2.51188e-06 max_closure=0.398016 faces_per_cell=7.99495 faces=2*owned:NO centroid_checks=3781 worst_centroid_error=1.3583e-09 violations=1 per_cell(rings,clipped,cuts)=10,110.696,13.2571  FAIL
+v64 warp rebuild: new_vertices=14869575 strict=0 kept_outside=937816 beyond_bound=211342 err>1e-9R=116530 err>1e-6R=19 err>1e-3R=2
+v64 cells: n=263424 strict=0 kept_outside=250973 beyond_bound=140886 err9=58476 err6=17 err3=0 built_exactly=21
+v64 pairing: faces=2106062 owned=1052905 (2*owned NO) unpaired_cells=303 of_them_kept_outside_err6_strict=301 of_them_err9=87
+v64 exact flagged: cells=253204 exact_not_ok=0 max_dvolume_rel=3.383e-01 max_dcentroid_per_size=1.026e-01 max_dradius_rel=1.977e-14 max_dvertex_per_R=1.530e+00 (box-plane vertices skipped 19909) output_past_1e-9=303 output_past_1e-6=295
+v64 exact unpaired: cells=1 exact_not_ok=0 max_dvolume_rel=7.810e-16 max_dcentroid_per_size=1.363e-15 max_dradius_rel=2.973e-16 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=10198 exact_not_ok=0 max_dvolume_rel=5.578e-15 max_dcentroid_per_size=2.587e-15 max_dradius_rel=3.419e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=295 beyond_bound=257 err9=147 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 263403 cells: 420.2 ms
+v64 closure: cells_past_1e-12=303 past_1e-9=303 of 263424
+=== bcc@0 262144 v64 all
+warp: build_ms=0.204275 construct_ms=12.4986 construct_Mcells_s=21.2265 pipeline_Mcells_s=20.8852
+clip_checksum=3939070297281435838 clip_topology=12584851991624230846
+  certified=265302/265302 statuses=265302,0,0,0,0,0,0, volume_error=7.20535e-14 min_volume=3.76929e-06 max_closure=9.6495e-17 faces_per_cell=14 faces=2*owned:yes centroid_checks=6609 worst_centroid_error=3.20774e-14 violations=0 per_cell(rings,clipped,cuts)=3,22.7619,14  PASS
+v64 warp rebuild: new_vertices=16349261 strict=0 kept_outside=806442 beyond_bound=470780 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=265302 strict=0 kept_outside=247024 beyond_bound=180095 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=3714228 owned=1857114 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=247024 exact_not_ok=0 max_dvolume_rel=5.955e-15 max_dcentroid_per_size=1.453e-15 max_dradius_rel=2.532e-15 max_dvertex_per_R=1.342e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=18278 exact_not_ok=0 max_dvolume_rel=3.483e-15 max_dcentroid_per_size=1.201e-15 max_dradius_rel=1.266e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 265302 cells: 54.4 ms
+v64 closure: cells_past_1e-12=0 past_1e-9=0 of 265302
+=== fcc@0 262144 v64 all
+warp: build_ms=0.199903 construct_ms=12.1151 construct_Mcells_s=21.1307 pipeline_Mcells_s=20.7877
+clip_checksum=18076669338743425459 clip_topology=9694245440920275659
+  certified=256000/256000 statuses=256000,0,0,0,0,0,0, volume_error=8.10907e-13 min_volume=3.90625e-06 max_closure=8.49099e-17 faces_per_cell=12 faces=2*owned:yes centroid_checks=4976 worst_centroid_error=1.76635e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.4267,13.752  PASS
+v64 warp rebuild: new_vertices=15262650 strict=0 kept_outside=594769 beyond_bound=204048 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=256000 strict=0 kept_outside=174138 beyond_bound=108376 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=3072000 owned=1536000 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=174138 exact_not_ok=0 max_dvolume_rel=3.903e-15 max_dcentroid_per_size=1.062e-15 max_dradius_rel=2.637e-15 max_dvertex_per_R=1.000e+00 (box-plane vertices skipped 26491) output_past_1e-9=0 output_past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=81862 exact_not_ok=0 max_dvolume_rel=4.337e-15 max_dcentroid_per_size=7.167e-16 max_dradius_rel=2.498e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 256000 cells: 78.3 ms
+v64 closure: cells_past_1e-12=0 past_1e-9=0 of 256000
+=== wave 262144 v64 all
+warp: build_ms=0.185509 construct_ms=10.6372 construct_Mcells_s=24.6442 pipeline_Mcells_s=24.2217
+clip_checksum=10381810791124529504 clip_topology=16761990552282294282
+  certified=262144/262144 statuses=262144,0,0,0,0,0,0, volume_error=8.88178e-15 min_volume=3.8146e-06 max_closure=1.50325e-16 faces_per_cell=16.0936 faces=2*owned:yes centroid_checks=7676 worst_centroid_error=2.19823e-14 violations=0 per_cell(rings,clipped,cuts)=4,26,16.1078  PASS
+v64 warp rebuild: new_vertices=16618205 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=25909 err>1e-6R=8 err>1e-3R=0
+v64 cells: n=262144 strict=0 kept_outside=0 beyond_bound=0 err9=24734 err6=8 err3=0 built_exactly=0
+v64 pairing: faces=4218836 owned=2109418 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=24734 exact_not_ok=0 max_dvolume_rel=9.326e-15 max_dcentroid_per_size=3.289e-15 max_dradius_rel=5.000e-15 max_dvertex_per_R=1.673e-04 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=237410 exact_not_ok=0 max_dvolume_rel=1.044e-14 max_dcentroid_per_size=4.105e-15 max_dradius_rel=5.641e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 262144 cells: 41.7 ms
+v64 closure: cells_past_1e-12=0 past_1e-9=0 of 262144
+=== uniform 262144 v64 all
+warp: build_ms=0.225217 construct_ms=22.1636 construct_Mcells_s=11.8277 pipeline_Mcells_s=11.7087
+clip_checksum=1933409858463841175 clip_topology=14689488962382335539
+  certified=262144/262144 statuses=262144,0,0,0,0,0,0, volume_error=1.88738e-14 min_volume=1.87791e-07 max_closure=2.00802e-16 faces_per_cell=15.5358 faces=2*owned:NO centroid_checks=7402 worst_centroid_error=7.06691e-14 violations=0 per_cell(rings,clipped,cuts)=6.21946,47.9974,17.949  FAIL
+v64 warp rebuild: new_vertices=20478619 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=262144 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=4072611 owned=2036306 (2*owned NO) unpaired_cells=1 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact unpaired: cells=1 exact_not_ok=0 max_dvolume_rel=6.900e-16 max_dcentroid_per_size=1.721e-16 max_dradius_rel=1.471e-16 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=262143 exact_not_ok=0 max_dvolume_rel=1.239e-14 max_dcentroid_per_size=5.914e-15 max_dradius_rel=8.040e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 262144 cells: 224.4 ms
+v64 closure: cells_past_1e-12=0 past_1e-9=0 of 262144
+=== halo 2097152 v64 all
+warp: build_ms=1.85106 construct_ms=206.217 construct_Mcells_s=10.1696 pipeline_Mcells_s=10.0792
+clip_checksum=11274236621017364016 clip_topology=5391169937363065530
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=6.66134e-15 min_volume=4.0723e-12 max_closure=2.26793e-16 faces_per_cell=15.5236 faces=2*owned:yes centroid_checks=938 worst_centroid_error=3.51502e-13 violations=0 per_cell(rings,clipped,cuts)=7.41043,53.6301,19.3527  PASS
+v64 warp rebuild: new_vertices=178608134 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=2097152 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=32555250 owned=16277625 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=2097152 exact_not_ok=0 max_dvolume_rel=4.280e-13 max_dcentroid_per_size=1.850e-13 max_dradius_rel=1.699e-13 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 2097152 cells: 2574.2 ms
+v64 closure: cells_past_1e-12=0 past_1e-9=0 of 2097152
+=== surface 2097152 v64 all
+warp: build_ms=1.77687 construct_ms=7738.98 construct_Mcells_s=0.270986 pipeline_Mcells_s=0.270923
+clip_checksum=8692849831209391091 clip_topology=16436069227693843516
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=2.44249e-15 min_volume=1.06998e-10 max_closure=1.08948e-15 faces_per_cell=14.6818 faces=2*owned:NO centroid_checks=846 worst_centroid_error=1.1538e-13 violations=0 per_cell(rings,clipped,cuts)=50.684,1219.74,29.6977  FAIL
+v64 warp rebuild: new_vertices=442316654 strict=0 kept_outside=4 beyond_bound=1 err>1e-9R=5 err>1e-6R=5 err>1e-3R=4
+v64 cells: n=2097152 strict=0 kept_outside=4 beyond_bound=1 err9=4 err6=4 err3=3 built_exactly=5
+v64 pairing: faces=30789961 owned=15394981 (2*owned NO) unpaired_cells=1 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact unpaired: cells=1 exact_not_ok=0 max_dvolume_rel=4.532e-15 max_dcentroid_per_size=1.550e-15 max_dradius_rel=1.949e-16 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 exact sample: cells=2097146 exact_not_ok=0 max_dvolume_rel=1.787e-13 max_dcentroid_per_size=1.462e-13 max_dradius_rel=6.529e-14 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) output_past_1e-9=0 output_past_1e-6=0
+v64 wrong flagged cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong unpaired cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 wrong sample cells (output past 1e-6) by bit: strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0 closure_at_most_1e-12=0
+v64 exact rebuild of 2097147 cells: 231198.0 ms
+v64 closure: cells_past_1e-12=0 past_1e-9=0 of 2097152
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  v64-gpu4
+Node list: ravg1002
+Job start: Mon Nov 23 17:28:44 CET 2026
+Job end:   Mon Nov 23 17:39:51 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-joblogs/vertex64
+Command:   /raven/u/uli/voronoi-cpp-joblogs/vertex64/gpu_closure.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32907352        v64-gpu4      1            36                             00:11:07      0:0
+  
+Maximum memory per node: 2.985304 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 5.5 %
+CO2 footprint: 13.5470 g (estimate based on total cluster power and electricity mix)
+  

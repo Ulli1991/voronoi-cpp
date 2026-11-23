@@ -4,7 +4,7 @@
 // rounded clipping's new vertex on a cut edge. Each new vertex of a rounded cut (the warp kernel's interpolation
 // t = side[w] / (side[w] - side[u]), the per-thread kernel's three-plane intersection) is classified by the two ends'
 // signed distances to the cutting plane; counters are global, flags and the worst vertex per cell. Derivation of the
-// bound: docs/vertex64.md.
+// bound and results: research_notes/vertex64_2026-11-23.md.
 #if defined(VORONOI_VERTEX64)
 
 #include <Kokkos_Core.hpp>
@@ -64,7 +64,8 @@ KOKKOS_INLINE_FUNCTION const Sinks& sinks() {
     KOKKOS_IF_ON_HOST((return host_sinks();))
 }
 
-// The bound on the rounding of side = d.x - |d|^2 / 2 for the stored d and x (docs/vertex64.md): gamma_8 (S + o) with
+// The bound on the rounding of side = d.x - |d|^2 / 2 for the stored d and x (research_notes/vertex64_2026-11-23.md):
+// gamma_8 (S + o) with
 // S = sum |d_k x_k|, o = |d|^2 / 2, taken as 9 u (S + o), u = 2^-53, so that rounding the bound itself is covered.
 KOKKOS_INLINE_FUNCTION double side_bound(double dx, double dy, double dz, double x, double y, double z, double offset) {
     return 9 * 0x1p-53 * (Kokkos::abs(dx * x) + Kokkos::abs(dy * y) + Kokkos::abs(dz * z) + Kokkos::abs(offset));

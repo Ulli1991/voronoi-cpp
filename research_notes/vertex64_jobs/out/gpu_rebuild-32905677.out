@@ -1,0 +1,164 @@
+NVIDIA A100-SXM4-40GB, 210 MHz
+=== jittered 2097152 default
+warp: build_ms=0.691264 construct_ms=49.2991 construct_Mcells_s=42.5394 pipeline_Mcells_s=41.9511
+clip_checksum=13686594205346499734 clip_topology=1112999687026462257
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=1.9762e-14 min_volume=3.60794e-07 max_closure=1.67152e-16 faces_per_cell=15.9078 faces=2*owned:yes centroid_checks=927 worst_centroid_error=4.27015e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.8912,15.968  PASS
+=== jittered 2097152 v64
+warp: build_ms=0.699062 construct_ms=79.6942 construct_Mcells_s=26.315 pipeline_Mcells_s=26.0862
+clip_checksum=13686594205346499734 clip_topology=1112999687026462257
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=1.9762e-14 min_volume=3.60794e-07 max_closure=1.67152e-16 faces_per_cell=15.9078 faces=2*owned:yes centroid_checks=927 worst_centroid_error=4.27015e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.8912,15.968  PASS
+v64 warp rebuild: new_vertices=129965916 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=2097152 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=33361126 owned=16680563 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=1.422e-14 max_dcentroid_per_size=5.232e-15 max_dradius_rel=5.954e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4096 cells: 4.3 ms
+=== uniform 2097152 default
+warp: build_ms=0.973469 construct_ms=94.1736 construct_Mcells_s=22.269 pipeline_Mcells_s=22.0412
+clip_checksum=2921508570962916943 clip_topology=16534567143518024571
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=1.45439e-14 min_volume=1.57005e-08 max_closure=2.27748e-16 faces_per_cell=15.5352 faces=2*owned:yes centroid_checks=971 worst_centroid_error=5.79413e-14 violations=0 per_cell(rings,clipped,cuts)=6.22326,48.0459,17.9477  PASS
+=== uniform 2097152 v64
+warp: build_ms=0.96199 construct_ms=169.216 construct_Mcells_s=12.3934 pipeline_Mcells_s=12.3233
+clip_checksum=2921508570962916943 clip_topology=16534567143518024571
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=1.45439e-14 min_volume=1.57005e-08 max_closure=2.27748e-16 faces_per_cell=15.5352 faces=2*owned:yes centroid_checks=971 worst_centroid_error=5.79413e-14 violations=0 per_cell(rings,clipped,cuts)=6.22326,48.0459,17.9477  PASS
+v64 warp rebuild: new_vertices=163602719 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=2097152 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=32579582 owned=16289791 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=2.184e-14 max_dcentroid_per_size=5.625e-15 max_dradius_rel=1.037e-14 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4096 cells: 16.0 ms
+=== halo 2097152 default
+warp: build_ms=1.01727 construct_ms=124.277 construct_Mcells_s=16.8748 pipeline_Mcells_s=16.7377
+clip_checksum=11274236621017364016 clip_topology=5391169937363065530
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=6.66134e-15 min_volume=4.0723e-12 max_closure=2.26793e-16 faces_per_cell=15.5236 faces=2*owned:yes centroid_checks=938 worst_centroid_error=3.51502e-13 violations=0 per_cell(rings,clipped,cuts)=7.41043,53.6301,19.3527  PASS
+=== halo 2097152 v64
+warp: build_ms=1.01732 construct_ms=206.302 construct_Mcells_s=10.1655 pipeline_Mcells_s=10.1156
+clip_checksum=11274236621017364016 clip_topology=5391169937363065530
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=6.66134e-15 min_volume=4.0723e-12 max_closure=2.26793e-16 faces_per_cell=15.5236 faces=2*owned:yes centroid_checks=938 worst_centroid_error=3.51502e-13 violations=0 per_cell(rings,clipped,cuts)=7.41043,53.6301,19.3527  PASS
+v64 warp rebuild: new_vertices=178608134 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=2097152 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=32555250 owned=16277625 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=1.284e-13 max_dcentroid_per_size=5.420e-14 max_dradius_rel=6.345e-14 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4096 cells: 41.2 ms
+=== cosmicweb 2097152 default
+warp: build_ms=0.719194 construct_ms=148.879 construct_Mcells_s=14.0863 pipeline_Mcells_s=14.0186
+clip_checksum=8284419946011831954 clip_topology=5004367317035691164
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=2.42029e-14 min_volume=1.82713e-10 max_closure=2.37162e-16 faces_per_cell=15.2609 faces=2*owned:yes centroid_checks=931 worst_centroid_error=1.24563e-13 violations=0 per_cell(rings,clipped,cuts)=7.77123,74.8099,21.0114  PASS
+=== cosmicweb 2097152 v64
+warp: build_ms=0.719187 construct_ms=250.679 construct_Mcells_s=8.36588 pipeline_Mcells_s=8.34195
+clip_checksum=8284419946011831954 clip_topology=5004367317035691164
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=2.42029e-14 min_volume=1.82713e-10 max_closure=2.37162e-16 faces_per_cell=15.2609 faces=2*owned:yes centroid_checks=931 worst_centroid_error=1.24563e-13 violations=0 per_cell(rings,clipped,cuts)=7.77123,74.8099,21.0114  PASS
+v64 warp rebuild: new_vertices=197929143 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=2097152 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=32004390 owned=16002195 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=4.907e-14 max_dcentroid_per_size=1.050e-14 max_dradius_rel=1.062e-14 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4096 cells: 37.1 ms
+=== fccsolid 2097152 default
+warp: build_ms=0.712062 construct_ms=66.0524 construct_Mcells_s=32.183 pipeline_Mcells_s=31.8397
+clip_checksum=15135947247305197102 clip_topology=13745435295516739288
+  certified=2125764/2125764 statuses=2125764,0,0,0,0,0,0, volume_error=6.66134e-15 min_volume=3.40721e-07 max_closure=1.35221e-16 faces_per_cell=14.1278 faces=2*owned:yes centroid_checks=490 worst_centroid_error=3.84908e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.5906,15.8894  PASS
+=== fccsolid 2097152 v64
+warp: build_ms=0.711264 construct_ms=116.016 construct_Mcells_s=18.323 pipeline_Mcells_s=18.2113
+clip_checksum=15135947247305197102 clip_topology=13745435295516739288
+  certified=2125764/2125764 statuses=2125764,0,0,0,0,0,0, volume_error=6.66134e-15 min_volume=3.40721e-07 max_closure=1.35221e-16 faces_per_cell=14.1278 faces=2*owned:yes centroid_checks=490 worst_centroid_error=3.84908e-14 violations=0 per_cell(rings,clipped,cuts)=4,21.5906,15.8894  PASS
+v64 warp rebuild: new_vertices=147583243 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=2125764 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=30032470 owned=15016235 (2*owned yes) unpaired_cells=0 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=1.066e-14 max_dcentroid_per_size=3.704e-15 max_dradius_rel=7.910e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4096 cells: 6.8 ms
+=== surface 2097152 default
+warp: build_ms=0.980172 construct_ms=7276.17 construct_Mcells_s=0.288222 pipeline_Mcells_s=0.288183
+clip_checksum=8692849831209391091 clip_topology=16436069227693843516
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=2.44249e-15 min_volume=1.06998e-10 max_closure=1.08948e-15 faces_per_cell=14.6818 faces=2*owned:NO centroid_checks=846 worst_centroid_error=1.1538e-13 violations=0 per_cell(rings,clipped,cuts)=50.684,1219.74,29.6977  FAIL
+=== surface 2097152 v64
+warp: build_ms=0.978427 construct_ms=7707.44 construct_Mcells_s=0.272095 pipeline_Mcells_s=0.27206
+clip_checksum=8692849831209391091 clip_topology=16436069227693843516
+  certified=2097152/2097152 statuses=2097152,0,0,0,0,0,0, volume_error=2.44249e-15 min_volume=1.06998e-10 max_closure=1.08948e-15 faces_per_cell=14.6818 faces=2*owned:NO centroid_checks=846 worst_centroid_error=1.1538e-13 violations=0 per_cell(rings,clipped,cuts)=50.684,1219.74,29.6977  FAIL
+v64 warp rebuild: new_vertices=442316654 strict=0 kept_outside=4 beyond_bound=1 err>1e-9R=5 err>1e-6R=5 err>1e-3R=4
+v64 cells: n=2097152 strict=0 kept_outside=4 beyond_bound=1 err9=4 err6=4 err3=3 built_exactly=5
+v64 pairing: faces=30789961 owned=15394981 (2*owned NO) unpaired_cells=1 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=1 exact_not_ok=0 max_dvolume_rel=4.532e-15 max_dcentroid_per_size=1.550e-15 max_dradius_rel=1.949e-16 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=7.406e-14 max_dcentroid_per_size=2.643e-14 max_dradius_rel=2.198e-14 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4097 cells: 2589.3 ms
+=== uniform 262144 default
+warp: build_ms=0.178002 construct_ms=12.6539 construct_Mcells_s=20.7164 pipeline_Mcells_s=20.429
+clip_checksum=1933409858463841175 clip_topology=14689488962382335539
+  certified=262144/262144 statuses=262144,0,0,0,0,0,0, volume_error=1.88738e-14 min_volume=1.87791e-07 max_closure=2.00802e-16 faces_per_cell=15.5358 faces=2*owned:NO centroid_checks=7402 worst_centroid_error=7.06691e-14 violations=0 per_cell(rings,clipped,cuts)=6.21946,47.9974,17.949  FAIL
+=== uniform 262144 v64
+warp: build_ms=0.18007 construct_ms=22.0852 construct_Mcells_s=11.8697 pipeline_Mcells_s=11.7737
+clip_checksum=1933409858463841175 clip_topology=14689488962382335539
+  certified=262144/262144 statuses=262144,0,0,0,0,0,0, volume_error=1.88738e-14 min_volume=1.87791e-07 max_closure=2.00802e-16 faces_per_cell=15.5358 faces=2*owned:NO centroid_checks=7402 worst_centroid_error=7.06691e-14 violations=0 per_cell(rings,clipped,cuts)=6.21946,47.9974,17.949  FAIL
+v64 warp rebuild: new_vertices=20478619 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=262144 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=4072611 owned=2036306 (2*owned NO) unpaired_cells=1 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=1 exact_not_ok=0 max_dvolume_rel=6.900e-16 max_dcentroid_per_size=1.721e-16 max_dradius_rel=1.471e-16 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=8.381e-15 max_dcentroid_per_size=3.846e-15 max_dradius_rel=5.086e-15 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4097 cells: 16.3 ms
+=== uniform 16777216 default
+warp: build_ms=8.02755 construct_ms=750.913 construct_Mcells_s=22.3424 pipeline_Mcells_s=22.1061
+clip_checksum=16346516172605543073 clip_topology=5964749348563914456
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0,0, volume_error=2.42917e-13 min_volume=1.06901e-09 max_closure=2.52864e-16 faces_per_cell=15.5352 faces=2*owned:NO centroid_checks=131 worst_centroid_error=8.54947e-14 violations=0 per_cell(rings,clipped,cuts)=6.22252,48.0423,17.9534  FAIL
+=== uniform 16777216 v64
+warp: build_ms=8.02978 construct_ms=1350.41 construct_Mcells_s=12.4238 pipeline_Mcells_s=12.3503
+clip_checksum=16346516172605543073 clip_topology=5964749348563914456
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0,0, volume_error=2.42917e-13 min_volume=1.06901e-09 max_closure=2.52864e-16 faces_per_cell=15.5352 faces=2*owned:NO centroid_checks=131 worst_centroid_error=8.54947e-14 violations=0 per_cell(rings,clipped,cuts)=6.22252,48.0423,17.9534  FAIL
+v64 warp rebuild: new_vertices=1308349793 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=16777216 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=260638114 owned=130319056 (2*owned NO) unpaired_cells=2 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=2 exact_not_ok=0 max_dvolume_rel=1.260e-14 max_dcentroid_per_size=6.216e-15 max_dradius_rel=7.729e-16 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=2.863e-14 max_dcentroid_per_size=1.272e-14 max_dradius_rel=1.273e-14 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4098 cells: 16.9 ms
+=== halo 16777216 default
+warp: build_ms=8.22477 construct_ms=915.939 construct_Mcells_s=18.317 pipeline_Mcells_s=18.1539
+clip_checksum=18191891323383144143 clip_topology=15231736977288044424
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0,0, volume_error=9.05942e-14 min_volume=2.18467e-13 max_closure=2.46217e-16 faces_per_cell=15.5279 faces=2*owned:NO centroid_checks=135 worst_centroid_error=1.67673e-13 violations=0 per_cell(rings,clipped,cuts)=7.27584,50.9183,19.23  FAIL
+=== halo 16777216 v64
+warp: build_ms=8.22232 construct_ms=1527.36 construct_Mcells_s=10.9845 pipeline_Mcells_s=10.9257
+clip_checksum=18191891323383144143 clip_topology=15231736977288044424
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0,0, volume_error=9.05942e-14 min_volume=2.18467e-13 max_closure=2.46217e-16 faces_per_cell=15.5279 faces=2*owned:NO centroid_checks=135 worst_centroid_error=1.67673e-13 violations=0 per_cell(rings,clipped,cuts)=7.27584,50.9183,19.23  FAIL
+v64 warp rebuild: new_vertices=1417232701 strict=0 kept_outside=0 beyond_bound=0 err>1e-9R=0 err>1e-6R=0 err>1e-3R=0
+v64 cells: n=16777216 strict=0 kept_outside=0 beyond_bound=0 err9=0 err6=0 err3=0 built_exactly=0
+v64 pairing: faces=260514509 owned=130257254 (2*owned NO) unpaired_cells=1 of_them_kept_outside_err6_strict=0 of_them_err9=0
+v64 exact flagged: cells=0 exact_not_ok=0 max_dvolume_rel=0.000e+00 max_dcentroid_per_size=0.000e+00 max_dradius_rel=0.000e+00 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact unpaired: cells=1 exact_not_ok=0 max_dvolume_rel=2.911e-15 max_dcentroid_per_size=1.105e-15 max_dradius_rel=1.348e-16 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact sample: cells=4096 exact_not_ok=0 max_dvolume_rel=4.560e-13 max_dcentroid_per_size=1.484e-13 max_dradius_rel=2.155e-13 max_dvertex_per_R=0.000e+00 (box-plane vertices skipped 0) cells_past_1e-9=0 past_1e-6=0
+v64 exact rebuild of 4097 cells: 28.4 ms
+                                  
+================================= 
+Global information about the job: 
+================================= 
+  
+Job owner: uli(28632)
+Job name:  v64-gpu
+Node list: ravg1002
+Job start: Mon Nov 23 16:37:04 CET 2026
+Job end:   Mon Nov 23 16:47:36 CET 2026
+Work dir:  /raven/u/uli/voronoi-cpp-joblogs/vertex64
+Command:   /raven/u/uli/voronoi-cpp-joblogs/vertex64/gpu_rebuild.sh
+  
+  
+  
+==========================================================================================
+Information on jobsteps (Note: MaxRSS/AveRSS is the maximum/average over all 
+tasks of the per-task memory high-water marks; cf. "man sacct"): 
+==========================================================================================
+  
+JobID            JobName NNodes NTasks  NCPUS       MaxRSS       AveRSS    Elapsed ExitCode
+------------- ---------- ------ ------ ------ ------------ ------------ ---------- --------
+32905677         v64-gpu      1            36                             00:10:32      0:0
+  
+Maximum memory per node: 9.939587 GB (defined as MaxRSS*Ntasks/NNodes)
+CPU utilization: 5.5 %
+CO2 footprint: 12.8361 g (estimate based on total cluster power and electricity mix)
+  
