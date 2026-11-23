@@ -26,6 +26,7 @@ endfunction()
 voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
 voronoi_program(mesh2d_bench src/bench/mesh2d_bench.cpp)
 voronoi_program(library_bench src/bench/library_bench.cpp)
+voronoi_program(geometry_derivative_bench src/bench/geometry_derivative_bench.cpp)
 # CPU and GPU in one build (Kokkos with OpenMP and CUDA): the probe of docs/ideas.md, "CPU and GPU together".
 if(Kokkos_ENABLE_OPENMP AND Kokkos_ENABLE_CUDA)
     voronoi_program(backends_probe src/bench/backends_probe.cpp)
@@ -33,13 +34,21 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
-    foreach(test exact_predicates clipping mesh start repair voronoi_mesh order mesh1d mesh2d distortion metamorphic modes)
+    foreach(test exact_predicates clipping mesh start repair voronoi_mesh order mesh1d mesh2d distortion metamorphic modes geometry_derivative)
         voronoi_program(${test}_test src/test/${test}_test.cpp)
         add_test(NAME ${test} COMMAND ${test}_test)
         set_tests_properties(${test} PROPERTIES TIMEOUT 600)
     endforeach()
     if(VORONOI_SANITIZERS)
         set_tests_properties(mesh2d PROPERTIES TIMEOUT 3000)  # its brute-force oracles, about 11x slower
+    endif()
+    # Optional: the 2D geometry derivatives against luna-cpp's test-only reference (not a ctest; TESTING.md).
+    set(VORONOI_LUNA_DIR "" CACHE PATH "A luna-cpp checkout with src/test/reference_geometry_2d.hpp")
+    if(VORONOI_LUNA_DIR)
+        voronoi_program(geometry_derivative_luna src/test/geometry_derivative_luna.cpp)
+        target_compile_definitions(geometry_derivative_luna PRIVATE
+            LUNA_GEOMETRY_DERIVATIVE="${VORONOI_LUNA_DIR}/src/hydro/geometry_derivative.hpp"
+            LUNA_REFERENCE_2D="${VORONOI_LUNA_DIR}/src/test/reference_geometry_2d.hpp")
     endif()
     voronoi_program(mesh_cases_test src/test/mesh_cases_test.cpp)
     file(GLOB mesh_cases_groups CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/test/mesh_cases/*.cpp)

@@ -26,7 +26,7 @@ sbatch -o build-cuda/bench-%j.out scripts/bench_a100.sh build-cuda   # ctest + A
 
 ## The programs at a glance
 
-Thirteen CTest programs, 22 tests; the details follow.
+Fourteen CTest programs, 23 tests; the details follow.
 
 | Test | Specifies |
 |---|---|
@@ -43,6 +43,7 @@ Thirteen CTest programs, 22 tests; the details follow.
 | `mesh1d` | the 1D line: sorting, walls, insert and remove |
 | `mesh_fuzz` | random point sets, boxes and motions against the exact reference, plus every saved failing case in `src/test/fuzz_cases/`; ctest runs a smoke set, `scripts/mesh_fuzz_cpu.sh` and `scripts/mesh_fuzz_gpudev.sh` run campaigns |
 | `metamorphic` | exact transformations of the input give the transformed mesh: shifts by whole grid steps, axis swaps and rotations, permuted ids, a doubled box; 3D, 2D, 1D. Geometry agrees to rounding (tolerance 1e-10); a doubled box is exact |
+| `geometry_derivative` | the geometry derivatives (`voronoi::GeometryDerivative`, 2D and 3D): the tangent against central differences on the quantisation grid, the adjoint against the tangent (dot test), Σ dV = 0, closure, translation, the same bits twice |
 
 ## The tests
 
@@ -61,6 +62,13 @@ CPU times: OpenMP build (gcc 15), one thread of a Raven login node
 | `mesh1d` | 2048 | under 1 s | the 1D mesh (`voronoi::Mesh<1>`, `sorted_mesh.hpp`) against a host oracle, periodic and with walls, lines of length 1 and 3, uniform, lattice and clumps of snapped duplicates (ties by id): the sorted order, volumes and centroids exact in quarter grid steps of the 2⁵² grid, volumes summing to the line in integers, faces once with owner < neighbour, area +-1, per-cell face lists by id of the other particle, the end cells reaching the walls; moving: after every step (small ones that keep the order, large ones that cross, points wrapping through L) the mesh equals a fresh build bit for bit, and the order is sorted again only when points crossed; insertion and removal over random batches, on a rotated periodic line and with walls, on generators and twice in a gap: the oracle, a fresh build bit for bit, the reported overlaps against the host's integers, growth, a transfer by the report conserves to rounding |
 | `mesh2d` | ~4096, 2²⁰ | 3 min | the 2D mesh (`voronoi::Mesh<2>`) against oracles that share no code with it: in-circle signs against a 4 x 4 integer determinant, the perturbed test consistent under every permutation; on random, jittered, clustered, lattice, hexagonal and wave inputs in square and non-square boxes: every triangle positive, every edge in two triangles, signed areas summing to the box in exact integers, no particle strictly inside a circumcircle, every cell clipped in long double by the bisectors of all particles in all images (volumes, centroids, neighbours, face lengths and centroids), face lists in order of the other id (brute force, O(n²), oracle only); after steps of 0.03 to 1 spacings a repaired mesh equals a fresh build bit for bit, with both fallbacks; repeated runs give the same hash; particles on one position refused by name at the start and in a step, no mesh after a refusal and the next update builds, no particles, a mapping of degree 4 and kicks of order the box |
 | `modes` | 32768 (3D), 16384 (2D), 4096 (1D) | | `voronoi::Engine` in every mode the build has (cpu; with a device also gpu and hybrid): a build and 4 steps of 0.3 spacings on jittered, uniform, clustered, halo and cosmicweb, 2 steps of 2 spacings (rebuilds), and jittered at 0.1 spacings with 4 particles jumping 4 spacings each step (local repairs, required in every mode); per particle, faces, area vectors, volumes and centroids hashed independently of face numbering. Required: the same faces in every update and mode; hybrid (`Layout::same_bits_as_host`) the same bits as cpu; gpu (fused, the default) volumes to 1e-12 of cpu (measured: 20 to 23 % of volumes differ, at most 6.6e-16 relative in 3D, 3.6e-14 in 2D; see "Bits across backends" below). Positions in any memory and layout are accepted (a host `View<double*[3]>` is LayoutRight, the CUDA mesh LayoutLeft). Options: names, refusals, cpu on 2 host threads the same bits as on all |
+| `geometry_derivative` | 4096 and 8192 (2D and 3D) | 2 s at 8 threads | the derivatives of V, c, A, x_f in the generator positions at fixed topology, on eleven meshes: 2D 64 x 64 jittered in squares of side 1 and 3, 64 x 128 in a 1 x 2 box, uniform, and a mesh repaired into place from points up to 0.4 spacings away; 3D 16³ jittered in cubes of side 1 and 3, 16 x 16 x 32 in a 1 x 1 x 2 box, uniform, repaired, and repaired with faces by owner, the owner bit, faces on read and float centroids. The points sit on the quantisation grid and move by whole grid steps (up to 8 k per axis, k = 64, 16, 4), so the central differences of fresh meshes carry no quantisation error; cells a flip touches within ±k, their neighbours and their faces are left out (under 5 % at k ≤ 16); Richardson's extrapolation of k = 16 and 4 removes the k² truncation, which is large on the smallest faces of near-cospherical corners. Required: tangent against the extrapolation within 1e-8 of the largest change (measured 1e-10 to 2e-9); dot test ⟨w, J v⟩ = ⟨Jᵀ w, v⟩ for each bar alone and all together within 1e-12 (measured 1e-16 to 3e-13); Σ dV = 0 within 1e-13 of Σ |dV|; each cell's dA closes within 1e-12 of the largest dA; a uniform translation changes nothing (within 1e-12 of a random direction's changes); tangent and adjoint give the same bits on a second call |
+
+The 2D geometry derivatives are also compared with luna-cpp's independent, test-only reference
+(`reference::Geometry2D` in luna-cpp's `src/test/reference_geometry_2d.hpp`), with the library's class behind luna-cpp's
+interface `hydro::GeometryDerivative<2, Memory>`: configure with `-DVORONOI_LUNA_DIR=<luna-cpp checkout>` and run
+`geometry_derivative_luna` (not a ctest). On jittered and uniform 64 x 64 meshes the tangent agrees to 2.2e-15 and the
+adjoint to 8.8e-16 of the largest entry (host build, job 32820093).
 
 ### Special cases of the mesh
 

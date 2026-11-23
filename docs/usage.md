@@ -42,6 +42,29 @@ On Raven, build with at most `-j4` on the login node, or inside a Slurm job, and
 - The dimension is a template parameter, `voronoi::Mesh<D, Exec>` with `exact_predicates::BoxN<D>`; `Box` is `BoxN<3>` (research_notes/dimension_design_2026-11-02.md).
 - `voronoi::Mesh<2>` has the contract of `Mesh<3>` on triangles (`voronoi_mesh_2d.hpp`), with two differences. `volume()` is current after `update_cells()` only. There are always exactly 3n faces, numbered for good: a flip gives its face new particles, and a face can have zero length on a lattice. A repaired mesh equals a fresh build bit for bit.
 
+## Geometry derivatives
+
+`voronoi::GeometryDerivative<Mesh>` (`geometry_derivative.hpp`, [#63](https://github.com/Ulli1991/voronoi-cpp/issues/63)) gives the derivatives of a 2D or 3D mesh's geometry in its generator positions x, at the topology the last `update()` produced: the cell volumes V and centroids c (relative to the generator), and the face area vectors A (owner to neighbour) and centroids x_f (relative to the owner), the quantities `volume()`, `centroid()`, `area()` and `face_centroid()` return.
+
+```cpp
+mesh.update(x);
+mesh.update_cells();                                   // required: the derivative reads the cell lists
+voronoi::GeometryDerivative<voronoi::Mesh<3>> d(mesh); // valid until the next update()
+d.tangent(dx, dV, dc, dA, dxf);   // writes dV(i), dc(i, a), dA(f, a), dxf(f, a) for position changes dx(i, a)
+d.adjoint(Vbar, cbar, Abar, xfbar, xbar);   // xbar(i, a) += the transpose applied to the bars
+```
+
+- **Views.** Device views of doubles, one row per cell (`dx`, `dV`, `dc`, `Vbar`, `cbar`, `xbar`) or per face f < `faces()` (`dA`, `dxf`, `Abar`, `xfbar`); vectors as (rows x D). Any layout. An empty bar view counts as zero, so a function of the volumes alone passes only `Vbar`. Rows follow the mesh's cell order: after a 3D re-sort cell i is the caller's particle `permutation()(i)`. Every `Layout` works (faces by owner, the owner bit, faces on read, float centroids); the derivative computes in double from the rings and the positions in every case.
+- **What is differentiated.** The formulas the mesh evaluates, from the offsets between quantised positions in whole grid steps, taken as continuous (through a periodic image an offset's derivative is 1). As a function of the double positions the mesh's geometry is piecewise constant at the 2⁻³⁰ scale; this is the derivative of the geometry without the quantisation, which is what an optimiser or a tangent model needs.
+  - A Voronoi vertex is the circumcentre c of a triangle or tetrahedron: d_k · c = |d_k|²/2 for the offsets d_k of its other corners, so d_k · dc = dd_k · (d_k − c), solved with the inverse of the matrix of rows d_k. A sliver, whose centre the mesh computes exactly on the integer grid, is the same rational function and takes the same derivative.
+  - A 3D face is the fan of triangles from its first vertex: A is the sum of their area vectors, x_f their centroids' mean weighted by |T_m · d| (d to the neighbour). Every T_m is parallel to d, so the weights' dependence on d's direction is zero and is left out. A 2D face is the segment between two vertices.
+  - A cell's volume is Σ_f |A_f · d_f| / (2D), its centroid the pyramids' mean at D / (D + 1) of the way to each x_f, in the order `update_cells()` sums them.
+- **Flips.** The topology is held fixed. The geometry is continuous across a flip (the face that appears or vanishes has zero area there), so the derivative is a valid one-sided one, and a function of the geometry has a kink there, not a jump. Derivatives through `update()` itself (flip decisions, repair, re-sorts) and through the quantisation are not provided.
+- **Determinism.** The tangent writes each output once. The adjoint has no atomics: one pass sums each cell's bars of its volume and moment, one gathers each vertex's bar over the faces around it (3D: its six edges, each face found by bisection in the sorted cell list), one gathers each cell's x̄ over its faces and the vertices around it. Every sum is one thread's, in a fixed order, so the bits are the same every run (on one backend; CUDA fuses multiply-adds, so the host's bits differ in the last places).
+- **Cost.** Scratch, kept by the object and reused: 3D 4 doubles per cell and 3 per tetrahedron (199 B/cell at 128³), 2D 3 per cell, 2 per triangle and an int per face (68 B/cell); the caller's views come on top. Times against one build and one moving step: [measurements](measurements.md#geometry-derivatives-63).
+- **Accuracy.** Against central differences of fresh meshes whose points sit on the grid and move by whole grid steps (so the differences have no quantisation error), extrapolated to remove the k² truncation: 1e-10 to 2e-9 of the largest change; dot test 1e-15 to 3e-13; Σ dV = 0 to 3e-17 of Σ|dV|; a translation changes nothing ([TESTING.md](../TESTING.md#the-tests)). The 2D version equals luna-cpp's independent reference to 2e-15.
+- `geometry_derivative_bench <2|3> <n> [kind] [repeats]` (`src/bench/`) times both against a build and a moving step and prints the scratch in B/cell.
+
 ## The benchmark driver `voronoi_bench`
 
 `voronoi_bench` (`src/bench/`) times and checks the pipeline:
@@ -58,7 +81,7 @@ voronoi_bench step <n> <distribution> <displacement> [steps=10] [--verify] [--me
 ## Repository layout
 
 - `src/neighbour_search/`, `src/voronoi_construct/`: the library.
-- `src/test/`: the tests and their support code; `mesh_cases_test` has its groups in `src/test/mesh_cases/` (one file per group, shared helpers in `common.hpp`). `src/bench/`: `voronoi_bench`, `mesh2d_bench`.
+- `src/test/`: the tests and their support code; `mesh_cases_test` has its groups in `src/test/mesh_cases/` (one file per group, shared helpers in `common.hpp`). `src/bench/`: `voronoi_bench`, `mesh2d_bench`, `geometry_derivative_bench`. The optional `geometry_derivative_luna` (CMake `-DVORONOI_LUNA_DIR=<luna-cpp checkout>`, not a ctest) compares the 2D derivatives with luna-cpp's test-only reference.
 - Used by luna-cpp, keep: `voronoi_library`, `src/test/check.hpp`, `src/test/support.hpp` (and what it includes), `src/bench/device_memory.hpp`.
 - `scripts/`: lint and A100 benchmark, test and `compute-sanitizer` (`sanitize_a100.sh <build> <memcheck|racecheck|initcheck|synccheck>`) scripts.
 - `research_notes/`, `reports/`: status notes and surveys.

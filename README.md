@@ -109,6 +109,7 @@ Every path takes positions in a periodic box, quantises them to integer coordina
 | Moving step: `Mesh<3>::update(x)` + `update_cells()` | the same as the full rebuild, repaired by exact flips; face numbers kept where no flip touched them; particles renumbered along a Hilbert curve every 25 updates (`permutation()`; `Layout::every = 0` keeps them) | yes | 202 at 0.03 mean spacings per step (128³); 1911 (128³, re-sorts included) | moving meshes: particles that move a little each step (moving-mesh hydro such as [luna-cpp](https://github.com/Ulli1991/luna-cpp), Lagrangian particle methods) |
 | Volumes only: `shell_voronoi::volumes_and_centroids(exec, box, x, volume, centroid)` | per cell volume and centroid, bit-identical to the clipping rebuild's | certified cells, as the clipping rebuild | 43.1 (128³, device to device, cell list included); 101 | density estimates (1 / volume), Lloyd relaxation and centroidal Voronoi tessellations, molecular-dynamics and point-cloud analysis |
 | 2D: `voronoi::Mesh<2>` | the same as `Mesh<3>` on triangles (edges as faces, areas as volumes) | yes | build 100, step 765 (2²⁰ cells, 0.03 spacings); 537–574 | 2D meshes and particle sets |
+| Geometry derivatives: `voronoi::GeometryDerivative<Mesh>` (`geometry_derivative.hpp`), 2D and 3D | how V, c (per cell) and A, x_f (per face) change with the generator positions at the current topology: `tangent(dx, dV, dc, dA, dxf)` and its transpose `adjoint(Vbar, cbar, Abar, xfbar, xbar)` | the mesh's (the derivative holds the topology fixed) | 3D 128³: tangent 101, adjoint 29.0; 2D 2²⁰: 1235, 413 ([measurements](docs/measurements.md#geometry-derivatives-63)); scratch 199 (3D), 68 (2D) on top of the mesh | shape and mesh optimisation (centroidal tessellations, energies of V and A), sensitivities and inverse problems on moving meshes |
 | 1D: `voronoi::Mesh<1>` | sorted cells: lengths, centroids, the two faces per cell | yes | 18,905 per moving step (2²⁰ cells, 1095 MHz, older code) | 1D tests and particle methods; periodic ends or walls (`voronoi::Ends`) |
 
 Faces cost most of the memory: a 3D cell has about 16 faces (15.9 measured; each stored once, 8 per cell), so when faces are not needed, `volumes_and_centroids` takes 101 B/cell against 671 for the clipping rebuild with faces, both measured with the cell list in the library benchmark.
@@ -162,6 +163,17 @@ mesh.update_cells();     // per-cell face lists, ordered volumes and centroids
 - Every cell must be certified within one periodic image: in practice about 6 or more particles across the shortest side; otherwise `update()` throws, stating the rule.
 - Options: `clip(x, cells)` for a local rebuild, `volumes_and_centroids` without a mesh, `set_layout(voronoi::Layout)` to keep memory order on long runs, `for_each_face` and `faces_on_read` to skip stored face rows, `same_bits_as_host` for the host's bits on a GPU; `voronoi::Engine` (`voronoi_engine.hpp`) picks cpu, gpu or hybrid at run time in a build with both backends.
 
+Geometry derivatives (2D and 3D, `#include "geometry_derivative.hpp"`):
+
+```cpp
+voronoi::GeometryDerivative<voronoi::Mesh<3>> d(mesh);  // after update() and update_cells()
+d.tangent(dx, dV, dc, dA, dxf);              // position changes dx -> changes of V, c, A, x_f
+d.adjoint(Vbar, cbar, Abar, xfbar, xbar);    // adds the transpose to xbar (an empty bar counts as zero)
+```
+
+- They differentiate the formulas the mesh evaluates, with the offsets between quantised positions taken as continuous; the topology is held fixed, so across a flip the derivative is one-sided (the geometry itself is continuous there).
+- The adjoint gathers per vertex and per cell in a fixed order, with no atomics: the same bits every run. Details and costs: [docs/usage.md](docs/usage.md#geometry-derivatives).
+
 Everything a caller can rely on, and the options of the benchmark driver `voronoi_bench`, is in [docs/usage.md](docs/usage.md#what-a-caller-can-rely-on).
 
 ## Measured performance
@@ -184,7 +196,7 @@ Peak GPU memory: 701 B/cell for a plain rebuild, 1911 B/cell for a moving step w
 
 ## Tests
 
-Thirteen CTest programs (22 tests) specify the library against exact references that share no code with it: predicates, clipping, the start, the repair after every step, the `voronoi::Mesh` contract, special cases, distortion flows, 2D and 1D, fuzzing and metamorphic tests. What each specifies, run times and what PASS means are in [TESTING.md](TESTING.md).
+Fourteen CTest programs (23 tests) specify the library against exact references that share no code with it: predicates, clipping, the start, the repair after every step, the `voronoi::Mesh` contract, special cases, distortion flows, 2D and 1D, fuzzing and metamorphic tests, and the geometry derivatives against central differences. What each specifies, run times and what PASS means are in [TESTING.md](TESTING.md).
 
 ```sh
 ctest --test-dir build-cuda --output-on-failure         # A100: ~5 minutes
