@@ -47,7 +47,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Speed against quality](paper/figures/fig07a_quality.png)
 
-**Fig. 7b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes. The grey band holds the codes with no cell missing (spread vertically only to tell them apart); votess crashed on cosmic web and on surface and is not drawn there. On surface our rebuild leaves 2 in 10⁴ cells to the exact start, which is complete but slow (issue #60).
+**Fig. 7b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes. The grey band holds the codes with no cell missing (spread vertically only to tell them apart); votess crashed on cosmic web and on surface and is not drawn there. On surface our rebuild misses 2.3 in 10⁴ cells and our exact start is complete; both run at 0.03–0.04 M cells/s there (issue #60).
 
 ![Application inputs: completeness against build rate](paper/figures/fig07b_application.png)
 
