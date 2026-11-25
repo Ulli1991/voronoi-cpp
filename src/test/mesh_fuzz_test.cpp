@@ -1299,9 +1299,10 @@ int main(int argc, char** argv) {
 #if defined(VORONOI_VERTEX64)
         {
             const auto c = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, v64);
-            std::printf("v64 counters: new_vertices=%llu strict=%llu kept_outside=%llu beyond_bound=%llu "
-                        "err>1e-9R=%llu err>1e-6R=%llu err>1e-3R=%llu\n",
-                        c(0), c(1), c(2), c(3), c(4), c(5), c(6));
+            std::printf(
+                "v64 counters: new_vertices=%llu strict=%llu kept_outside=%llu beyond_bound=%llu "
+                "err>1e-9R=%llu err>1e-6R=%llu err>1e-3R=%llu\n",
+                c(0), c(1), c(2), c(3), c(4), c(5), c(6));
         }
 #endif
         return 0;

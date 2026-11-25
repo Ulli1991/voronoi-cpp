@@ -14,12 +14,12 @@ namespace vertex64 {
 
 // Bits of a cut (and, or-ed, of a cell).
 enum Bit : unsigned {
-    strict = 1,        // |side[w]| <= B_w and |side[u]| <= B_u: both ends within the rounding bound of the plane
-    kept_outside = 2,  // side[u] > 0: the kept end lies outside, t > 1, the vertex is placed beyond u
-    beyond_bound = 4,  // side[u] > B_u: the kept end lies outside for certain
-    err9 = 8,          // first-order bound of the vertex's displacement along the edge > 1e-9 R
-    err6 = 16,         // ... > 1e-6 R
-    err3 = 32,         // ... > 1e-3 R
+    strict = 1,           // |side[w]| <= B_w and |side[u]| <= B_u: both ends within the rounding bound of the plane
+    kept_outside = 2,     // side[u] > 0: the kept end lies outside, t > 1, the vertex is placed beyond u
+    beyond_bound = 4,     // side[u] > B_u: the kept end lies outside for certain
+    err9 = 8,             // first-order bound of the vertex's displacement along the edge > 1e-9 R
+    err6 = 16,            // ... > 1e-6 R
+    err3 = 32,            // ... > 1e-3 R
     built_exactly = 128,  // the cell's last build was exact (written by exact passes)
 };
 // Global counters.
@@ -29,12 +29,12 @@ enum Counter : int { new_vertices, c_strict, c_kept_outside, c_beyond_bound, c_e
 struct Sinks {
     unsigned long long* counter = nullptr;  // [counters]
     int cap = 0;
-    unsigned* flag = nullptr;      // or of the cut bits of the cell's last rounded build
-    float* worst = nullptr;        // largest displacement bound / R of its cuts
-    double* radius = nullptr;      // final radius of the last rounded build (box units)
+    unsigned* flag = nullptr;        // or of the cut bits of the cell's last rounded build
+    float* worst = nullptr;          // largest displacement bound / R of its cuts
+    double* radius = nullptr;        // final radius of the last rounded build (box units)
     double* exact_radius = nullptr;  // final radius of the last exact build (box units)
-    int* worst_slot = nullptr;     // [4 cap]: generator slot, the slots of planes a, b and the cutting plane
-                                   //   (a box plane k as -1 - k)
+    int* worst_slot = nullptr;       // [4 cap]: generator slot, the slots of planes a, b and the cutting plane
+                                     //   (a box plane k as -1 - k)
     double* worst_vertex = nullptr;  // [3 cap]: the vertex placed by that cut, relative to the generator
 };
 
@@ -92,10 +92,12 @@ KOKKOS_INLINE_FUNCTION unsigned classify(double sw, double su, double bw, double
 
 // The counter of each bit, in Counter order after new_vertices.
 KOKKOS_INLINE_FUNCTION unsigned counted_bit(int k) {
-    return k == c_strict ? strict : k == c_kept_outside ? kept_outside : k == c_beyond_bound ? beyond_bound
-                                    : k == c_err9       ? err9
-                                    : k == c_err6       ? err6
-                                                        : err3;
+    return k == c_strict         ? strict
+           : k == c_kept_outside ? kept_outside
+           : k == c_beyond_bound ? beyond_bound
+           : k == c_err9         ? err9
+           : k == c_err6         ? err6
+                                 : err3;
 }
 
 // The per-cell record of a rounded build: bits, counts of its cuts, the worst cut and the final radius.

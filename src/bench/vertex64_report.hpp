@@ -45,9 +45,7 @@ struct Views {
         s.worst_vertex = worst_vertex.data();
         return s;
     }
-    void install(int n) const {
-        vertex64::install(sinks(n), !std::is_same_v<Memory, Kokkos::HostSpace>);
-    }
+    void install(int n) const { vertex64::install(sinks(n), !std::is_same_v<Memory, Kokkos::HostSpace>); }
     void clear() const {
         Kokkos::deep_copy(counter, 0ull);
         Kokkos::deep_copy(flag, 0u);
@@ -57,9 +55,10 @@ struct Views {
 
 inline void print_counters(const Views& v, const char* label) {
     const auto c = support::to_host(v.counter);
-    std::printf("v64 %s: new_vertices=%llu strict=%llu kept_outside=%llu beyond_bound=%llu err>1e-9R=%llu "
-                "err>1e-6R=%llu err>1e-3R=%llu\n",
-                label, c(0), c(1), c(2), c(3), c(4), c(5), c(6));
+    std::printf(
+        "v64 %s: new_vertices=%llu strict=%llu kept_outside=%llu beyond_bound=%llu err>1e-9R=%llu "
+        "err>1e-6R=%llu err>1e-3R=%llu\n",
+        label, c(0), c(1), c(2), c(3), c(4), c(5), c(6));
 }
 
 // The report; `dump`: a CSV of the compared cells, or "".
@@ -82,7 +81,7 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
 
     // Cells by bit (the last rounded build of each cell; built_exactly: finished by exact_where_failed).
     const unsigned bits[] = {vertex64::strict, vertex64::kept_outside, vertex64::beyond_bound, vertex64::err9,
-                             vertex64::err6, vertex64::err3, vertex64::built_exactly};
+                             vertex64::err6,   vertex64::err3,         vertex64::built_exactly};
     const char* names[] = {"strict", "kept_outside", "beyond_bound", "err9", "err6", "err3", "built_exactly"};
     long long by_bit[7] = {};
     for (int i = 0; i < n; ++i)
@@ -111,9 +110,10 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
         unpaired_flagged += (flag(i) & (vertex64::kept_outside | vertex64::err6 | vertex64::strict)) != 0;
         unpaired_err9 += (flag(i) & vertex64::err9) != 0;
     }
-    std::printf("v64 pairing: faces=%lld owned=%lld (2*owned %s) unpaired_cells=%zu of_them_kept_outside_err6_strict=%lld "
-                "of_them_err9=%lld\n",
-                faces, owned, faces == 2 * owned ? "yes" : "NO", unpaired.size(), unpaired_flagged, unpaired_err9);
+    std::printf(
+        "v64 pairing: faces=%lld owned=%lld (2*owned %s) unpaired_cells=%zu of_them_kept_outside_err6_strict=%lld "
+        "of_them_err9=%lld\n",
+        faces, owned, faces == 2 * owned ? "yes" : "NO", unpaired.size(), unpaired_flagged, unpaired_err9);
 
     // The cells to compare: flagged (err9 or worse, kept_outside, strict), the unpaired, and 4096 unflagged.
     const unsigned flagged_bits = vertex64::strict | vertex64::kept_outside | vertex64::err9;
@@ -162,7 +162,9 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
     const auto eradius = support::to_host(v.exact_radius);
 
     // The exact meeting point of the worst cut's three planes, in box units relative to the generator.
-    auto snapped = [&](int s, int a) { return static_cast<exact_predicates::i64>(exact_predicates::snap(positions(s, a), box, a)); };
+    auto snapped = [&](int s, int a) {
+        return static_cast<exact_predicates::i64>(exact_predicates::snap(positions(s, a), box, a));
+    };
     auto exact_vertex = [&](int t, const int* planes, double* x) {
         exact_predicates::Offset off[3];
         for (int k = 0; k < 3; ++k) {
@@ -183,12 +185,13 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
         double volume = 0, centroid = 0, radius = 0, vertex = 0;
         long long count = 0, exact_failed = 0, box_plane = 0, past_1e9 = 0, past_1e6 = 0;
         long long wrong_bit[7] = {};  // cells past 1e-6 in volume, centroid or radius, by bit
-        long long wrong_closed = 0;  // wrong cells whose closure is at most 1e-12 (a closure check would miss them)
+        long long wrong_closed = 0;   // wrong cells whose closure is at most 1e-12 (a closure check would miss them)
     } w[3];
     std::FILE* out = dump.empty() ? nullptr : std::fopen(dump.c_str(), "w");
     if (out)
-        std::fprintf(out, "id,kind,flag,worst_bound,volume,exact_volume,dvolume_rel,dcentroid_rel,radius,exact_radius,"
-                          "dradius_rel,dvertex_rel\n");
+        std::fprintf(out,
+                     "id,kind,flag,worst_bound,volume,exact_volume,dvolume_rel,dcentroid_rel,radius,exact_radius,"
+                     "dradius_rel,dvertex_rel\n");
     for (std::size_t k = 0; k < ids.size(); ++k) {
         const int i = ids[k];
         Worst& r = w[kind[k]];
@@ -230,11 +233,12 @@ void report(const Exec& exec, const Grid& grid, const Views& v, const Cells& cel
     if (out) std::fclose(out);
     const char* kinds[] = {"flagged", "unpaired", "sample"};
     for (int c = 0; c < 3; ++c)
-        std::printf("v64 exact %s: cells=%lld exact_not_ok=%lld max_dvolume_rel=%.3e max_dcentroid_per_size=%.3e "
-                    "max_dradius_rel=%.3e max_dvertex_per_R=%.3e (box-plane vertices skipped %lld) "
-                    "output_past_1e-9=%lld output_past_1e-6=%lld\n",
-                    kinds[c], w[c].count, w[c].exact_failed, w[c].volume, w[c].centroid, w[c].radius, w[c].vertex,
-                    w[c].box_plane, w[c].past_1e9, w[c].past_1e6);
+        std::printf(
+            "v64 exact %s: cells=%lld exact_not_ok=%lld max_dvolume_rel=%.3e max_dcentroid_per_size=%.3e "
+            "max_dradius_rel=%.3e max_dvertex_per_R=%.3e (box-plane vertices skipped %lld) "
+            "output_past_1e-9=%lld output_past_1e-6=%lld\n",
+            kinds[c], w[c].count, w[c].exact_failed, w[c].volume, w[c].centroid, w[c].radius, w[c].vertex,
+            w[c].box_plane, w[c].past_1e9, w[c].past_1e6);
     for (int c = 0; c < 3; ++c) {
         std::printf("v64 wrong %s cells (output past 1e-6) by bit:", kinds[c]);
         for (int b = 0; b < 7; ++b) std::printf(" %s=%lld", names[b], w[c].wrong_bit[b]);
