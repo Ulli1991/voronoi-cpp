@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Figure where_time ("where the time goes"): (a) the control flow of Mesh::update(), its decisions and stages, in the
 colours of the stages; (b) wall time per cell of a moving step in six stages, per input at 0.03, 0.1 and 0.3 mean
-spacings per step; (c) jittered input across displacements, with slots for the host-fallback and rebuild rows of the
-post-merge rerun. 128³ on one A100. Data: paper/data/stages.csv (wall time per stage), kernels.csv (Kokkos Tools
+spacings per step; (c) jittered input across displacements, enlarged. 128³ on one A100. Data: paper/data/stages.csv (wall time per stage), kernels.csv (Kokkos Tools
 kernel times); the kernel labels are mapped onto the six stages below (also in paper/data/SOURCES.md); "host and
 other" is the wall time minus the mapped kernels. The flowchart follows scripts/flow_chart.py and flow_detail.py."""
 import csv
@@ -184,13 +183,11 @@ def main():
     b.text(0.97, 0.985, "(b)", transform=b.transAxes, ha="right", va="top")
 
     c = fig.add_subplot(grid[0, 1])
-    rows = [0, 1, 2, 3, 4.5]
-    labels = ["jittered, 0.03", "0.1", "0.3", "1.0", "clustered, 0.3"]
-    values = [d.get(("jittered", s)) for s in SPACINGS] + [None, None]
+    rows = [0, 1, 2]
+    labels = ["jittered, 0.03", "0.1", "0.3"]
+    values = [d.get(("jittered", s)) for s in SPACINGS]
     bars(c, rows, labels, values)
-    for y in rows[3:]:
-        c.text(1.0, y, "rerun", va="center", fontsize=11, color=FAINT, style="italic")
-    c.set_ylim(5.3, -0.7)
+    c.set_ylim(4.3, -0.7)  # room below the bars for the legend
     c.set_xlim(0, 26)
     c.set_xlabel("wall time per cell, ns")
     c.text(0.97, 0.985, "(c)", transform=c.transAxes, ha="right", va="top")

@@ -1,6 +1,6 @@
 # Caption drafts (facts the captions must state)
 
-**walkthrough (Fig. 1, full page).** One periodic 2D example, computed by the library's own 2D mesh (`Mesh<2>`),
+**`fig01_walkthrough` (Fig. 1, full page).** One periodic 2D example, computed by the library's own 2D mesh (`Mesh<2>`),
 which shares the 3D mesh's structure. Rows 1–2, *Build*: **(1) Quantise positions.** Each coordinate is rounded down to an integer k in [0, 2³⁰), and the position is k × step: positions are quantised to integer coordinates on a 2³⁰ grid (inset: one grid cell, much enlarged). Every later decision is an exact test on these integer positions; exact ties break by particle id. **(2) Morton cell list.** Sorted along a Morton curve (line, slot 0 to 95): each tree node is one run of slots. Each particle's level has about one particle per cell: 4 (16²) in the patch, 3 (8²) around. **(3) Clip one cell.** From a square of half-width L/4, cut by bisectors nearest first (numbers). The walk stops at the first grid cell 2R away (dashed), R the farthest corner: 7 cuts, 1 miss (hollow), 87 never read. **(4) All cells: face rings.** Every cell is clipped on its own, in parallel, and keeps its ring: its neighbours in order (q1 … q7 here), in one pool. The rings are the whole topology; no corner is stored. **(5) Exact start.** Consecutive ring entries give triangles (i, qₘ, qₘ₊₁), each once: 192 = 2n, with 3n = 288 faces. Checked: the exact screen and flips change 0 of them; the areas add up to the box once. **(6) Points move.** The solver calls update(x) with new positions, here up to 0.25 mean spacings (arrows ×3). The triangles are kept (grey); a step needs no cell list and no clipping. Rows 3–4, *Step*: **(7) Screen.** One pass over the old triangles at the new points: the in-circle test of each edge in double, with a rounding bound. Failing, unsure, and (in so small a box) long edges are listed: 42 of 288. **(8) Flip.** The exact test decides each listed edge. Flips (dashed: gone, green: new) run in rounds; votes settle conflicts, so thread order is moot. 13 flips in 6 rounds; volumes equal a fresh build's. **(9) Geometry: the dual.** Circumcentres (blue dots) are the cell corners: the Voronoi mesh is the dual of the triangles. One thread per face writes its area vector (arrows) and centroid (orange). **(10) update_cells().** Per cell, a list of its faces sorted by the other particle's id (1 … 7). Volume and centroid (×) are summed over the pyramids in that order: the same bits on every run. Σ volume = L² exactly here. **(11) Fallbacks.** Two particles jump (arrows); flips leave 1 inverted triangle (red). Few stuck: the host redoes a patch (11 triangles), the GPU flips again. Many: a rebuild (1–5). Two at one integer position: refused. **(12) Re-sort (3D).** Over many steps ids drift apart in space (grey: id order). Renumbering along a Hilbert curve (colour) restores locality: the mean id gap over faces is 13 at the start, 24 now, 13 after. Badges: where each part
 runs (GPU, host, or the caller). In 3D the same: panels 1, 6 and 10; 2D stand-ins for 3D: a quadtree for the octree
 (2), a polygon cut by bisector lines for a polyhedron cut by bisector planes, the 2R circle for a sphere (3), one
@@ -9,7 +9,7 @@ in-sphere tests and 2-3/3-2 flips (7, 8), polygon edges for polygonal faces (9),
 tetrahedron (11); panel 12 shows in 2D a step only the 3D mesh takes. The code behind each panel:
 `walkthrough_captions.md`.
 
-**inputs.** The five benchmark inputs (top row and first panel of the bottom row) and the three application inputs
+**`fig02_inputs`.** The five benchmark inputs (top row and first panel of the bottom row) and the three application inputs
 (bottom row: cosmic web, fcc solid, surface), with the generators and seed 20261029 of the benchmarks
 (`src/test/support.hpp`, positions quantised to integer coordinates on a 2³⁰ grid; `library_bench points`), at 64³ = 262,144 points; the fcc solid at
 32³ unit cells = 131,072 atoms (the generator rounds n to 4 l³, and 2¹⁸ atoms would need l = 40.3). The benchmarks run
@@ -36,7 +36,7 @@ nearest-neighbour distances of all eight inputs, as the fraction of points per b
 distance in mean spacings (n^(−1/3)); dashed: the three application inputs; dotted: one mean spacing. Two degenerate test cases are not shown: an exact cubic lattice (every point
 cospherical with its neighbours) and the lattice shifted by 10⁻⁵ spacing ("wave").
 
-**application.** Completeness against build rate on the three application inputs, one point per code at 128³
+**`fig05b_application`.** Completeness against build rate on the three application inputs, one point per code at 128³
 (fcc solid: 2²⁰ atoms), double precision but where marked float, periodic unit box, median of 3 timed runs, full cells
 but for the volumes-only codes (Basselin et al., Ray et al., Liu et al.; their README setting per input class, as in the
 quality figure: white noise for cosmic web and surface, perturbed grid for the fcc solid; Ray et al. = VoroGPU, K = 190
@@ -84,7 +84,7 @@ every 200 µs (library benchmark, voronoi-cpp ad62997), except the moving step (
 the lowest input, light part: up to the highest of the five inputs. Dashed: the B/cell at which 256³, 384³ and 512³
 fill one A100 40 GB. Besides memory, the face-ring pool's 32-bit offsets overflow between 256³ and 384³.
 
-**oracle_errors.** Against the exact reference `src/test/oracle.hpp`: 128-bit integer predicates and long-double
+**`fig05c_volume_errors`.** Against the exact reference `src/test/oracle.hpp`: 128-bit integer predicates and long-double
 clipping over all periodic images, brute force per sampled cell; it includes only the C++ standard library and shares
 no code with the mesh (its driver shares the point-file reader). 1000 sampled cells per input. All at 128³ (2,097,152 cells). (a) voronoi-cpp's
 warp rebuild and (b) its exact start, one A100 at 1305 MHz (55cd6b1, job 32366449), per input; (c) every code on halo
@@ -98,7 +98,7 @@ Ray et al. (VoroGPU, float, K = 190) 21,471 of 2,097,152 cells; the other codes 
 Wave at 256³ runs out of the 40 GB in the step. Re-sort: 500 steps at 0.1 spacings, jittered, Hilbert order every 50
 updates; the legend gives cells × steps over the summed step times, re-sorts included.
 
-**quality.** Build rates at 128³ as in the library figures; error against the exact reference on 1000 sampled cells
+**`fig05a_quality`.** Build rates at 128³ as in the library figures; error against the exact reference on 1000 sampled cells
 (median to max); completeness over all cells; total sampled volume |Σ V − box| (a tiling check, not accuracy).
 Neighbour-set agreement and closure are not shown: the benchmark runs stored volumes only.
 
@@ -113,7 +113,7 @@ at 256³ its check finds 44 bad tetrahedra and patches 830 cells in a second rou
 has one round, no bad tetrahedra, and costs clipping 57 + from_rings 50 ≈ start 117 ms. Per cell, clipping (27 ns)
 and from_rings (23 ns) are the same at both sizes.
 
-**library_stages.** Where each code's build time goes, ns per cell at 128³ (2,097,152 cells) on jittered and white-noise
+**`fig04b_stages_per_code`.** Where each code's build time goes, ns per cell at 128³ (2,097,152 cells) on jittered and white-noise
 input. Each code's staged runs repeat its timed runs with a lap at the end of each stage (device synchronized first) and,
 inside a library call, the code's own timers or its kernels by label (method per code: docs/library_benchmark.md,
 "Stages", branch library-stages). Markers on one log axis: neighbour search (cell list, kNN grid and query, BVH,
@@ -147,13 +147,13 @@ between laps (0.9); it has no copies because it is timed from points on the devi
 Basselin et al.'s 34.5 matches their cell kernel alone (docs/library_benchmark.md, Stages: 38.4 M cells/s on our A100,
 33.3 scaled to a V100), not the full build host to host (10.4 on our A100).
 
-**luna_vortex.** 3D Yee vortex, HLLC Riemann solver, MC limiter; L1 errors of density and velocity against n_x
+**`fig08_luna_vortex`.** 3D Yee vortex, HLLC Riemann solver, MC limiter; L1 errors of density and velocity against n_x
 (n_x³ cells). See PLAN.md (Fig. 13) for the runs.
 
-**memory (b), legend.** Dark bars: voronoi-cpp, grey: the other codes; the darker part is the lowest of the five inputs,
+**`fig07_memory` (b), legend.** Dark bars: voronoi-cpp, grey: the other codes; the darker part is the lowest of the five inputs,
 the lighter part up to the highest.
 
-**where_time (Fig. 4, "where the time goes").** (a) The control flow of `Mesh::update()`: a built mesh with the same n
+**`fig04a_where_time` (Fig. 4, "where the time goes").** (a) The control flow of `Mesh::update()`: a built mesh with the same n
 is checked, flipped, reconnected, measured and summed; few stuck flips are finished on the host, more, or a failed
 volume check, go to a rebuild (dashed: quantise, cell list, clip, exact start), which refuses with a clear error when
 the start is not exact. Box colours are the stages of (b) and (c). (b) Wall time per cell of one moving step

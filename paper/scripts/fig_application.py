@@ -3,7 +3,7 @@
 atoms, surface 128³), one point per code, from the library benchmark's own runs: rates from bench/libraries/results
 (the "Application inputs" tables of scripts/library_benchmark.py), cells missing from accuracy-inputs-*.jsonl and the
 per-cell errors of paper/data/oracle_errors_application.csv. Codes that crash are listed in the panel, codes whose
-volumes are wrong are drawn open and labelled; our surface rows carry the open issue #60."""
+volumes are wrong are drawn open and labelled; our two surface rows are joined and labelled (cells refused, issue #60)."""
 import glob
 import json
 import os
@@ -122,7 +122,7 @@ def main():
             ax.annotate("", (r["rate"], height(r)), xytext=(0.042, 2.5e-6), arrowprops=dict(
                 arrowstyle="-", color="0.3", lw=0.8, shrinkA=0, shrinkB=5))
         if ours:
-            ax.text(0.046, 2.5e-6, "#60 open", fontsize=11, ha="left", va="center")
+            ax.text(0.046, 2.5e-6, "ours", fontsize=11, ha="left", va="center")
         crashed = [f"{r['label']}" for r in here if r["state"] == "crashed"]
         if crashed:
             ax.text(0.95, 0.5, "crashed:\n" + "\n".join(crashed), transform=ax.transAxes, ha="right", va="top",

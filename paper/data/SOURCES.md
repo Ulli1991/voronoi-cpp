@@ -3,7 +3,6 @@
 | file | what | from | jobs, commit, clock |
 |---|---|---|---|
 | `oracle_errors.csv` | per-cell relative volume error of the 1000 sampled cells, every volumes file of the library benchmark | `paper/scripts/extract_oracle.py` (+ `oracle_errors.cpp`, same sample as `bench/libraries/oracle_check.cpp`) on `/raven/u/uli/libbench-data/volumes/*.f64` and the oracle caches `points/*.oracle1000` | oracle jobs 32225958, 32234618 (caches); checks 32269164 and the login run `accuracy-main-login.jsonl`; voronoi-cpp volumes from ad62997 (main b2faee8 + benchmark). The extractor checks every median against those records (all match) |
-| `ceiling.json` | DRAM bytes, bandwidth, occupancy per kernel label (Nsight Compute), 128³ | `scripts/ceiling_tables.py` on `/raven/u/uli/voronoi-cpp-joblogs/voronoi-cpp-ceiling/build-nvtx/jobs` | jobs 32222161, 32222162, 32222164, 32222165, 32222228; main 69de1d3; 1279-1305 MHz per kernel |
 | `raw/sweep-<job>.jsonl` | one JSON line per timed run (library_bench) | `paper/scripts/throughput_vs_n_a100.sh` via `submit_sweep.sh` | see `throughput_vs_n.csv` (jobs, hosts and logged SM clock per row) |
 | `raw/check-<job>.txt` | `voronoi_bench rebuild` with its cell checks and faces per cell, per input and n | same jobs | |
 | `throughput_vs_n.csv` | median / min / max M cells/s per commit, input, n and path; peak B/cell; SM clock under load | `paper/scripts/extract_sweep.py` | |

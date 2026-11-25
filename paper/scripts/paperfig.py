@@ -58,8 +58,18 @@ def figure(width_mm, height_mm, **kw):
     return plt.subplots(figsize=(width_mm * MM / SCALE, height_mm * MM / SCALE), **kw)
 
 
+# The paper's order (paper/figures/README.md): figure name in the scripts -> file name. A letter marks the parts of one figure.
+NUMBER = {"walkthrough": "fig01_walkthrough", "inputs": "fig02_inputs", "library_headline": "fig03a_speed_full_cells",
+          "library_more": "fig03b_speed_volumes_cpu_step", "where_time": "fig04a_where_time",
+          "library_stages": "fig04b_stages_per_code", "quality": "fig05a_quality", "application": "fig05b_application",
+          "oracle_errors": "fig05c_volume_errors", "throughput_vs_n": "fig06a_throughput_vs_n",
+          "step_vs_displacement": "fig06b_step_vs_displacement", "resort": "fig06c_resort", "memory": "fig07_memory",
+          "luna_vortex": "fig08_luna_vortex"}
+
+
 def save(fig, name, width_mm):
-    """paper/figures/<name>.pdf scaled to width_mm exactly, and <name>.png at 600 dpi of that width."""
+    """paper/figures/<numbered name>.pdf scaled to width_mm exactly, and the .png at 600 dpi of that width."""
+    name = NUMBER[name]
     os.makedirs(OUT, exist_ok=True)
     buf = io.BytesIO()
     fig.savefig(buf, format="pdf")

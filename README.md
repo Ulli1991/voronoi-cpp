@@ -15,53 +15,59 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 190–263 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding, and each step is checked against a fresh exact build.
 4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
 
-**Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
+**Fig. 2: Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
 
-![Test inputs](docs/figures/results/inputs.png)
+![Test inputs](paper/figures/fig02_inputs.png)
 
-**Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³).
+**Fig. 3: Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³).
 
-![Full cells against the public libraries](docs/figures/results/library_headline.png)
+![Full cells against the public libraries](paper/figures/fig03a_speed_full_cells.png)
 
-![Volumes only, 72 cores and the moving step](docs/figures/results/library_more.png)
+![Volumes only, 72 cores and the moving step](paper/figures/fig03b_speed_volumes_cpu_step.png)
 
-**Where the time goes.** The moving step as a flowchart with its cost per cell by stage, then each library's time split into neighbour search and cell construction: ours takes under 1 ns per cell, the k-nearest-neighbour GPU codes spend 20–55 % of their time finding neighbours.
+**Fig. 4: Where the time goes.** The moving step as a flowchart with its cost per cell by stage, then each library's time split into neighbour search and cell construction: ours takes under 1 ns per cell, the k-nearest-neighbour GPU codes spend 20–55 % of their time finding neighbours.
 
-![Flowchart of update() and its cost by stage](docs/figures/results/where_time.png)
+![Flowchart of update() and its cost by stage](paper/figures/fig04a_where_time.png)
 
-![Time per stage for every library](docs/figures/results/library_stages.png)
+![Time per stage for every library](paper/figures/fig04b_stages_per_code.png)
 
-**Throughput against problem size and displacement.** Rebuild, exact start, moving step and memory from 32³ to 256³ (panel (b) predates the exact-start speed-up); the moving step against how far points move per step, the grey band being the exact start.
+**Fig. 5a: Speed against quality.** Every library against an independent exact reference on sampled cells: relative volume error, fraction of cells missing and total sampled volume against the box.
 
-![Throughput against problem size](docs/figures/results/throughput_vs_n.png)
+![Speed against quality](paper/figures/fig05a_quality.png)
 
-![Step rate against displacement](docs/figures/results/step_vs_displacement.png)
+**Fig. 5b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes.
 
-**Re-sort over a long run.** 500 steps with a Hilbert re-sort every 50 steps, which restores memory order and gained 1.3–1.5× over the run (figure of 2026-11-10). Since 2026-11-18 the re-sort is on by default, every 25 updates, and the step is 2.2× faster than before over 500 steps at 0.1 spacings, 128³ and 256³ ([measurements](docs/measurements.md#the-2-step-branch-step-2x-2026-11-18)). The step levers of the same day (repair kernels in registers, the screen's centre kept in registers) add 1.17–1.21× over 500 steps ([measurements](docs/measurements.md#the-step-levers-branch-step-levers-2026-11-18)). A re-sort allocates nothing (it works in the ring pools): 2.0–2.3 ns/cell at 128³ and 256³. It renumbers the particles: callers follow `permutation()`, with `permute_in_place()` when they must not allocate ([usage](docs/usage.md)).
+![Application inputs: completeness against build rate](paper/figures/fig05b_application.png)
 
-![Re-sort over 500 steps](docs/figures/results/resort.png)
+**Fig. 5c: Volume errors.** Our per-cell volume errors against the exact reference, all at the level of double rounding.
 
-**Speed against quality.** Every library against an independent exact reference on sampled cells: relative volume error, fraction of cells missing and total sampled volume against the box.
+![Volume error against the exact reference](paper/figures/fig05c_volume_errors.png)
 
-![Speed against quality](docs/figures/results/quality.png)
+**Fig. 6a, b: Throughput against problem size and displacement.** Rebuild, exact start, moving step and memory from 32³ to 256³ (panel (b) predates the exact-start speed-up); the moving step against how far points move per step, the grey band being the exact start.
 
-**Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes.
+![Throughput against problem size](paper/figures/fig06a_throughput_vs_n.png)
 
-![Application inputs: completeness against build rate](docs/figures/results/application.png)
+![Step rate against displacement](paper/figures/fig06b_step_vs_displacement.png)
 
-**Volume errors.** Our per-cell volume errors against the exact reference, all at the level of double rounding.
+**Fig. 6c: Re-sort over a long run.** 500 steps with a Hilbert re-sort every 50 steps, which restores memory order and gained 1.3–1.5× over the run (figure of 2026-11-10). Since 2026-11-18 the re-sort is on by default, every 25 updates, and the step is 2.2× faster than before over 500 steps at 0.1 spacings, 128³ and 256³ ([measurements](docs/measurements.md#the-2-step-branch-step-2x-2026-11-18)). The step levers of the same day (repair kernels in registers, the screen's centre kept in registers) add 1.17–1.21× over 500 steps ([measurements](docs/measurements.md#the-step-levers-branch-step-levers-2026-11-18)). A re-sort allocates nothing (it works in the ring pools): 2.0–2.3 ns/cell at 128³ and 256³. It renumbers the particles: callers follow `permutation()`, with `permute_in_place()` when they must not allocate ([usage](docs/usage.md)).
 
-![Volume error against the exact reference](docs/figures/results/oracle_errors.png)
+![Re-sort over 500 steps](paper/figures/fig06c_resort.png)
 
-**Memory.** Device bytes per cell at the peak, by array, for the rebuild, exact start and moving step at 128³; then peak bytes per cell for every GPU code, with the limits at which 256³, 384³ and 512³ fit one A100 40 GB.
+**Fig. 7: Memory.** Device bytes per cell at the peak, by array, for the rebuild, exact start and moving step at 128³; then peak bytes per cell for every GPU code, with the limits at which 256³, 384³ and 512³ fit one A100 40 GB.
 
-![Memory per cell](docs/figures/results/memory.png)
+![Memory per cell](paper/figures/fig07_memory.png)
 
-The scripts and data that draw these figures are on the [`paper-figures`](https://github.com/Ulli1991/voronoi-cpp/tree/paper-figures/paper) branch.
+**Fig. 8: A moving-mesh code on the library.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
+
+![3D vortex convergence of luna-cpp](paper/figures/fig08_luna_vortex.png)
+
+The figures are numbered in the paper's order (Fig. 1 is the walkthrough under [How it works](#how-it-works)); a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 
 ## How it works
 
-![Building the mesh and one moving step](docs/figures/results/walkthrough.png)
+**Fig. 1: Building the mesh and one moving step.**
+
+![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
 
 One 2D example of 96 points throughout. Build (rows 1–2): quantise positions, Morton cell list, clip each cell against its neighbours until certified, face rings, exact Delaunay start. Step (rows 3–4): screen the tetrahedra the motion may break, repair them with exact flips, recompute geometry from the dual, per-cell sums, fallbacks, optional re-sort. 3D works the same way with polyhedra and tetrahedra.
 

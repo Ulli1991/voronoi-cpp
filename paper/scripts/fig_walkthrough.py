@@ -7,7 +7,7 @@ import io
 import os
 import sys
 
-from paperfig import DOUBLE, MM, OUT, REPO
+from paperfig import DOUBLE, MM, NUMBER, OUT, REPO
 
 sys.path.insert(0, os.path.join(REPO, "scripts"))
 import overview_figure as of  # noqa: E402
@@ -74,7 +74,7 @@ def save(self, name):
 
     if name != "overview_step":
         return
-    name = "walkthrough"
+    name = NUMBER["walkthrough"]
     for ax in self.fig.axes:  # panel 2's level key sits on the drawing; the caption names the levels instead
         if ax.get_legend():
             ax.get_legend().remove()
