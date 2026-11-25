@@ -101,7 +101,8 @@ def headline(summary, pub):
     app = {(r["label"], r["kind"]): r for r in fa.rows() if r["state"] != "crashed"}
     first = len(lb.INPUTS)
     for label, line in drawn.items():
-        run = []  # consecutive application inputs this code has a rate for
+        last = (line.get_xdata()[-1], line.get_ydata()[-1])
+        run = [last] if last[0] == first - 1 else []  # the curve goes on from halo; it breaks only where a code has no rate
         for k, (kind, _) in enumerate(APPLICATION):
             r = app.get((label, kind))
             if r is None:
@@ -118,7 +119,6 @@ def headline(summary, pub):
     axes_inputs(ax)  # measured rows only; the published rates are in captions.md
     ax.set_xticks(range(first + len(APPLICATION)), LABELS + [short for _, short in APPLICATION])
     ax.set_xlim(-0.4, first + len(APPLICATION) - 0.6)
-    ax.axvline(first - 0.5, color="0.6", lw=0.8, ls=":")
     ax.set_ylim(0.01, 1000)
     ax.set_ylabel("full cells, M cells/s")
     handles, labels = ax.get_legend_handles_labels()
