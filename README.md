@@ -15,6 +15,10 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 190–263 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding, and each step is checked against a fresh exact build.
 4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
 
+**Fig. 1: Building the mesh and one moving step.** One 2D example of 96 points throughout. Build (rows 1–2): quantise positions, Morton cell list, clip each cell against its neighbours until certified, face rings, exact Delaunay start. Step (rows 3–4): screen the tetrahedra the motion may break, repair them with exact flips, recompute geometry from the dual, per-cell sums, fallbacks, optional re-sort. 3D works the same way with polyhedra and tetrahedra.
+
+![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
+
 **Fig. 2: Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
 
 ![Test inputs](paper/figures/fig02_inputs.png)
@@ -61,15 +65,11 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![3D vortex convergence of luna-cpp](paper/figures/fig08_luna_vortex.png)
 
-The figures are numbered in the paper's order (Fig. 1 is the walkthrough under [How it works](#how-it-works)); a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
+The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 
 ## How it works
 
-**Fig. 1: Building the mesh and one moving step.**
-
-![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
-
-One 2D example of 96 points throughout. Build (rows 1–2): quantise positions, Morton cell list, clip each cell against its neighbours until certified, face rings, exact Delaunay start. Step (rows 3–4): screen the tetrahedra the motion may break, repair them with exact flips, recompute geometry from the dual, per-cell sums, fallbacks, optional re-sort. 3D works the same way with polyhedra and tetrahedra.
+Fig. 1 above shows the whole method in one 2D example.
 
 Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md): the whole method panel by panel, the control flow of `update()`, one step and a rebuild in detail, where the data lives, how the GPU touches memory, and the memory pools and limits.
 
