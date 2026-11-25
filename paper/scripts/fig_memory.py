@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Figure memory: (a) device B/cell by array role at the peak of the rebuild, the exact start and a moving step
-(Kokkos arrays, 128³ and 256³, jittered); (b) peak B/cell of each code in the library benchmark, with the B/cell at
-which 256³, 384³ and 512³ fit one A100 40 GB. Data: paper/data/memory_by_array.csv, bench/libraries/results."""
+"""Figure memory: (a) device B/cell by array role at the peak of the rebuild, the exact start and a mesh update
+(Kokkos arrays, 128³ and 256³, jittered); (b) peak B/cell of each code in the library benchmark.
+Data: paper/data/memory_by_array.csv, bench/libraries/results."""
 import csv
 import os
 import sys
@@ -24,8 +24,6 @@ ROLES = [  # (role, array prefixes), stacking order
     ("repair scratch", ("tet_repair_",)),
 ]
 COLOURS = ["#7f7f7f", "#bcbd22", "#2ca02c", "#1f77b4", "#9467bd", "#ff7f0e", "#d62728"]
-A100 = 40e9
-SIZES = [(256, "256³"), (384, "384³"), (512, "512³")]
 GPU_ROWS = [  # (library prefix, variant prefix, label); full cells unless said
     ("voronoi-cpp", "warp clipping rebuild (cell", "voronoi-cpp, warp rebuild"),
     ("voronoi-cpp", "exact start", "voronoi-cpp, exact start (mesh)"),
@@ -64,7 +62,7 @@ def main():
             left += v
         big = sum(data[16777216, p].values())
         a.text(i, left + 25, f"{left:.0f}", ha="center", va="bottom", fontsize=11)
-    a.set_xticks(range(3), ["rebuild", "exact\nstart", "moving\nstep"])
+    a.set_xticks(range(3), ["rebuild", "exact\nstart", "mesh\nupdate"])
     a.set_xlim(-0.6, 4.4)  # room right of the bars for the legend
     a.set_ylim(0, 2200)
     a.set_ylabel("device B/cell at the peak, 128³")
@@ -84,18 +82,13 @@ def main():
         if bpc:
             rows.append((label, min(bpc), max(bpc)))
     steps = [float(r["bytes_per_cell"]) for k, r in csv_rows() if k == "moving step"]
-    rows.insert(2, ("voronoi-cpp, moving step", min(steps), max(steps)))
+    rows.insert(2, ("voronoi-cpp, mesh update", min(steps), max(steps)))
     for y, (label, lo, hi) in enumerate(rows):
         ours = label.startswith("voronoi-cpp")
         b.barh(y, hi, color="#666666" if ours else "#cfcfcf", height=0.6)
         b.barh(y, lo, color="#000000" if ours else "#8a8a8a", height=0.6)
         b.text(hi * 1.08, y, f"{lo:.0f}–{hi:.0f}" if hi > lo * 1.02 else f"{hi:.0f}", va="center", fontsize=11,
-               zorder=5, bbox=dict(fc="white", ec="none", pad=0.4))  # the size lines pass behind the values
-    for k, (side, name) in enumerate(SIZES):
-        limit = A100 / side ** 3
-        b.axvline(limit, color="#d62728", lw=1.4, ls="--", zorder=1)
-        b.text(limit * 1.05, -0.75 - 0.55 * k, f"{name} below {limit:.0f}", color="#d62728", ha="left",
-               va="center", fontsize=11, bbox=dict(fc="white", ec="none", pad=0.3))
+               zorder=5)
     from matplotlib.legend_handler import HandlerTuple
     from matplotlib.patches import Patch
     b.legend([(Patch(color="#000000"), Patch(color="#8a8a8a")), (Patch(color="#666666"), Patch(color="#cfcfcf"))],
@@ -104,7 +97,7 @@ def main():
     b.set_xscale("log")
     b.set_xlim(60, 3e4)
     b.set_yticks(range(len(rows)), [r[0] for r in rows], fontsize=11)
-    b.set_ylim(len(rows) - 0.4, -2.4)
+    b.set_ylim(len(rows) - 0.4, -1.1)
     b.set_xlabel("device B/cell at the peak, 128³")
     b.text(0.02, 0.98, "(b)", transform=b.transAxes, ha="left", va="top")
     figstyle.decorate(b)

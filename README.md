@@ -61,7 +61,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Build rate and memory against problem size](paper/figures/fig08_build_vs_n.png)
 
-**Fig. 9: Memory.** Device bytes per cell at the peak, by array, for the rebuild, exact start and moving step at 128³; then peak bytes per cell for every GPU code, with the limits at which 256³, 384³ and 512³ fit one A100 40 GB.
+**Fig. 9: Memory.** (a) Device bytes per cell at the peak, by array, for the rebuild, the exact start and the mesh update at 128³. (b) Peak bytes per cell for every GPU code, from the lowest to the highest of the five inputs. One A100 with 40 GB holds 256³ cells below 2384 bytes per cell, 384³ below 706 and 512³ below 298.
 
 ![Memory per cell](paper/figures/fig09_memory.png)
 
