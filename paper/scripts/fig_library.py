@@ -226,8 +226,7 @@ def step_codes(c, summary, text="(d)"):
 
 def main():
     summary, pub = load()
-    headline(summary, pub)
-    more(summary, pub)
+    headline(summary, pub)  # more(): the volumes-only and 72-core panels, no longer a paper figure
 
 
 if __name__ == "__main__":
