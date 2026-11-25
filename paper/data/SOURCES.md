@@ -45,3 +45,4 @@ geometry = tet_mesh::circumcentres, tet_mesh::faces, voronoi::total_volume;
 per-cell results = tet_mesh::cell_face_counts, cell_face_fill, cell_face_start, cell_sort, cell_sums, fresh_counts,
 fresh_fill, mark_cells, marked_counts, marked_fill;
 host and other = the step's wall time minus the kernels above (any other label, e.g. Kokkos::ViewCopy-1D, falls here).
+| `luna/kh/mode_<mesh>_<N>.txt`, `luna/kh/density_t2_1024.npz` | luna-cpp `hydro_kh2d <N> [--moving] --t-end=2.5`: t, mode amplitude M, peak kinetic energy density every 0.02; the density at t = 2 on 1024² pixels (`fig_kh.py <dump prefix>`) | Viper, one MI300A, job 13683847 (`kh_job.sh`); luna-cpp d209db7 (branch consolidate), voronoi-cpp c677926 (branch mi300a-hip), `-ffp-contract=off` | |

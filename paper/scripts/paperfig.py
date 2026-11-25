@@ -80,6 +80,7 @@ NUMBER = {
     "step_codes": "fig12d_step_codes",
     "luna_vortex": "fig13_luna_vortex",
     "titarev_toro": "fig14_titarev_toro",
+    "luna_kh": "fig15_luna_kh",
 }
 
 

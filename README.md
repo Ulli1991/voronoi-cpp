@@ -15,7 +15,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 190–263 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding, and each step is checked against a fresh exact build.
 4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
 
-**Two operations are timed, and they differ by an order of magnitude.** *Building* the mesh from scratch turns a set of points into the complete Voronoi mesh; a simulation does it once at the start (and after a rare failure). The *mesh update* brings an existing mesh up to date after the points moved a little; a simulation does it every time step. It is the cost of the mesh alone (repairing the tetrahedra by flips, recomputing the geometry, the per-cell lists and sums), with no hydrodynamics in it: a code built on the library adds its own solver on top, so that code's cell updates per second (Figs. 13–14 come from such a code) are lower than the mesh-update rates here, and the two must not be compared. On jittered points at 128³ the build runs at about 40 M cells/s and the mesh update at about 160 M cells/s. Figs. 1–9 are about the build, Figs. 10–12 about the mesh update, Figs. 13–14 about a hydrodynamics code using both.
+**Two operations are timed, and they differ by an order of magnitude.** *Building* the mesh from scratch turns a set of points into the complete Voronoi mesh; a simulation does it once at the start (and after a rare failure). The *mesh update* brings an existing mesh up to date after the points moved a little; a simulation does it every time step. It is the cost of the mesh alone (repairing the tetrahedra by flips, recomputing the geometry, the per-cell lists and sums), with no hydrodynamics in it: a code built on the library adds its own solver on top, so that code's cell updates per second (Figs. 13–15 come from such a code) are lower than the mesh-update rates here, and the two must not be compared. On jittered points at 128³ the build runs at about 40 M cells/s and the mesh update at about 160 M cells/s. Figs. 1–9 are about the build, Figs. 10–12 about the mesh update, Figs. 13–15 about a hydrodynamics code using both.
 
 ### Building the mesh from scratch
 
@@ -94,6 +94,10 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 **Fig. 14: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
 
 ![Titarev-Toro on the moving mesh](paper/figures/fig14_titarev_toro.png)
+
+**Fig. 15: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. Left: the density at t = 2 on the moving mesh at 1024² cells. Right: the amplitude of the seeded velocity mode against time on the moving and the static mesh at 256², 512² and 1024² (the three lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles, `paper/scripts/kh_linear_mcnally.py`). The measured growth rates between t = 0.6 and 1.2 are 2.81, 2.84 and 2.85 on the moving mesh and 2.84, 2.85 and 2.85 on the static mesh, within 0.7 % of theory.
+
+![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig15_luna_kh.png)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 
