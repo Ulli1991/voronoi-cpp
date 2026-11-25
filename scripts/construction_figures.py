@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Draws docs/figures/construction_*.png in LUNA's figure style. The geometry is computed by ports of the library's 2D
+"""Draws docs/figures/construction_*.png in LUNA's figure style; with --paper the clipping and exact-ties figures
+for the paper (paper/figures, numbered, panel letters only: the sentences under the panels are the captions). The geometry is computed by ports of the library's 2D
 code (polygon_clip.hpp, neighbor_search.hpp, tri_repair.hpp, exact_predicates_2d.hpp), checked against scipy.spatial."""
 import bisect
 import importlib.util
 import itertools
 import math
 import os
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -16,7 +18,8 @@ from matplotlib.patches import Circle, FancyArrowPatch, Polygon, Rectangle
 from scipy.spatial import Delaunay, Voronoi
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "..", "docs", "figures")
+PAPER = "--paper" in sys.argv
+OUT = os.path.join(HERE, "..", "paper" if PAPER else "docs", "figures")
 spec = importlib.util.spec_from_file_location("figstyle", os.path.join(HERE, "figstyle.py"))
 figstyle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(figstyle)
@@ -405,8 +408,25 @@ def outlined(ax, x, y, text, **kwargs):
 
 
 def save(fig, name):
-    fig.savefig(os.path.join(OUT, name), dpi=200)
+    if PAPER:  # the numbered name of paper/scripts/paperfig.py, vector and raster
+        table = open(os.path.join(HERE, "..", "paper", "scripts", "paperfig.py")).read()
+        stem = table.split(f'"{name[:-4]}": "')[1].split('"')[0]
+        fig.savefig(os.path.join(OUT, stem + ".pdf"))
+        fig.savefig(os.path.join(OUT, stem + ".png"), dpi=300)
+    else:
+        fig.savefig(os.path.join(OUT, name), dpi=200)
     plt.close(fig)
+
+
+def title(label):
+    """A panel's heading: its letter alone in the paper figures."""
+    return label.split(")")[0] + ")" if PAPER else label
+
+
+def note(ax, x, y, text, **kwargs):
+    """A sentence under a panel: drawn in the docs figures, left to the caption in the paper figures."""
+    if not PAPER:
+        ax.text(x, y, text, **kwargs)
 
 
 # ---- figure 1: one cell by clipping ----
@@ -457,7 +477,7 @@ def clipping_figure():
         grid = [[(a * width, lo[1]), (a * width, hi[1])] for a in range(x0, x1 + 1) if lo[0] <= a * width <= hi[0]]
         grid += [[(lo[0], b * width), (hi[0], b * width)] for b in range(y0, y1 + 1) if lo[1] <= b * width <= hi[1]]
         ax.add_collection(LineCollection(grid, colors="0.82", linewidths=THIN, zorder=1))
-        ax.text(lo[0] + 0.004, hi[1] + 0.035, label, fontsize=15, color=INK, va="center", ha="left")
+        ax.text(lo[0] + 0.004, hi[1] + 0.035, title(label), fontsize=15, color=INK, va="center", ha="left")
 
     def cells(ax, which, fc, ec="none", lw=0):
         for lv, a, b in which:
@@ -511,7 +531,7 @@ def clipping_figure():
     ax.plot(*zip(g, corner), color=INK, lw=THIN, zorder=7)
     outlined(ax, *(0.5 * (g + corner) + (0.012, -0.022)), "R = √2 L/4", fontsize=13)
     outlined(ax, *(g + (0.012, -0.03)), "home grid cell", fontsize=12, color=FAINT)
-    ax.text(lo[0] + 0.004, lo[1] - 0.04, "2R = 0.71 L: every particle in view may cut.\n"
+    note(ax, lo[0] + 0.004, lo[1] - 0.04, "2R = 0.71 L: every particle in view may cut.\n"
             f"Grid level {level}: {1 << level} × {1 << level} cells, about one particle each.", fontsize=13, va="center", color=INK)
 
     # (b) the first ring of grid cells, clipped nearest first
@@ -524,7 +544,7 @@ def clipping_figure():
     particles(ax, lambda j: dict(plain, mfc=TEST[1]) if cl.order.index(j) in {s["slot"] for s in first} else plain)
     label_order(ax, first)
     r = math.sqrt(first[-1]["reach2"]) / 2 / STEPS
-    ax.text(lo[0] + 0.004, lo[1] - 0.04, f"Each bisector cuts off a corner (orange).\nR falls to {r:.2f} L.", fontsize=13,
+    note(ax, lo[0] + 0.004, lo[1] - 0.04, f"Each bisector cuts off a corner (orange).\nR falls to {r:.2f} L.", fontsize=13,
             va="center", color=INK)
 
     # (c) the next rings
@@ -545,7 +565,7 @@ def clipping_figure():
         return plain
     particles(ax, style_c)
     label_order(ax, later)
-    ax.text(lo[0] + 0.004, lo[1] - 0.04, "Hollow: tested, its bisector misses the cell.\nDashed: the cell after (b).",
+    note(ax, lo[0] + 0.004, lo[1] - 0.04, "Hollow: tested, its bisector misses the cell.\nDashed: the cell after (b).",
             fontsize=13, va="center", color=INK)
 
     # (d) certified
@@ -556,8 +576,9 @@ def clipping_figure():
         lv, a, b = c.stop
         w = 1.0 / (1 << lv)
         ax.add_patch(Rectangle((a * w, b * w), w, w, fc="none", ec=INK, lw=1.4, ls=(0, (3, 2)), zorder=6))
-        outlined(ax, (a + 1) * w + 0.006, (b + 0.5) * w, "walk stops: this cell\nis 2R from the home cell", fontsize=12,
-                 va="center", color=INK)
+        if not PAPER:
+            outlined(ax, (a + 1) * w + 0.006, (b + 0.5) * w, "walk stops: this cell\nis 2R from the home cell", fontsize=12,
+                     va="center", color=INK)
     reach = math.sqrt(c.reach2) / STEPS
     ax.add_patch(Circle(g, reach, fc="none", ec=REFUSE[1], lw=HEAVY, zorder=6))
     ax.add_patch(polygon_patch(rel(c.vertices()), fc=REBUILD[0], ec=REBUILD[1], lw=HEAVY, zorder=5, alpha=0.9))
@@ -578,6 +599,8 @@ def clipping_figure():
                plt.Line2D([], [], **dict(plain, mfc="white", mec="0.6", mew=1.2, ms=5.5))]
     labels = ["neighbours: the cell's faces", f"tested, not a face ({len(tested) - len(final)})",
               f"never needed ({sum(1 for j in range(len(k)) if j != i and cl.order.index(j) not in tested and np.all(np.abs(k[j] / STEPS - g) < half + 0.03))} in view)"]
+    if PAPER:
+        labels = ["neighbour", "tested, not a neighbour", "never tested"]
     ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.0, 0.0), fontsize=12.5, handletextpad=0.3,
               borderaxespad=0.2, ncol=1)
     save(fig, "construction_clipping.png")
@@ -907,10 +930,10 @@ def exact_figure():
         ax.set_ylim(-0.5, size + 0.5)
         grid = [[(v, 0), (v, size)] for v in range(size + 1)] + [[(0, v), (size, v)] for v in range(size + 1)]
         ax.add_collection(LineCollection(grid, colors="0.8", linewidths=THIN, zorder=1))
-        ax.text(0, 1.03, label, fontsize=15, va="bottom", transform=ax.transAxes)
+        ax.text(0, 1.03, title(label), fontsize=15, va="bottom", transform=ax.transAxes)
 
     def caption(ax, text):
-        ax.text(0, -0.02, text, fontsize=13, va="top", transform=ax.transAxes, linespacing=1.3)
+        note(ax, 0, -0.02, text, fontsize=13, va="top", transform=ax.transAxes, linespacing=1.3)
 
     # (a) snapping: down to the grid point below and to the left
     ax = axes[0, 0]
@@ -1093,6 +1116,9 @@ def rings_figure():
 
 if __name__ == "__main__":
     clipping_figure()
+    if PAPER:
+        exact_figure()
+        sys.exit(0)
     cell_list_figure()
     flip_figure()
     exact_figure()

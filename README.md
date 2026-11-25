@@ -19,57 +19,57 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
 
-**Fig. 2: Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
+**Fig. 4: Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
 
-![Test inputs](paper/figures/fig02_inputs.png)
+![Test inputs](paper/figures/fig04_inputs.png)
 
-**Fig. 3: Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³). Right of the dotted line in the first figure: the three application inputs (cosmic web 128³, fcc solid 2²⁰ atoms, surface 128³), same codes and timing; an open marker where a code misses cells or returns wrong volumes, no marker where it crashed (votess on cosmic web and surface). On the surface input our rebuild and exact start drop to 0.03–0.04 M cells/s (cells refused and built again, issue #60).
+**Fig. 5: Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³). Right of the dotted line in the first figure: the three application inputs (cosmic web 128³, fcc solid 2²⁰ atoms, surface 128³), same codes and timing; an open marker where a code misses cells or returns wrong volumes, no marker where it crashed (votess on cosmic web and surface). On the surface input our rebuild and exact start drop to 0.03–0.04 M cells/s (cells refused and built again, issue #60).
 
-![Full cells against the public libraries](paper/figures/fig03a_speed_full_cells.png)
+![Full cells against the public libraries](paper/figures/fig05a_speed_full_cells.png)
 
-![Volumes only, 72 cores and the moving step](paper/figures/fig03b_speed_volumes_cpu_step.png)
+![Volumes only, 72 cores and the moving step](paper/figures/fig05b_speed_volumes_cpu_step.png)
 
-**Fig. 4: Where the time goes.** The moving step as a flowchart with its cost per cell by stage, then each library's time split into neighbour search and cell construction: ours takes under 1 ns per cell, the k-nearest-neighbour GPU codes spend 20–55 % of their time finding neighbours.
+**Fig. 6: Where the time goes.** The moving step as a flowchart with its cost per cell by stage, then each library's time split into neighbour search and cell construction: ours takes under 1 ns per cell, the k-nearest-neighbour GPU codes spend 20–55 % of their time finding neighbours.
 
-![Flowchart of update() and its cost by stage](paper/figures/fig04a_where_time.png)
+![Flowchart of update() and its cost by stage](paper/figures/fig06a_where_time.png)
 
-![Time per stage for every library](paper/figures/fig04b_stages_per_code.png)
+![Time per stage for every library](paper/figures/fig06b_stages_per_code.png)
 
-**Fig. 5a: Speed against quality.** Every library against an independent exact reference on sampled cells: relative volume error, fraction of cells missing and total sampled volume against the box.
+**Fig. 7a: Speed against quality.** Every library against an independent exact reference on sampled cells: relative volume error, fraction of cells missing and total sampled volume against the box.
 
-![Speed against quality](paper/figures/fig05a_quality.png)
+![Speed against quality](paper/figures/fig07a_quality.png)
 
-**Fig. 5b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes.
+**Fig. 7b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes.
 
-![Application inputs: completeness against build rate](paper/figures/fig05b_application.png)
+![Application inputs: completeness against build rate](paper/figures/fig07b_application.png)
 
-**Fig. 5c: Volume errors.** Our per-cell volume errors against the exact reference, all at the level of double rounding.
+**Fig. 7c: Volume errors.** Our per-cell volume errors against the exact reference, all at the level of double rounding.
 
-![Volume error against the exact reference](paper/figures/fig05c_volume_errors.png)
+![Volume error against the exact reference](paper/figures/fig07c_volume_errors.png)
 
-**Fig. 6a, b: Throughput against problem size and displacement.** Rebuild, exact start, moving step and memory from 32³ to 256³ (panel (b) predates the exact-start speed-up); the moving step against how far points move per step, the grey band being the exact start.
+**Fig. 8a, b: Throughput against problem size and displacement.** Rebuild, exact start, moving step and memory from 32³ to 256³ (panel (b) predates the exact-start speed-up); the moving step against how far points move per step, the grey band being the exact start.
 
-![Throughput against problem size](paper/figures/fig06a_throughput_vs_n.png)
+![Throughput against problem size](paper/figures/fig08a_throughput_vs_n.png)
 
-![Step rate against displacement](paper/figures/fig06b_step_vs_displacement.png)
+![Step rate against displacement](paper/figures/fig08b_step_vs_displacement.png)
 
-**Fig. 6c: Re-sort over a long run.** 500 steps with a Hilbert re-sort every 50 steps, which restores memory order and gained 1.3–1.5× over the run (figure of 2026-11-10). Since 2026-11-18 the re-sort is on by default, every 25 updates, and the step is 2.2× faster than before over 500 steps at 0.1 spacings, 128³ and 256³ ([measurements](docs/measurements.md#the-2-step-branch-step-2x-2026-11-18)). The step levers of the same day (repair kernels in registers, the screen's centre kept in registers) add 1.17–1.21× over 500 steps ([measurements](docs/measurements.md#the-step-levers-branch-step-levers-2026-11-18)). A re-sort allocates nothing (it works in the ring pools): 2.0–2.3 ns/cell at 128³ and 256³. It renumbers the particles: callers follow `permutation()`, with `permute_in_place()` when they must not allocate ([usage](docs/usage.md)).
+**Fig. 8c: Re-sort over a long run.** 500 steps with a Hilbert re-sort every 50 steps, which restores memory order and gained 1.3–1.5× over the run (figure of 2026-11-10). Since 2026-11-18 the re-sort is on by default, every 25 updates, and the step is 2.2× faster than before over 500 steps at 0.1 spacings, 128³ and 256³ ([measurements](docs/measurements.md#the-2-step-branch-step-2x-2026-11-18)). The step levers of the same day (repair kernels in registers, the screen's centre kept in registers) add 1.17–1.21× over 500 steps ([measurements](docs/measurements.md#the-step-levers-branch-step-levers-2026-11-18)). A re-sort allocates nothing (it works in the ring pools): 2.0–2.3 ns/cell at 128³ and 256³. It renumbers the particles: callers follow `permutation()`, with `permute_in_place()` when they must not allocate ([usage](docs/usage.md)).
 
-![Re-sort over 500 steps](paper/figures/fig06c_resort.png)
+![Re-sort over 500 steps](paper/figures/fig08c_resort.png)
 
-**Fig. 7: Memory.** Device bytes per cell at the peak, by array, for the rebuild, exact start and moving step at 128³; then peak bytes per cell for every GPU code, with the limits at which 256³, 384³ and 512³ fit one A100 40 GB.
+**Fig. 9: Memory.** Device bytes per cell at the peak, by array, for the rebuild, exact start and moving step at 128³; then peak bytes per cell for every GPU code, with the limits at which 256³, 384³ and 512³ fit one A100 40 GB.
 
-![Memory per cell](paper/figures/fig07_memory.png)
+![Memory per cell](paper/figures/fig09_memory.png)
 
-**Fig. 8: A moving-mesh code on the library.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
+**Fig. 10: A moving-mesh code on the library.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
 
-![3D vortex convergence of luna-cpp](paper/figures/fig08_luna_vortex.png)
+![3D vortex convergence of luna-cpp](paper/figures/fig10_luna_vortex.png)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 
 ## How it works
 
-Fig. 1 above shows the whole method in one 2D example.
+Fig. 1 above shows the whole method in one 2D example; Figs. 2 and 3 show its two central ideas.
 
 Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md): the whole method panel by panel, the control flow of `update()`, one step and a rebuild in detail, where the data lives, how the GPU touches memory, and the memory pools and limits.
 
@@ -88,21 +88,15 @@ Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_wor
 
 2D (`voronoi_mesh_2d.hpp`, `polygon_clip.hpp`, `tri_mesh.hpp`, `tri_repair.hpp`, `tri_finish.hpp`) runs the same stages on triangles, with exact clipping. 1D (`sorted_mesh.hpp`) quantises the generators to a 2⁵² grid, sorts them and supports `insert()` and `remove()`.
 
-![Clipping one cell](docs/figures/construction_clipping.png)
+**Fig. 2: Clipping one cell.** (a) The start square, a quarter of the box wide on each side of the generator; R is the distance to its farthest corner, and every particle within 2R may still cut the cell. (b) The 3 × 3 grid cells around the home cell, nearest particle first: each bisector cuts off a corner (orange) and R falls. (c) The next rings of grid cells; only particles within 2R are tested, hollow ones were tested and their bisector missed the cell (dashed: the cell after (b)). (d) Certified: no particle is left within 2R (red), the walk stops at the first grid cell 2R away (dashed square), and most particles were never looked at.
 
-How one cell is clipped. The start square is a quarter of the box wide on each side of the generator; each bisector, nearest first, cuts off a corner. The walk stops once no particle within 2R (red) is left, and most particles are never looked at.
+![Clipping one cell](paper/figures/fig02_clipping.png)
 
-![The cell list](docs/figures/construction_cell_list.png)
+**Fig. 3: Quantisation and exact ties.** (a) Each position goes to the grid point below and left of it; drawn with 8 steps across, the code has 2³⁰. (b) Four grid points exactly on one circle: the rounded in-circle value has opposite signs in different argument orders, inside its error bound, so double precision cannot decide; in exact integers it is 0, a true tie. (c), (d) Ties go by particle id: the particle with the lowest id counts as outside the circle of the other three, so the same diagonal is kept from every argument order, and other ids give the other diagonal.
 
-Left: each particle's grid level, fine in the clumps and coarse in the background. Right: the slot order along the Morton curve; every node of the tree, such as the blue one, holds one run of slots.
+![Quantisation and exact ties](paper/figures/fig03_exact_ties.png)
 
-![Repair by flips](docs/figures/construction_flip.png)
-
-A flip in 2D: d moved inside the circle through c, a, b, and one flip replaces edge a-b with c-d. In the Voronoi dual this replaces one face and moves the ends of four; the rest of the mesh is untouched.
-
-![Quantisation and exact ties](docs/figures/construction_exact.png)
-
-Four points exactly on one circle: rounded arithmetic gives opposite answers in different argument orders. The exact test sees the tie, and the particle ids decide it the same way for every caller.
+The cell list and the repair by flips have their own figures in [docs/how_it_works.md](docs/how_it_works.md).
 
 ## What it computes
 

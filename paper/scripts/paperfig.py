@@ -59,12 +59,24 @@ def figure(width_mm, height_mm, **kw):
 
 
 # The paper's order (paper/figures/README.md): figure name in the scripts -> file name. A letter marks the parts of one figure.
-NUMBER = {"walkthrough": "fig01_walkthrough", "inputs": "fig02_inputs", "library_headline": "fig03a_speed_full_cells",
-          "library_more": "fig03b_speed_volumes_cpu_step", "where_time": "fig04a_where_time",
-          "library_stages": "fig04b_stages_per_code", "quality": "fig05a_quality", "application": "fig05b_application",
-          "oracle_errors": "fig05c_volume_errors", "throughput_vs_n": "fig06a_throughput_vs_n",
-          "step_vs_displacement": "fig06b_step_vs_displacement", "resort": "fig06c_resort", "memory": "fig07_memory",
-          "luna_vortex": "fig08_luna_vortex"}
+NUMBER = {
+    "walkthrough": "fig01_walkthrough",
+    "construction_clipping": "fig02_clipping",
+    "construction_exact": "fig03_exact_ties",
+    "inputs": "fig04_inputs",
+    "library_headline": "fig05a_speed_full_cells",
+    "library_more": "fig05b_speed_volumes_cpu_step",
+    "where_time": "fig06a_where_time",
+    "library_stages": "fig06b_stages_per_code",
+    "quality": "fig07a_quality",
+    "application": "fig07b_application",
+    "oracle_errors": "fig07c_volume_errors",
+    "throughput_vs_n": "fig08a_throughput_vs_n",
+    "step_vs_displacement": "fig08b_step_vs_displacement",
+    "resort": "fig08c_resort",
+    "memory": "fig09_memory",
+    "luna_vortex": "fig10_luna_vortex",
+}
 
 
 def save(fig, name, width_mm):
