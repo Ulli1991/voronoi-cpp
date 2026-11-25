@@ -15,7 +15,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 190–263 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding, and each step is checked against a fresh exact build.
 4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
 
-**Two operations are timed, and they differ by an order of magnitude.** *Building* the mesh from scratch turns a set of points into the complete Voronoi mesh; a simulation does it once at the start (and after a rare failure). The *mesh update* brings an existing mesh up to date after the points moved a little; a simulation does it every time step. It is the cost of the mesh alone (repairing the tetrahedra by flips, recomputing the geometry, the per-cell lists and sums), with no hydrodynamics in it: a code built on the library adds its own solver on top, so that code's cell updates per second (Figs. 12–14 come from such a code) are lower than the mesh-update rates here, and the two must not be compared. On jittered points at 128³ the build runs at about 40 M cells/s and the mesh update at about 160 M cells/s. Figs. 1–8 are about the build, Figs. 9–11 about the mesh update, Figs. 12–14 about a hydrodynamics code using both.
+**Two operations are timed, and they differ by an order of magnitude.** *Building* the mesh from scratch turns a set of points into the complete Voronoi mesh; a simulation does it once at the start (and after a rare failure). The *mesh update* brings an existing mesh up to date after the points moved a little; a simulation does it every time step. It is the cost of the mesh alone (repairing the tetrahedra by flips, recomputing the geometry, the per-cell lists and sums), with no hydrodynamics in it: a code built on the library adds its own solver on top, so that code's cell updates per second (Figs. 11–13 come from such a code) are lower than the mesh-update rates here, and the two must not be compared. On jittered points at 128³ the build runs at about 40 M cells/s and the mesh update at about 160 M cells/s. Figs. 1–8 are about the build, Figs. 9–10 about the mesh update, Figs. 11–13 about a hydrodynamics code using both.
 
 ### Building the mesh from scratch
 
@@ -59,33 +59,29 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![One step of the moving mesh](paper/figures/fig09_moving_step.png)
 
-**Fig. 10: Where the mesh update's time goes.** (a) The control flow of one update: the usual path along the top (check, flip, reconnect, geometry, per-cell results), the host finish for the few stuck regions, and the rebuild as the last resort. (b) Wall time per cell of one mesh update in those stages at 128³, per input, for points moving 0.03, 0.1 and 0.3 mean spacings per step; the number at each bar is the mesh-update rate in M cells/s.
+**Fig. 10: Speed of the mesh update (the mesh alone, no solver).** (a) Against problem size, per input, at 0.1 spacings per step. (b) Against how far the points move per step (128³); the grey band is the exact start, the cost of building again instead. Split by stage, the cost that grows with the displacement is the flipping and reconnecting of the mesh; the check, the geometry and the per-cell results stay the same (jittered: 6.6 ns per cell at 0.03 spacings, 17.9 ns at 0.3). (c) Over 500 steps with and without a re-sort of the mesh in memory every 50 steps. (d) Against the mesh update of the other codes that have one, jittered input at 128³. 500 steps with a Hilbert re-sort every 50 steps, which restores memory order and gained 1.3–1.5× over the run (figure of 2026-11-10). Since 2026-11-18 the re-sort is on by default, every 25 updates, and the step is 2.2× faster than before over 500 steps at 0.1 spacings, 128³ and 256³ ([measurements](docs/measurements.md#the-2-step-branch-step-2x-2026-11-18)). The step levers of the same day (repair kernels in registers, the screen's centre kept in registers) add 1.17–1.21× over 500 steps ([measurements](docs/measurements.md#the-step-levers-branch-step-levers-2026-11-18)). A re-sort allocates nothing (it works in the ring pools): 2.0–2.3 ns/cell at 128³ and 256³. It renumbers the particles: callers follow `permutation()`, with `permute_in_place()` when they must not allocate ([usage](docs/usage.md)).
 
-![Flowchart of the step and its cost by stage](paper/figures/fig10_where_time.png)
+![Step rate against problem size](paper/figures/fig10a_step_vs_n.png)
 
-**Fig. 11: Speed of the mesh update (the mesh alone, no solver).** (a) Against problem size, per input, at 0.1 spacings per step. (b) Against how far the points move per step (128³); the grey band is the exact start, the cost of building again instead. (c) Over 500 steps with and without a re-sort of the mesh in memory every 50 steps. (d) Against the mesh update of the other codes that have one, jittered input at 128³. 500 steps with a Hilbert re-sort every 50 steps, which restores memory order and gained 1.3–1.5× over the run (figure of 2026-11-10). Since 2026-11-18 the re-sort is on by default, every 25 updates, and the step is 2.2× faster than before over 500 steps at 0.1 spacings, 128³ and 256³ ([measurements](docs/measurements.md#the-2-step-branch-step-2x-2026-11-18)). The step levers of the same day (repair kernels in registers, the screen's centre kept in registers) add 1.17–1.21× over 500 steps ([measurements](docs/measurements.md#the-step-levers-branch-step-levers-2026-11-18)). A re-sort allocates nothing (it works in the ring pools): 2.0–2.3 ns/cell at 128³ and 256³. It renumbers the particles: callers follow `permutation()`, with `permute_in_place()` when they must not allocate ([usage](docs/usage.md)).
+![Step rate against displacement](paper/figures/fig10b_step_vs_displacement.png)
 
-![Step rate against problem size](paper/figures/fig11a_step_vs_n.png)
+![Re-sort over 500 steps](paper/figures/fig10c_resort.png)
 
-![Step rate against displacement](paper/figures/fig11b_step_vs_displacement.png)
-
-![Re-sort over 500 steps](paper/figures/fig11c_resort.png)
-
-![The moving step of other codes](paper/figures/fig11d_step_codes.png)
+![The moving step of other codes](paper/figures/fig10d_step_codes.png)
 
 ### A moving-mesh code on the library
 
-**Fig. 12: 3D isentropic vortex.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
+**Fig. 11: 3D isentropic vortex.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
 
-![3D vortex convergence of luna-cpp](paper/figures/fig12_luna_vortex.png)
+![3D vortex convergence of luna-cpp](paper/figures/fig11_luna_vortex.png)
 
-**Fig. 13: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
+**Fig. 12: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
 
-![Titarev-Toro on the moving mesh](paper/figures/fig13_titarev_toro.png)
+![Titarev-Toro on the moving mesh](paper/figures/fig12_titarev_toro.png)
 
-**Fig. 14: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. Left: the density at t = 2 on the moving mesh at 1024² cells. Right: the amplitude of the seeded velocity mode against time on the moving and the static mesh at 256², 512² and 1024² (the three lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles, `paper/scripts/kh_linear_mcnally.py`). The measured growth rates between t = 0.6 and 1.2 are 2.81, 2.84 and 2.85 on the moving mesh and 2.84, 2.85 and 2.85 on the static mesh, within 0.7 % of theory.
+**Fig. 13: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. Left: the density at t = 2 on the moving mesh at 1024² cells. Right: the amplitude of the seeded velocity mode against time on the moving and the static mesh at 256², 512² and 1024² (the three lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles, `paper/scripts/kh_linear_mcnally.py`). The measured growth rates between t = 0.6 and 1.2 are 2.81, 2.84 and 2.85 on the moving mesh and 2.84, 2.85 and 2.85 on the static mesh, within 0.7 % of theory.
 
-![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig14_luna_kh.png)
+![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig13_luna_kh.png)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 

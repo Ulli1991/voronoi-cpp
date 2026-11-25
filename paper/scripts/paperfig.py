@@ -70,14 +70,13 @@ NUMBER = {
     "throughput_vs_n": "fig07_build_vs_n",
     "memory": "fig08_memory",
     "walkthrough_step": "fig09_moving_step",
-    "where_time": "fig10_where_time",
-    "step_vs_n": "fig11a_step_vs_n",
-    "step_vs_displacement": "fig11b_step_vs_displacement",
-    "resort": "fig11c_resort",
-    "step_codes": "fig11d_step_codes",
-    "luna_vortex": "fig12_luna_vortex",
-    "titarev_toro": "fig13_titarev_toro",
-    "luna_kh": "fig14_luna_kh",
+    "step_vs_n": "fig10a_step_vs_n",
+    "step_vs_displacement": "fig10b_step_vs_displacement",
+    "resort": "fig10c_resort",
+    "step_codes": "fig10d_step_codes",
+    "luna_vortex": "fig11_luna_vortex",
+    "titarev_toro": "fig12_titarev_toro",
+    "luna_kh": "fig13_luna_kh",
 }
 
 
