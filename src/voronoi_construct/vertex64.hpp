@@ -1,10 +1,8 @@
 #pragma once
 
-// Diagnostic build only (-DVORONOI_VERTEX64; off by default, the default build has none of this): issue #64, the
-// rounded clipping's new vertex on a cut edge. Each new vertex of a rounded cut (the warp kernel's interpolation
-// t = side[w] / (side[w] - side[u]), the per-thread kernel's three-plane intersection) is classified by the two ends'
-// signed distances to the cutting plane; counters are global, flags and the worst vertex per cell. Derivation of the
-// bound and results: research_notes/vertex64_2026-11-23.md.
+// Diagnostic build only (-DVORONOI_VERTEX64, off by default): issue #64, the rounded clipping's new vertex on a cut
+// edge. Each new vertex of a rounded cut is classified by its two ends' signed distances to the cutting plane: global
+// counters, flags and the worst vertex per cell. Bound and results: research_notes/vertex64_2026-11-23.md.
 #if defined(VORONOI_VERTEX64)
 
 #include <Kokkos_Core.hpp>
@@ -43,6 +41,7 @@ struct Sinks {
 #if defined(__CUDACC__)
 static __device__ Sinks device_sinks;
 #endif
+// The sinks host kernels write to.
 inline Sinks& host_sinks() {
     static Sinks s;
     return s;
@@ -59,6 +58,7 @@ inline void install(const Sinks& s, bool on_device) {
     }
 }
 
+// The installed sinks of the side the caller runs on (device or host).
 KOKKOS_INLINE_FUNCTION const Sinks& sinks() {
     KOKKOS_IF_ON_DEVICE((return device_sinks;))
     KOKKOS_IF_ON_HOST((return host_sinks();))
@@ -114,6 +114,7 @@ KOKKOS_INLINE_FUNCTION void count(Record& r, unsigned bits) {
     for (int k = 1; k < counters; ++k) r.count[k] += (bits & counted_bit(k)) != 0;
 }
 
+// Adds a rounded build's counts to the global counters and stores its flag, worst cut and radius for cell id.
 KOKKOS_INLINE_FUNCTION void write(int id, const Record& r, double radius) {
     const Sinks& s = sinks();
     if (s.counter != nullptr)
@@ -130,6 +131,7 @@ KOKKOS_INLINE_FUNCTION void write(int id, const Record& r, double radius) {
     for (int k = 0; k < 3; ++k) s.worst_vertex[3 * id + k] = r.vertex[k];
 }
 
+// Marks cell id as built exactly and stores that build's radius.
 KOKKOS_INLINE_FUNCTION void write_exact(int id, double radius) {
     const Sinks& s = sinks();
     if (id >= s.cap || s.flag == nullptr) return;

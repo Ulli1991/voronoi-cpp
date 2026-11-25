@@ -1,9 +1,8 @@
 #pragma once
 
 // Diagnostic build only (-DVORONOI_VERTEX64): the report of issue #64 for `voronoi_bench rebuild ... --vertex64`.
-// After a warp rebuild with the sinks installed: the global counters, the cells by bit, then the flagged cells (and
-// a sample of unflagged ones, and the cells whose faces do not pair) built again exactly (ExactCell) and compared:
-// volume, centroid, radius, and the worst cut's vertex against the exact meeting point of its three planes.
+// Prints the global counters and the cells by bit, then builds flagged, sampled unflagged and unpaired cells again
+// exactly (ExactCell) and compares volume, centroid, radius and the worst cut's vertex (three-plane meeting point).
 
 #include "support.hpp"
 #include "vertex64.hpp"
