@@ -19,25 +19,25 @@ OURS = "#000000"
 OTHERS = ["#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#1f77b4", "#17becf", "#e377c2", "#7f7f7f", "#bcbd22"]
 MARKERS = "^vPXsDh<>p*"
 HEADLINE = [  # (library, variant prefix, device, threads, label)
-    ("voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "ours, rebuild"),
-    ("voronoi-cpp", "exact start", "A100", 1, "ours, exact start"),
+    ("voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "this work, rebuild"),
+    ("voronoi-cpp", "exact start", "A100", 1, "this work, exact start"),
     ("peclet-voro", "cold build", "A100", 1, "peclet-voro"),
     ("gDel3D", "Delaunay + faces", "A100", 1, "gDel3D + faces"),
     ("Paragram", "voronoi_diagram + faces", "A100", 1, "Paragram + faces"),
     ("votess", "tesellate + faces", "A100", 1, "votess + faces"),
 ]
-SHORT = {"voronoi-cpp, warp rebuild, host to host": "voronoi-cpp, host to host",
-         "voronoi-cpp, host to host, volumes + centroids out": "voronoi-cpp, host to host",
+SHORT = {"voronoi-cpp, warp rebuild, host to host": "Kikkou, host to host",
+         "voronoi-cpp, host to host, volumes + centroids out": "Kikkou, host to host",
          "CGAL parallel + faces (ours)": "CGAL + faces", "geogram PDEL + faces (ours)": "geogram PDEL + faces",
          "geogram periodic + cells": "geogram periodic", "CGAL periodic + faces, 1 core": "CGAL, 1 core",
          "TetGen + faces, 1 core": "TetGen, 1 core", "Qhull + faces, 1 core": "Qhull, 1 core",
-         "voronoi-cpp, warp rebuild": "voronoi-cpp", "voro++ multithreaded": "voro++",
+         "voronoi-cpp, warp rebuild": "Kikkou", "voro++ multithreaded": "voro++",
          "votess + faces (ours)": "votess + faces", "peclet-voro (no centroids)": "peclet-voro",
          "Basselin et al. 2021": "Basselin et al.", "Liu et al. 2022 (float)": "Liu et al. (float)",
          "Ray et al. 2018 (float)": "Ray et al. (float)",
-         "voronoi-cpp, host to host, volumes + centroids out": "ours, full cells, host to host"}
-SHORT["voronoi-cpp, warp rebuild"] = "ours"
-SHORT["voronoi-cpp, host to host, volumes + centroids out"] = "ours, full cells, host to host"
+         "voronoi-cpp, host to host, volumes + centroids out": "this work, full cells, host to host"}
+SHORT["voronoi-cpp, warp rebuild"] = "this work"
+SHORT["voronoi-cpp, host to host, volumes + centroids out"] = "this work, full cells, host to host"
 
 
 def load():
@@ -92,7 +92,7 @@ HEADLINE_WIDTH = 130.0  # mm: eight inputs
 # Panel (a) of library_more as it was first drawn: our full cells with the volumes and centroids copied out, then the
 # three volumes-only codes (scripts/library_benchmark.py's FIGURE_GPU_VOLUMES has other rows of ours since).
 VOLUMES = [("voronoi-cpp", "warp clipping rebuild, host to host, volumes and centroids copied out", "A100", 1,
-            "ours, full cells, host to host")] + list(lb.FIGURE_GPU_VOLUMES[2:])
+            "this work, full cells, host to host")] + list(lb.FIGURE_GPU_VOLUMES[2:])
 
 
 def application_inputs(ax, drawn, rows, ticks):
@@ -115,7 +115,7 @@ def application_inputs(ax, drawn, rows, ticks):
         checked = next((name for (l, d, t, v), name in known.items()
                         if (l, d, t) == (lib, device, threads) and (variant.startswith(v) or v.startswith(variant))), None)
         if lib == "voronoi-cpp" and device == "A100":
-            checked = "ours, rebuild"  # every A100 row of ours is the warp rebuild
+            checked = "this work, rebuild"  # every A100 row of ours is the warp rebuild
         last = (line.get_xdata()[-1], line.get_ydata()[-1])
         run = [last] if last[0] == first - 1 else []
         for k, (kind, _) in enumerate(APPLICATION):
@@ -181,7 +181,7 @@ def more(summary, pub):
     others = [lb.curve(g, lib, var, "A100", 1, lb.SIZES[0])["bluenoise"]["median"]
               for lib, var in (("Basselin", ""), ("VoroGPU", ""), ("Liu et al.", "tet-centric"))]
     a.plot(1, vol["median"], "*", color=OURS, ms=15, mec="white", mew=0.5, zorder=6,
-           label="ours, volumes only, host to host")
+           label="this work, volumes only, host to host")
     a.text(1.2, vol["median"] * 1.5, "{:.1f}× Basselin\n{:.1f}× Ray\n{:.1f}× Liu (same job)".format(
         *(vol["median"] / o for o in others)), fontsize=10, va="center", ha="left")
     a.set_ylim(0.03, 5000)
@@ -208,7 +208,7 @@ def more(summary, pub):
 def step_codes(summary):
     """The moving step of the codes that have one, jittered input at 128³ (a figure of the moving-mesh part)."""
     fig, c = figure(SINGLE, 70)
-    names = ["ours\nGPU", "peclet\nGPU", "ours\nCPU", "peclet\nCPU", "CGAL\n1 core"]
+    names = ["this work\nGPU", "peclet\nGPU", "this work\nCPU", "peclet\nCPU", "CGAL\n1 core"]
     for k, row in enumerate(lb.FIGURE_STEP[:5]):
         got = lb.curve(summary, *row[:4], lb.SIZES[0], phase="step").get("jittered")
         if got:

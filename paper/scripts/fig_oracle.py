@@ -14,7 +14,7 @@ ZERO = 2.2e-19  # errors of exactly 0: their own bin left of an axis break, labe
 FLOOR = 1e-18  # nonzero errors below this go into the first log bin
 BINS = np.concatenate([[1.2e-19, 4e-19], np.logspace(-18, -2, 65)])  # [4e-19, 1e-18) stays empty: the break
 OTHERS = [  # (volumes prefix, label, colour); halo 2,097,152, the hardest input
-    ("voronoi-cpp-warp-a100", "ours", "#000000"),
+    ("voronoi-cpp-warp-a100", "this work", "#000000"),
     ("voropp-mt-cpu", "voro++", "#1f77b4"),
     ("cgal-dt3-par-cpu", "CGAL + faces", "#2ca02c"),
     ("geogram-pdel-cpu", "geogram", "#9467bd"),

@@ -25,12 +25,12 @@ ROLES = [  # (role, array prefixes), stacking order
 ]
 COLOURS = ["#7f7f7f", "#bcbd22", "#2ca02c", "#1f77b4", "#9467bd", "#ff7f0e", "#d62728"]
 GPU_ROWS = [  # (library prefix, variant prefix, label); full cells unless said
-    ("voronoi-cpp", "warp clipping rebuild (cell", "voronoi-cpp, warp rebuild"),
-    ("voronoi-cpp", "exact start", "voronoi-cpp, exact start (mesh)"),
+    ("voronoi-cpp", "warp clipping rebuild (cell", "Kikkou, rebuild"),
+    ("voronoi-cpp", "exact start", "Kikkou, exact start"),
     ("peclet-voro", "cold build", "peclet-voro"),
-    ("gDel3D", "Delaunay + faces", "gDel3D + faces (ours)"),
-    ("Paragram", "voronoi_diagram + faces", "Paragram + faces (ours)"),
-    ("votess", "tesellate + faces", "votess + faces (ours)"),
+    ("gDel3D", "Delaunay + faces", "gDel3D + faces"),
+    ("Paragram", "voronoi_diagram + faces", "Paragram + faces"),
+    ("votess", "tesellate + faces", "votess + faces"),
     ("Basselin", "", "Basselin et al. (volumes)"),
     ("Liu et al.", "tet-centric", "Liu et al. (volumes)"),
     ("VoroGPU", "", "Ray et al. (volumes)"),
@@ -82,9 +82,9 @@ def main():
         if bpc:
             rows.append((label, min(bpc), max(bpc)))
     steps = [float(r["bytes_per_cell"]) for k, r in csv_rows() if k == "moving step"]
-    rows.insert(2, ("voronoi-cpp, mesh update", min(steps), max(steps)))
+    rows.insert(2, ("Kikkou, mesh update", min(steps), max(steps)))
     for y, (label, lo, hi) in enumerate(rows):
-        ours = label.startswith("voronoi-cpp")
+        ours = label.startswith("Kikkou")
         b.barh(y, hi, color="#666666" if ours else "#cfcfcf", height=0.6)
         b.barh(y, lo, color="#000000" if ours else "#8a8a8a", height=0.6)
         b.text(hi * 1.08, y, f"{lo:.0f}–{hi:.0f}" if hi > lo * 1.02 else f"{hi:.0f}", va="center", fontsize=11,

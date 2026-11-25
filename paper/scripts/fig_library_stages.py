@@ -18,9 +18,9 @@ N = 2097152
 INPUTS = [("jittered", "jittered"), ("uniform", "white noise")]
 # (library prefix, variant prefix, label); the kNN codes run their README setting per input (grid / white noise).
 GPU = [
-    ("voronoi-cpp", "warp clipping rebuild (cell list", "voronoi-cpp, rebuild"),
-    ("voronoi-cpp", "warp clipping rebuild, host to host (copy", "voronoi-cpp, rebuild, host to host"),
-    ("voronoi-cpp", "exact start", "voronoi-cpp, exact start"),
+    ("voronoi-cpp", "warp clipping rebuild (cell list", "Kikkou, rebuild"),
+    ("voronoi-cpp", "warp clipping rebuild, host to host (copy", "Kikkou, rebuild, host to host"),
+    ("voronoi-cpp", "exact start", "Kikkou, exact start"),
     ("Basselin", "VoroAlgo", "Basselin et al."),
     ("VoroGPU", "kNN", "Ray et al. (float)"),
     ("Liu", "tet-centric", "Liu et al. (float)"),
@@ -30,8 +30,8 @@ GPU = [
     ("gDel3D", "Delaunay + faces", "gDel3D + faces"),
 ]
 CPU = [
-    ("voronoi-cpp", "warp clipping rebuild (cell list", "voronoi-cpp, rebuild"),
-    ("voronoi-cpp", "exact start", "voronoi-cpp, exact start"),
+    ("voronoi-cpp", "warp clipping rebuild (cell list", "Kikkou, rebuild"),
+    ("voronoi-cpp", "exact start", "Kikkou, exact start"),
     ("voro++", "multithreaded", "voro++"),
     ("CGAL", "Delaunay + faces", "CGAL + faces"),
     ("geogram", "PeriodicDelaunay3d + Voronoi", "geogram periodic"),

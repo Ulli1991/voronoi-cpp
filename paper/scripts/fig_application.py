@@ -25,9 +25,9 @@ SETTING = {"basselin": {"fccsolid": "grid"}, "vorogpu": {"fccsolid": "k90"}, "li
 WHITE = {"basselin": "white", "vorogpu": "k190", "liu": "p0"}
 # (label, volumes prefix with {s} for the README setting, library, variant prefix, device, threads, colour, marker)
 CODES = [
-    ("ours, rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1,
+    ("this work, rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1,
      "#000000", "o"),
-    ("ours, exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555", "o"),
+    ("this work, exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555", "o"),
     ("peclet-voro", "peclet-voro-a100", "peclet-voro", "cold build", "A100", 1, "#ff7f0e", "o"),
     ("gDel3D + faces", "gdel3d-a100", "gDel3D", "Delaunay + faces", "A100", 1, "#2ca02c", "o"),
     ("Paragram + faces", "paragram-a100", "Paragram", "voronoi_diagram + faces", "A100", 1, "#d62728", "o"),
@@ -45,7 +45,7 @@ CODES = [
 # Runs that end without volumes (docs/measurements.md, "Application inputs"): no rate, no record; listed in the panel.
 CRASHED = {("votess + faces", "cosmicweb"): "CUDA error 700", ("votess + faces", "surface"): "CUDA error 700",
            ("votess + faces (72 cores)", "surface"): "length_error"}
-ISSUE_60 = ("ours, rebuild", "ours, exact start")  # surface: cells refused, about 300x slower (#60 open)
+ISSUE_60 = ("this work, rebuild", "this work, exact start")  # surface: cells refused, about 300x slower (#60 open)
 
 
 def accuracy():
@@ -92,7 +92,7 @@ def rows():
 
 
 # Level of each complete code in the band (steps of 25 %), chosen so codes of similar rate sit at least two levels apart.
-LEVEL = {"ours, rebuild": 6, "ours, exact start": 1, "peclet-voro": 11, "gDel3D + faces": 0,
+LEVEL = {"this work, rebuild": 6, "this work, exact start": 1, "peclet-voro": 11, "gDel3D + faces": 0,
          "Paragram + faces": 8, "votess + faces": 7, "Basselin et al.": 4, "Ray et al. (float)": 9,
          "Liu et al. (float)": 6, "voro++ (72 cores)": 5, "CGAL + faces (72 cores)": 12,
          "geogram (72 cores)": 3, "votess + faces (72 cores)": 10}
