@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Part 2 figure, 3D Yee vortex: L1(ρ) and L1(v) of the cell averages against n_x for luna-cpp's moving mesh (two
-flux passes, today's scheme), the static Voronoi mesh and LUNA MC (Cartesian), at 190 mm. Data: paper/data/luna/
-(vortex_norms.csv from the luna-cpp job logs, LUNA MC from luna-reference-solutions; see SOURCES.md)."""
+"""Part 2 figure, 3D Yee vortex. Left: the density in the mid-plane z = 1.25 at the final time t = 10 on luna-cpp's
+moving mesh (n_x = 64), each pixel coloured by the cell it lies in, the cell boundaries drawn (the plane's cut through
+the 3D Voronoi mesh). Right: L1(ρ) and L1(v) of the cell averages against n_x for the moving mesh (two flux passes,
+today's scheme), the static Voronoi mesh and LUNA MC (Cartesian). 190 mm. Data: paper/data/luna/ (vortex_slab_64.npz
+from hydro_wave3d --out, cut to the slab around the plane by vortex_slab(); vortex_norms.csv from the luna-cpp job
+logs; LUNA MC from luna-reference-solutions; see SOURCES.md)."""
 import csv
 import os
 
@@ -10,6 +13,44 @@ import numpy as np
 from paperfig import DATA, DOUBLE, LW, figstyle, figure, save
 
 NX = (32, 64, 128, 256)
+SIDE, ORIGIN, PLANE = (10.0, 10.0, 2.5), (-5.0, -5.0, 0.0), 1.25
+SLAB = os.path.join(DATA, "luna", "vortex_slab_64.npz")
+
+
+def vortex_slab(npy, nx=64):
+    """Writes SLAB from hydro_wave3d's --out rows (generator 0-2, centroid 3-5, volume 6, rho 7, v 8-10, P 11): the cells
+    within three spacings of the plane, positions in the box [0, side), float32."""
+    r = np.load(npy)
+    x = (r[:, :3] - np.array(ORIGIN)) % np.array(SIDE)
+    near = np.abs(x[:, 2] - PLANE) < 3 * SIDE[0] / nx
+    np.savez_compressed(SLAB, x=x[near].astype(np.float32), rho=r[near, 7].astype(np.float32), nx=nx)
+
+
+def picture(ax, pixels=900):
+    """The plane's cut through the mesh: every pixel takes the density of its nearest generator (its Voronoi cell)."""
+    from scipy.spatial import cKDTree
+
+    d = np.load(SLAB)
+    x, rho = d["x"].astype(float), d["rho"]
+    at = (np.arange(pixels) + 0.5) / pixels * SIDE[0]
+    gx, gy = np.meshgrid(at, at, indexing="ij")
+    query = np.c_[gx.ravel(), gy.ravel(), np.full(gx.size, PLANE)]
+    # periodic in x and y; the slab does not reach the box's z faces
+    tiles = np.concatenate([x + np.array([i * SIDE[0], j * SIDE[1], 0.0]) for i in (-1, 0, 1) for j in (-1, 0, 1)])
+    cell = (cKDTree(tiles).query(query, workers=4)[1] % len(x)).reshape(pixels, pixels)
+    image = ax.imshow(rho[cell].T, origin="lower", extent=(ORIGIN[0], ORIGIN[0] + SIDE[0], ORIGIN[1], ORIGIN[1] + SIDE[1]),
+                      cmap="viridis", interpolation="nearest")
+    edge = np.zeros(cell.shape, bool)
+    edge[:-1] |= cell[:-1] != cell[1:]
+    edge[:, :-1] |= cell[:, :-1] != cell[:, 1:]
+    lines = np.zeros((pixels, pixels, 4))
+    lines[..., 3] = 0.35 * edge.T
+    ax.imshow(lines, origin="lower", extent=image.get_extent(), interpolation="nearest")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal")
+    bar = ax.figure.colorbar(image, ax=ax, location="top", fraction=0.046, pad=0.03)
+    bar.set_label(r"$\rho$ at $t = 10$")
 
 
 def main():
@@ -19,7 +60,11 @@ def main():
     d = np.load(os.path.join(DATA, "luna", "yee_vortex_convergence.npz"))
     pick = (d["dim"] == 3) & (d["limiter"] == 1) & (d["vx"] == 0) & (d["cfl"] == 0.8) & (d["ic_quad"] == 8)
     order = np.argsort(d["nx"][pick])
-    fig, axes = figure(DOUBLE, 72, ncols=2)
+    with_picture = os.path.exists(SLAB)
+    fig, axes = figure(DOUBLE, 72, ncols=3 if with_picture else 2)
+    if with_picture:
+        picture(axes[0])
+        axes = axes[1:]
     for ax, key, label, v in ((axes[0], "L1_rho", r"$L_1(\rho)$", "rho"), (axes[1], "L1_v", r"$L_1(v)$", "v")):
         nx = d["nx"][pick][order]
         keep = nx <= 256
@@ -46,4 +91,8 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:  # fig_vortex.py <hydro_wave3d --out file of the moving mesh at t = 10, n_x = 64>
+        vortex_slab(sys.argv[1])
     main()
