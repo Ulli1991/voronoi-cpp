@@ -76,6 +76,7 @@ NUMBER = {
     "resort": "fig08c_resort",
     "memory": "fig09_memory",
     "luna_vortex": "fig10_luna_vortex",
+    "titarev_toro": "fig11_titarev_toro",  # luna-cpp's docs/figures/titarev_toro.png, copied
 }
 
 

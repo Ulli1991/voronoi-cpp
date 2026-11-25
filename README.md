@@ -15,7 +15,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 190–263 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding, and each step is checked against a fresh exact build.
 4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
 
-**Fig. 1: Building the mesh and one moving step.** One 2D example of 96 points throughout. Build (rows 1–2): quantise positions, Morton cell list, clip each cell against its neighbours until certified, face rings, exact Delaunay start. Step (rows 3–4): screen the tetrahedra the motion may break, repair them with exact flips, recompute geometry from the dual, per-cell sums, fallbacks, optional re-sort. 3D works the same way with polyhedra and tetrahedra.
+**Fig. 1: Building the mesh and one moving step.** One 2D example of 96 points throughout. Build (rows 1–2): quantise positions, Morton cell list, clip each cell against its neighbours until certified, face rings, exact Delaunay start. Step (rows 3–4): screen the tetrahedra the motion may break, repair them with exact flips, recompute geometry from the dual, per-cell sums, fallbacks, optional re-sort. 3D works the same way with polyhedra and tetrahedra. Panels: 1 quantise positions, 2 Morton cell list, 3 clip one cell, 4 all cells with their face rings, 5 exact start, 6 points move, 7 screen, 8 flip, 9 geometry from the dual, 10 `update_cells()`, 11 fallbacks, 12 re-sort (3D only). All run on the GPU, except 6 (the caller moves the points) and 11 (host or GPU).
 
 ![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
 
@@ -47,7 +47,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Speed against quality](paper/figures/fig07a_quality.png)
 
-**Fig. 7b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes.
+**Fig. 7b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes. The grey band holds the codes with no cell missing (spread vertically only to tell them apart); votess crashed on cosmic web and on surface and is not drawn there. On surface our rebuild leaves 2 in 10⁴ cells to the exact start, which is complete but slow (issue #60).
 
 ![Application inputs: completeness against build rate](paper/figures/fig07b_application.png)
 
@@ -72,6 +72,10 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 **Fig. 10: A moving-mesh code on the library.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
 
 ![3D vortex convergence of luna-cpp](paper/figures/fig10_luna_vortex.png)
+
+**Fig. 11: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
+
+![Titarev-Toro on the moving mesh](paper/figures/fig11_titarev_toro.png)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 

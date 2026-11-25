@@ -18,6 +18,7 @@ SHEET = {}  # the one sheet both of overview_figure's figures draw on
 _init = of.Sheet.__init__
 CAPTIONS = []  # (panel number, title, text, code) of every panel, for the captions
 _panel = of.Sheet.panel
+WHERE = {}  # panel number -> where it runs (GPU, host, caller): for the caption
 
 
 # The paper's terms (owner): positions are "quantised to integer coordinates on a 2^30 grid", then "quantised" or
@@ -42,13 +43,14 @@ def words(text):
 
 
 def panel(self, row, col, number, title, where, body, code, window=(0, 1, 0, 1)):
-    """Sheet.panel with the text and the code lines left to the caption: title and drawing only."""
+    """Sheet.panel with everything written left to the caption (title, where it runs, text, code): number and drawing only."""
     title, body, code = words(title), words(body), words(code)
     CAPTIONS.append((number, title, body, code))
     rowh = self.HEAD + self.S + self.TEXT + self.GAP
     if int(number) > 6:  # the step: rows 3-4, below a small extra gap
         row = row + 2 + PAIR / rowh
-    return _panel(self, row, col + LEFT / self.W, number, title, where, "", "", window)
+    WHERE[number] = where
+    return _panel(self, row, col + LEFT / self.W, number, "", (), "", "", window)
 
 
 def sheet(self, rows, cols):

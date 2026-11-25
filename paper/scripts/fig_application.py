@@ -2,8 +2,8 @@
 """Figure application: completeness against build rate on the three application inputs (cosmic web 128³, fcc solid 2²⁰
 atoms, surface 128³), one point per code, from the library benchmark's own runs: rates from bench/libraries/results
 (the "Application inputs" tables of scripts/library_benchmark.py), cells missing from accuracy-inputs-*.jsonl and the
-per-cell errors of paper/data/oracle_errors_application.csv. Codes that crash are listed in the panel, codes whose
-volumes are wrong are drawn open and labelled; our two surface rows are joined and labelled (cells refused, issue #60)."""
+per-cell errors of paper/data/oracle_errors_application.csv. Codes that crash are not drawn (CRASHED; named in the
+caption), codes whose volumes are wrong are drawn open; the grey band holds the codes with no cell missing."""
 import glob
 import json
 import os
@@ -117,16 +117,6 @@ def main():
             ax.plot(r["rate"], y, r["marker"], color=r["colour"], ms=9 if hollow else 8,
                     mfc="none" if hollow else r["colour"], mec=r["colour"] if hollow else "white",
                     mew=1.8 if hollow else 0.5, zorder=5 if hollow else 4)
-        ours = [r for r in here if kind == "surface" and r["label"] in ISSUE_60]
-        for r in ours:
-            ax.annotate("", (r["rate"], height(r)), xytext=(0.042, 2.5e-6), arrowprops=dict(
-                arrowstyle="-", color="0.3", lw=0.8, shrinkA=0, shrinkB=5))
-        if ours:
-            ax.text(0.046, 2.5e-6, "ours", fontsize=11, ha="left", va="center")
-        crashed = [f"{r['label']}" for r in here if r["state"] == "crashed"]
-        if crashed:
-            ax.text(0.95, 0.5, "crashed:\n" + "\n".join(crashed), transform=ax.transAxes, ha="right", va="top",
-                    fontsize=10, color="0.25")
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlim(0.01, 80)
@@ -136,8 +126,6 @@ def main():
         ax.set_xlabel("build rate, M cells/s")
         ax.set_title(title, fontsize=13)
         figstyle.decorate(ax)
-        ax.text(0.97, 3e-7, "band: no cell missing", fontsize=10, va="bottom", ha="right", color="0.3",
-                transform=ax.get_yaxis_transform())
     axes[0].set_ylabel("fraction of cells missing")
     # One shared legend inside the panel with the most room (fcc solid: every code complete, the top is empty): one
     # entry per code (colour), then the keys for marker shape (where it ran) and open markers (wrong volumes).
