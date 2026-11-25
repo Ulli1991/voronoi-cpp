@@ -18,6 +18,10 @@ LEFT = 0.05  # inches left of the first column
 PAIR = 0.20  # extra space between the build and the step rows, inches
 SHEET = {}  # the one sheet both of overview_figure's figures draw on
 _init = of.Sheet.__init__
+# A brief title beside each panel's number (the full sentence stays in the caption).
+TITLE = {"1": "Integer positions", "2": "Morton cell list", "3": "Clip one cell", "4": "All cells",
+         "5": "Exact Delaunay mesh", "6": "Points move", "7": "Check", "8": "Flip", "9": "Geometry",
+         "10": "Per-cell results", "11": "Fallbacks", "12": "Re-sort"}
 CAPTIONS = []  # (panel number, title, text, code) of every panel, for the captions
 _panel = of.Sheet.panel
 WHERE = {}  # panel number -> where it runs (GPU, host, caller): for the caption
@@ -53,7 +57,7 @@ def panel(self, row, col, number, title, where, body, code, window=(0, 1, 0, 1))
         row = row + 2 + PAIR / rowh
     WHERE[number] = where
     shown = number if int(number) <= 6 else str(int(number) - 6)  # the step is a figure of its own: its panels 1-6
-    return _panel(self, row, col + LEFT / self.W, shown, "", (), "", "", window)
+    return _panel(self, row, col + LEFT / self.W, shown, TITLE[number], (), "", "", window)
 
 
 def sheet(self, rows, cols):
