@@ -32,7 +32,8 @@ std::string text_arg(int argc, char** argv, const std::string& key, const std::s
 // Calls f(slot j, d2) for every slot within h of slot q's position (q itself included), walking the grid cells at the
 // level where cells are about h / per_h wide, skipping cells whose box is farther than h.
 template <class F>
-KOKKOS_INLINE_FUNCTION void ball(const Grid& g, int q, double h, int per_h, int depth, const F& f, int* tested = nullptr) {
+KOKKOS_INLINE_FUNCTION void ball(const Grid& g, int q, double h, int per_h, int depth, const F& f,
+                                 int* tested = nullptr) {
     const double px = g.positions(q, 0), py = g.positions(q, 1), pz = g.positions(q, 2);
     const double h2 = h * h;
     // The finest level whose cells are at least h / per_h wide.
@@ -127,8 +128,7 @@ int main(int argc, char** argv) {
     const Grid g = shell_voronoi::make_grid(list);
     const int depth = g.levels + neighbor_search::fine_levels;
     std::cout << "# backend=" << Exec::name() << " concurrency=" << exec.concurrency() << " n=" << n
-              << " input=" << kind << " ngb=" << ngb << " per_h=" << per_h << " base_levels=" << list.levels
-              << "\n";
+              << " input=" << kind << " ngb=" << ngb << " per_h=" << per_h << " base_levels=" << list.levels << "\n";
     std::cout << "cell_list: build_ms=" << build_ms << " ns_per_particle=" << build_ms * 1e6 / n << "\n";
 
     // Radii per slot: given, or from the density, GIZMO-like: start from the slot's cell-list level, then three
@@ -148,42 +148,49 @@ int main(int argc, char** argv) {
     } else {
         const double c = std::cbrt(3.0 * ngb / (4.0 * M_PI));
         const auto level = g.level;
-        Kokkos::parallel_for("ngb::h0", Kokkos::RangePolicy<Exec>(exec, 0, n),
-                             KOKKOS_LAMBDA(int q) { h(q) = c / double(1 << level(q)); });
+        Kokkos::parallel_for(
+            "ngb::h0", Kokkos::RangePolicy<Exec>(exec, 0, n),
+            KOKKOS_LAMBDA(int q) { h(q) = c / double(1 << level(q)); });
         for (int it = 0; it < 4; ++it)
-            Kokkos::parallel_for("ngb::h_update", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int q) {
-                int k = 0;
-                ball(g, q, h(q), per_h, depth, [&](int, double) { ++k; });
-                h(q) *= Kokkos::cbrt(double(ngb + 1) / Kokkos::max(k, 1));  // +1: the particle itself
-            });
+            Kokkos::parallel_for(
+                "ngb::h_update", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                    int k = 0;
+                    ball(g, q, h(q), per_h, depth, [&](int, double) { ++k; });
+                    h(q) *= Kokkos::cbrt(double(ngb + 1) / Kokkos::max(k, 1));  // +1: the particle itself
+                });
     }
     exec.fence();
 
     using Range = Kokkos::RangePolicy<Exec>;
     // One-way: count, scan, fill.
     auto count_pass = [&] {
-        Kokkos::parallel_for("ngb::count", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            int k = 0;
-            ball(g, q, h(q), per_h, depth, [&](int s, double) { k += s != q; });
-            count(q) = k;
-        });
+        Kokkos::parallel_for(
+            "ngb::count", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                int k = 0;
+                ball(g, q, h(q), per_h, depth, [&](int s, double) { k += s != q; });
+                count(q) = k;
+            });
     };
     int total = 0;
     auto scan_pass = [&](const Ints& c, const Ints& o, int& sum) {
-        Kokkos::parallel_scan("ngb::scan", Range(exec, 0, n + 1), KOKKOS_LAMBDA(int q, int& at, bool last) {
-            const int k = q < n ? c(q) : 0;
-            if (last) o(q) = at;
-            at += k;
-        }, sum);
+        Kokkos::parallel_scan(
+            "ngb::scan", Range(exec, 0, n + 1),
+            KOKKOS_LAMBDA(int q, int& at, bool last) {
+                const int k = q < n ? c(q) : 0;
+                if (last) o(q) = at;
+                at += k;
+            },
+            sum);
     };
     Ints neighbours;
     auto fill_pass = [&] {
-        Kokkos::parallel_for("ngb::fill", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            int at = offsets(q);
-            ball(g, q, h(q), per_h, depth, [&](int s, double) {
-                if (s != q) neighbours(at++) = s;
+        Kokkos::parallel_for(
+            "ngb::fill", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                int at = offsets(q);
+                ball(g, q, h(q), per_h, depth, [&](int s, double) {
+                    if (s != q) neighbours(at++) = s;
+                });
             });
-        });
     };
     const double count_ms = timed(repeats, count_pass);
     const double scan_ms = timed(repeats, [&] { scan_pass(count, offsets, total); });
@@ -199,17 +206,20 @@ int main(int argc, char** argv) {
                   << " ns_per_particle=" << (count_ms + scan_ms + fill_ms) * 1e6 / n
                   << " with_cell_list_ns_per_particle=" << (build_ms + count_ms + scan_ms + fill_ms) * 1e6 / n
                   << " entries=" << total << " mean=" << double(sum) / n << " p1=" << percentile(v, 0.01)
-                  << " p50=" << percentile(v, 0.5) << " p99=" << percentile(v, 0.99)
-                  << " max=" << percentile(v, 1.0) << "\n";
+                  << " p50=" << percentile(v, 0.5) << " p99=" << percentile(v, 0.99) << " max=" << percentile(v, 1.0)
+                  << "\n";
     }
 
     {  // Candidates (particles whose distance is computed) per particle, untimed.
         long long tested = 0;
-        Kokkos::parallel_reduce("ngb::candidates", Range(exec, 0, n), KOKKOS_LAMBDA(int q, long long& sum) {
-            int t = 0;
-            ball(g, q, h(q), per_h, depth, [&](int, double) {}, &t);
-            sum += t;
-        }, tested);
+        Kokkos::parallel_reduce(
+            "ngb::candidates", Range(exec, 0, n),
+            KOKKOS_LAMBDA(int q, long long& sum) {
+                int t = 0;
+                ball(g, q, h(q), per_h, depth, [&](int, double) {}, &t);
+                sum += t;
+            },
+            tested);
         std::cout << "candidates_per_particle=" << double(tested) / n << "\n";
     }
 
@@ -220,19 +230,21 @@ int main(int argc, char** argv) {
     int ttotal = 0, stotal = 0;
     auto transpose = [&] {
         Kokkos::deep_copy(exec, tcount, 0);
-        Kokkos::parallel_for("ngb::t_count", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            for (int a = offsets(q); a < offsets(q + 1); ++a) Kokkos::atomic_inc(&tcount(neighbours(a)));
-        });
+        Kokkos::parallel_for(
+            "ngb::t_count", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                for (int a = offsets(q); a < offsets(q + 1); ++a) Kokkos::atomic_inc(&tcount(neighbours(a)));
+            });
         scan_pass(tcount, toffsets, ttotal);
         if (transposed.extent(0) != static_cast<std::size_t>(ttotal))
             transposed = Ints(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("transposed")), ttotal);
         Kokkos::deep_copy(exec, tcursor, 0);
-        Kokkos::parallel_for("ngb::t_fill", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            for (int a = offsets(q); a < offsets(q + 1); ++a) {
-                const int j = neighbours(a);
-                transposed(toffsets(j) + Kokkos::atomic_fetch_inc(&tcursor(j))) = q;
-            }
-        });
+        Kokkos::parallel_for(
+            "ngb::t_fill", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                for (int a = offsets(q); a < offsets(q + 1); ++a) {
+                    const int j = neighbours(a);
+                    transposed(toffsets(j) + Kokkos::atomic_fetch_inc(&tcursor(j))) = q;
+                }
+            });
     };
     auto extra = KOKKOS_LAMBDA(int q, int j) {
         double ax = g.positions(j, 0) - g.positions(q, 0), ay = g.positions(j, 1) - g.positions(q, 1),
@@ -241,20 +253,22 @@ int main(int argc, char** argv) {
         return ax * ax + ay * ay + az * az >= h(q) * h(q);
     };
     auto merge = [&] {
-        Kokkos::parallel_for("ngb::s_count", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            int k = offsets(q + 1) - offsets(q);
-            for (int a = toffsets(q); a < toffsets(q + 1); ++a) k += extra(q, transposed(a));
-            scount(q) = k;
-        });
+        Kokkos::parallel_for(
+            "ngb::s_count", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                int k = offsets(q + 1) - offsets(q);
+                for (int a = toffsets(q); a < toffsets(q + 1); ++a) k += extra(q, transposed(a));
+                scount(q) = k;
+            });
         scan_pass(scount, soffsets, stotal);
         if (sym.extent(0) != static_cast<std::size_t>(stotal))
             sym = Ints(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("symmetric")), stotal);
-        Kokkos::parallel_for("ngb::s_fill", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            int at = soffsets(q);
-            for (int a = offsets(q); a < offsets(q + 1); ++a) sym(at++) = neighbours(a);
-            for (int a = toffsets(q); a < toffsets(q + 1); ++a)
-                if (extra(q, transposed(a))) sym(at++) = transposed(a);
-        });
+        Kokkos::parallel_for(
+            "ngb::s_fill", Range(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                int at = soffsets(q);
+                for (int a = offsets(q); a < offsets(q + 1); ++a) sym(at++) = neighbours(a);
+                for (int a = toffsets(q); a < toffsets(q + 1); ++a)
+                    if (extra(q, transposed(a))) sym(at++) = transposed(a);
+            });
     };
     const double transpose_ms = timed(repeats, transpose);
     const double merge_ms = timed(repeats, merge);
@@ -305,8 +319,7 @@ int main(int argc, char** argv) {
             }
             auto differ = [&](const std::vector<int>& got, const std::vector<int>& want) {
                 std::vector<int> d;
-                std::set_symmetric_difference(got.begin(), got.end(), want.begin(), want.end(),
-                                              std::back_inserter(d));
+                std::set_symmetric_difference(got.begin(), got.end(), want.begin(), want.end(), std::back_inserter(d));
                 int bad = 0;
                 for (int s : d) bad += std::find(near.begin(), near.end(), s) == near.end();
                 borderline += static_cast<int>(d.size()) - bad;

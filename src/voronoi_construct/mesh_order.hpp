@@ -195,8 +195,8 @@ public:
             hipcub::DoubleBuffer<Key> k(nullptr, nullptr);
             hipcub::DoubleBuffer<int> v(nullptr, nullptr);
             std::size_t bytes = 0;
-            (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0, 8 * static_cast<int>(sizeof(Key)),
-                                                     exec.hip_stream());
+            (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0,
+                                                     8 * static_cast<int>(sizeof(Key)), exec.hip_stream());
             if (arena) {
                 keys_ = arena->template take<Key>(capacity);
                 ids_ = arena->template take<int>(capacity);

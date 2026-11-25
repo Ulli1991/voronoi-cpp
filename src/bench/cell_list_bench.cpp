@@ -25,50 +25,51 @@ double search(const Exec& exec, const Grid& g, double c, int drop, bool prune, i
               const Counts& tested, const Rho& rho) {
     const int n = g.n, depth = g.levels + neighbor_search::fine_levels;
     return median_ms(repeats, [&] {
-        Kokkos::parallel_for("cell_list_bench::search", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int q) {
-            const double px = g.positions(q, 0), py = g.positions(q, 1), pz = g.positions(q, 2);
-            const int own = g.level(q);
-            const double h = c / double(1 << own), h2 = h * h;
-            const int level = Kokkos::max(2, own - drop);
-            const int side = 1 << level;
-            const double w = 1.0 / side;
-            const int reach = Kokkos::min(static_cast<int>(Kokkos::ceil(h / w)), (side - 1) / 2);
-            const int hx = neighbor_search::grid_coordinate(px, 1.0, side);
-            const int hy = neighbor_search::grid_coordinate(py, 1.0, side);
-            const int hz = neighbor_search::grid_coordinate(pz, 1.0, side);
-            int found = 0, seen = 0;
-            double sum = 0;
-            for (int dx = -reach; dx <= reach; ++dx) {
-                const double gx = Kokkos::max(0, Kokkos::abs(dx) - 1) * w;
-                for (int dy = -reach; dy <= reach; ++dy) {
-                    const double gy = Kokkos::max(0, Kokkos::abs(dy) - 1) * w;
-                    for (int dz = -reach; dz <= reach; ++dz) {
-                        const double gz = Kokkos::max(0, Kokkos::abs(dz) - 1) * w;
-                        if (prune && gx * gx + gy * gy + gz * gz >= h2) continue;
-                        const int x = (hx + dx + side) & (side - 1), y = (hy + dy + side) & (side - 1),
-                                  z = (hz + dz + side) & (side - 1);
-                        int begin, end;
-                        g.template range<true>(level, x, y, z, begin, end);
-                        seen += end - begin;
-                        for (int s = begin; s < end; ++s) {
-                            double ax = g.positions(s, 0) - px, ay = g.positions(s, 1) - py,
-                                   az = g.positions(s, 2) - pz;
-                            ax -= Kokkos::round(ax), ay -= Kokkos::round(ay), az -= Kokkos::round(az);
-                            const double d2 = ax * ax + ay * ay + az * az;
-                            if (d2 < h2) {
-                                const double u = 1 - d2 / h2;
-                                sum += u * u * u;
-                                ++found;
+        Kokkos::parallel_for(
+            "cell_list_bench::search", Kokkos::RangePolicy<Exec>(exec, 0, n), KOKKOS_LAMBDA(int q) {
+                const double px = g.positions(q, 0), py = g.positions(q, 1), pz = g.positions(q, 2);
+                const int own = g.level(q);
+                const double h = c / double(1 << own), h2 = h * h;
+                const int level = Kokkos::max(2, own - drop);
+                const int side = 1 << level;
+                const double w = 1.0 / side;
+                const int reach = Kokkos::min(static_cast<int>(Kokkos::ceil(h / w)), (side - 1) / 2);
+                const int hx = neighbor_search::grid_coordinate(px, 1.0, side);
+                const int hy = neighbor_search::grid_coordinate(py, 1.0, side);
+                const int hz = neighbor_search::grid_coordinate(pz, 1.0, side);
+                int found = 0, seen = 0;
+                double sum = 0;
+                for (int dx = -reach; dx <= reach; ++dx) {
+                    const double gx = Kokkos::max(0, Kokkos::abs(dx) - 1) * w;
+                    for (int dy = -reach; dy <= reach; ++dy) {
+                        const double gy = Kokkos::max(0, Kokkos::abs(dy) - 1) * w;
+                        for (int dz = -reach; dz <= reach; ++dz) {
+                            const double gz = Kokkos::max(0, Kokkos::abs(dz) - 1) * w;
+                            if (prune && gx * gx + gy * gy + gz * gz >= h2) continue;
+                            const int x = (hx + dx + side) & (side - 1), y = (hy + dy + side) & (side - 1),
+                                      z = (hz + dz + side) & (side - 1);
+                            int begin, end;
+                            g.template range<true>(level, x, y, z, begin, end);
+                            seen += end - begin;
+                            for (int s = begin; s < end; ++s) {
+                                double ax = g.positions(s, 0) - px, ay = g.positions(s, 1) - py,
+                                       az = g.positions(s, 2) - pz;
+                                ax -= Kokkos::round(ax), ay -= Kokkos::round(ay), az -= Kokkos::round(az);
+                                const double d2 = ax * ax + ay * ay + az * az;
+                                if (d2 < h2) {
+                                    const double u = 1 - d2 / h2;
+                                    sum += u * u * u;
+                                    ++found;
+                                }
                             }
                         }
                     }
                 }
-            }
-            (void)depth;
-            count(q) = found;
-            tested(q) = seen;
-            rho(q) = sum;
-        });
+                (void)depth;
+                count(q) = found;
+                tested(q) = seen;
+                rho(q) = sum;
+            });
     });
 }
 

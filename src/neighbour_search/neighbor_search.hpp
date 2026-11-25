@@ -308,7 +308,7 @@ void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPosit
     } else
 #endif
 #if defined(KOKKOS_ENABLE_HIP)
-    if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {
+        if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {
         hipcub::DoubleBuffer<std::uint64_t> keys(b.keys[0], b.keys[1]);
         hipcub::DoubleBuffer<int> ids(b.ids[0], b.ids[1]);
         std::size_t bytes = s.sort_scratch.extent(0);
