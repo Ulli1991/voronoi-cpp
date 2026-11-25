@@ -192,14 +192,27 @@ public:
         }
 #elif defined(KOKKOS_ENABLE_HIP)
         if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {  // the CUDA branch with hipCUB (rocPRIM)
-            keys_ = Keys(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), capacity);
-            ids_ = Ids(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_ids")), capacity);
-            hipcub::DoubleBuffer<std::uint64_t> k(nullptr, nullptr);
+            hipcub::DoubleBuffer<Key> k(nullptr, nullptr);
             hipcub::DoubleBuffer<int> v(nullptr, nullptr);
             std::size_t bytes = 0;
-            (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0, 64, exec.hip_stream());
-            scratch_ = Kokkos::View<char*, Memory>(
-                Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_sort")), bytes);
+            (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0, 8 * static_cast<int>(sizeof(Key)),
+                                                     exec.hip_stream());
+            if (arena) {
+                keys_ = arena->template take<Key>(capacity);
+                ids_ = arena->template take<int>(capacity);
+                scratch_ = arena->template take<char>(bytes);
+            }
+            if (!keys_.data() || !ids_.data() || !scratch_.data()) {
+                own_keys_ = Kokkos::View<Key*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), capacity);
+                own_ids_ = Kokkos::View<int*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_ids")), capacity);
+                own_scratch_ = Kokkos::View<char*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_sort")), bytes);
+                keys_ = own_keys_;
+                ids_ = own_ids_;
+                scratch_ = own_scratch_;
+            }
         }
 #else
         (void)capacity, (void)arena;
@@ -225,7 +238,7 @@ public:
 #endif
 #if defined(KOKKOS_ENABLE_HIP)
         if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {
-            hipcub::DoubleBuffer<std::uint64_t> k(keys.data(), keys_.data());
+            hipcub::DoubleBuffer<Key> k(keys.data(), keys_.data());
             hipcub::DoubleBuffer<int> v(ids.data(), ids_.data());
             std::size_t bytes = scratch_.extent(0);
             if (hipcub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, k, v, n, 0, bits, exec_.hip_stream()) !=
