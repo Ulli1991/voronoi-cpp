@@ -14,23 +14,23 @@ from paperfig import DATA, DOUBLE, LW, figstyle, figure, save
 
 NX = (32, 64, 128, 256)
 SIDE, ORIGIN, PLANE = (10.0, 10.0, 2.5), (-5.0, -5.0, 0.0), 1.25
-SLAB = os.path.join(DATA, "luna", "vortex_slab_64.npz")
+SLAB = os.path.join(DATA, "luna", "vortex_slab_64_t{t}.npz")  # t: 0 and 10
 
 
-def vortex_slab(npy, nx=64):
-    """Writes SLAB from hydro_wave3d's --out rows (generator 0-2, centroid 3-5, volume 6, rho 7, v 8-10, P 11): the cells
+def vortex_slab(npy, t, nx=64):
+    """Writes SLAB for time t from hydro_wave3d's --out rows (generator 0-2, centroid 3-5, volume 6, rho 7, v 8-10, P 11): the cells
     within three spacings of the plane, positions in the box [0, side), float32."""
     r = np.load(npy)
     x = (r[:, :3] - np.array(ORIGIN)) % np.array(SIDE)
     near = np.abs(x[:, 2] - PLANE) < 3 * SIDE[0] / nx
-    np.savez_compressed(SLAB, x=x[near].astype(np.float32), rho=r[near, 7].astype(np.float32), nx=nx)
+    np.savez_compressed(SLAB.format(t=t), x=x[near].astype(np.float32), rho=r[near, 7].astype(np.float32), nx=nx)
 
 
-def picture(ax, pixels=900):
+def picture(ax, t, limits, pixels=900):
     """The plane's cut through the mesh: every pixel takes the density of its nearest generator (its Voronoi cell)."""
     from scipy.spatial import cKDTree
 
-    d = np.load(SLAB)
+    d = np.load(SLAB.format(t=t))
     x, rho = d["x"].astype(float), d["rho"]
     at = (np.arange(pixels) + 0.5) / pixels * SIDE[0]
     gx, gy = np.meshgrid(at, at, indexing="ij")
@@ -39,7 +39,7 @@ def picture(ax, pixels=900):
     tiles = np.concatenate([x + np.array([i * SIDE[0], j * SIDE[1], 0.0]) for i in (-1, 0, 1) for j in (-1, 0, 1)])
     cell = (cKDTree(tiles).query(query, workers=4)[1] % len(x)).reshape(pixels, pixels)
     image = ax.imshow(rho[cell].T, origin="lower", extent=(ORIGIN[0], ORIGIN[0] + SIDE[0], ORIGIN[1], ORIGIN[1] + SIDE[1]),
-                      cmap="viridis", interpolation="nearest")
+                      cmap="viridis", interpolation="nearest", vmin=limits[0], vmax=limits[1])
     edge = np.zeros(cell.shape, bool)
     edge[:-1] |= cell[:-1] != cell[1:]
     edge[:, :-1] |= cell[:, :-1] != cell[:, 1:]
@@ -49,8 +49,9 @@ def picture(ax, pixels=900):
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect("equal")
-    bar = ax.figure.colorbar(image, ax=ax, location="top", fraction=0.046, pad=0.03)
-    bar.set_label(r"$\rho$ at $t = 10$")
+    ax.grid(False)
+    bar = ax.figure.colorbar(image, ax=ax, location="right", fraction=0.046, pad=0.03)
+    bar.set_label(r"$\rho$")
 
 
 def main():
@@ -60,12 +61,13 @@ def main():
     d = np.load(os.path.join(DATA, "luna", "yee_vortex_convergence.npz"))
     pick = (d["dim"] == 3) & (d["limiter"] == 1) & (d["vx"] == 0) & (d["cfl"] == 0.8) & (d["ic_quad"] == 8)
     order = np.argsort(d["nx"][pick])
-    with_picture = os.path.exists(SLAB)
-    fig, axes = figure(DOUBLE, 72, ncols=3 if with_picture else 2)
-    if with_picture:
-        picture(axes[0])
-        axes = axes[1:]
-    for ax, key, label, v in ((axes[0], "L1_rho", r"$L_1(\rho)$", "rho"), (axes[1], "L1_v", r"$L_1(v)$", "v")):
+    # (a) the density in the plane through the vortex on the moving mesh after 10 time units; (b) the L1 error of the
+    # density against resolution. A third panel, the code's cell updates per second against problem size on the A100 and
+    # the MI300A, joins when those runs exist.
+    fig, axes = figure(DOUBLE, 80, ncols=2, gridspec_kw=dict(width_ratios=[1.0, 1.15]))
+    picture(axes[0], 10, (float(np.load(SLAB.format(t=10))["rho"].min()), 1.0))
+    axes[0].text(0.04, 0.96, "(a)", transform=axes[0].transAxes, va="top", color="white")
+    for ax, key, label, v in ((axes[1], "L1_rho", r"$L_1(\rho)$", "rho"),):
         nx = d["nx"][pick][order]
         keep = nx <= 256
         ax.plot(nx[keep], d[f"avg_{v}_L1"][pick][order][keep], "o-", color="#1f77b4", lw=LW, ms=7,
@@ -84,7 +86,8 @@ def main():
         ax.set_ylabel(label)
         figstyle.decorate(ax)
         ax.xaxis.set_minor_locator(__import__("matplotlib").ticker.NullLocator())
-    axes[0].legend(loc="lower left", fontsize=11)
+    axes[1].legend(loc="lower left", fontsize=11)
+    axes[1].text(0.96, 0.96, "(b)", transform=axes[1].transAxes, va="top", ha="right")
     # the test and solver (3D Yee vortex, HLLC, MC limiter) are in the caption
     fig.tight_layout()
     save(fig, "luna_vortex", DOUBLE)
@@ -93,6 +96,7 @@ def main():
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) > 1:  # fig_vortex.py <hydro_wave3d --out file of the moving mesh at t = 10, n_x = 64>
-        vortex_slab(sys.argv[1])
+    if len(sys.argv) > 2:  # fig_vortex.py <hydro_wave3d --out file of the moving mesh at t = 0> <the same at t = 10> (n_x = 64)
+        vortex_slab(sys.argv[1], 0)
+        vortex_slab(sys.argv[2], 10)
     main()

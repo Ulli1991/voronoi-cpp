@@ -42,8 +42,10 @@ def main():
     a.set_xlabel("x")
     a.set_ylabel("y")
     a.grid(False)
-    bar = fig.colorbar(image, ax=a, location="top", fraction=0.046, pad=0.03)
-    bar.set_label(r"$\rho$ at $t = 2$")
+    bar = fig.colorbar(image, ax=a, location="right", fraction=0.046, pad=0.03)
+    bar.set_label(r"$\rho$")
+    a.text(0.04, 0.96, "(a)", transform=a.transAxes, va="top", color="white")
+    b.text(0.04, 0.96, "(b)", transform=b.transAxes, va="top")
     colours = {256: "#9ecae1", 512: "#4292c6", 1024: "#08306b"}
     rates = {}
     for mesh, style in (("moving", "-"), ("static", "--")):
