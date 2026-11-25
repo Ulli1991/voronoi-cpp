@@ -8,18 +8,18 @@ The library will be renamed **kikkou** (亀甲, kikkō, the tortoise-shell patte
 
 ## Results
 
-One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless stated; CPU rows on one 72-core node (2 × Xeon 8360Y). Every code runs on the same points with the same timing scope; measurements of 12–16 November 2026, some rows older than the latest speed-ups, as the captions say.
+One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless stated; CPU rows on one 72-core node (2 × Xeon 8360Y). Every code runs on the same points with the same timing scope; figures of 10–16 November 2026, as their captions say; every rate and memory figure in the text re-measured on main 7da61fb on 23 November 2026 (A100 job 32906141, CPU node job 32906207; [measurements](docs/measurements.md#re-measured-on-main-issue-6-2026-11-23)).
 
 1. **Exact on every input.** Topology is decided by exact predicates on positions quantised to integer coordinates on a 2³⁰ grid. Every cell is built on all eight inputs, with median volume errors of 10⁻¹⁵ (at most about 10⁻¹³) against an independent exact reference; the float GPU codes lose up to 20 % of cells on cosmic web and nearly all on surfaces.
-2. **Fast full Voronoi cells.** 42.6 M cells/s on jittered points at 128³ with faces, areas, centroids and neighbours, 4–55× faster than the other public libraries on the same GPU; volumes and centroids only, 33 M cells/s, 1.8–3.2× faster than the fastest float GPU codes. On a CPU node it is ahead of multithreaded voro++ on every input.
-3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 190–263 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding, and each step is checked against a fresh exact build.
-4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
+2. **Fast full Voronoi cells.** 42.5 M cells/s on jittered points at 128³ with faces, areas, centroids and neighbours, 4–55× faster than the other public libraries on the same GPU; volumes and centroids only, 34 M cells/s host to host, 1.8–3.2× faster than the fastest float GPU codes (ratios of the 2026-11-15 tables; our rows have not got slower since). On a CPU node it is ahead of multithreaded voro++ on every input.
+3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 185–228 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step (first ten steps; over 500 steps with re-sorts), 8–10× faster than an exact rebuild of the same points (23 M cells/s), and each step is checked against a fresh exact build.
+4. **Memory.** 1911 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
 
 **Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
 
 ![Test inputs](docs/figures/results/inputs.png)
 
-**Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³).
+**Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. These figures are of 2026-11-15: since then our exact start in this benchmark is 1.24–1.56× faster on every input but jittered 128³ (unchanged), the moving step 1.27×, the rest within a few percent (the regenerated tables and figure: [library_benchmark.md](docs/library_benchmark.md#the-full-table)).
 
 ![Full cells against the public libraries](docs/figures/results/library_headline.png)
 
