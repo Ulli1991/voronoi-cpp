@@ -63,29 +63,23 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![One step of the moving mesh](paper/figures/fig10_moving_step.png)
 
-**Fig. 11: Speed of the mesh update (the mesh alone, no solver).** (a) Against problem size, per input, at 0.1 spacings per step. (b) Against how far the points move per step (128³); the grey band is the exact start, the cost of building again instead. Split by stage, the cost that grows with the displacement is the flipping and reconnecting of the mesh; the check, the geometry and the per-cell results stay about the same (jittered: 6.6 ns per cell at 0.03 spacings, 17.9 ns at 0.3). (c) Over 500 steps with and without a re-sort of the mesh in memory every 50 steps. (d) Against the mesh update of the other codes that have one, jittered input at 128³. 500 steps with a Hilbert re-sort every 50 steps, which restores memory order and gained 1.3–1.5× over the run (figure of 2026-11-10). Since 2026-11-18 the re-sort is on by default, every 25 updates, and the step is 2.2× faster than before over 500 steps at 0.1 spacings, 128³ and 256³ ([measurements](docs/measurements.md#the-2-step-branch-step-2x-2026-11-18)). The step levers of the same day (repair kernels in registers, the screen's centre kept in registers) add 1.17–1.21× over 500 steps ([measurements](docs/measurements.md#the-step-levers-branch-step-levers-2026-11-18)). A re-sort allocates nothing (it works in the ring pools): 2.0–2.3 ns/cell at 128³ and 256³. It renumbers the particles: callers follow `permutation()`, with `permute_in_place()` when they must not allocate ([usage](docs/usage.md)).
+**Fig. 11: Speed of the mesh update (the mesh alone, no solver).** (a) Against problem size, per input, with the points moving 0.1 Δ per step. (b) At 128³ against how far the points move per step; the grey band is the exact start, the cost of building again instead. The cost that grows with the displacement is the flipping and reconnecting of the mesh; the check, the geometry and the per-cell results stay about the same (jittered: 6.6 ns per cell at 0.03 Δ, 17.9 ns at 0.3 Δ). (c) Over 500 steps at 0.1 Δ, jittered, with and without a re-sort of the mesh in memory every 50 steps; the legend gives the rate over the whole run, re-sorts included. The re-sort restores memory order as the moving points scramble it, costs 2.0–2.3 ns per cell and allocates nothing; it is on by default, every 25 updates. (d) Against the mesh update of the other codes that have one, jittered input at 128³.
 
-![Step rate against problem size](paper/figures/fig11a_step_vs_n.png)
-
-![Step rate against displacement](paper/figures/fig11b_step_vs_displacement.png)
-
-![Re-sort over 500 steps](paper/figures/fig11c_resort.png)
-
-![The moving step of other codes](paper/figures/fig11d_step_codes.png)
+![Speed of the mesh update](paper/figures/fig11_mesh_update.png)
 
 ### A moving-mesh code on the library
 
-**Fig. 12: 3D isentropic vortex.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
+**Fig. 12: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
 
-![3D vortex convergence of luna-cpp](paper/figures/fig12_luna_vortex.png)
+![Titarev-Toro on the moving mesh](paper/figures/fig12_titarev_toro.png)
 
-**Fig. 13: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
+**Fig. 13: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. Left: the density at t = 2 on the moving mesh at 1024² cells. Right: the amplitude of the seeded velocity mode against time on the moving and the static mesh at 256², 512² and 1024² (the three lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles, `paper/scripts/kh_linear_mcnally.py`). The measured growth rates between t = 0.6 and 1.2 are 2.81, 2.84 and 2.85 on the moving mesh and 2.84, 2.85 and 2.85 on the static mesh, within 0.7 % of theory.
 
-![Titarev-Toro on the moving mesh](paper/figures/fig13_titarev_toro.png)
+![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig13_luna_kh.png)
 
-**Fig. 14: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. Left: the density at t = 2 on the moving mesh at 1024² cells. Right: the amplitude of the seeded velocity mode against time on the moving and the static mesh at 256², 512² and 1024² (the three lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles, `paper/scripts/kh_linear_mcnally.py`). The measured growth rates between t = 0.6 and 1.2 are 2.81, 2.84 and 2.85 on the moving mesh and 2.84, 2.85 and 2.85 on the static mesh, within 0.7 % of theory.
+**Fig. 14: 3D isentropic vortex.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
 
-![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig14_luna_kh.png)
+![3D vortex convergence of luna-cpp](paper/figures/fig14_luna_vortex.png)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 

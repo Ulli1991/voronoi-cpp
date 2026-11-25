@@ -25,8 +25,8 @@ def runs(path):
     return out
 
 
-def main():
-    fig, ax = figure(SINGLE, 70)
+def resort(ax, text="(c)"):
+    """The mesh update over 500 steps with and without the re-sort, 128³ and 256³; the legend gives the rate over the run."""
     for mode, colour in (("long128", "#1f77b4"), ("long256", "#d62728")):
         paths = sorted(glob.glob(os.path.join(DATA, "raw", f"{mode}-*.txt")))
         if not paths:
@@ -44,11 +44,6 @@ def main():
     ax.set_xlim(0, 500)
     lo, hi = ax.get_ylim()
     ax.set_ylim(0, hi * 1.6)  # headroom: the legend clears the curves
-    ax.legend(loc="upper right", fontsize=11, title="over the run, M cells/s", title_fontsize=11)
+    ax.legend(loc="upper right", fontsize=10, title="over the run, M cells/s", title_fontsize=10)
+    ax.text(0.03, 0.96, text, transform=ax.transAxes, va="top")
     figstyle.decorate(ax)
-    fig.tight_layout()
-    save(fig, "resort", SINGLE)
-
-
-if __name__ == "__main__":
-    main()

@@ -202,12 +202,10 @@ def more(summary, pub):
     b.legend(loc="upper right", fontsize=11, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
     fig.tight_layout()
     save(fig, "library_more", DOUBLE)
-    step_codes(summary)
 
 
-def step_codes(summary):
-    """The moving step of the codes that have one, jittered input at 128³ (a figure of the moving-mesh part)."""
-    fig, c = figure(SINGLE, 70)
+def step_codes(c, summary, text="(d)"):
+    """The mesh update of the codes that have one, jittered input at 128³."""
     names = ["Kikkou\nGPU", "peclet\nGPU", "Kikkou\nCPU", "peclet\nCPU", "CGAL\n1 core"]
     for k, row in enumerate(lb.FIGURE_STEP[:5]):
         got = lb.curve(summary, *row[:4], lb.SIZES[0], phase="step").get("jittered")
@@ -223,8 +221,7 @@ def step_codes(summary):
     figstyle.decorate(c)
     c.minorticks_off()
     c.tick_params(axis="x", which="both", top=False, bottom=False)
-    fig.tight_layout()
-    save(fig, "step_codes", SINGLE)
+    c.text(0.03, 0.96, text, transform=c.transAxes, va="top")
 
 
 def main():

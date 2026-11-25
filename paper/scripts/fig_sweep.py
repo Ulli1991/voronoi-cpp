@@ -33,12 +33,27 @@ def clock_text(clocks):
 def throughput(commit, table, clocks):
     # the build: rebuild, exact start and its peak memory; the moving step against n is a figure of its own (step_vs_n)
     fig, axes = figure(DOUBLE, 64, ncols=3)
-    step_fig, step_ax = figure(SINGLE, 64)
-    panels = [(axes[0], "rebuild", "Mcells_s_median", "(a)"),
-              (axes[1], "start", "Mcells_s_median", "(b)"),
-              (axes[2], "start", "bytes_per_cell", "(c)"),
-              (step_ax, "step 0.1", "Mcells_s_median", "")]
-    for ax, path, col, text in panels:
+    against_n(table, [(axes[0], "rebuild", "Mcells_s_median", "(a)", 1.75),
+                      (axes[1], "start", "Mcells_s_median", "(b)", 1.2),
+                      (axes[2], "start", "bytes_per_cell", "(c)", 1.2)])
+    axes[0].set_ylabel("rebuild, M cells/s")
+    axes[1].set_ylabel("exact start, M cells/s")
+    axes[2].set_ylabel("peak memory, B/cell")
+    axes[0].legend(loc="upper left", ncol=2, fontsize=10, bbox_to_anchor=(0.12, 1.0))
+    fig.tight_layout()
+    save(fig, "throughput_vs_n", DOUBLE)
+
+
+def step_vs_n(ax, table, text="(a)"):
+    """The mesh update against problem size, per input, at 0.1 spacings per step."""
+    against_n(table, [(ax, "step 0.1", "Mcells_s_median", text, 1.75)])
+    ax.set_ylabel("mesh update, M cells/s")
+    ax.legend(loc="upper left", ncol=2, fontsize=10, bbox_to_anchor=(0.12, 1.0))
+
+
+def against_n(table, panels):
+    """One quantity of the sweep against the number of cells, a curve per input; `room` is the headroom for a legend."""
+    for ax, path, col, text, room in panels:
         top = 0
         for kind in INPUTS:
             got = table.get((kind, path), {})
@@ -48,23 +63,12 @@ def throughput(commit, table, clocks):
                 top = max(top, max(y for _, y in pts))
         ax.set_xticks(range(len(SIZES)), SIZE_LABEL)
         ax.set_xlim(-0.3, len(SIZES) - 0.7)
-        ax.set_ylim(0, (1.75 if ax is axes[0] or ax is step_ax else 1.2) * top if top else 1)  # headroom for the legends
+        ax.set_ylim(0, room * top if top else 1)
         ax.text(0.03, 0.96, text, transform=ax.transAxes, va="top")
         ax.set_ylabel("B/cell" if col == "bytes_per_cell" else "M cells/s")
         figstyle.decorate(ax)
         ax.xaxis.set_minor_locator(matplotlib_null())
-    for ax in (*axes, step_ax):
         ax.set_xlabel("cells n")
-    axes[0].set_ylabel("rebuild, M cells/s")
-    axes[1].set_ylabel("exact start, M cells/s")
-    axes[2].set_ylabel("peak memory, B/cell")
-    step_ax.set_ylabel("mesh update, M cells/s")
-    axes[0].legend(loc="upper left", ncol=2, fontsize=10, bbox_to_anchor=(0.12, 1.0))
-    step_ax.legend(loc="upper left", ncol=2, fontsize=10)
-    fig.tight_layout()
-    save(fig, "throughput_vs_n", DOUBLE)
-    step_fig.tight_layout()
-    save(step_fig, "step_vs_n", SINGLE)
 
 
 def matplotlib_null():
@@ -72,8 +76,8 @@ def matplotlib_null():
     return matplotlib.ticker.NullLocator()
 
 
-def displacement(commit, table, clocks):
-    fig, ax = figure(SINGLE, 75)
+def displacement(ax, table, text="(b)"):
+    """The mesh update at 128³ against how far the points move per step; the band is the exact start (building again)."""
     for kind in INPUTS:
         pts = sorted((float(p.split()[1]), float(got[2097152]["Mcells_s_median"]))
                      for (k, p), got in table.items() if k == kind and p.startswith("step") and 2097152 in got)
@@ -83,22 +87,19 @@ def displacement(commit, table, clocks):
               if 2097152 in table.get((k, "start"), {})]
     if starts:
         ax.axhspan(min(starts), max(starts), color="0.85", zorder=0)
-        ax.text(0.0105, min(starts) * 1.1, "exact start, all inputs", fontsize=11, color="0.3", va="bottom")
+        ax.text(0.0105, min(starts) * 1.1, "exact start", fontsize=11, color="0.3", va="bottom")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("displacement per step, mean spacings")
+    ax.set_xlabel("displacement per step / Δ")
     ax.set_ylabel("mesh update, M cells/s")
     ax.set_ylim(min(starts) * 0.8 if starts else None, 450)
-    ax.legend(loc="lower left", ncol=2, fontsize=11, bbox_to_anchor=(0.0, 0.34))
+    ax.text(0.03, 0.96, text, transform=ax.transAxes, va="top")
     figstyle.decorate(ax)
-    fig.tight_layout()
-    save(fig, "step_vs_displacement", SINGLE)
 
 
 def main():
     commit, table, clocks = load(sys.argv[1] if len(sys.argv) > 1 else None)
     throughput(commit, table, clocks)
-    displacement(commit, table, clocks)
 
 
 if __name__ == "__main__":

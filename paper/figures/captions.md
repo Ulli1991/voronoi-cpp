@@ -129,7 +129,7 @@ and from_rings (23 ns) are the same at both sizes.
 Basselin et al.'s 34.5 matches their cell kernel alone (docs/library_benchmark.md, Stages: 38.4 M cells/s on our A100,
 33.3 scaled to a V100), not the full build host to host (10.4 on our A100).
 
-**`fig12_luna_vortex`.** 3D Yee vortex, HLLC Riemann solver, MC limiter; L1 errors of density and velocity against n_x
+**`fig14_luna_vortex`.** 3D Yee vortex, HLLC Riemann solver, MC limiter; L1 errors of density and velocity against n_x
 (n_x³ cells). See PLAN.md (Fig. 13) for the runs.
 
 **`fig09_memory` (b), legend.** Dark bars: voronoi-cpp, grey: the other codes; the darker part is the lowest of the five inputs,

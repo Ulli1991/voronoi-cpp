@@ -71,13 +71,10 @@ NUMBER = {
     "throughput_vs_n": "fig08_build_vs_n",
     "memory": "fig09_memory",
     "walkthrough_step": "fig10_moving_step",
-    "step_vs_n": "fig11a_step_vs_n",
-    "step_vs_displacement": "fig11b_step_vs_displacement",
-    "resort": "fig11c_resort",
-    "step_codes": "fig11d_step_codes",
-    "luna_vortex": "fig12_luna_vortex",
-    "titarev_toro": "fig13_titarev_toro",
-    "luna_kh": "fig14_luna_kh",
+    "mesh_update": "fig11_mesh_update",
+    "titarev_toro": "fig12_titarev_toro",
+    "luna_kh": "fig13_luna_kh",
+    "luna_vortex": "fig14_luna_vortex",
 }
 
 
