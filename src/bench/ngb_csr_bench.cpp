@@ -1,12 +1,6 @@
 // The adaptive Morton cell list (neighbor_search::CellList) as GIZMO's neighbour search (MI300A study, not part of the
-// library): per-particle radii h_i, a CSR neighbour list per particle (offsets + neighbour slots), one-way
-// (r_ij < h_i) and symmetric (r_ij < max(h_i, h_j)), self excluded. Periodic unit box; slots in Morton order.
-// Timed separately: the cell list (Morton sort + offsets + levels), and the list: count pass, scan, fill pass; for the
-// symmetric list also the transpose of the one-way list and its merge (j joins i's row when r_ij < h_j <= ... and
-// r_ij >= h_i, so nothing is listed twice).
-// args: ngb_csr_bench <n> <kind|file.pts> [--ngb=32] [--h=file.h] [--repeats=5] [--verify=256] [--per-h=1|2]
-//   file.pts: uint64 n, uint64 frames, n x 3 doubles in [0, 1); file.h: n doubles (radii in the same units).
-//   --per-h: grid cells per h along an axis at the walk level (1: cells >= h wide, reach 1; 2: >= h/2, reach 2).
+// library): per-particle radii h_i and a CSR neighbour list per particle, one-way (r_ij < h_i) and symmetric
+// (r_ij < max(h_i, h_j)), self excluded; periodic unit box, slots in Morton order. Arguments and timings: main().
 #include "support.hpp"
 
 #include <algorithm>
@@ -87,6 +81,12 @@ double percentile(std::vector<int> v, double p) {
 
 }  // namespace
 
+// Timed separately: the cell list (Morton sort + offsets + levels), and the list: count pass, scan, fill pass; for the
+// symmetric list also the transpose of the one-way list and its merge (j joins i's row when r_ij < h_j and r_ij >= h_i,
+// so nothing is listed twice).
+// args: ngb_csr_bench <n> <kind|file.pts> [--ngb=32] [--h=file.h] [--repeats=5] [--verify=256] [--per-h=1|2]
+//   file.pts: uint64 n, uint64 frames, n x 3 doubles in [0, 1); file.h: n doubles (radii in the same units).
+//   --per-h: grid cells per h along an axis at the walk level (1: cells >= h wide, reach 1; 2: >= h/2, reach 2).
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard guard(argc, argv);
     if (argc < 3) {

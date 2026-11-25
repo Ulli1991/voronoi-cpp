@@ -153,14 +153,17 @@ template <class T>
 __device__ T lane0(T v) {
     return __shfl_sync(all_lanes, v, 0);
 }
+// Lane `from`'s value of v, in every lane.
 template <class T>
 __device__ T shfl(T v, int from) {
     return __shfl_sync(all_lanes, v, from);
 }
+// The value of v in the lane whose number differs by `mask`.
 template <class T>
 __device__ T shfl_xor(T v, int mask) {
     return __shfl_xor_sync(all_lanes, v, mask);
 }
+// The value of v `by` lanes below (the lowest lanes keep their own).
 template <class T>
 __device__ T shfl_up(T v, int by) {
     return __shfl_up_sync(all_lanes, v, by);
@@ -186,6 +189,7 @@ __device__ inline void sync_lanes() {
 // A shuffle does not make the lanes meet, so a broadcast of what lane 0 computed alone waits for all lanes first;
 // without that the work counter of Kernel was read before lane 0 had taken a cell (illegal addresses on gfx942).
 __device__ inline void converge() { sync_lanes(); }
+// Lane `from`'s value of v, in every lane.
 template <class T>
 __device__ T shfl(T v, int from) {
     return __shfl(v, from, lanes);
@@ -199,10 +203,12 @@ __device__ T lane0(T v) {
     else
         return shfl(v, 0);
 }
+// The value of v in the lane whose number differs by `mask`.
 template <class T>
 __device__ T shfl_xor(T v, int mask) {
     return __shfl_xor(v, mask, lanes);
 }
+// The value of v `by` lanes below (the lowest lanes keep their own).
 template <class T>
 __device__ T shfl_up(T v, int by) {
     return __shfl_up(v, by, lanes);

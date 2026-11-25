@@ -1,7 +1,6 @@
-// The cell list as a plain neighbour search (MI300A study, not part of the library): times neighbor_search::build and
-// a gather over all particles within h_i of each particle i, h_i set by the cell list's own level so that about
-// `ngb` particles fall within it (the density loop of an SPH/MFM code). One thread per slot, in slot order.
-// args: cell_list_bench <n> <kind> [ngb=64] [repeats=5]
+// The cell list as a plain neighbour search (MI300A study, not part of the library): times neighbor_search::build and a
+// gather over all particles within h_i of each particle i (an SPH/MFM density loop), h_i from the cell list's own level
+// so that about `ngb` particles fall within it. One thread per slot. Args: cell_list_bench <n> <kind> [ngb=64] [repeats=5]
 #include "support.hpp"
 
 #include <algorithm>
