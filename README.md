@@ -57,7 +57,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ### Updating the mesh after the points moved
 
-**Fig. 10: One update of the mesh.** The same example after the points moved (Fig. 1, panel 6). Panels: 1 screen: the triangles the motion may have broken (orange), 2 flip: failing edges (red, dashed) replaced by exact flips (green) in rounds, 3 geometry from the dual: circumcentres, then faces, 4 per-cell results summed in a fixed order, 5 fallbacks: a region the flips cannot repair is rebuilt (on the host or the GPU), 6 re-sort along a space-filling curve (3D only, shown in 2D). All on the GPU unless noted.
+**Fig. 10: One update of the mesh.** The same example after the points moved (Fig. 1, panel 6). Panels: 1 check: the triangles the motion may have broken (orange), 2 flip: failing edges (red, dashed) replaced by exact flips (green) in rounds, 3 geometry from the dual: circumcentres, then faces, 4 per-cell results summed in a fixed order, 5 fallbacks: a region the flips cannot repair is rebuilt (on the host or the GPU), 6 re-sort along a space-filling curve (3D only, shown in 2D). All on the GPU unless noted.
 
 ![One step of the moving mesh](paper/figures/fig10_moving_step.png)
 
