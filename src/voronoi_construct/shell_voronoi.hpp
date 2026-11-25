@@ -751,7 +751,8 @@ void exact_where_failed(const ExecSpace& exec, const Grid<typename ExecSpace::me
         "shell_voronoi::count_failed", Kokkos::RangePolicy<ExecSpace>(exec, 0, selection.count(grid.n)),
         KOKKOS_LAMBDA(int i, long long& sum) {
             const int s = status(order(selection.slot(i)));
-            sum += static_cast<long long>(s != ok && s != face_overflow) + (static_cast<long long>(s == unclosed) << 32);
+            sum +=
+                static_cast<long long>(s != ok && s != face_overflow) + (static_cast<long long>(s == unclosed) << 32);
         },
         failed);
     out.unclosed_cells() = failed >> 32;
