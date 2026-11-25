@@ -41,17 +41,9 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Volumes only on one A100, and full cells on 72 cores](paper/figures/fig05b_speed_volumes_cpu.png)
 
-**Fig. 6a: Build speed against quality.** Every library against an independent exact reference on sampled cells: relative volume error, fraction of cells missing and total sampled volume against the box.
+**Fig. 6: Build speed against correctness.** Every library at 128³ against an independent exact reference, one point per code and input. (a) Relative volume error of 1000 sampled cells on the five synthetic inputs: the marker is the median, the line reaches the largest error. Most codes have their median at the level of double rounding (10⁻¹⁵), geogram at 10⁻¹² and the two single-precision codes at 10⁻⁵. (b)–(e) The fraction of cells a code fails to return, on the synthetic inputs and on the three application inputs; an open marker means returned volumes are wrong. The grey band holds the codes with no cell missing (spread vertically only to tell them apart). votess crashed on cosmic web and on surface and is not drawn there. The surface points of this work predate the work on issue #60 (rebuild then: 2.3 in 10⁴ cells missing, 0.036 M cells/s); main now certifies every cell there, at 0.29 M cells/s.
 
-![Speed against quality](paper/figures/fig06a_quality.png)
-
-**Fig. 6b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes. The grey band holds the codes with no cell missing (spread vertically only to tell them apart); votess crashed on cosmic web and on surface and is not drawn there. Our surface points predate the work on issue #60 (rebuild then: 2.3 in 10⁴ cells missing, 0.036 M cells/s); main now certifies every cell there, at 0.29 M cells/s.
-
-![Application inputs: completeness against build rate](paper/figures/fig06b_application.png)
-
-**Fig. 6c: Volume errors.** Our per-cell volume errors against the exact reference, all at the level of double rounding.
-
-![Volume error against the exact reference](paper/figures/fig06c_volume_errors.png)
+![Build speed against correctness](paper/figures/fig06_correctness.png)
 
 **Fig. 7: The build against problem size.** From 32³ to 256³ points on one A100, per input: (a) the plain rebuild, (b) the exact start, (c) the exact start's peak device memory per cell. Panel (b) predates the speed-up of the exact start.
 
