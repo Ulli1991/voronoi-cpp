@@ -15,9 +15,9 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 3. **A persistent moving mesh.** Exact GPU flips repair the mesh at 190–263 M cells/s per step (with per-cell lists and sums) at 256³ when points move 0.1 spacings per step, 4–16× faster than rebuilding, and each step is checked against a fresh exact build.
 4. **Memory.** About 2000 B/cell for the full moving mesh, so 256³ (16.8 M cells) fits on one A100 40 GB.
 
-**Fig. 1: Building the mesh and one moving step.** One 2D example of 96 points throughout. Build (rows 1–2): quantise positions, Morton cell list, clip each cell against its neighbours until certified, face rings, exact Delaunay start. Step (rows 3–4): screen the tetrahedra the motion may break, repair them with exact flips, recompute geometry from the dual, per-cell sums, fallbacks, optional re-sort. 3D works the same way with polyhedra and tetrahedra. Panels: 1 quantise positions, 2 Morton cell list, 3 clip one cell, 4 all cells with their face rings, 5 exact start, 6 points move, 7 screen, 8 flip, 9 geometry from the dual, 10 `update_cells()`, 11 fallbacks, 12 re-sort (3D only). All run on the GPU, except 6 (the caller moves the points) and 11 (host or GPU).
+**Fig. 1: Building the mesh.** One 2D example of 96 points, computed by the library's 2D mesh. Panels: 1 quantise positions (inset: one grid cell, much enlarged), 2 Morton cell list, 3 clip one cell, 4 all cells with their face rings, 5 exact Delaunay start, 6 the caller moves the points. All but 6 run on the GPU. The moving step that follows is Fig. 10.
 
-![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
+![Building the mesh](paper/figures/fig01_build.png)
 
 **Fig. 2: Clipping one cell.** (a) The start square, a quarter of the box wide on each side of the generator; R is the distance to its farthest corner, and every particle within 2R may still cut the cell. (b) The 3 × 3 grid cells around the home cell, nearest particle first: each bisector cuts off a corner (orange) and R falls. (c) The next rings of grid cells; only particles within 2R are tested, hollow ones were tested and their bisector missed the cell (dashed: the cell after (b)). (d) Certified: no particle is left within 2R (red), the walk stops at the first grid cell 2R away (dashed square), and most particles were never looked at. In (d): blue, the neighbours that give the cell its faces; orange rings, particles tested whose bisector missed the cell; grey rings, particles never tested.
 
@@ -69,19 +69,23 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Memory per cell](paper/figures/fig09_memory.png)
 
-**Fig. 10: A moving-mesh code on the library.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
+**Fig. 10: One step of the moving mesh.** The same example after the points moved (Fig. 1, panel 6). Panels: 1 screen: the triangles the motion may have broken (orange), 2 flip: failing edges (red, dashed) replaced by exact flips (green) in rounds, 3 geometry from the dual: circumcentres, then faces, 4 per-cell results summed in a fixed order, 5 fallbacks: a region the flips cannot repair is rebuilt (on the host or the GPU), 6 re-sort along a space-filling curve (3D only, shown in 2D). All on the GPU unless noted.
 
-![3D vortex convergence of luna-cpp](paper/figures/fig10_luna_vortex.png)
+![One step of the moving mesh](paper/figures/fig10_moving_step.png)
 
-**Fig. 11: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
+**Fig. 11: A moving-mesh code on the library.** luna-cpp's 3D isentropic (Yee) vortex: L1 errors of density and velocity against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version).
 
-![Titarev-Toro on the moving mesh](paper/figures/fig11_titarev_toro.png)
+![3D vortex convergence of luna-cpp](paper/figures/fig11_luna_vortex.png)
+
+**Fig. 12: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
+
+![Titarev-Toro on the moving mesh](paper/figures/fig12_titarev_toro.png)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 
 ## How it works
 
-Fig. 1 above shows the whole method in one 2D example; Figs. 2 and 3 show its two central ideas, the clipping of a cell and the exact decisions.
+Fig. 1 above shows the build in one 2D example and Fig. 10 the moving step; Figs. 2 and 3 show the two central ideas of the build, the clipping of a cell and the exact decisions.
 
 Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md): the whole method panel by panel, the control flow of `update()`, one step and a rebuild in detail, where the data lives, how the GPU touches memory, and the memory pools and limits.
 

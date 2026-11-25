@@ -60,7 +60,7 @@ def figure(width_mm, height_mm, **kw):
 
 # The paper's order (paper/figures/README.md): figure name in the scripts -> file name. A letter marks the parts of one figure.
 NUMBER = {
-    "walkthrough": "fig01_walkthrough",
+    "walkthrough": "fig01_build",
     "construction_clipping": "fig02_clipping",
     "construction_exact": "fig03_exact_ties",
     "inputs": "fig04_inputs",
@@ -75,8 +75,9 @@ NUMBER = {
     "step_vs_displacement": "fig08b_step_vs_displacement",
     "resort": "fig08c_resort",
     "memory": "fig09_memory",
-    "luna_vortex": "fig10_luna_vortex",
-    "titarev_toro": "fig11_titarev_toro",  # luna-cpp's docs/figures/titarev_toro.png, copied
+    "walkthrough_step": "fig10_moving_step",
+    "luna_vortex": "fig11_luna_vortex",
+    "titarev_toro": "fig12_titarev_toro",  # luna-cpp's docs/figures/titarev_toro.png, copied
 }
 
 

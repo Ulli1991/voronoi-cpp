@@ -7,12 +7,14 @@ import io
 import os
 import sys
 
+from matplotlib.transforms import Bbox
+
 from paperfig import DOUBLE, MM, NUMBER, OUT, REPO
 
 sys.path.insert(0, os.path.join(REPO, "scripts"))
 import overview_figure as of  # noqa: E402
 
-LEFT = 0.38  # inches for the row labels
+LEFT = 0.05  # inches left of the first column
 PAIR = 0.20  # extra space between the build and the step rows, inches
 SHEET = {}  # the one sheet both of overview_figure's figures draw on
 _init = of.Sheet.__init__
@@ -50,7 +52,8 @@ def panel(self, row, col, number, title, where, body, code, window=(0, 1, 0, 1))
     if int(number) > 6:  # the step: rows 3-4, below a small extra gap
         row = row + 2 + PAIR / rowh
     WHERE[number] = where
-    return _panel(self, row, col + LEFT / self.W, number, "", (), "", "", window)
+    shown = number if int(number) <= 6 else str(int(number) - 6)  # the step is a figure of its own: its panels 1-6
+    return _panel(self, row, col + LEFT / self.W, shown, "", (), "", "", window)
 
 
 def sheet(self, rows, cols):
@@ -63,34 +66,32 @@ def sheet(self, rows, cols):
     self.width += LEFT
     self.fig.set_size_inches(self.width, self.height)
     SHEET["sheet"] = self
-    rowh = self.HEAD + self.S + self.TEXT + self.GAP
-    for k, label in enumerate(("Build", "Step")):
-        middle = self.height - (2 * k + 1) * rowh - k * PAIR + self.GAP / 2
-        self.fig.text(0.12 / self.width, middle / self.height, label, rotation=90, ha="left", va="center",
-                      fontsize=of.TITLE + 1, fontweight="bold", color=of.INK)
 
 
 def save(self, name):
-    """Sheet.save for print, once both halves are drawn: the PDF scaled to 190 mm, the PNG at 600 dpi of that width."""
+    """Sheet.save for print, once both halves are drawn: each half a PDF scaled to 190 mm and a PNG at 600 dpi of that width."""
     from pypdf import PdfReader, PdfWriter
 
     if name != "overview_step":
         return
-    name = NUMBER["walkthrough"]
     for ax in self.fig.axes:  # panel 2's level key sits on the drawing; the caption names the levels instead
         if ax.get_legend():
             ax.get_legend().remove()
-    buf = io.BytesIO()
-    self.fig.savefig(buf, format="pdf")
-    page = PdfReader(buf).pages[0]
-    page.scale_by(DOUBLE * MM * 72 / float(page.mediabox.width))
-    writer = PdfWriter()
-    writer.add_page(page)
-    with open(os.path.join(OUT, name + ".pdf"), "wb") as f:
-        writer.write(f)
-    self.fig.savefig(os.path.join(OUT, name + ".png"), dpi=600 * DOUBLE * MM / self.width)
+    # Two figures from the one sheet: the build (rows 1-2) and the moving step (rows 3-4), cut between the pairs.
+    cut = self.height - 2 * (self.HEAD + self.S + self.TEXT + self.GAP) - 0.8 * PAIR
+    for key, low, high in (("walkthrough", cut, self.height), ("walkthrough_step", 0.0, cut)):
+        box = Bbox([[0.0, low], [self.width, high]])
+        buf = io.BytesIO()
+        self.fig.savefig(buf, format="pdf", bbox_inches=box)
+        page = PdfReader(buf).pages[0]
+        page.scale_by(DOUBLE * MM * 72 / float(page.mediabox.width))
+        writer = PdfWriter()
+        writer.add_page(page)
+        with open(os.path.join(OUT, NUMBER[key] + ".pdf"), "wb") as f:
+            writer.write(f)
+        self.fig.savefig(os.path.join(OUT, NUMBER[key] + ".png"), dpi=600 * DOUBLE * MM / self.width, bbox_inches=box)
+        print(f"{NUMBER[key]}: {DOUBLE:.0f} mm x {float(page.mediabox.height) / 72 / MM:.0f} mm")
     of.plt.close(self.fig)
-    print(f"{name}: {DOUBLE:.0f} mm x {float(page.mediabox.height) / 72 / MM:.0f} mm, scale {DOUBLE * MM / self.width:.3f}")
 
 
 def captions():
