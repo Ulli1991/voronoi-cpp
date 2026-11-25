@@ -13,12 +13,16 @@ namespace {
 using namespace support;
 using Mesh = voronoi::Mesh<3>;
 
-#ifdef KOKKOS_ENABLE_CUDA
+// The device of the records: LIBBENCH_DEVICE, else the machine the paper's first runs used for this backend.
+#if defined(KOKKOS_ENABLE_CUDA)
 using Peak = libbench::DevicePeak;
-const char* const device_name = "A100-SXM4-40GB";
+const char* const default_device = "A100-SXM4-40GB";
+#elif defined(KOKKOS_ENABLE_HIP)
+using Peak = libbench::HostPeak;  // an APU's GPU allocates from host memory: the resident set holds the device arrays
+const char* const default_device = "MI300A";
 #else
 using Peak = libbench::HostPeak;
-const char* const device_name = "2x Xeon Platinum 8360Y";
+const char* const default_device = "2x Xeon Platinum 8360Y";
 #endif
 
 Points to_points(const double* xyz, std::uint64_t n) {
@@ -42,9 +46,9 @@ libbench::Setup setup(const std::string& variant, const std::string& outputs, co
     s.library = "voronoi-cpp";
     s.variant = variant;
     s.version = version();
-    s.device = device_name;
+    s.device = libbench::env("LIBBENCH_DEVICE", default_device);
     s.threads = Exec().concurrency();
-#ifdef KOKKOS_ENABLE_CUDA
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
     s.threads = 1;
 #endif
     s.outputs = outputs;
@@ -67,8 +71,10 @@ double peak_of(const F& f) {
     return peak.stop();
 }
 
-#ifdef KOKKOS_ENABLE_CUDA
+#if defined(KOKKOS_ENABLE_CUDA)
 using PinnedSpace = Kokkos::CudaHostPinnedSpace;
+#elif defined(KOKKOS_ENABLE_HIP)
+using PinnedSpace = Kokkos::HIPHostPinnedSpace;
 #else
 using PinnedSpace = Kokkos::HostSpace;
 #endif
