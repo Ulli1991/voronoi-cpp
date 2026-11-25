@@ -168,3 +168,5 @@ One A100 at 1305 MHz, 128³, main 55cd6b1, job 32362452. Stages:
 *per-cell results*: `update_cells()`, the per-cell face lists sorted by neighbour and the volume and centroid sums;
 *host and other*: wall time no kernel accounts for (host waits, copies, launches), and the host finish and rebuild when
 they occur.
+
+**`fig03a_speed_full_cells`, application inputs (added 2026-11-25).** Right of the dotted line in the first figure: the three application inputs (cosmic web 128³, fcc solid 2²⁰ atoms, surface 128³), same codes and timing; an open marker where a code misses cells or returns wrong volumes, no marker where it crashed (votess on cosmic web and surface). On the surface input our rebuild and exact start drop to 0.03–0.04 M cells/s (cells refused and built again, issue #60). Rates and states are those of `fig05b_application` (`fig_application.rows()`); 130 mm wide.

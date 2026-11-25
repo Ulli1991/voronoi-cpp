@@ -52,8 +52,10 @@ def load():
 
 
 def curves(ax, summary, rows, big=False):
+    """One curve per row over the five benchmark inputs; returns {label: its line}."""
     xs = np.arange(len(lb.INPUTS))
     k = 0
+    drawn = {}
     for lib, variant, device, threads, label in rows:
         got = lb.curve(summary, lib, variant, device, threads, lb.SIZES[0])
         pts = [(x, got[i]["median"]) for x, i in zip(xs, lb.INPUTS) if i in got]
@@ -64,8 +66,10 @@ def curves(ax, summary, rows, big=False):
         marker = ("o" if "start" not in label else "s") if ours else MARKERS[k % len(MARKERS)]
         k += 0 if ours else 1
         ls = "-" if device == "A100" else ("--" if threads > 1 else ":")
-        ax.plot(*zip(*pts), color=colour, marker=marker, ms=9 if ours and big else 7, lw=LW * (1.4 if ours else 1),
-                ls=ls if not ours or "start" not in label else "--", label=SHORT.get(label, label), zorder=4 if ours else 3)
+        drawn[label], = ax.plot(*zip(*pts), color=colour, marker=marker, ms=9 if ours and big else 7,
+                                lw=LW * (1.4 if ours else 1), ls=ls if not ours or "start" not in label else "--",
+                                label=SHORT.get(label, label), zorder=4 if ours else 3)
+    return drawn
 
 
 def axes_inputs(ax, short=False):
@@ -83,15 +87,46 @@ def axes_inputs(ax, short=False):
     ax.tick_params(axis="x", which="both", top=False, bottom=False)
 
 
+APPLICATION = [("cosmicweb", "cosmic\nweb"), ("fccsolid", "fcc\nsolid"), ("surface", "sur-\nface")]
+HEADLINE_WIDTH = 130.0  # mm: eight inputs
+
+
 def headline(summary, pub):
-    fig, ax = figure(SINGLE, 85)
-    curves(ax, summary, HEADLINE, big=True)
+    """The five benchmark inputs, then the three application inputs of fig_application (same rows, same rates): an open
+    marker where that code's volumes are wrong or cells are missing, no marker where it crashed."""
+    import fig_application as fa
+
+    fig, ax = figure(HEADLINE_WIDTH, 85)
+    drawn = curves(ax, summary, HEADLINE, big=True)
+    app = {(r["label"], r["kind"]): r for r in fa.rows() if r["state"] != "crashed"}
+    first = len(lb.INPUTS)
+    for label, line in drawn.items():
+        run = []  # consecutive application inputs this code has a rate for
+        for k, (kind, _) in enumerate(APPLICATION):
+            r = app.get((label, kind))
+            if r is None:
+                run = []
+                continue
+            run.append((first + k, r["rate"]))
+            if len(run) > 1:
+                ax.plot(*zip(*run[-2:]), color=line.get_color(), lw=line.get_linewidth(), ls=line.get_linestyle(),
+                        zorder=line.get_zorder())
+            incomplete = r["state"] == "wrong" or r["missing"] > 0
+            ax.plot(first + k, r["rate"], line.get_marker(), color=line.get_color(), ms=line.get_markersize(),
+                    mfc="white" if incomplete else line.get_color(), mew=1.8 if incomplete else 0,
+                    zorder=line.get_zorder() + 1)
     axes_inputs(ax)  # measured rows only; the published rates are in captions.md
-    ax.set_ylim(0.1, 1000)
+    ax.set_xticks(range(first + len(APPLICATION)), LABELS + [short for _, short in APPLICATION])
+    ax.set_xlim(-0.4, first + len(APPLICATION) - 0.6)
+    ax.axvline(first - 0.5, color="0.6", lw=0.8, ls=":")
+    ax.set_ylim(0.01, 1000)
     ax.set_ylabel("full cells, M cells/s")
-    ax.legend(loc="upper right", fontsize=11, ncol=2, columnspacing=0.6, handlelength=1.5)
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(ax.plot([], [], "o", color="0.3", mfc="white", mew=1.8, ms=8)[0])
+    labels.append("cells missing or wrong")
+    ax.legend(handles, labels, loc="upper right", fontsize=11, ncol=3, columnspacing=0.6, handlelength=1.5)
     fig.tight_layout()
-    save(fig, "library_headline", SINGLE)
+    save(fig, "library_headline", HEADLINE_WIDTH)
 
 
 GAPS = ("gaps-chain-a100-32368078.jsonl", "gaps-cpu-pair-32367276.jsonl")  # branch close-gaps, voronoi-cpp 77055a4

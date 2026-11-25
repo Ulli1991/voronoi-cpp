@@ -23,7 +23,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Test inputs](paper/figures/fig02_inputs.png)
 
-**Fig. 3: Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³).
+**Fig. 3: Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³). Right of the dotted line in the first figure: the three application inputs (cosmic web 128³, fcc solid 2²⁰ atoms, surface 128³), same codes and timing; an open marker where a code misses cells or returns wrong volumes, no marker where it crashed (votess on cosmic web and surface). On the surface input our rebuild and exact start drop to 0.03–0.04 M cells/s (cells refused and built again, issue #60).
 
 ![Full cells against the public libraries](paper/figures/fig03a_speed_full_cells.png)
 
