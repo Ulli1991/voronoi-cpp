@@ -26,6 +26,12 @@ HEADLINE = [  # (library, variant prefix, device, threads, label)
     ("Paragram", "voronoi_diagram + faces", "A100", 1, "Paragram + faces"),
     ("votess", "tesellate + faces", "A100", 1, "votess + faces"),
 ]
+HEADLINE_CPU = [  # one node, all its 72 cores
+    ("voronoi-cpp", "warp clipping rebuild (cell", "2x Xeon", 72, "Kikkou (this work), rebuild, CPU"),
+    ("voro++", "multithreaded", "2x Xeon", 72, "voro++"),
+    ("CGAL Delaunay_triangulation_3", "Delaunay + faces", "2x Xeon", 72, "CGAL + faces"),
+    ("geogram", "PeriodicDelaunay3d + Voronoi cells", "2x Xeon", 72, "geogram"),
+]
 SHORT = {"voronoi-cpp, warp rebuild, host to host": "Kikkou (this work), host to host",
          "voronoi-cpp, host to host, volumes + centroids out": "Kikkou (this work), host to host",
          "CGAL parallel + faces (ours)": "CGAL + faces", "geogram PDEL + faces (ours)": "geogram PDEL + faces",
@@ -62,12 +68,12 @@ def curves(ax, summary, rows, big=False):
         if not pts:
             continue
         ours = lib == "voronoi-cpp"
-        colour = OURS if ours else OTHERS[k % len(OTHERS)]
+        colour = (OURS if "start" not in label else "#777777") if ours else OTHERS[k % len(OTHERS)]
         marker = ("o" if "start" not in label else "s") if ours else MARKERS[k % len(MARKERS)]
         k += 0 if ours else 1
         ls = "-" if device == "A100" else ("--" if threads > 1 else ":")
         drawn[label], = ax.plot(*zip(*pts), color=colour, marker=marker, ms=9 if ours and big else 7,
-                                lw=LW * (1.4 if ours else 1), ls=ls if not ours or "start" not in label else "--",
+                                lw=LW * (1.4 if ours else 1), ls=ls,
                                 label=SHORT.get(label, label), zorder=4 if ours else 3)
     return drawn
 
@@ -138,18 +144,25 @@ def application_inputs(ax, drawn, rows, ticks):
 
 def headline(summary, pub):
     """Full cells on one A100 over the five benchmark inputs and the three application inputs."""
-    fig, ax = figure(HEADLINE_WIDTH, 85)
-    drawn = curves(ax, summary, HEADLINE, big=True)
+    fig, ax = figure(DOUBLE, 95)
+    # the CPU rows: ours and voro++ from the job that ran both on one node (gaps()), the others from the benchmark
+    g = gaps()
+    merged = {k: v for k, v in summary.items() if not (k[0][0] in ("voronoi-cpp", "voro++") and k[0][3] == 72)}
+    merged.update({k: v for k, v in g.items() if k[0][3] == 72})
+    rows = HEADLINE + HEADLINE_CPU
+    drawn = curves(ax, merged, rows, big=True)
     axes_inputs(ax)  # measured rows only; the published rates are in captions.md
-    application_inputs(ax, drawn, HEADLINE, LABELS + [short for _, short in APPLICATION])
+    application_inputs(ax, drawn, rows, LABELS + [short for _, short in APPLICATION])
     ax.set_ylim(0.01, 1000)
     ax.set_ylabel("full cells, M cells/s")
     handles, labels = ax.get_legend_handles_labels()
-    handles.append(ax.plot([], [], "o", color="0.3", mfc="white", mew=1.8, ms=8)[0])
-    labels.append("cells missing or wrong")
-    ax.legend(handles, labels, loc="upper right", fontsize=11, ncol=3, columnspacing=0.6, handlelength=1.5)
+    handles += [ax.plot([], [], "-", color="0.4", lw=LW)[0], ax.plot([], [], "--", color="0.4", lw=LW)[0],
+                ax.plot([], [], "o", color="0.3", mfc="white", mew=1.8, ms=8, ls="none")[0]]
+    labels += ["solid: one GPU (A100)", "dashed: one CPU node (72 cores)", "cells missing or wrong"]
+    ax.legend(handles, labels, loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=10.5, handlelength=2.2,
+              frameon=False, labelspacing=0.45)
     fig.tight_layout()
-    save(fig, "library_headline", HEADLINE_WIDTH)
+    save(fig, "library_headline", DOUBLE)
 
 
 GAPS = ("gaps-chain-a100-32368078.jsonl", "gaps-cpu-pair-32367276.jsonl")  # branch close-gaps, voronoi-cpp 77055a4
