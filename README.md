@@ -19,6 +19,14 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
 
+**Fig. 2: Clipping one cell.** (a) The start square, a quarter of the box wide on each side of the generator; R is the distance to its farthest corner, and every particle within 2R may still cut the cell. (b) The 3 × 3 grid cells around the home cell, nearest particle first: each bisector cuts off a corner (orange) and R falls. (c) The next rings of grid cells; only particles within 2R are tested, hollow ones were tested and their bisector missed the cell (dashed: the cell after (b)). (d) Certified: no particle is left within 2R (red), the walk stops at the first grid cell 2R away (dashed square), and most particles were never looked at.
+
+![Clipping one cell](paper/figures/fig02_clipping.png)
+
+**Fig. 3: Quantisation and exact ties.** (a) Each position goes to the grid point below and left of it; drawn with 8 steps across, the code has 2³⁰. (b) Four grid points exactly on one circle: the rounded in-circle value has opposite signs in different argument orders, inside its error bound, so double precision cannot decide; in exact integers it is 0, a true tie. (c), (d) Ties go by particle id: the particle with the lowest id counts as outside the circle of the other three, so the same diagonal is kept from every argument order, and other ids give the other diagonal.
+
+![Quantisation and exact ties](paper/figures/fig03_exact_ties.png)
+
 **Fig. 4: Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
 
 ![Test inputs](paper/figures/fig04_inputs.png)
@@ -69,7 +77,7 @@ The figures are numbered in the paper's order; a letter marks the parts of one f
 
 ## How it works
 
-Fig. 1 above shows the whole method in one 2D example; Figs. 2 and 3 show its two central ideas.
+Fig. 1 above shows the whole method in one 2D example; Figs. 2 and 3 show its two central ideas, the clipping of a cell and the exact decisions.
 
 Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_works.md): the whole method panel by panel, the control flow of `update()`, one step and a rebuild in detail, where the data lives, how the GPU touches memory, and the memory pools and limits.
 
@@ -87,14 +95,6 @@ Each stage is explained, with figures, in [docs/how_it_works.md](docs/how_it_wor
 10. **Memory order** (`mesh_order.hpp`, optional, `Layout`). Between the repair and the geometry: cells re-sorted along a curve, tetrahedra and faces after them; faces numbered by owner; an owner bit in list entries.
 
 2D (`voronoi_mesh_2d.hpp`, `polygon_clip.hpp`, `tri_mesh.hpp`, `tri_repair.hpp`, `tri_finish.hpp`) runs the same stages on triangles, with exact clipping. 1D (`sorted_mesh.hpp`) quantises the generators to a 2⁵² grid, sorts them and supports `insert()` and `remove()`.
-
-**Fig. 2: Clipping one cell.** (a) The start square, a quarter of the box wide on each side of the generator; R is the distance to its farthest corner, and every particle within 2R may still cut the cell. (b) The 3 × 3 grid cells around the home cell, nearest particle first: each bisector cuts off a corner (orange) and R falls. (c) The next rings of grid cells; only particles within 2R are tested, hollow ones were tested and their bisector missed the cell (dashed: the cell after (b)). (d) Certified: no particle is left within 2R (red), the walk stops at the first grid cell 2R away (dashed square), and most particles were never looked at.
-
-![Clipping one cell](paper/figures/fig02_clipping.png)
-
-**Fig. 3: Quantisation and exact ties.** (a) Each position goes to the grid point below and left of it; drawn with 8 steps across, the code has 2³⁰. (b) Four grid points exactly on one circle: the rounded in-circle value has opposite signs in different argument orders, inside its error bound, so double precision cannot decide; in exact integers it is 0, a true tie. (c), (d) Ties go by particle id: the particle with the lowest id counts as outside the circle of the other three, so the same diagonal is kept from every argument order, and other ids give the other diagonal.
-
-![Quantisation and exact ties](paper/figures/fig03_exact_ties.png)
 
 The cell list and the repair by flips have their own figures in [docs/how_it_works.md](docs/how_it_works.md).
 
