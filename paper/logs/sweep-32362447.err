@@ -1,0 +1,91 @@
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-4c5089f7-7972-f4b5-95b2-a45679d64886)
+wrote 32768 points to /ptmp/uli/voronoi-paper/points/jittered_32768.pts
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/jittered_32768_0.03-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/jittered_32768_0.1-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/jittered_32768_0.3-32362447.trj
+wrote 32768 points to /ptmp/uli/voronoi-paper/points/uniform_32768.pts
+lloyd: iteration 10 volume/mean: rms spread 0.106629
+lloyd: iteration 20 volume/mean: rms spread 0.0760832
+lloyd: iteration 30 volume/mean: rms spread 0.0648837
+lloyd: iteration 40 volume/mean: rms spread 0.0590564
+lloyd: iteration 50 volume/mean: rms spread 0.055564
+lloyd: iteration 60 volume/mean: rms spread 0.0532421
+lloyd: iteration 70 volume/mean: rms spread 0.0515255
+lloyd: iteration 80 volume/mean: rms spread 0.0501985
+lloyd: iteration 90 volume/mean: rms spread 0.0491367
+lloyd: iteration 100 volume/mean: rms spread 0.0482678
+wrote 32768 points to /ptmp/uli/voronoi-paper/points/bluenoise_32768.pts
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_32768_0.03-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_32768_0.1-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_32768_0.3-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/uniform_32768_0.03-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/uniform_32768_0.1-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/uniform_32768_0.3-32362447.trj
+wrote 32768 points to /ptmp/uli/voronoi-paper/points/clustered_32768.pts
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/clustered_32768_0.03-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/clustered_32768_0.1-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/clustered_32768_0.3-32362447.trj
+wrote 32768 points to /ptmp/uli/voronoi-paper/points/halo_32768.pts
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/halo_32768_0.03-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/halo_32768_0.1-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/halo_32768_0.3-32362447.trj
+wrote 32768 points to /ptmp/uli/voronoi-paper/points/lattice_32768.pts
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/lattice_32768_0.03-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/lattice_32768_0.1-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/lattice_32768_0.3-32362447.trj
+wrote 32768 points to /ptmp/uli/voronoi-paper/points/wave_32768.pts
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/wave_32768_0.03-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/wave_32768_0.1-32362447.trj
+wrote 11 frames of 32768 points to /ptmp/uli/voronoi-paper/tmp/wave_32768_0.3-32362447.trj
+wrote 262144 points to /ptmp/uli/voronoi-paper/points/jittered_262144.pts
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/jittered_262144_0.03-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/jittered_262144_0.1-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/jittered_262144_0.3-32362447.trj
+wrote 262144 points to /ptmp/uli/voronoi-paper/points/uniform_262144.pts
+lloyd: iteration 10 volume/mean: rms spread 0.107304
+lloyd: iteration 20 volume/mean: rms spread 0.0768498
+lloyd: iteration 30 volume/mean: rms spread 0.0657863
+lloyd: iteration 40 volume/mean: rms spread 0.0599976
+lloyd: iteration 50 volume/mean: rms spread 0.056394
+lloyd: iteration 60 volume/mean: rms spread 0.0538998
+lloyd: iteration 70 volume/mean: rms spread 0.0520599
+lloyd: iteration 80 volume/mean: rms spread 0.0506444
+lloyd: iteration 90 volume/mean: rms spread 0.0495207
+lloyd: iteration 100 volume/mean: rms spread 0.0486073
+wrote 262144 points to /ptmp/uli/voronoi-paper/points/bluenoise_262144.pts
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_262144_0.03-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_262144_0.1-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_262144_0.3-32362447.trj
+# failed: check uniform 262144
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/uniform_262144_0.03-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/uniform_262144_0.1-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/uniform_262144_0.3-32362447.trj
+wrote 262144 points to /ptmp/uli/voronoi-paper/points/clustered_262144.pts
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/clustered_262144_0.03-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/clustered_262144_0.1-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/clustered_262144_0.3-32362447.trj
+wrote 262144 points to /ptmp/uli/voronoi-paper/points/halo_262144.pts
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/halo_262144_0.03-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/halo_262144_0.1-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/halo_262144_0.3-32362447.trj
+wrote 262144 points to /ptmp/uli/voronoi-paper/points/lattice_262144.pts
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/lattice_262144_0.03-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/lattice_262144_0.1-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/lattice_262144_0.3-32362447.trj
+wrote 262144 points to /ptmp/uli/voronoi-paper/points/wave_262144.pts
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/wave_262144_0.03-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/wave_262144_0.1-32362447.trj
+wrote 11 frames of 262144 points to /ptmp/uli/voronoi-paper/tmp/wave_262144_0.3-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/jittered_2097152_0.03-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/jittered_2097152_0.1-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/jittered_2097152_0.3-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_2097152_0.03-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_2097152_0.1-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/bluenoise_2097152_0.3-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/uniform_2097152_0.03-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/uniform_2097152_0.1-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/uniform_2097152_0.3-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/clustered_2097152_0.03-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/clustered_2097152_0.1-32362447.trj
+wrote 11 frames of 2097152 points to /ptmp/uli/voronoi-paper/tmp/clustered_2097152_0.3-32362447.trj
+[2026-11-15T07:43:33.692] error: *** JOB 32362447 ON ravg1177 CANCELLED AT 2026-11-15T07:43:33 DUE to SIGNAL Terminated ***

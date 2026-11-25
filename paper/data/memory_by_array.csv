@@ -1,0 +1,404 @@
+job,input,n,phase,array,bytes_per_cell
+32362454,jittered,2097152,rebuild,"(peak, all arrays)",701.273
+32362454,jittered,2097152,rebuild,cell_centroid,24
+32362454,jittered,2097152,rebuild,cell_closure,8
+32362454,jittered,2097152,rebuild,cell_face_count,4
+32362454,jittered,2097152,rebuild,cell_face_start,4
+32362454,jittered,2097152,rebuild,cell_face_used,3.8147e-06
+32362454,jittered,2097152,rebuild,cell_list_sort_scratch,0.270752
+32362454,jittered,2097152,rebuild,cell_offsets,4
+32362454,jittered,2097152,rebuild,cell_owned_count,4
+32362454,jittered,2097152,rebuild,cell_status,4
+32362454,jittered,2097152,rebuild,cell_volume,8
+32362454,jittered,2097152,rebuild,cell_work,12
+32362454,jittered,2097152,rebuild,face_area,264
+32362454,jittered,2097152,rebuild,face_centroid,264
+32362454,jittered,2097152,rebuild,face_neighbour,44
+32362454,jittered,2097152,rebuild,particle_order,4
+32362454,jittered,2097152,rebuild,positions,24
+32362454,jittered,2097152,rebuild,shell_stencil,0.00117111
+32362454,jittered,2097152,rebuild,shell_stencil_bound2,0.00117111
+32362454,jittered,2097152,rebuild,shell_stencil_ends,1.14441e-05
+32362454,jittered,2097152,rebuild,shell_warp_next_cell,3.8147e-06
+32362454,jittered,2097152,rebuild,slot_fine_keys,4
+32362454,jittered,2097152,rebuild,slot_levels,1
+32362454,jittered,2097152,rebuild,slot_positions,24
+32362454,jittered,2097152,exact start,"(peak, all arrays)",1955.05
+32362454,jittered,2097152,exact start,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,jittered,2097152,exact start,cell_centroid,24
+32362454,jittered,2097152,exact start,cell_face,65.6198
+32362454,jittered,2097152,exact start,cell_face_cursor,4
+32362454,jittered,2097152,exact start,cell_face_start,4
+32362454,jittered,2097152,exact start,cell_volume,8
+32362454,jittered,2097152,exact start,face_area,196.859
+32362454,jittered,2097152,exact start,face_centroid,196.859
+32362454,jittered,2097152,exact start,face_rings_counts,1.52588e-05
+32362454,jittered,2097152,exact start,face_rings_ids,41.0124
+32362454,jittered,2097152,exact start,face_rings_listed,3.8147e-06
+32362454,jittered,2097152,exact start,face_rings_neighbour,32.8099
+32362454,jittered,2097152,exact start,face_rings_numbered,7.82315
+32362454,jittered,2097152,exact start,face_rings_owner,32.8099
+32362454,jittered,2097152,exact start,face_rings_pool,500.682
+32362454,jittered,2097152,exact start,face_rings_ring_length,32.8099
+32362454,jittered,2097152,exact start,face_rings_ring_start,32.8099
+32362454,jittered,2097152,exact start,face_rings_start,31.2926
+32362454,jittered,2097152,exact start,face_rows,6.10352e-05
+32362454,jittered,2097152,exact start,positions,56
+32362454,jittered,2097152,exact start,tet_adjacent,125.17
+32362454,jittered,2097152,exact start,tet_centre,250.341
+32362454,jittered,2097152,exact start,tet_edges,7.82315
+32362454,jittered,2097152,exact start,tet_repair_alive,7.82315
+32362454,jittered,2097152,exact start,tet_repair_counters,1.90735e-05
+32362454,jittered,2097152,exact start,tet_repair_dirty,31.2926
+32362454,jittered,2097152,exact start,tet_repair_free,0.490902
+32362454,jittered,2097152,exact start,tet_repair_freed,1.00195
+32362454,jittered,2097152,exact start,tet_repair_listed,31.2926
+32362454,jittered,2097152,exact start,tet_repair_lock,62.5852
+32362454,jittered,2097152,exact start,tet_repair_plans,9.01758
+32362454,jittered,2097152,exact start,tet_repair_point,16
+32362454,jittered,2097152,exact start,tet_repair_stuck,2.00391
+32362454,jittered,2097152,exact start,tet_repair_touched,7.82315
+32362454,jittered,2097152,exact start,tet_repair_touched_list,7.8251
+32362454,jittered,2097152,exact start,tet_repair_work,2.00391
+32362454,jittered,2097152,exact start,tet_vertex,125.17
+32362454,jittered,2097152,moving step,"(peak, all arrays)",1979.09
+32362454,jittered,2097152,moving step,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,jittered,2097152,moving step,Kokkos::InternalScratchSpace,0.0339355
+32362454,jittered,2097152,moving step,cell_centroid,24
+32362454,jittered,2097152,moving step,cell_face,65.6198
+32362454,jittered,2097152,moving step,cell_face_cursor,4
+32362454,jittered,2097152,moving step,cell_face_start,4
+32362454,jittered,2097152,moving step,cell_volume,8
+32362454,jittered,2097152,moving step,face_area,196.859
+32362454,jittered,2097152,moving step,face_centroid,196.859
+32362454,jittered,2097152,moving step,face_rings_counts,1.52588e-05
+32362454,jittered,2097152,moving step,face_rings_ids,41.0124
+32362454,jittered,2097152,moving step,face_rings_listed,3.8147e-06
+32362454,jittered,2097152,moving step,face_rings_neighbour,32.8099
+32362454,jittered,2097152,moving step,face_rings_numbered,7.82315
+32362454,jittered,2097152,moving step,face_rings_owner,32.8099
+32362454,jittered,2097152,moving step,face_rings_pool,500.682
+32362454,jittered,2097152,moving step,face_rings_ring_length,32.8099
+32362454,jittered,2097152,moving step,face_rings_ring_start,32.8099
+32362454,jittered,2097152,moving step,face_rings_start,31.2926
+32362454,jittered,2097152,moving step,face_rows,6.10352e-05
+32362454,jittered,2097152,moving step,positions,80
+32362454,jittered,2097152,moving step,tet_adjacent,125.17
+32362454,jittered,2097152,moving step,tet_centre,250.341
+32362454,jittered,2097152,moving step,tet_edges,7.82315
+32362454,jittered,2097152,moving step,tet_repair_alive,7.82315
+32362454,jittered,2097152,moving step,tet_repair_counters,1.90735e-05
+32362454,jittered,2097152,moving step,tet_repair_dirty,31.2926
+32362454,jittered,2097152,moving step,tet_repair_free,0.490902
+32362454,jittered,2097152,moving step,tet_repair_freed,1.00195
+32362454,jittered,2097152,moving step,tet_repair_listed,31.2926
+32362454,jittered,2097152,moving step,tet_repair_lock,62.5852
+32362454,jittered,2097152,moving step,tet_repair_plans,9.01758
+32362454,jittered,2097152,moving step,tet_repair_point,16
+32362454,jittered,2097152,moving step,tet_repair_stuck,2.00391
+32362454,jittered,2097152,moving step,tet_repair_touched,7.82315
+32362454,jittered,2097152,moving step,tet_repair_touched_list,7.8251
+32362454,jittered,2097152,moving step,tet_repair_work,2.00391
+32362454,jittered,2097152,moving step,tet_vertex,125.17
+32362454,halo,2097152,rebuild,"(peak, all arrays)",701.273
+32362454,halo,2097152,rebuild,cell_centroid,24
+32362454,halo,2097152,rebuild,cell_closure,8
+32362454,halo,2097152,rebuild,cell_face_count,4
+32362454,halo,2097152,rebuild,cell_face_start,4
+32362454,halo,2097152,rebuild,cell_face_used,3.8147e-06
+32362454,halo,2097152,rebuild,cell_list_sort_scratch,0.270752
+32362454,halo,2097152,rebuild,cell_offsets,4
+32362454,halo,2097152,rebuild,cell_owned_count,4
+32362454,halo,2097152,rebuild,cell_status,4
+32362454,halo,2097152,rebuild,cell_volume,8
+32362454,halo,2097152,rebuild,cell_work,12
+32362454,halo,2097152,rebuild,face_area,264
+32362454,halo,2097152,rebuild,face_centroid,264
+32362454,halo,2097152,rebuild,face_neighbour,44
+32362454,halo,2097152,rebuild,particle_order,4
+32362454,halo,2097152,rebuild,positions,24
+32362454,halo,2097152,rebuild,shell_stencil,0.00117111
+32362454,halo,2097152,rebuild,shell_stencil_bound2,0.00117111
+32362454,halo,2097152,rebuild,shell_stencil_ends,1.14441e-05
+32362454,halo,2097152,rebuild,shell_warp_next_cell,3.8147e-06
+32362454,halo,2097152,rebuild,slot_fine_keys,4
+32362454,halo,2097152,rebuild,slot_levels,1
+32362454,halo,2097152,rebuild,slot_positions,24
+32362454,halo,2097152,exact start,"(peak, all arrays)",1906.71
+32362454,halo,2097152,exact start,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,halo,2097152,exact start,cell_centroid,24
+32362454,halo,2097152,exact start,cell_face,64.0347
+32362454,halo,2097152,exact start,cell_face_cursor,4
+32362454,halo,2097152,exact start,cell_face_start,4
+32362454,halo,2097152,exact start,cell_volume,8
+32362454,halo,2097152,exact start,face_area,192.104
+32362454,halo,2097152,exact start,face_centroid,192.104
+32362454,halo,2097152,exact start,face_rings_counts,1.52588e-05
+32362454,halo,2097152,exact start,face_rings_ids,40.0217
+32362454,halo,2097152,exact start,face_rings_listed,3.8147e-06
+32362454,halo,2097152,exact start,face_rings_neighbour,32.0173
+32362454,halo,2097152,exact start,face_rings_numbered,7.607
+32362454,halo,2097152,exact start,face_rings_owner,32.0173
+32362454,halo,2097152,exact start,face_rings_pool,486.848
+32362454,halo,2097152,exact start,face_rings_ring_length,32.0173
+32362454,halo,2097152,exact start,face_rings_ring_start,32.0173
+32362454,halo,2097152,exact start,face_rings_start,30.428
+32362454,halo,2097152,exact start,face_rows,6.10352e-05
+32362454,halo,2097152,exact start,positions,56
+32362454,halo,2097152,exact start,tet_adjacent,121.712
+32362454,halo,2097152,exact start,tet_centre,243.424
+32362454,halo,2097152,exact start,tet_edges,7.607
+32362454,halo,2097152,exact start,tet_repair_alive,7.607
+32362454,halo,2097152,exact start,tet_repair_counters,1.90735e-05
+32362454,halo,2097152,exact start,tet_repair_dirty,30.428
+32362454,halo,2097152,exact start,tet_repair_free,0.47739
+32362454,halo,2097152,exact start,tet_repair_freed,1.00195
+32362454,halo,2097152,exact start,tet_repair_listed,30.428
+32362454,halo,2097152,exact start,tet_repair_lock,60.856
+32362454,halo,2097152,exact start,tet_repair_plans,9.01758
+32362454,halo,2097152,exact start,tet_repair_point,16
+32362454,halo,2097152,exact start,tet_repair_stuck,2.00391
+32362454,halo,2097152,exact start,tet_repair_touched,7.607
+32362454,halo,2097152,exact start,tet_repair_touched_list,7.60895
+32362454,halo,2097152,exact start,tet_repair_work,2.00391
+32362454,halo,2097152,exact start,tet_vertex,121.712
+32362454,halo,2097152,moving step,"(peak, all arrays)",1930.71
+32362454,halo,2097152,moving step,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,halo,2097152,moving step,cell_centroid,24
+32362454,halo,2097152,moving step,cell_face,64.0347
+32362454,halo,2097152,moving step,cell_face_cursor,4
+32362454,halo,2097152,moving step,cell_face_start,4
+32362454,halo,2097152,moving step,cell_volume,8
+32362454,halo,2097152,moving step,face_area,192.104
+32362454,halo,2097152,moving step,face_centroid,192.104
+32362454,halo,2097152,moving step,face_rings_counts,1.52588e-05
+32362454,halo,2097152,moving step,face_rings_ids,40.0217
+32362454,halo,2097152,moving step,face_rings_listed,3.8147e-06
+32362454,halo,2097152,moving step,face_rings_neighbour,32.0173
+32362454,halo,2097152,moving step,face_rings_numbered,7.607
+32362454,halo,2097152,moving step,face_rings_owner,32.0173
+32362454,halo,2097152,moving step,face_rings_pool,486.848
+32362454,halo,2097152,moving step,face_rings_ring_length,32.0173
+32362454,halo,2097152,moving step,face_rings_ring_start,32.0173
+32362454,halo,2097152,moving step,face_rings_start,30.428
+32362454,halo,2097152,moving step,face_rows,6.10352e-05
+32362454,halo,2097152,moving step,positions,80
+32362454,halo,2097152,moving step,tet_adjacent,121.712
+32362454,halo,2097152,moving step,tet_centre,243.424
+32362454,halo,2097152,moving step,tet_edges,7.607
+32362454,halo,2097152,moving step,tet_repair_alive,7.607
+32362454,halo,2097152,moving step,tet_repair_counters,1.90735e-05
+32362454,halo,2097152,moving step,tet_repair_dirty,30.428
+32362454,halo,2097152,moving step,tet_repair_free,0.47739
+32362454,halo,2097152,moving step,tet_repair_freed,1.00195
+32362454,halo,2097152,moving step,tet_repair_listed,30.428
+32362454,halo,2097152,moving step,tet_repair_lock,60.856
+32362454,halo,2097152,moving step,tet_repair_plans,9.01758
+32362454,halo,2097152,moving step,tet_repair_point,16
+32362454,halo,2097152,moving step,tet_repair_stuck,2.00391
+32362454,halo,2097152,moving step,tet_repair_touched,7.607
+32362454,halo,2097152,moving step,tet_repair_touched_list,7.60895
+32362454,halo,2097152,moving step,tet_repair_work,2.00391
+32362454,halo,2097152,moving step,tet_vertex,121.712
+32362454,jittered,16777216,rebuild,"(peak, all arrays)",655.767
+32362454,jittered,16777216,rebuild,cell_centroid,24
+32362454,jittered,16777216,rebuild,cell_closure,8
+32362454,jittered,16777216,rebuild,cell_face_count,4
+32362454,jittered,16777216,rebuild,cell_face_start,4
+32362454,jittered,16777216,rebuild,cell_face_used,4.76837e-07
+32362454,jittered,16777216,rebuild,cell_list_sort_scratch,0.267181
+32362454,jittered,16777216,rebuild,cell_offsets,4
+32362454,jittered,16777216,rebuild,cell_owned_count,4
+32362454,jittered,16777216,rebuild,cell_status,4
+32362454,jittered,16777216,rebuild,cell_volume,8
+32362454,jittered,16777216,rebuild,cell_work,12
+32362454,jittered,16777216,rebuild,face_area,243
+32362454,jittered,16777216,rebuild,face_centroid,243
+32362454,jittered,16777216,rebuild,face_neighbour,40.5
+32362454,jittered,16777216,rebuild,particle_order,4
+32362454,jittered,16777216,rebuild,positions,24
+32362454,jittered,16777216,rebuild,shell_stencil,0.000146389
+32362454,jittered,16777216,rebuild,shell_stencil_bound2,0.000146389
+32362454,jittered,16777216,rebuild,shell_stencil_ends,1.43051e-06
+32362454,jittered,16777216,rebuild,shell_warp_next_cell,4.76837e-07
+32362454,jittered,16777216,rebuild,slot_fine_keys,4
+32362454,jittered,16777216,rebuild,slot_levels,1
+32362454,jittered,16777216,rebuild,slot_positions,24
+32362454,jittered,16777216,exact start,"(peak, all arrays)",1955.18
+32362454,jittered,16777216,exact start,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,jittered,16777216,exact start,cell_centroid,24
+32362454,jittered,16777216,exact start,cell_face,65.6248
+32362454,jittered,16777216,exact start,cell_face_cursor,4
+32362454,jittered,16777216,exact start,cell_face_start,4
+32362454,jittered,16777216,exact start,cell_volume,8
+32362454,jittered,16777216,exact start,face_area,196.874
+32362454,jittered,16777216,exact start,face_centroid,196.874
+32362454,jittered,16777216,exact start,face_rings_counts,1.90735e-06
+32362454,jittered,16777216,exact start,face_rings_ids,41.0155
+32362454,jittered,16777216,exact start,face_rings_listed,4.76837e-07
+32362454,jittered,16777216,exact start,face_rings_neighbour,32.8124
+32362454,jittered,16777216,exact start,face_rings_numbered,7.82384
+32362454,jittered,16777216,exact start,face_rings_owner,32.8124
+32362454,jittered,16777216,exact start,face_rings_pool,500.726
+32362454,jittered,16777216,exact start,face_rings_ring_length,32.8124
+32362454,jittered,16777216,exact start,face_rings_ring_start,32.8124
+32362454,jittered,16777216,exact start,face_rings_start,31.2954
+32362454,jittered,16777216,exact start,face_rows,7.62939e-06
+32362454,jittered,16777216,exact start,positions,56
+32362454,jittered,16777216,exact start,tet_adjacent,125.181
+32362454,jittered,16777216,exact start,tet_centre,250.363
+32362454,jittered,16777216,exact start,tet_edges,7.82384
+32362454,jittered,16777216,exact start,tet_repair_alive,7.82384
+32362454,jittered,16777216,exact start,tet_repair_counters,2.38419e-06
+32362454,jittered,16777216,exact start,tet_repair_dirty,31.2954
+32362454,jittered,16777216,exact start,tet_repair_free,0.489234
+32362454,jittered,16777216,exact start,tet_repair_freed,1.00024
+32362454,jittered,16777216,exact start,tet_repair_listed,31.2954
+32362454,jittered,16777216,exact start,tet_repair_lock,62.5907
+32362454,jittered,16777216,exact start,tet_repair_plans,9.0022
+32362454,jittered,16777216,exact start,tet_repair_point,16
+32362454,jittered,16777216,exact start,tet_repair_stuck,2.00049
+32362454,jittered,16777216,exact start,tet_repair_touched,7.82384
+32362454,jittered,16777216,exact start,tet_repair_touched_list,7.82408
+32362454,jittered,16777216,exact start,tet_repair_work,2.00049
+32362454,jittered,16777216,exact start,tet_vertex,125.181
+32362454,jittered,16777216,moving step,"(peak, all arrays)",1979.19
+32362454,jittered,16777216,moving step,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,jittered,16777216,moving step,Kokkos::InternalScratchSpace,0.015625
+32362454,jittered,16777216,moving step,cell_centroid,24
+32362454,jittered,16777216,moving step,cell_face,65.6248
+32362454,jittered,16777216,moving step,cell_face_cursor,4
+32362454,jittered,16777216,moving step,cell_face_start,4
+32362454,jittered,16777216,moving step,cell_volume,8
+32362454,jittered,16777216,moving step,face_area,196.874
+32362454,jittered,16777216,moving step,face_centroid,196.874
+32362454,jittered,16777216,moving step,face_rings_counts,1.90735e-06
+32362454,jittered,16777216,moving step,face_rings_ids,41.0155
+32362454,jittered,16777216,moving step,face_rings_listed,4.76837e-07
+32362454,jittered,16777216,moving step,face_rings_neighbour,32.8124
+32362454,jittered,16777216,moving step,face_rings_numbered,7.82384
+32362454,jittered,16777216,moving step,face_rings_owner,32.8124
+32362454,jittered,16777216,moving step,face_rings_pool,500.726
+32362454,jittered,16777216,moving step,face_rings_ring_length,32.8124
+32362454,jittered,16777216,moving step,face_rings_ring_start,32.8124
+32362454,jittered,16777216,moving step,face_rings_start,31.2954
+32362454,jittered,16777216,moving step,face_rows,7.62939e-06
+32362454,jittered,16777216,moving step,positions,80
+32362454,jittered,16777216,moving step,tet_adjacent,125.181
+32362454,jittered,16777216,moving step,tet_centre,250.363
+32362454,jittered,16777216,moving step,tet_edges,7.82384
+32362454,jittered,16777216,moving step,tet_repair_alive,7.82384
+32362454,jittered,16777216,moving step,tet_repair_counters,2.38419e-06
+32362454,jittered,16777216,moving step,tet_repair_dirty,31.2954
+32362454,jittered,16777216,moving step,tet_repair_free,0.489234
+32362454,jittered,16777216,moving step,tet_repair_freed,1.00024
+32362454,jittered,16777216,moving step,tet_repair_listed,31.2954
+32362454,jittered,16777216,moving step,tet_repair_lock,62.5907
+32362454,jittered,16777216,moving step,tet_repair_plans,9.0022
+32362454,jittered,16777216,moving step,tet_repair_point,16
+32362454,jittered,16777216,moving step,tet_repair_stuck,2.00049
+32362454,jittered,16777216,moving step,tet_repair_touched,7.82384
+32362454,jittered,16777216,moving step,tet_repair_touched_list,7.82408
+32362454,jittered,16777216,moving step,tet_repair_work,2.00049
+32362454,jittered,16777216,moving step,tet_vertex,125.181
+32362454,halo,16777216,rebuild,"(peak, all arrays)",655.767
+32362454,halo,16777216,rebuild,cell_centroid,24
+32362454,halo,16777216,rebuild,cell_closure,8
+32362454,halo,16777216,rebuild,cell_face_count,4
+32362454,halo,16777216,rebuild,cell_face_start,4
+32362454,halo,16777216,rebuild,cell_face_used,4.76837e-07
+32362454,halo,16777216,rebuild,cell_list_sort_scratch,0.267181
+32362454,halo,16777216,rebuild,cell_offsets,4
+32362454,halo,16777216,rebuild,cell_owned_count,4
+32362454,halo,16777216,rebuild,cell_status,4
+32362454,halo,16777216,rebuild,cell_volume,8
+32362454,halo,16777216,rebuild,cell_work,12
+32362454,halo,16777216,rebuild,face_area,243
+32362454,halo,16777216,rebuild,face_centroid,243
+32362454,halo,16777216,rebuild,face_neighbour,40.5
+32362454,halo,16777216,rebuild,particle_order,4
+32362454,halo,16777216,rebuild,positions,24
+32362454,halo,16777216,rebuild,shell_stencil,0.000146389
+32362454,halo,16777216,rebuild,shell_stencil_bound2,0.000146389
+32362454,halo,16777216,rebuild,shell_stencil_ends,1.43051e-06
+32362454,halo,16777216,rebuild,shell_warp_next_cell,4.76837e-07
+32362454,halo,16777216,rebuild,slot_fine_keys,4
+32362454,halo,16777216,rebuild,slot_levels,1
+32362454,halo,16777216,rebuild,slot_positions,24
+32362454,halo,16777216,exact start,"(peak, all arrays)",1907.23
+32362454,halo,16777216,exact start,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,halo,16777216,exact start,cell_centroid,24
+32362454,halo,16777216,exact start,cell_face,64.0525
+32362454,halo,16777216,exact start,cell_face_cursor,4
+32362454,halo,16777216,exact start,cell_face_start,4
+32362454,halo,16777216,exact start,cell_volume,8
+32362454,halo,16777216,exact start,face_area,192.157
+32362454,halo,16777216,exact start,face_centroid,192.157
+32362454,halo,16777216,exact start,face_rings_counts,1.90735e-06
+32362454,halo,16777216,exact start,face_rings_ids,40.0328
+32362454,halo,16777216,exact start,face_rings_listed,4.76837e-07
+32362454,halo,16777216,exact start,face_rings_neighbour,32.0262
+32362454,halo,16777216,exact start,face_rings_numbered,7.60943
+32362454,halo,16777216,exact start,face_rings_owner,32.0262
+32362454,halo,16777216,exact start,face_rings_pool,487.004
+32362454,halo,16777216,exact start,face_rings_ring_length,32.0262
+32362454,halo,16777216,exact start,face_rings_ring_start,32.0262
+32362454,halo,16777216,exact start,face_rings_start,30.4377
+32362454,halo,16777216,exact start,face_rows,7.62939e-06
+32362454,halo,16777216,exact start,positions,56
+32362454,halo,16777216,exact start,tet_adjacent,121.751
+32362454,halo,16777216,exact start,tet_centre,243.502
+32362454,halo,16777216,exact start,tet_edges,7.60943
+32362454,halo,16777216,exact start,tet_repair_alive,7.60943
+32362454,halo,16777216,exact start,tet_repair_counters,2.38419e-06
+32362454,halo,16777216,exact start,tet_repair_dirty,30.4377
+32362454,halo,16777216,exact start,tet_repair_free,0.475833
+32362454,halo,16777216,exact start,tet_repair_freed,1.00024
+32362454,halo,16777216,exact start,tet_repair_listed,30.4377
+32362454,halo,16777216,exact start,tet_repair_lock,60.8754
+32362454,halo,16777216,exact start,tet_repair_plans,9.0022
+32362454,halo,16777216,exact start,tet_repair_point,16
+32362454,halo,16777216,exact start,tet_repair_stuck,2.00049
+32362454,halo,16777216,exact start,tet_repair_touched,7.60943
+32362454,halo,16777216,exact start,tet_repair_touched_list,7.60967
+32362454,halo,16777216,exact start,tet_repair_work,2.00049
+32362454,halo,16777216,exact start,tet_vertex,121.751
+32362454,halo,16777216,moving step,"(peak, all arrays)",1931.23
+32362454,halo,16777216,moving step,Kokkos::CudaSpace::TeamScratchMemory,0
+32362454,halo,16777216,moving step,Kokkos::InternalScratchSpace,0.00719452
+32362454,halo,16777216,moving step,cell_centroid,24
+32362454,halo,16777216,moving step,cell_face,64.0525
+32362454,halo,16777216,moving step,cell_face_cursor,4
+32362454,halo,16777216,moving step,cell_face_start,4
+32362454,halo,16777216,moving step,cell_volume,8
+32362454,halo,16777216,moving step,face_area,192.157
+32362454,halo,16777216,moving step,face_centroid,192.157
+32362454,halo,16777216,moving step,face_rings_counts,1.90735e-06
+32362454,halo,16777216,moving step,face_rings_ids,40.0328
+32362454,halo,16777216,moving step,face_rings_listed,4.76837e-07
+32362454,halo,16777216,moving step,face_rings_neighbour,32.0262
+32362454,halo,16777216,moving step,face_rings_numbered,7.60943
+32362454,halo,16777216,moving step,face_rings_owner,32.0262
+32362454,halo,16777216,moving step,face_rings_pool,487.004
+32362454,halo,16777216,moving step,face_rings_ring_length,32.0262
+32362454,halo,16777216,moving step,face_rings_ring_start,32.0262
+32362454,halo,16777216,moving step,face_rings_start,30.4377
+32362454,halo,16777216,moving step,face_rows,7.62939e-06
+32362454,halo,16777216,moving step,positions,80
+32362454,halo,16777216,moving step,tet_adjacent,121.751
+32362454,halo,16777216,moving step,tet_centre,243.502
+32362454,halo,16777216,moving step,tet_edges,7.60943
+32362454,halo,16777216,moving step,tet_repair_alive,7.60943
+32362454,halo,16777216,moving step,tet_repair_counters,2.38419e-06
+32362454,halo,16777216,moving step,tet_repair_dirty,30.4377
+32362454,halo,16777216,moving step,tet_repair_free,0.475833
+32362454,halo,16777216,moving step,tet_repair_freed,1.00024
+32362454,halo,16777216,moving step,tet_repair_listed,30.4377
+32362454,halo,16777216,moving step,tet_repair_lock,60.8754
+32362454,halo,16777216,moving step,tet_repair_plans,9.0022
+32362454,halo,16777216,moving step,tet_repair_point,16
+32362454,halo,16777216,moving step,tet_repair_stuck,2.00049
+32362454,halo,16777216,moving step,tet_repair_touched,7.60943
+32362454,halo,16777216,moving step,tet_repair_touched_list,7.60967
+32362454,halo,16777216,moving step,tet_repair_work,2.00049
+32362454,halo,16777216,moving step,tet_vertex,121.751

@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""paper/data/inputs.npz from the 64³ point files of the benchmark inputs (library_bench points / lloyd: the generators
+and seed of src/test/support.hpp): per input a slab one mean spacing thick projected to x-y (for clustered and halo
+through the most isolated dense blob or halo, shifted periodically so it sits in the middle), the nearest-neighbour distance histogram in
+mean spacings, and the density contrast (99.9 / 0.1 percentile of 1/r_32³). The application inputs: cosmic web and
+surface at 64³, the fcc solid at l = 32 unit cells (2^17 atoms; the generator rounds n to 4 l³, and 2^18 would need
+l = 40.3), its slab centred on an atomic (001) plane; files from `library_bench points <n> <kind> <file>`.
+Usage: extract_inputs.py [points dir]."""
+import os
+import sys
+
+import numpy as np
+from scipy.spatial import cKDTree
+
+from paperfig import DATA
+
+KINDS = ["jittered", "bluenoise", "uniform", "clustered", "halo", "lattice", "wave", "cosmicweb", "fccsolid", "surface"]
+N = 262144
+SIZE = {"fccsolid": 131072}  # 4 * 32³ atoms
+BINS = np.logspace(-3, 1, 161)  # nearest-neighbour distance in mean spacings
+
+
+def read(path):
+    head = np.fromfile(path, dtype=np.uint64, count=2)
+    return np.fromfile(path, dtype=np.float64, offset=16, count=int(head[0]) * 3).reshape(-1, 3)
+
+
+def main(src):
+    out = {"bins": BINS}
+    for kind in KINDS:
+        n = SIZE.get(kind, N)
+        x = read(os.path.join(src, f"{kind}_{n}.pts"))
+        side = len(x) ** (1 / 3)  # mean spacings per box side
+        d = cKDTree(x, boxsize=1.0).query(x, k=33)[0] * side
+        rho = 1 / d[:, 32] ** 3
+        out[f"{kind}_contrast"] = np.percentile(rho, 99.9) / np.percentile(rho, 0.1)
+        out[f"{kind}_nn_hist"] = np.histogram(d[:, 1], bins=BINS)[0]
+        centre = np.array([0.5, 0.5, 0.5 + 0.5 / side])
+        if kind in ("fccsolid", "surface"):  # an atomic plane (z = 16 lattice constants); the plane of 4 shell centres
+            centre[2] = 0.5
+        if kind in ("clustered", "halo"):  # the most isolated of the densest blobs or halos, moved to the middle
+            h, _ = np.histogramdd(x, bins=16, range=[(0, 1)] * 3)
+            peaks = []
+            for cell in np.argsort(h, axis=None)[::-1]:
+                c = (np.array(np.unravel_index(cell, h.shape)) + 0.5) / 16
+                if all(np.linalg.norm((c - q + 0.5) % 1.0 - 0.5) > 0.15 for q in peaks):
+                    peaks.append(c)
+                if len(peaks) == (8 if kind == "clustered" else 4):
+                    break
+            gap = [min(np.linalg.norm((p - q + 0.5) % 1.0 - 0.5) for q in peaks if q is not p) for p in peaks]
+            cell = np.floor(peaks[int(np.argmax(gap))] * 16).astype(int)
+            inside = np.all(np.floor(x * 16).astype(int) == cell, axis=1)
+            centre = np.median(x[inside], axis=0)  # the core of that blob or halo
+        y = (x - centre + 0.5) % 1.0
+        out[f"{kind}_slab"] = y[np.abs(y[:, 2] - 0.5) < 0.5 / side][:, :2].astype(np.float32)
+        print(f"{kind}: {len(out[kind + '_slab'])} slab points, contrast {out[kind + '_contrast']:.3g}")
+    np.savez_compressed(os.path.join(DATA, "inputs.npz"), **out)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1] if len(sys.argv) > 1 else "/ptmp/uli/voronoi-paper/points")

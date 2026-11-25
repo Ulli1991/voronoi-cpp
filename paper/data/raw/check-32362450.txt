@@ -1,0 +1,16 @@
+== check lattice 16777216
+# backend=Cuda n=16777216 distribution=lattice box=1,1,1 tiles=1x1x1 grid=256^3_per_tile repeats=3
+warp: build_ms=4.1272 construct_ms=290.992 construct_Mcells_s=57.6553 pipeline_Mcells_s=56.849
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=6 p99=6
+clip_checksum=1958026233106633481 clip_topology=1155143128169550859
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0, volume_error=2.22045e-16 min_volume=5.96046e-08 max_closure=0 faces_per_cell=6 faces=2*owned:yes centroid_checks=81 worst_centroid_error=3.55271e-15 violations=0 per_cell(rings,clipped,cuts)=4,26,6  PASS
+== check wave 16777216
+# backend=Cuda n=16777216 distribution=wave box=1,1,1 tiles=1x1x1 grid=256^3_per_tile repeats=3
+warp: build_ms=4.15174 construct_ms=408.721 construct_Mcells_s=41.048 pipeline_Mcells_s=40.6353
+work0: mean=4 p99=4
+work1: mean=26 p99=26
+work2: mean=16.1056 p99=21
+clip_checksum=7689661914660662636 clip_topology=438191309002643200
+  certified=16777216/16777216 statuses=16777216,0,0,0,0,0, volume_error=2.7045e-13 min_volume=5.96029e-08 max_closure=1.85945e-16 faces_per_cell=16.0693 faces=2*owned:yes centroid_checks=208 worst_centroid_error=7.5273e-14 violations=0 per_cell(rings,clipped,cuts)=4,26,16.1056  PASS

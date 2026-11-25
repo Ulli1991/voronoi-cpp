@@ -1,0 +1,8 @@
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-29c6aad7-f392-72bf-0c67-ee09e4e5e2eb)
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/clustered_16777216_0.03-32362449.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/clustered_16777216_0.1-32362449.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/clustered_16777216_0.3-32362449.trj
+# failed: check halo 16777216
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/halo_16777216_0.03-32362449.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/halo_16777216_0.1-32362449.trj
+wrote 11 frames of 16777216 points to /ptmp/uli/voronoi-paper/tmp/halo_16777216_0.3-32362449.trj

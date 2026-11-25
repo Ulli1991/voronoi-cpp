@@ -1,0 +1,157 @@
+job,input,n,what,stage,ms
+32362452,jittered,2097152,rebuild,cell list,0.727693
+32362452,jittered,2097152,rebuild,clipping,49.3295
+32362452,jittered,2097152,start,clipping with rings,57.0204
+32362452,jittered,2097152,start,exact start after clipping,57.53
+32362452,jittered,2097152,step 0.03,repair,5.535
+32362452,jittered,2097152,step 0.03,host fallback,0
+32362452,jittered,2097152,step 0.03,rebuild,0
+32362452,jittered,2097152,step 0.03,re-sort,0
+32362452,jittered,2097152,step 0.03,geometry,4.524
+32362452,jittered,2097152,step 0.03,cells,3.7
+32362452,jittered,2097152,start,clipping with rings,57.008
+32362452,jittered,2097152,start,exact start after clipping,55.85
+32362452,jittered,2097152,step 0.1,repair,9.375
+32362452,jittered,2097152,step 0.1,host fallback,0
+32362452,jittered,2097152,step 0.1,rebuild,0
+32362452,jittered,2097152,step 0.1,re-sort,0
+32362452,jittered,2097152,step 0.1,geometry,7.535
+32362452,jittered,2097152,step 0.1,cells,4.97
+32362452,jittered,2097152,start,clipping with rings,57.0027
+32362452,jittered,2097152,start,exact start after clipping,55.62
+32362452,jittered,2097152,step 0.3,repair,19.17
+32362452,jittered,2097152,step 0.3,host fallback,0
+32362452,jittered,2097152,step 0.3,rebuild,0
+32362452,jittered,2097152,step 0.3,re-sort,0
+32362452,jittered,2097152,step 0.3,geometry,13.41
+32362452,jittered,2097152,step 0.3,cells,4.934
+32362452,uniform,2097152,rebuild,cell list,1.00766
+32362452,uniform,2097152,rebuild,clipping,95.6374
+32362452,uniform,2097152,start,clipping with rings,117.898
+32362452,uniform,2097152,start,exact start after clipping,117.7
+32362452,uniform,2097152,step 0.03,repair,4.326
+32362452,uniform,2097152,step 0.03,host fallback,0
+32362452,uniform,2097152,step 0.03,rebuild,0
+32362452,uniform,2097152,step 0.03,re-sort,0
+32362452,uniform,2097152,step 0.03,geometry,3.669
+32362452,uniform,2097152,step 0.03,cells,3.522
+32362452,uniform,2097152,start,clipping with rings,117.987
+32362452,uniform,2097152,start,exact start after clipping,118
+32362452,uniform,2097152,step 0.1,repair,6.252
+32362452,uniform,2097152,step 0.1,host fallback,0
+32362452,uniform,2097152,step 0.1,rebuild,0
+32362452,uniform,2097152,step 0.1,re-sort,0
+32362452,uniform,2097152,step 0.1,geometry,4.968
+32362452,uniform,2097152,step 0.1,cells,4.02
+32362452,uniform,2097152,start,clipping with rings,117.729
+32362452,uniform,2097152,start,exact start after clipping,118.1
+32362452,uniform,2097152,step 0.3,repair,11.5
+32362452,uniform,2097152,step 0.3,host fallback,0
+32362452,uniform,2097152,step 0.3,rebuild,0
+32362452,uniform,2097152,step 0.3,re-sort,0
+32362452,uniform,2097152,step 0.3,geometry,8.546
+32362452,uniform,2097152,step 0.3,cells,5.209
+32362452,clustered,2097152,rebuild,cell list,1.05046
+32362452,clustered,2097152,rebuild,clipping,123.23
+32362452,clustered,2097152,start,clipping with rings,138.215
+32362452,clustered,2097152,start,exact start after clipping,129.7
+32362452,clustered,2097152,step 0.03,repair,4.113
+32362452,clustered,2097152,step 0.03,host fallback,0
+32362452,clustered,2097152,step 0.03,rebuild,0
+32362452,clustered,2097152,step 0.03,re-sort,0
+32362452,clustered,2097152,step 0.03,geometry,3.558
+32362452,clustered,2097152,step 0.03,cells,3.479
+32362452,clustered,2097152,start,clipping with rings,137.882
+32362452,clustered,2097152,start,exact start after clipping,126.6
+32362452,clustered,2097152,step 0.1,repair,6.102
+32362452,clustered,2097152,step 0.1,host fallback,0
+32362452,clustered,2097152,step 0.1,rebuild,0
+32362452,clustered,2097152,step 0.1,re-sort,0
+32362452,clustered,2097152,step 0.1,geometry,4.827
+32362452,clustered,2097152,step 0.1,cells,3.946
+32362452,clustered,2097152,start,clipping with rings,138.169
+32362452,clustered,2097152,start,exact start after clipping,125.8
+32362452,clustered,2097152,step 0.3,repair,10.84
+32362452,clustered,2097152,step 0.3,host fallback,0
+32362452,clustered,2097152,step 0.3,rebuild,0
+32362452,clustered,2097152,step 0.3,re-sort,0
+32362452,clustered,2097152,step 0.3,geometry,8.045
+32362452,clustered,2097152,step 0.3,cells,5.163
+32362452,halo,2097152,rebuild,cell list,1.05677
+32362452,halo,2097152,rebuild,clipping,135.196
+32362452,halo,2097152,start,clipping with rings,150.22
+32362452,halo,2097152,start,exact start after clipping,52.97
+32362452,halo,2097152,step 0.03,repair,4.257
+32362452,halo,2097152,step 0.03,host fallback,0
+32362452,halo,2097152,step 0.03,rebuild,0
+32362452,halo,2097152,step 0.03,re-sort,0
+32362452,halo,2097152,step 0.03,geometry,3.669
+32362452,halo,2097152,step 0.03,cells,3.499
+32362452,halo,2097152,start,clipping with rings,150.663
+32362452,halo,2097152,start,exact start after clipping,52.92
+32362452,halo,2097152,step 0.1,repair,6.223
+32362452,halo,2097152,step 0.1,host fallback,0
+32362452,halo,2097152,step 0.1,rebuild,0
+32362452,halo,2097152,step 0.1,re-sort,0
+32362452,halo,2097152,step 0.1,geometry,4.932
+32362452,halo,2097152,step 0.1,cells,3.992
+32362452,halo,2097152,start,clipping with rings,150.193
+32362452,halo,2097152,start,exact start after clipping,54.35
+32362452,halo,2097152,step 0.3,repair,11.18
+32362452,halo,2097152,step 0.3,host fallback,0
+32362452,halo,2097152,step 0.3,rebuild,0
+32362452,halo,2097152,step 0.3,re-sort,0
+32362452,halo,2097152,step 0.3,geometry,8.408
+32362452,halo,2097152,step 0.3,cells,5.166
+32362452,lattice,2097152,rebuild,cell list,0.683105
+32362452,lattice,2097152,rebuild,clipping,38.1682
+32362452,lattice,2097152,start,clipping with rings,40.0062
+32362452,lattice,2097152,start,exact start after clipping,237.3
+32362452,lattice,2097152,step 0.03,repair,5.907
+32362452,lattice,2097152,step 0.03,host fallback,0
+32362452,lattice,2097152,step 0.03,rebuild,0
+32362452,lattice,2097152,step 0.03,re-sort,0
+32362452,lattice,2097152,step 0.03,geometry,4.518
+32362452,lattice,2097152,step 0.03,cells,4.471
+32362452,lattice,2097152,start,clipping with rings,40.0286
+32362452,lattice,2097152,start,exact start after clipping,238.6
+32362452,lattice,2097152,step 0.1,repair,6.712
+32362452,lattice,2097152,step 0.1,host fallback,0
+32362452,lattice,2097152,step 0.1,rebuild,0
+32362452,lattice,2097152,step 0.1,re-sort,0
+32362452,lattice,2097152,step 0.1,geometry,4.996
+32362452,lattice,2097152,step 0.1,cells,4.619
+32362452,lattice,2097152,start,clipping with rings,40.1311
+32362452,lattice,2097152,start,exact start after clipping,235.9
+32362452,lattice,2097152,step 0.3,repair,8.974
+32362452,lattice,2097152,step 0.3,host fallback,0
+32362452,lattice,2097152,step 0.3,rebuild,0
+32362452,lattice,2097152,step 0.3,re-sort,0
+32362452,lattice,2097152,step 0.3,geometry,6.266
+32362452,lattice,2097152,step 0.3,cells,4.951
+32362452,wave,2097152,rebuild,cell list,0.738823
+32362452,wave,2097152,rebuild,clipping,51.4301
+32362452,wave,2097152,start,clipping with rings,58.9703
+32362452,wave,2097152,start,exact start after clipping,423.3
+32362452,wave,2097152,step 0.03,repair,5.896
+32362452,wave,2097152,step 0.03,host fallback,0
+32362452,wave,2097152,step 0.03,rebuild,0
+32362452,wave,2097152,step 0.03,re-sort,0
+32362452,wave,2097152,step 0.03,geometry,4.273
+32362452,wave,2097152,step 0.03,cells,4.232
+32362452,wave,2097152,start,clipping with rings,58.9317
+32362452,wave,2097152,start,exact start after clipping,422.3
+32362452,wave,2097152,step 0.1,repair,6.762
+32362452,wave,2097152,step 0.1,host fallback,0
+32362452,wave,2097152,step 0.1,rebuild,0
+32362452,wave,2097152,step 0.1,re-sort,0
+32362452,wave,2097152,step 0.1,geometry,4.731
+32362452,wave,2097152,step 0.1,cells,4.386
+32362452,wave,2097152,start,clipping with rings,58.9731
+32362452,wave,2097152,start,exact start after clipping,422.3
+32362452,wave,2097152,step 0.3,repair,9.073
+32362452,wave,2097152,step 0.3,host fallback,0
+32362452,wave,2097152,step 0.3,rebuild,0
+32362452,wave,2097152,step 0.3,re-sort,0
+32362452,wave,2097152,step 0.3,geometry,6.038
+32362452,wave,2097152,step 0.3,cells,4.767
