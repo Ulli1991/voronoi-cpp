@@ -31,7 +31,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Test inputs](paper/figures/fig04_inputs.png)
 
-**Fig. 5: Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³). The last three inputs in the first figure are the application inputs (cosmic web 128³, fcc solid 2²⁰ atoms, surface 128³), same codes and timing; an open marker where a code misses cells or returns wrong volumes, no marker where it crashed (votess on cosmic web and surface). On the surface input our rebuild and exact start drop to 0.03–0.04 M cells/s (cells refused and built again, issue #60).
+**Fig. 5: Against the public libraries.** Full cells on one A100 (codes that return only tetrahedra or neighbours get our face step, timed in), then volumes only, one 72-core node and the moving step; only our own measurements are drawn. The exact-start rows predate the 1.07–1.74× speed-up of the start (now 25.0 M cells/s on jittered input at 128³). The last three inputs in the first figure are the application inputs (cosmic web 128³, fcc solid 2²⁰ atoms, surface 128³), same codes and timing; an open marker where a code misses cells or returns wrong volumes, no marker where it crashed (votess on cosmic web and surface). The surface points of ours predate the work on issue #60: main now builds the surface at 128³ with no cell refused, at 0.29 M cells/s (rebuild) and 0.25 (exact start), where the figure still shows 0.036 and 0.026.
 
 ![Full cells against the public libraries](paper/figures/fig05a_speed_full_cells.png)
 
@@ -47,7 +47,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Speed against quality](paper/figures/fig07a_quality.png)
 
-**Fig. 7b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes. The grey band holds the codes with no cell missing (spread vertically only to tell them apart); votess crashed on cosmic web and on surface and is not drawn there. On surface our rebuild misses 2.3 in 10⁴ cells and our exact start is complete; both run at 0.03–0.04 M cells/s there (issue #60).
+**Fig. 7b: Application inputs.** Completeness against build rate on cosmic web, fcc solid and surface input; open markers are wrong volumes. The grey band holds the codes with no cell missing (spread vertically only to tell them apart); votess crashed on cosmic web and on surface and is not drawn there. Our surface points predate the work on issue #60 (rebuild then: 2.3 in 10⁴ cells missing, 0.036 M cells/s); main now certifies every cell there, at 0.29 M cells/s.
 
 ![Application inputs: completeness against build rate](paper/figures/fig07b_application.png)
 
