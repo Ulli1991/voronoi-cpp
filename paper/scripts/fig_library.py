@@ -89,36 +89,59 @@ def axes_inputs(ax, short=False):
 
 APPLICATION = [("cosmicweb", "cosmic\nweb"), ("fccsolid", "fcc\nsolid"), ("surface", "sur-\nface")]
 HEADLINE_WIDTH = 130.0  # mm: eight inputs
+# Panel (a) of library_more as it was first drawn: our full cells with the volumes and centroids copied out, then the
+# three volumes-only codes (scripts/library_benchmark.py's FIGURE_GPU_VOLUMES has other rows of ours since).
+VOLUMES = [("voronoi-cpp", "warp clipping rebuild, host to host, volumes and centroids copied out", "A100", 1,
+            "ours, full cells, host to host")] + list(lb.FIGURE_GPU_VOLUMES[2:])
 
 
-def headline(summary, pub):
-    """The five benchmark inputs, then the three application inputs of fig_application (same rows, same rates): an open
-    marker where that code's volumes are wrong or cells are missing, no marker where it crashed."""
+def application_inputs(ax, drawn, rows, ticks):
+    """Continues each curve of `drawn` ({label: line}, drawn from `rows`) over the three application inputs: rates from
+    the library benchmark's records of those inputs (ours: the application jobs' commit), an open marker where
+    fig_application finds that code's volumes wrong or cells missing, a break where a code has no rate there."""
     import fig_application as fa
 
-    fig, ax = figure(HEADLINE_WIDTH, 85)
-    drawn = curves(ax, summary, HEADLINE, big=True)
-    app = {(r["label"], r["kind"]): r for r in fa.rows() if r["state"] != "crashed"}
+    records, _ = lb.load_records()
+    size = {kind: n for kind, n, _ in fa.PANELS}
+    summary = lb.summarise([r for r in records if r["input"] in size and (
+        r["library"] != "voronoi-cpp" or r["version"] == lb.OURS_APPLICATION)])
+    state = {(r["label"], r["kind"]): r for r in fa.rows() if r["state"] != "crashed"}
+    known = {(lib, device, threads, variant): label for label, _, lib, variant, device, threads, _, _ in fa.CODES}
     first = len(lb.INPUTS)
-    for label, line in drawn.items():
+    for lib, variant, device, threads, label in rows:
+        line = drawn.get(label)
+        if line is None:
+            continue
+        checked = next((name for (l, d, t, v), name in known.items()
+                        if (l, d, t) == (lib, device, threads) and (variant.startswith(v) or v.startswith(variant))), None)
+        if lib == "voronoi-cpp" and device == "A100":
+            checked = "ours, rebuild"  # every A100 row of ours is the warp rebuild
         last = (line.get_xdata()[-1], line.get_ydata()[-1])
-        run = [last] if last[0] == first - 1 else []  # the curve goes on from halo; it breaks only where a code has no rate
+        run = [last] if last[0] == first - 1 else []
         for k, (kind, _) in enumerate(APPLICATION):
-            r = app.get((label, kind))
-            if r is None:
+            got = lb.curve(summary, lib, variant, device, threads, size[kind]).get(kind)
+            if got is None:
                 run = []
                 continue
-            run.append((first + k, r["rate"]))
+            run.append((first + k, got["median"]))
             if len(run) > 1:
                 ax.plot(*zip(*run[-2:]), color=line.get_color(), lw=line.get_linewidth(), ls=line.get_linestyle(),
                         zorder=line.get_zorder())
-            incomplete = r["state"] == "wrong" or r["missing"] > 0
-            ax.plot(first + k, r["rate"], line.get_marker(), color=line.get_color(), ms=line.get_markersize(),
+            r = state.get((checked, kind))
+            incomplete = r is not None and (r["state"] == "wrong" or r["missing"] > 0)
+            ax.plot(first + k, got["median"], line.get_marker(), color=line.get_color(), ms=line.get_markersize(),
                     mfc="white" if incomplete else line.get_color(), mew=1.8 if incomplete else 0,
                     zorder=line.get_zorder() + 1)
-    axes_inputs(ax)  # measured rows only; the published rates are in captions.md
-    ax.set_xticks(range(first + len(APPLICATION)), LABELS + [short for _, short in APPLICATION])
+    ax.set_xticks(range(first + len(APPLICATION)), ticks)
     ax.set_xlim(-0.4, first + len(APPLICATION) - 0.6)
+
+
+def headline(summary, pub):
+    """Full cells on one A100 over the five benchmark inputs and the three application inputs."""
+    fig, ax = figure(HEADLINE_WIDTH, 85)
+    drawn = curves(ax, summary, HEADLINE, big=True)
+    axes_inputs(ax)  # measured rows only; the published rates are in captions.md
+    application_inputs(ax, drawn, HEADLINE, LABELS + [short for _, short in APPLICATION])
     ax.set_ylim(0.01, 1000)
     ax.set_ylabel("full cells, M cells/s")
     handles, labels = ax.get_legend_handles_labels()
@@ -147,10 +170,11 @@ def gaps():
 
 def more(summary, pub):
     g = gaps()
-    fig, axes = figure(DOUBLE, 80, ncols=3, gridspec_kw=dict(width_ratios=[1.15, 1.0, 0.85]))
-    a, b, c = axes
-    curves(a, summary, lb.FIGURE_GPU_VOLUMES)
+    fig, (a, b) = figure(DOUBLE, 80, ncols=2)
+    names = ["jittered", "blue noise", "white noise", "clustered", "halo", "cosmic web", "fcc solid", "surface"]
+    drawn = curves(a, summary, VOLUMES)
     axes_inputs(a, short=True)
+    application_inputs(a, drawn, VOLUMES, names)
     # Our volumes-only path, host to host like the three codes, from the job that ran them on blue noise.
     vol = next(v for k, v in g.items() if k[0][1] == "volumes and centroids only, host to host"  # pageable buffers
                and k[2] == "bluenoise" and k[3] == lb.SIZES[0])
@@ -160,7 +184,7 @@ def more(summary, pub):
            label="ours, volumes only, host to host")
     a.text(1.2, vol["median"] * 1.5, "{:.1f}× Basselin\n{:.1f}× Ray\n{:.1f}× Liu (same job)".format(
         *(vol["median"] / o for o in others)), fontsize=10, va="center", ha="left")
-    a.set_ylim(0.5, 5000)
+    a.set_ylim(0.03, 5000)
     a.set_ylabel("M cells/s")
     a.text(0.03, 0.97, "(a) A100, volumes", transform=a.transAxes, va="top")
     a.legend(loc="upper right", fontsize=10, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
@@ -169,12 +193,21 @@ def more(summary, pub):
     merged.update({k: v for k, v in g.items() if k[0][3] == 72})
     cpu = [("voronoi-cpp", "warp clipping rebuild (cell", "2x Xeon", 72, "voronoi-cpp, warp rebuild")] + \
         [r for r in lb.FIGURE_CPU_FULL[1:7]]
-    curves(b, merged, cpu)
+    drawn = curves(b, merged, cpu)
     summary = merged
     axes_inputs(b, short=True)
+    application_inputs(b, {SHORT.get(k, k) if k not in drawn else k: v for k, v in drawn.items()}, cpu, names)
     b.set_ylim(0.05, 5000)
     b.text(0.03, 0.97, "(b) 72 cores, full cells", transform=b.transAxes, va="top")
     b.legend(loc="upper right", fontsize=11, handlelength=1.4, bbox_to_anchor=(1.0, 0.9))
+    fig.tight_layout()
+    save(fig, "library_more", DOUBLE)
+    step_codes(summary)
+
+
+def step_codes(summary):
+    """The moving step of the codes that have one, jittered input at 128³ (a figure of the moving-mesh part)."""
+    fig, c = figure(SINGLE, 70)
     names = ["ours\nGPU", "peclet\nGPU", "ours\nCPU", "peclet\nCPU", "CGAL\n1 core"]
     for k, row in enumerate(lb.FIGURE_STEP[:5]):
         got = lb.curve(summary, *row[:4], lb.SIZES[0], phase="step").get("jittered")
@@ -187,12 +220,11 @@ def more(summary, pub):
     c.set_xlim(-0.6, 4.6)
     c.set_xticks(range(5), names, fontsize=11)
     c.set_ylabel("moving step, M cells/s")
-    c.text(0.96, 0.97, "(c)", transform=c.transAxes, ha="right", va="top")
     figstyle.decorate(c)
     c.minorticks_off()
     c.tick_params(axis="x", which="both", top=False, bottom=False)
     fig.tight_layout()
-    save(fig, "library_more", DOUBLE)
+    save(fig, "step_codes", SINGLE)
 
 
 def main():

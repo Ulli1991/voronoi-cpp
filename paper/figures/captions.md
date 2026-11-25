@@ -113,7 +113,7 @@ at 256³ its check finds 44 bad tetrahedra and patches 830 cells in a second rou
 has one round, no bad tetrahedra, and costs clipping 57 + from_rings 50 ≈ start 117 ms. Per cell, clipping (27 ns)
 and from_rings (23 ns) are the same at both sizes.
 
-**`fig06b_stages_per_code`.** Where each code's build time goes, ns per cell at 128³ (2,097,152 cells) on jittered and white-noise
+**`fig06_stages_per_code`.** Where each code's build time goes, ns per cell at 128³ (2,097,152 cells) on jittered and white-noise
 input. Each code's staged runs repeat its timed runs with a lap at the end of each stage (device synchronized first) and,
 inside a library call, the code's own timers or its kernels by label (method per code: docs/library_benchmark.md,
 "Stages", branch library-stages). Markers on one log axis: neighbour search (cell list, kNN grid and query, BVH,
@@ -147,13 +147,13 @@ between laps (0.9); it has no copies because it is timed from points on the devi
 Basselin et al.'s 34.5 matches their cell kernel alone (docs/library_benchmark.md, Stages: 38.4 M cells/s on our A100,
 33.3 scaled to a V100), not the full build host to host (10.4 on our A100).
 
-**`fig11_luna_vortex`.** 3D Yee vortex, HLLC Riemann solver, MC limiter; L1 errors of density and velocity against n_x
+**`fig13_luna_vortex`.** 3D Yee vortex, HLLC Riemann solver, MC limiter; L1 errors of density and velocity against n_x
 (n_x³ cells). See PLAN.md (Fig. 13) for the runs.
 
 **`fig09_memory` (b), legend.** Dark bars: voronoi-cpp, grey: the other codes; the darker part is the lowest of the five inputs,
 the lighter part up to the highest.
 
-**`fig06a_where_time` (Fig. 4, "where the time goes").** (a) The control flow of `Mesh::update()`: a built mesh with the same n
+**`fig11_where_time` (Fig. 4, "where the time goes").** (a) The control flow of `Mesh::update()`: a built mesh with the same n
 is checked, flipped, reconnected, measured and summed; few stuck flips are finished on the host, more, or a failed
 volume check, go to a rebuild (dashed: quantise, cell list, clip, exact start), which refuses with a clear error when
 the start is not exact. Box colours are the stages of (b) and (c). (b) Wall time per cell of one moving step

@@ -31,11 +31,13 @@ def clock_text(clocks):
 
 
 def throughput(commit, table, clocks):
-    fig, axes = figure(DOUBLE, 120, nrows=2, ncols=2)
-    panels = [(axes[0, 0], "rebuild", "Mcells_s_median", "(a) rebuild"),
-              (axes[0, 1], "start", "Mcells_s_median", "(b) exact start"),
-              (axes[1, 0], "step 0.1", "Mcells_s_median", "(c) moving step"),
-              (axes[1, 1], "start", "bytes_per_cell", "(d) peak memory, exact start")]
+    # the build: rebuild, exact start and its peak memory; the moving step against n is a figure of its own (step_vs_n)
+    fig, axes = figure(DOUBLE, 64, ncols=3)
+    step_fig, step_ax = figure(SINGLE, 64)
+    panels = [(axes[0], "rebuild", "Mcells_s_median", "(a)"),
+              (axes[1], "start", "Mcells_s_median", "(b)"),
+              (axes[2], "start", "bytes_per_cell", "(c)"),
+              (step_ax, "step 0.1", "Mcells_s_median", "")]
     for ax, path, col, text in panels:
         top = 0
         for kind in INPUTS:
@@ -46,16 +48,23 @@ def throughput(commit, table, clocks):
                 top = max(top, max(y for _, y in pts))
         ax.set_xticks(range(len(SIZES)), SIZE_LABEL)
         ax.set_xlim(-0.3, len(SIZES) - 0.7)
-        ax.set_ylim(0, (1.55 if ax is axes[0, 0] else 1.2) * top if top else 1)  # headroom for the legend in (a)
+        ax.set_ylim(0, (1.75 if ax is axes[0] or ax is step_ax else 1.2) * top if top else 1)  # headroom for the legends
         ax.text(0.03, 0.96, text, transform=ax.transAxes, va="top")
         ax.set_ylabel("B/cell" if col == "bytes_per_cell" else "M cells/s")
         figstyle.decorate(ax)
         ax.xaxis.set_minor_locator(matplotlib_null())
-    for ax in axes[1]:
+    for ax in (*axes, step_ax):
         ax.set_xlabel("cells n")
-    axes[0, 0].legend(loc="upper right", ncol=4, fontsize=11, bbox_to_anchor=(1.0, 0.9))
+    axes[0].set_ylabel("rebuild, M cells/s")
+    axes[1].set_ylabel("exact start, M cells/s")
+    axes[2].set_ylabel("peak memory, B/cell")
+    step_ax.set_ylabel("moving step, M cells/s")
+    axes[0].legend(loc="upper left", ncol=2, fontsize=10, bbox_to_anchor=(0.12, 1.0))
+    step_ax.legend(loc="upper left", ncol=2, fontsize=10)
     fig.tight_layout()
     save(fig, "throughput_vs_n", DOUBLE)
+    step_fig.tight_layout()
+    save(step_fig, "step_vs_n", SINGLE)
 
 
 def matplotlib_null():
