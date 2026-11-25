@@ -121,7 +121,7 @@ def main():
         ax.set_yscale("log")
         ax.set_xlim(0.01, 80)
         ax.set_xticks([0.01, 0.1, 1, 10], ["0.01", "0.1", "1", "10"])
-        ax.set_ylim(1e-8, 1e7)  # headroom above 1 for the legend
+        ax.set_ylim(1e-8, 5)
         ax.set_yticks([1e-8, 1e-6, 1e-4, 1e-2, 1])
         ax.set_xlabel("build rate, M cells/s")
         ax.set_title(title, fontsize=13)
@@ -136,8 +136,8 @@ def main():
     handles += [plt.Line2D([], [], color="0.3", marker="o", ls="none", ms=8),
                 plt.Line2D([], [], color="0.3", marker="D", ls="none", ms=7),
                 plt.Line2D([], [], color="0.3", marker="o", ls="none", ms=9, mfc="none", mew=1.8)]
-    axes[1].legend(handles, list(seen) + ["one A100", "72 cores", "wrong volumes"], loc="upper center", ncol=2,
-                   fontsize=11, handletextpad=0.2, columnspacing=0.6)
+    axes[1].legend(handles, list(seen) + ["one A100", "72 cores", "wrong volumes"], loc="center", ncol=2,
+                   fontsize=10.5, handletextpad=0.2, columnspacing=0.6, bbox_to_anchor=(0.5, 0.56))
     fig.subplots_adjust(left=0.07, right=0.99, top=0.93, bottom=0.14, wspace=0.08)
     save(fig, "application", DOUBLE)
     for r in data:

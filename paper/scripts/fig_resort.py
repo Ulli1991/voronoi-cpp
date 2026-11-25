@@ -40,7 +40,7 @@ def main():
             label = f"{size}, {'no re-sort' if flags == 'none' else 're-sort every 50'}: {over:.0f}"
             ax.plot(steps, smooth, color=colour, lw=LW, ls="-" if flags == "none" else "--", label=label)
     ax.set_xlabel("step")
-    ax.set_ylabel("step + update_cells, M cells/s")
+    ax.set_ylabel("moving step, M cells/s")
     ax.set_xlim(0, 500)
     lo, hi = ax.get_ylim()
     ax.set_ylim(0, hi * 1.6)  # headroom: the legend clears the curves

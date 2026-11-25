@@ -38,7 +38,7 @@ CPU = [
 ]
 GROUPS = [  # (name, stages of the record, marker, colour)
     ("neighbour search", ("search",), "o", "#1f77b4"),
-    ("cell kernel (+ relaunch)", ("cells", "relaunch"), "s", "#d62728"),
+    ("cell kernel", ("cells", "relaunch"), "s", "#d62728"),
     ("exact Delaunay start", ("exact",), "D", "#9467bd"),
     ("faces", ("faces",), "^", "#2ca02c"),
     ("copies host ↔ device", ("transfer_in", "transfer_out"), "v", "#ff7f0e"),
@@ -84,9 +84,7 @@ def main():
                     continue
                 ax.barh(y, total, height=0.62, color="0.9", edgecolor="0.6", lw=0.5, zorder=1)
                 if parts is None:
-                    ax.text(0.13, y, "stages not shown: own timers inconsistent", va="center", fontsize=10,
-                            color="0.3", zorder=2)
-                    continue
+                    continue  # no stages: this code's own timers are inconsistent (caption)
                 for k, (g, _, marker, colour) in enumerate(GROUPS):
                     if parts[g] >= 0.05:  # search and copies above, cell kernel and rest below the centre, so equal times both show
                         ax.plot(parts[g], y + (-0.17, 0.17, 0, 0, -0.17, 0.17)[k], marker, color=colour, ms=7, mew=1.6 if marker == "x" else 0.5,

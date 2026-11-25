@@ -471,7 +471,7 @@ def clipping_figure():
     def frame(ax, label):
         sketch(ax)
         ax.set_xlim(lo[0], hi[0])
-        ax.set_ylim(lo[1] - 0.085, hi[1] + 0.07)
+        ax.set_ylim(lo[1] - (0.012 if PAPER else 0.085), hi[1] + 0.07)  # room for the sentence under the panel
         x0, x1 = math.floor(lo[0] / width), math.ceil(hi[0] / width)
         y0, y1 = math.floor(lo[1] / width), math.ceil(hi[1] / width)
         grid = [[(a * width, lo[1]), (a * width, hi[1])] for a in range(x0, x1 + 1) if lo[0] <= a * width <= hi[0]]
@@ -599,10 +599,9 @@ def clipping_figure():
                plt.Line2D([], [], **dict(plain, mfc="white", mec="0.6", mew=1.2, ms=5.5))]
     labels = ["neighbours: the cell's faces", f"tested, not a face ({len(tested) - len(final)})",
               f"never needed ({sum(1 for j in range(len(k)) if j != i and cl.order.index(j) not in tested and np.all(np.abs(k[j] / STEPS - g) < half + 0.03))} in view)"]
-    if PAPER:
-        labels = ["neighbour", "tested, not a neighbour", "never tested"]
-    ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.0, 0.0), fontsize=12.5, handletextpad=0.3,
-              borderaxespad=0.2, ncol=1)
+    if not PAPER:  # the paper's caption names the three kinds of particle
+        ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.0, 0.0), fontsize=12.5, handletextpad=0.3,
+                  borderaxespad=0.2, ncol=1)
     save(fig, "construction_clipping.png")
 
 
@@ -920,7 +919,8 @@ def tie_break(big, ids):
 def exact_figure():
     centre, quad, big, scale, values = cocircular()
     fig, axes = plt.subplots(2, 2, figsize=(11.4, 12.8))
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.075, top=0.955, wspace=0.06, hspace=0.33)
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01 if PAPER else 0.075, top=0.955, wspace=0.06,
+                        hspace=0.12 if PAPER else 0.33)
     name = "ABCD"
     radius = math.dist(centre, quad[0])
 

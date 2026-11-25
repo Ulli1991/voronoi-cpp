@@ -78,7 +78,7 @@ def displacement(commit, table, clocks):
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("displacement per step, mean spacings")
-    ax.set_ylabel("step + update_cells, M cells/s")
+    ax.set_ylabel("moving step, M cells/s")
     ax.set_ylim(min(starts) * 0.8 if starts else None, 450)
     ax.legend(loc="lower left", ncol=2, fontsize=11, bbox_to_anchor=(0.0, 0.34))
     figstyle.decorate(ax)

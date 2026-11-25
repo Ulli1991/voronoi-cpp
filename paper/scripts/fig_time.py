@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Figure where_time ("where the time goes"): (a) the control flow of Mesh::update(), its decisions and stages, in the
 colours of the stages; (b) wall time per cell of a moving step in six stages, per input at 0.03, 0.1 and 0.3 mean
-spacings per step; (c) jittered input across displacements, enlarged. 128³ on one A100. Data: paper/data/stages.csv (wall time per stage), kernels.csv (Kokkos Tools
+spacings per step (the number at each bar: M cells/s). 128³ on one A100. Data: paper/data/stages.csv (wall time per stage), kernels.csv (Kokkos Tools
 kernel times); the kernel labels are mapped onto the six stages below (also in paper/data/SOURCES.md); "host and
 other" is the wall time minus the mapped kernels. The flowchart follows scripts/flow_chart.py and flow_detail.py."""
 import csv
@@ -97,7 +97,7 @@ def flowchart(ax):
         ax.plot(*zip(*points), color=INK, lw=1.4, zorder=2, solid_joinstyle="round")
 
     # the step (top row)
-    ax.text(0.5, top, "update(x)", ha="left", va="center", fontsize=11, fontweight="bold", color=INK)
+    ax.text(0.5, top, "positions", ha="left", va="center", fontsize=11, fontweight="bold", color=INK)
     diamond(22, top, 11, 12, "mesh\nbuilt?")
     box(39, top, 14, 9, "Check", "check")
     box(56, top, 14, 9, "Flip", "flip")
@@ -163,10 +163,7 @@ def main():
     fig = figure(DOUBLE, 170)[0]
     fig.clf()
     flowchart(fig.add_axes([0.005, 0.585, 0.99, 0.41]))  # the flowchart takes the full width
-    grid = fig.add_gridspec(1, 2, width_ratios=[1.25, 1], wspace=0.36, left=0.135, right=0.985, top=0.55,
-                            bottom=0.07)
-
-    b = fig.add_subplot(grid[0, 0])
+    b = fig.add_axes([0.2, 0.07, 0.6, 0.48])
     rows, labels, values, y = [], [], [], 0
     for kind in INPUTS:
         for k, s in enumerate(SPACINGS):
@@ -177,22 +174,12 @@ def main():
         y += 0.5
     bars(b, rows, labels, values)
     b.set_ylim(y - 0.3, -0.8)
-    b.set_xlim(0, 22)
+    b.set_xlim(0, 26)
     b.xaxis.set_major_locator(plt.MultipleLocator(5))
     b.set_xlabel("wall time per cell, ns")
-    b.text(0.97, 0.985, "(b)", transform=b.transAxes, ha="right", va="top")
-
-    c = fig.add_subplot(grid[0, 1])
-    rows = [0, 1, 2]
-    labels = ["jittered, 0.03", "0.1", "0.3"]
-    values = [d.get(("jittered", s)) for s in SPACINGS]
-    bars(c, rows, labels, values)
-    c.set_ylim(4.3, -0.7)  # room below the bars for the legend
-    c.set_xlim(0, 26)
-    c.set_xlabel("wall time per cell, ns")
-    c.text(0.97, 0.985, "(c)", transform=c.transAxes, ha="right", va="top")
+    b.text(-0.3, 1.0, "(b)", transform=b.transAxes, ha="left", va="top")
     handles = [plt.Rectangle((0, 0), 1, 1, color=col) for _, col, _ in STAGES]
-    c.legend(handles, [s for s, _, _ in STAGES], loc="lower right", fontsize=11)
+    b.legend(handles, [s for s, _, _ in STAGES], loc="lower right", fontsize=11)
     save(fig, "where_time", DOUBLE)
 
 

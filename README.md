@@ -19,7 +19,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Building the mesh and one moving step](paper/figures/fig01_walkthrough.png)
 
-**Fig. 2: Clipping one cell.** (a) The start square, a quarter of the box wide on each side of the generator; R is the distance to its farthest corner, and every particle within 2R may still cut the cell. (b) The 3 × 3 grid cells around the home cell, nearest particle first: each bisector cuts off a corner (orange) and R falls. (c) The next rings of grid cells; only particles within 2R are tested, hollow ones were tested and their bisector missed the cell (dashed: the cell after (b)). (d) Certified: no particle is left within 2R (red), the walk stops at the first grid cell 2R away (dashed square), and most particles were never looked at.
+**Fig. 2: Clipping one cell.** (a) The start square, a quarter of the box wide on each side of the generator; R is the distance to its farthest corner, and every particle within 2R may still cut the cell. (b) The 3 × 3 grid cells around the home cell, nearest particle first: each bisector cuts off a corner (orange) and R falls. (c) The next rings of grid cells; only particles within 2R are tested, hollow ones were tested and their bisector missed the cell (dashed: the cell after (b)). (d) Certified: no particle is left within 2R (red), the walk stops at the first grid cell 2R away (dashed square), and most particles were never looked at. In (d): blue, the neighbours that give the cell its faces; orange rings, particles tested whose bisector missed the cell; grey rings, particles never tested.
 
 ![Clipping one cell](paper/figures/fig02_clipping.png)
 
@@ -37,7 +37,7 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Volumes only, 72 cores and the moving step](paper/figures/fig05b_speed_volumes_cpu_step.png)
 
-**Fig. 6: Where the time goes.** The moving step as a flowchart with its cost per cell by stage, then each library's time split into neighbour search and cell construction: ours takes under 1 ns per cell, the k-nearest-neighbour GPU codes spend 20–55 % of their time finding neighbours.
+**Fig. 6: Where the time goes.** The moving step as a flowchart with its cost per cell by stage, then each library's time split into neighbour search and cell construction: ours takes under 1 ns per cell, the k-nearest-neighbour GPU codes spend 20–55 % of their time finding neighbours. In the bars, the number is the step rate in M cells/s; gDel3D has no stage markers because its own timers are inconsistent.
 
 ![Flowchart of update() and its cost by stage](paper/figures/fig06a_where_time.png)
 
