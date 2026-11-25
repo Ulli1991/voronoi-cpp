@@ -219,7 +219,7 @@ def step_codes(summary):
     c.set_ylim(0.01, 1000)
     c.set_xlim(-0.6, 4.6)
     c.set_xticks(range(5), names, fontsize=11)
-    c.set_ylabel("moving step, M cells/s")
+    c.set_ylabel("mesh update, M cells/s")
     figstyle.decorate(c)
     c.minorticks_off()
     c.tick_params(axis="x", which="both", top=False, bottom=False)
