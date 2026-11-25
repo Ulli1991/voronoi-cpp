@@ -8,3 +8,6 @@ target_link_libraries(paper_trajectory PRIVATE Kokkos::kokkos)
 target_compile_features(paper_trajectory PRIVATE cxx_std_17)
 target_include_directories(paper_trajectory PRIVATE ${root}/src/neighbour_search ${root}/src/voronoi_construct
     ${root}/src/test)
+if(Kokkos_ENABLE_HIP)  # as the library's CMakeLists.txt
+    target_compile_options(paper_trajectory PRIVATE -ffp-contract=off)
+endif()

@@ -20,6 +20,11 @@ target_compile_features(voronoi_library INTERFACE cxx_std_17)
 target_include_directories(voronoi_library INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/neighbour_search
     ${CMAKE_CURRENT_SOURCE_DIR}/src/voronoi_construct)
+# hipcc fuses a * b + c by default, so the rounded arithmetic on the device would not give the host's bits (and not the
+# same bits from run to run); 0.4-1.4 % slower on an MI300A.
+if(Kokkos_ENABLE_HIP)
+    target_compile_options(voronoi_library INTERFACE -ffp-contract=off)
+endif()
 
 function(voronoi_program name source)
     add_executable(${name} ${source})
