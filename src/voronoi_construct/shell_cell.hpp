@@ -3,6 +3,9 @@
 #include "exact_predicates.hpp"
 #include "shell_grid.hpp"
 #include "shell_limits.hpp"
+#if defined(VORONOI_VERTEX64)
+#include "vertex64.hpp"
+#endif
 
 #include <Kokkos_Core.hpp>
 
@@ -48,6 +51,9 @@ struct RoundedCell {
     Index starts[Planes], ends[Planes];            // a cut's new vertex whose hole edge starts / ends at a plane
     int planes = 0, vertices = 0, free_count = 0;  // vertices: slots ever used, free_count of them on the stack
     double radius2 = 0;                            // largest squared vertex distance from the generator
+#if defined(VORONOI_VERTEX64)
+    vertex64::Record v64;  // the diagnostic of #64 (vertex64.hpp)
+#endif
 
     KOKKOS_INLINE_FUNCTION Vec3 position(int v, double) const { return vertex[v]; }
     KOKKOS_INLINE_FUNCTION Vec3 face_normal(int plane) const { return normal[plane]; }
@@ -297,12 +303,29 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
     };
     Hole hole[max_holes];
     int holes = 0;
+#if defined(VORONOI_VERTEX64)
+    unsigned v64_bits[C::exact ? 1 : max_holes];
+    float v64_err[C::exact ? 1 : max_holes];
+#endif
     for (int w = 0; w < cell.vertices; ++w) {
         if (!cut[w]) continue;
         for (int k = 0; k < 3; ++k) {
             const Index u = cell.adjacent[w][k];
             if (cut[u]) continue;
             if (holes == max_holes) return vertex_overflow;
+#if defined(VORONOI_VERTEX64)
+            if constexpr (!C::exact) {
+                const Vec3 xw = cell.vertex[w], xu = cell.vertex[u];
+                const double sw = Ar::sub(Ar::dot(d, xw), offset), su = Ar::sub(Ar::dot(d, xu), offset);
+                const double bw = vertex64::side_bound(d.x, d.y, d.z, xw.x, xw.y, xw.z, offset);
+                const double bu = vertex64::side_bound(d.x, d.y, d.z, xu.x, xu.y, xu.z, offset);
+                const double ex = xu.x - xw.x, ey = xu.y - xw.y, ez = xu.z - xw.z;
+                v64_bits[holes] = vertex64::classify(sw, su, bw, bu, Kokkos::sqrt(ex * ex + ey * ey + ez * ez),
+                                                     Kokkos::sqrt(cell.radius2), v64_err[holes]);
+                vertex64::count(cell.v64, v64_bits[holes]);
+                cell.v64.flag |= v64_bits[holes];
+            }
+#endif
             // The filter's bound needs new vertices between their ends: a kept end within the tolerance outside fails.
             if constexpr (checked && !C::exact)
                 if (Ar::sub(Ar::dot(d, cell.vertex[u]), offset) > 0) return degenerate;
@@ -353,6 +376,17 @@ KOKKOS_INLINE_FUNCTION int clip(C& cell, const ep::Offset& e, const Vec3& d, int
             Vec3 x;
             if (!intersect<Ar>(cell, a, b, plane, x)) return degenerate;
             cell.vertex[s] = x;
+#if defined(VORONOI_VERTEX64)
+            if (v64_err[h] > cell.v64.worst) {
+                cell.v64.worst = v64_err[h];
+                cell.v64.slot[1] = a < box_planes ? -1 - a : cell.id[a];
+                cell.v64.slot[2] = b < box_planes ? -1 - b : cell.id[b];
+                cell.v64.slot[3] = id;
+                cell.v64.vertex[0] = x.x;
+                cell.v64.vertex[1] = x.y;
+                cell.v64.vertex[2] = x.z;
+            }
+#endif
             cell.corner[s][0] = static_cast<Index>(a);
             cell.corner[s][1] = static_cast<Index>(b);
             cell.corner[s][2] = static_cast<Index>(plane);

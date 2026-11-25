@@ -8,6 +8,11 @@ if(VORONOI_SANITIZERS)
     add_link_options(-fsanitize=address,undefined)
 endif()
 find_package(Kokkos CONFIG REQUIRED)
+# Diagnostic of issue #64 (rounded clipping, a vertex on a cut edge): counters and per-cell records, off by default.
+option(VORONOI_VERTEX64 "Build the #64 vertex diagnostic (src/voronoi_construct/vertex64.hpp)" OFF)
+if(VORONOI_VERTEX64)
+    add_compile_definitions(VORONOI_VERTEX64)
+endif()
 
 add_library(voronoi_library INTERFACE)
 target_link_libraries(voronoi_library INTERFACE Kokkos::kokkos)

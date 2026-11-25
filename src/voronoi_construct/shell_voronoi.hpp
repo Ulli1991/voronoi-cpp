@@ -304,6 +304,12 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
             Held<Cell> holder;
             Cell& cell = holder.cell;
             start_cube(cell, half, unit, n);
+#if defined(VORONOI_VERTEX64)
+            if constexpr (!Cell::exact) {
+                cell.v64 = vertex64::Record{};
+                cell.v64.slot[0] = t;
+            }
+#endif
             double reach2 = cell.reach2(unit);
             int status = ok;
             bool certified = false;
@@ -546,6 +552,16 @@ void construct_pass(const ExecSpace& exec, const Grid<typename ExecSpace::memory
                 out.work(id, 1) = clipped;
                 out.work(id, 2) = cuts;
             }
+#if defined(VORONOI_VERTEX64)
+            if constexpr (Cell::exact) {
+                double r2 = 0;
+                for (int v = 0; v < cell.vertices; ++v)
+                    if (live(cell, v)) r2 = Kokkos::max(r2, cell.r2[v] / (1 + 1e-12));
+                vertex64::write_exact(id, Kokkos::sqrt(r2) * unit);
+            } else {
+                vertex64::write(id, cell.v64, Kokkos::sqrt(cell.radius2));
+            }
+#endif
         });
 }
 

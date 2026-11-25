@@ -17,6 +17,9 @@
 #if defined(VORONOI_MEASURE)
 #include "measure.hpp"
 #endif
+#if defined(VORONOI_VERTEX64)
+#include "vertex64_report.hpp"
+#endif
 #if defined(KOKKOS_ENABLE_CUDA)
 #include <nvtx3/nvToolsExt.h>
 #endif
@@ -282,6 +285,12 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
               << list.tiles[2] << " grid=" << (1 << list.levels) << "^3_per_tile repeats=" << repeats << "\n";
     int failures = 0;
     shell_voronoi::Cells<Memory> cells(n, true);
+#if defined(VORONOI_VERTEX64)
+    // #64 diagnostic: installed for the timed builds too, so their time includes its cost.
+    const vertex64_report::Views v64(n);
+    v64.install(n);
+    v64.clear();
+#endif
     KernelTimes::total.clear();
     const double construct_ms = median_ms(repeats, [&] {
         const Phase phase("clip");
@@ -306,6 +315,15 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
                   << "\n";
         failures += check_cells(cells, x, std::cout, box);
     }
+#if defined(VORONOI_VERTEX64)
+    v64.clear();
+    shell_voronoi::construct_warp(exec, grid, cells, same_bits);
+    exec.fence();
+    {
+        const char* dump_to = std::getenv("VERTEX64_DUMP");
+        vertex64_report::report(exec, grid, v64, cells, dump_to ? std::string(dump_to) : std::string());
+    }
+#endif
     DeviceMemory<Memory>::phase("warp", n);
 #if defined(VORONOI_MEASURE)
     if (measure_every > 0) measure_bench::clipping(exec, grid, box, measure_every, dump);
