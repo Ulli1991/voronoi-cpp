@@ -291,6 +291,7 @@ int rebuild(const std::vector<std::string>& args, const Box& box, bool check, in
     std::cout << "warp: build_ms=" << build_ms << " construct_ms=" << construct_ms
               << " construct_Mcells_s=" << n / construct_ms / 1e3
               << " pipeline_Mcells_s=" << n / (build_ms + construct_ms) / 1e3 << "\n";
+    std::cout << "unclosed: cells_built_exactly=" << cells.unclosed_cells() << "\n";
     if (check) {
         // Work per cell: batches, clips, cuts; mean and p99.
         const auto work = to_host(cells.work);

@@ -3,6 +3,7 @@
 #include "voronoi_mesh.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 
 // Geometry derivatives at fixed topology (#63): how the cell volumes V_i, cell centroids c_i, face area vectors A_f and
@@ -468,57 +469,61 @@ void tangent3(const ExecSpace& exec, const Faces3<typename ExecSpace::memory_spa
     cell_tangent<3>(exec, cells, n, dx, out);
 }
 
-// Cell lo's face to cell hi (lo < hi) whose ring holds tetrahedron t, and t's place in that ring; -1 if none. The list is
-// sorted by the other cell (update_cells), so a bisection finds it.
-template <class C, class G>
-KOKKOS_INLINE_FUNCTION int face_of_edge(const C& cells, const G& g, int lo, int hi, int t, int& place) {
-    int first = cells.start(lo), last = cells.start(lo + 1);
-    auto other = [&](int e) {
-        const int f = tet_mesh::list_face(cells.list(e));
-        return cells.owner(f) ^ cells.neighbour(f) ^ lo;
-    };
-    while (first < last) {
-        const int mid = (first + last) / 2;
-        if (other(mid) < hi)
-            first = mid + 1;
-        else
-            last = mid;
-    }
-    for (int e = first; e < cells.start(lo + 1) && other(e) == hi; ++e) {
-        const int f = tet_mesh::list_face(cells.list(e));
-        const int s = g.slot.data() ? g.slot(f) : f;
-        for (int m = 0; m < g.ring_length(s); ++m)
-            if (g.ring(g.ring_start(s) + m) == t) {
-                place = m;
-                return f;
+// TetFaces::place of a ring entry past a byte (the adjoint then finds it by a scan).
+constexpr int far_place = 255;
+
+// Each tetrahedron's six faces, one per corner pair e (0..5: 01 02 03 12 13 23 of its corners in increasing order), and
+// its place in each face's ring. Written by face_numbers, read by the adjoint: 30 B per tetrahedron slot of the
+// derivative's scratch. Copy into kernels.
+template <class Memory>
+struct TetFaces {
+    Kokkos::View<int* [6], Kokkos::LayoutRight, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>> face;
+    Kokkos::View<std::uint8_t* [6], Kokkos::LayoutRight, Memory, Kokkos::MemoryTraits<Kokkos::Unmanaged>> place;
+};
+
+// Fills `numbers` for the tetrahedra around every face, one thread per face, each slot written once (no atomics).
+template <class ExecSpace, class Vertex, class C>
+void face_numbers(const ExecSpace& exec, const Faces3<typename ExecSpace::memory_space>& faces, const Vertex& vertex,
+                  const C& cells, int face_count, const TetFaces<typename ExecSpace::memory_space>& numbers) {
+    const auto g = faces.g;
+    Kokkos::parallel_for(
+        "geometry_derivative::face_numbers", Kokkos::RangePolicy<ExecSpace>(exec, 0, face_count), KOKKOS_LAMBDA(int f) {
+            const int i = cells.owner(f), j = cells.neighbour(f);  // i < j
+            const int s = g.slot.data() ? g.slot(f) : f;
+            const int begin = g.ring_start(s), length = g.ring_length(s);
+            for (int m = 0; m < length; ++m) {
+                const int t = g.ring(begin + m);
+                int v[4];
+                for (int k = 0; k < 4; ++k) v[k] = vertex(t, k);
+                sort4(v);
+                const int a = v[0] == i ? 0 : v[1] == i ? 1 : 2, b = v[1] == j ? 1 : v[2] == j ? 2 : 3;
+                const int e = a == 0 ? b - 1 : a == 1 ? b + 1 : 5;
+                numbers.face(t, e) = f;
+                numbers.place(t, e) = static_cast<std::uint8_t>(m < far_place ? m : far_place);
             }
-    }
-    return -1;
+        });
 }
 
 // The bar of a tetrahedron's vertex through the face of each corner pair. Copy into kernels.
-template <class Memory, class X, class Vertex, class C, class Bar, class In>
+template <class Memory, class X, class C, class Bar, class In>
 struct VertexBars {
     Faces3<Memory> faces;
-    Vertex vertex;
+    TetFaces<Memory> numbers;
     C cells;
     Bar cellbar;
     In in;
     X x;
     exact_predicates::Box box;
 
-    // Tetrahedron t's corners in increasing order.
-    KOKKOS_INLINE_FUNCTION void corners(int t, int* v) const {
-        for (int k = 0; k < 4; ++k) v[k] = vertex(t, k);
-        sort4(v);
-    }
-    // Through the face of corner pair e (0..5: 01 02 03 12 13 23); corners picked, not indexed, to keep v in registers.
-    KOKKOS_INLINE_FUNCTION Vec3 edge(int t, const int* v, int e) const {
-        const int a = e < 3 ? 0 : e < 5 ? 1 : 2, b = e < 3 ? e + 1 : e < 5 ? e - 1 : 3;
-        auto pick = [&](int k) { return k == 0 ? v[0] : k == 1 ? v[1] : k == 2 ? v[2] : v[3]; };
-        int place = 0;
-        const int f = face_of_edge(cells, faces.g, pick(a), pick(b), t, place);
-        if (f < 0) return Vec3{0, 0, 0};
+    // Through the face of corner pair e of tetrahedron t.
+    KOKKOS_INLINE_FUNCTION Vec3 edge(int t, int e) const {
+        const int f = numbers.face(t, e);
+        int place = numbers.place(t, e);
+        if (place == far_place) {
+            const int start = faces.g.ring_start(faces.slot(f));
+            place = 0;
+            while (faces.g.ring(start + place) != t) ++place;
+        }
         const int i = cells.owner(f), j = cells.neighbour(f);
         Vec3 A;
         FaceShare share;
@@ -537,7 +542,8 @@ struct VertexBars {
 // and over the tetrahedra around it. No atomics: every sum is one thread's, in a fixed order.
 template <class ExecSpace, class X, class Vertex, class Alive, class C, class Bar, class CTB, class In, class XBar>
 void adjoint3(const ExecSpace& exec, const Faces3<typename ExecSpace::memory_space>& faces, const Vertex& vertex,
-              const Alive& alive, int tets, const C& cells, int n, const Bar& cellbar, const CTB& ctbar, const In& in,
+              const Alive& alive, int tets, const C& cells, int n, const Bar& cellbar, const CTB& ctbar,
+              const TetFaces<typename ExecSpace::memory_space>& numbers, int face_count, const In& in,
               const XBar& xbar) {
     using Range = Kokkos::RangePolicy<ExecSpace>;
     const X x = faces.g.x;
@@ -545,15 +551,13 @@ void adjoint3(const ExecSpace& exec, const Faces3<typename ExecSpace::memory_spa
     const auto centre = faces.g.centre;
     const auto g = faces.g;
     cell_bars<3>(exec, cells, n, in, cellbar);
-    const VertexBars<typename ExecSpace::memory_space, X, Vertex, C, Bar, In> bars{faces, vertex, cells, cellbar,
-                                                                                   in,    x,      box};
+    face_numbers(exec, faces, vertex, cells, face_count, numbers);
+    const VertexBars<typename ExecSpace::memory_space, X, C, Bar, In> bars{faces, numbers, cells, cellbar, in, x, box};
     Kokkos::parallel_for(
         "geometry_derivative::vertex_bars", Range(exec, 0, tets), KOKKOS_LAMBDA(int t) {
             if (!alive(t)) return;
-            int v[4];
-            bars.corners(t, v);
             Vec3 bar{0, 0, 0};
-            for (int e = 0; e < 6; ++e) bar = bar + bars.edge(t, v, e);
+            for (int e = 0; e < 6; ++e) bar = bar + bars.edge(t, e);
             tet_mesh::store(ctbar, t, bar);
         });
     // x̄ in two passes, each a gather in a fixed order (one kernel spilled 7 KB/cell): over each cell's faces, then over
@@ -701,7 +705,8 @@ void adjoint2(const ExecSpace& exec, const Point& point, const exact_predicates:
 //    A, x_f (per face); an empty bar view counts as zero.
 // The quantities are the mesh's: c relative to the generator, A from owner to neighbour, x_f relative to the owner.
 // Deterministic: the adjoint gathers per vertex and per cell in a fixed order, with no atomics. The scratch it keeps,
-// scratch_bytes(), is reused between calls (3D: 4 doubles per cell and 3 per tetrahedron; 2D: 3 per cell, 4 per cell for
+// scratch_bytes(), is reused between calls (3D: 4 doubles per cell; per tetrahedron slot 3 doubles, 6 face numbers and 6
+// places, 54 B; 2D: 3 doubles per cell, 4 per cell for
 // the triangles and an int per face).
 template <class M>
 class GeometryDerivative;
@@ -744,11 +749,20 @@ public:
         const int n = mesh_.particles();
         const std::size_t after = static_cast<std::size_t>(n) * (D + 1);  // the cell bars, then the vertex bars
         if constexpr (D == 3) {
+            // Then each tetrahedron's six face numbers (ints) and places (bytes): 30 B per tetrahedron slot.
             const int tets = mesh_.repair_state().count;
-            grow(after + static_cast<std::size_t>(tets) * 3);
+            const std::size_t numbers_at = after + static_cast<std::size_t>(tets) * 3;
+            const std::size_t bytes = static_cast<std::size_t>(tets) * 6 * (sizeof(int) + 1);
+            double* const base = grow(numbers_at + (bytes + sizeof(double) - 1) / sizeof(double));
+            int* const face = reinterpret_cast<int*>(base + numbers_at);
+            using Numbers = geometry_derivative::TetFaces<Memory>;
+            const Numbers numbers{
+                decltype(Numbers::face)(face, tets),
+                decltype(Numbers::place)(reinterpret_cast<std::uint8_t*>(face + static_cast<std::size_t>(tets) * 6),
+                                         tets)};
             geometry_derivative::adjoint3<ExecSpace, typename MeshType::Positions>(
                 exec, faces3(), mesh_.tetrahedra().vertex, mesh_.repair_state().alive, tets, cells(), n, rows<4>(0, n),
-                rows<3>(after, tets), bars, xbar);
+                rows<3>(after, tets), numbers, mesh_.faces(), bars, xbar);
         } else {
             const int triangles = mesh_.triangles().count();
             const std::size_t ints = after + static_cast<std::size_t>(triangles) * 2;  // then the owning triangles
