@@ -8,7 +8,6 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Rectangle
 
 from paperfig import COLOR, DATA, DOUBLE, LABEL, LW, MM, SCALE, figstyle, save, style
 
@@ -49,11 +48,13 @@ def points(fig, cell, kind, d):
         spine.set_color("0.5")
     span = hi - lo
     bar = (8 if whole else 1) / side
-    ax.add_patch(Rectangle((0.015, 0.015), 0.6, 0.11, transform=ax.transAxes, fc="white", ec="0.6", lw=0.5, zorder=4))
+    # the scale bar and its label without a box: a white outline keeps them readable on the points
+    from matplotlib import patheffects
+    halo = [patheffects.withStroke(linewidth=3.5, foreground="white")]
     x0, y0 = lo + 0.05 * span, lo + 0.07 * span
-    ax.plot([x0, x0 + bar], [y0, y0], color="black", lw=2.2, solid_capstyle="butt", zorder=5)
+    ax.plot([x0, x0 + bar], [y0, y0], color="black", lw=2.2, solid_capstyle="butt", zorder=5, path_effects=halo)
     ax.text(x0 + bar + 0.03 * span, y0, "8 spacings" if whole else "1 spacing", color="black", ha="left",
-            va="center", fontsize=11, zorder=5)
+            va="center", fontsize=11, zorder=5, path_effects=halo)
     ax.set_xlabel(f"{LABEL[kind]} · {contrast(float(d[kind + '_contrast']))}", fontsize=12, labelpad=4)
 
 
