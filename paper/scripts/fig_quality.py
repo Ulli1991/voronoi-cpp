@@ -22,8 +22,8 @@ README = {"basselin": {"bluenoise": "blue", "jittered": "grid"}, "vorogpu": {"bl
 WHITE = {"basselin": "white", "vorogpu": "k190", "liu": "p0"}
 # (label, volumes prefix with {s} for the README setting, library, variant prefix, device, threads, colour)
 CODES = [
-    ("this work, rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "#000000"),
-    ("this work, exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555"),
+    ("Kikkou (this work), rebuild", "voronoi-cpp-warp-a100", "voronoi-cpp", "warp clipping rebuild (cell", "A100", 1, "#000000"),
+    ("Kikkou (this work), exact start", "voronoi-cpp-exact-a100", "voronoi-cpp", "exact start", "A100", 1, "#555555"),
     ("peclet-voro", "peclet-voro-a100", "peclet-voro", "cold build", "A100", 1, "#ff7f0e"),
     ("gDel3D + faces", "gdel3d-a100", "gDel3D", "Delaunay + faces", "A100", 1, "#2ca02c"),
     ("Paragram + faces", "paragram-a100", "Paragram", "voronoi_diagram + faces", "A100", 1, "#d62728"),

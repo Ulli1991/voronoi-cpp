@@ -25,8 +25,8 @@ ROLES = [  # (role, array prefixes), stacking order
 ]
 COLOURS = ["#7f7f7f", "#bcbd22", "#2ca02c", "#1f77b4", "#9467bd", "#ff7f0e", "#d62728"]
 GPU_ROWS = [  # (library prefix, variant prefix, label); full cells unless said
-    ("voronoi-cpp", "warp clipping rebuild (cell", "Kikkou, rebuild"),
-    ("voronoi-cpp", "exact start", "Kikkou, exact start"),
+    ("voronoi-cpp", "warp clipping rebuild (cell", "Kikkou (this work), rebuild"),
+    ("voronoi-cpp", "exact start", "Kikkou (this work), exact start"),
     ("peclet-voro", "cold build", "peclet-voro"),
     ("gDel3D", "Delaunay + faces", "gDel3D + faces"),
     ("Paragram", "voronoi_diagram + faces", "Paragram + faces"),
@@ -82,7 +82,7 @@ def main():
         if bpc:
             rows.append((label, min(bpc), max(bpc)))
     steps = [float(r["bytes_per_cell"]) for k, r in csv_rows() if k == "moving step"]
-    rows.insert(2, ("Kikkou, mesh update", min(steps), max(steps)))
+    rows.insert(2, ("Kikkou (this work), mesh update", min(steps), max(steps)))
     for y, (label, lo, hi) in enumerate(rows):
         ours = label.startswith("Kikkou")
         b.barh(y, hi, color="#666666" if ours else "#cfcfcf", height=0.6)

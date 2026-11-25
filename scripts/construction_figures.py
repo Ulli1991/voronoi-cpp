@@ -615,19 +615,23 @@ def clustered_points():
     return np.concatenate([rng.random((230, 2)), clump, small]) % 1.0
 
 
-def cell_list_figure():
+def cell_list_figure(into=None, headings=("(a) Each particle's grid level, its home cell shown",
+                                           "(b) Slot order: the Morton curve")):
     x = clustered_points()
     k = snapped(x)
     cl = CellList(k)
     n = len(k)
     levels = sorted(set(cl.level))
     colour = {lv: plt.cm.magma(0.25 + 0.6 * (lv - levels[0]) / max(1, levels[-1] - levels[0])) for lv in levels}
-    fig, axes = plt.subplots(1, 2, figsize=(13.2, 7.4))
-    fig.subplots_adjust(left=0.005, right=0.995, bottom=0.005, top=0.995, wspace=0.03)
+    if into is None:
+        fig, axes = plt.subplots(1, 2, figsize=(13.2, 7.4))
+        fig.subplots_adjust(left=0.005, right=0.995, bottom=0.005, top=0.995, wspace=0.03)
+    else:
+        axes = into
     for ax in axes:
         sketch(ax)
-        ax.set_xlim(-0.01, 1.01)
-        ax.set_ylim(-0.2, 1.08)
+        ax.set_xlim(*((-0.01, 1.01) if into is None else (-1 / 16, 17 / 16)))  # the margins of snap_panel's grid
+        ax.set_ylim(*((-0.2, 1.08) if into is None else (-1 / 16, 17 / 16)))
         ax.add_patch(Rectangle((0, 0), 1, 1, fc="none", ec=INK, lw=1.1, zorder=7))
     pts = np.array([k[cl.order[q]] for q in range(n)]) / STEPS
 
@@ -639,11 +643,18 @@ def cell_list_figure():
         w = 1.0 / (1 << lv)
         ax.add_patch(Rectangle((a * w, b * w), w, w, fc=colour[lv], ec="white", lw=0.3, zorder=2))
     ax.plot(*pts.T, marker="o", ms=1.7, mfc=INK, mec="none", ls="none", zorder=5)
-    ax.text(0.0, 1.04, "(a) Each particle's grid level, its home cell shown", fontsize=15, va="center")
+    if into is None:
+        ax.text(0.0, 1.04, headings[0], fontsize=15, va="center")
+    else:
+        ax.text(0, 1.03, headings[0], fontsize=15, va="bottom", transform=ax.transAxes)
     handles = [Rectangle((0, 0), 1, 1, fc=colour[lv], ec="none") for lv in levels]
     labels = [f"level {lv}: {1 << lv}² cells" for lv in levels]
-    ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.0, 0.0), ncol=2, fontsize=12.5, handlelength=1.2,
-              columnspacing=1.2, borderaxespad=0.3)
+    if into is None:
+        ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.0, 0.0), ncol=2, fontsize=12.5, handlelength=1.2,
+                  columnspacing=1.2, borderaxespad=0.3)
+    else:  # inside the box, where the points are sparse; no frame
+        ax.legend(handles, [f"{1 << lv}² cells" for lv in levels], loc="upper left", bbox_to_anchor=(0.04, 0.055),
+                  ncol=len(levels), fontsize=12.5, handlelength=1.2, columnspacing=1.6, frameon=False, borderaxespad=0)
 
     # (b) slot order: the Morton curve, coloured from the first slot to the last
     ax = axes[1]
@@ -663,13 +674,17 @@ def cell_list_figure():
     first = morton(*node) << span
     begin, end = cl.offsets[first], cl.offsets[first + (1 << span)]
     ax.add_patch(Rectangle((node[0] * w, node[1] * w), w, w, fc="none", ec=REBUILD[1], lw=HEAVY, zorder=6))
-    ax.text(0.0, 1.04, "(b) Slot order: the Morton curve", fontsize=15, va="center")
+    if into is None:
+        ax.text(0.0, 1.04, headings[1], fontsize=15, va="center")
+    else:
+        ax.text(0, 1.03, headings[1], fontsize=15, va="bottom", transform=ax.transAxes)
     up = cl.levels - node_level
-    ax.text(0.0, -0.1, f"Base grid {base} × {base}, n = {n}; colour from slot 0 (dark) to {n - 1} (light).\n"
+    note(ax, 0.0, -0.1, f"Base grid {base} × {base}, n = {n}; colour from slot 0 (dark) to {n - 1} (light).\n"
             f"The blue node, {up} levels above the base grid, holds slots {begin} to {end - 1}:\n"
             "every node of the tree is one run of slots.", fontsize=13, va="center", linespacing=1.3)
-    save(fig, "construction_cell_list.png")
-    return cl, levels
+    if into is None:
+        save(fig, "construction_cell_list.png")
+    return cl, levels, n, base, begin, end
 
 
 # ---- figure 3: repair by flips ----
@@ -916,29 +931,24 @@ def tie_break(big, ids):
     return kept.pop(), low
 
 
-def exact_figure():
-    centre, quad, big, scale, values = cocircular()
-    fig, axes = plt.subplots(2, 2, figsize=(11.4, 12.8))
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01 if PAPER else 0.075, top=0.955, wspace=0.06,
-                        hspace=0.12 if PAPER else 0.33)
-    name = "ABCD"
-    radius = math.dist(centre, quad[0])
+def lattice(ax, size, label):
+    """A square integer grid of `size` steps with a heading above it."""
+    sketch(ax)
+    ax.set_xlim(-0.5, size + 0.5)
+    ax.set_ylim(-0.5, size + 0.5)
+    grid = [[(v, 0), (v, size)] for v in range(size + 1)] + [[(0, v), (size, v)] for v in range(size + 1)]
+    ax.add_collection(LineCollection(grid, colors="0.8", linewidths=THIN, zorder=1))
+    ax.text(0, 1.03, label, fontsize=15, va="bottom", transform=ax.transAxes)
 
-    def lattice(ax, size, label):
-        sketch(ax)
-        ax.set_xlim(-0.5, size + 0.5)
-        ax.set_ylim(-0.5, size + 0.5)
-        grid = [[(v, 0), (v, size)] for v in range(size + 1)] + [[(0, v), (size, v)] for v in range(size + 1)]
-        ax.add_collection(LineCollection(grid, colors="0.8", linewidths=THIN, zorder=1))
-        ax.text(0, 1.03, label, fontsize=15, va="bottom", transform=ax.transAxes)
 
-    def caption(ax, text):
-        note(ax, 0, -0.02, text, fontsize=13, va="top", transform=ax.transAxes, linespacing=1.3)
+def under(ax, text):
+    note(ax, 0, -0.02, text, fontsize=13, va="top", transform=ax.transAxes, linespacing=1.3)
 
-    # (a) snapping: down to the grid point below and to the left
-    ax = axes[0, 0]
-    lattice(ax, 8, "(a) Positions become integers")
-    for v in range(9):  # the integer coordinates of the grid lines
+
+def snap_panel(ax, label):
+    """Snapping: every position goes down to the grid point below and to the left; the grid lines carry their integers."""
+    lattice(ax, 8, label)
+    for v in range(9):
         ax.text(v, -0.28, str(v), fontsize=12, ha="center", va="top", color="0.35")
         ax.text(-0.28, v, str(v), fontsize=12, ha="right", va="center", color="0.35")
     rng = np.random.default_rng(3)
@@ -951,12 +961,37 @@ def exact_figure():
         arrow(ax, x, k + 0.06 * (x - k) / max(np.linalg.norm(x - k), 1e-9), color=FAINT, lw=1.3, scale=12)
         ax.plot(*x, marker="o", ms=8, mfc="white", mec=INK, mew=1.4, ls="none", zorder=7)
         ax.plot(*k, marker="o", ms=8, mfc=INK, mec="white", mew=1.0, ls="none", zorder=7)
-    caption(ax, "Each position goes to the grid point below and left of it\n"
-            "(floor). Drawn: 8 steps across; the code has 2³⁰.")
+    under(ax, "Each position goes to the grid point below and left of it\n"
+          "(floor). Drawn: 8 steps across; the code has 2³⁰.")
+
+
+def grid_figure():
+    """Paper only: panels 1 and 2 of the walkthrough in detail, the integer positions and the Morton cell list."""
+    fig, axes = plt.subplots(1, 3, figsize=(17.4, 6.5))
+    fig.subplots_adjust(left=0.01, right=0.995, bottom=0.01, top=0.93, wspace=0.05)
+    snap_panel(axes[0], "(a) Positions become integers")
+    cell_list_figure(axes[1:], ("(b) Each point's grid cell", "(c) Order in memory: the Morton curve"))
+    save(fig, "construction_grid.png")
+
+
+def exact_figure():
+    centre, quad, big, scale, values = cocircular()
+    if PAPER:  # the tie alone, three panels in a row; the snapping panel is in grid_figure()
+        fig, row = plt.subplots(1, 3, figsize=(17.4, 6.3))
+        fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.92, wspace=0.06)
+        spot, letter = dict(zip("bcd", row)), dict(zip("bcd", ("(a)", "(b)", "(c)")))
+    else:
+        fig, axes = plt.subplots(2, 2, figsize=(11.4, 12.8))
+        fig.subplots_adjust(left=0.01, right=0.99, bottom=0.075, top=0.955, wspace=0.06, hspace=0.33)
+        spot, letter = dict(zip("abcd", axes.ravel())), {c: f"({c})" for c in "abcd"}
+        snap_panel(spot["a"], "(a) Positions become integers")
+    name = "ABCD"
+    radius = math.dist(centre, quad[0])
+    caption = under
 
     # (b) the tie
-    ax = axes[0, 1]
-    lattice(ax, 16, "(b) Four points on one circle: which diagonal?")
+    ax = spot["b"]
+    lattice(ax, 16, letter["b"] + " Four points on one circle: which diagonal?")
     ax.add_patch(Circle(centre, radius, fc="none", ec=INK, lw=HEAVY, zorder=3))
     for p, q, colour in ((0, 2, TEST[1]), (1, 3, REBUILD[1])):
         ax.plot(*zip(quad[p], quad[q]), color=colour, lw=HEAVY, ls=(0, (4, 2.5)), zorder=4)
@@ -975,8 +1010,8 @@ def exact_figure():
             "In exact integers it is 0: a true tie.")
 
     # (c), (d) the perturbation by particle id
-    for ax, ids, label in ((axes[1, 0], [7, 3, 12, 5], "(c) The tie goes by id: lowest id counts as outside"),
-                           (axes[1, 1], [2, 9, 6, 4], "(d) Other ids, other diagonal")):
+    for ax, ids, label in ((spot["c"], [7, 3, 12, 5], letter["c"] + " The tie goes by id: lowest id counts as outside"),
+                           (spot["d"], [2, 9, 6, 4], letter["d"] + " Other ids, other diagonal")):
         lattice(ax, 16, label)
         (p, q), low = tie_break(big, ids)
         ax.add_patch(Circle(centre, radius, fc="none", ec="0.6", lw=1.2, zorder=3))
@@ -1125,6 +1160,7 @@ def rings_figure():
 if __name__ == "__main__":
     clipping_figure()
     if PAPER:
+        grid_figure()
         exact_figure()
         sys.exit(0)
     cell_list_figure()
