@@ -930,16 +930,23 @@ def exact_figure():
         ax.set_ylim(-0.5, size + 0.5)
         grid = [[(v, 0), (v, size)] for v in range(size + 1)] + [[(0, v), (size, v)] for v in range(size + 1)]
         ax.add_collection(LineCollection(grid, colors="0.8", linewidths=THIN, zorder=1))
-        ax.text(0, 1.03, title(label), fontsize=15, va="bottom", transform=ax.transAxes)
+        ax.text(0, 1.03, label, fontsize=15, va="bottom", transform=ax.transAxes)
 
     def caption(ax, text):
         note(ax, 0, -0.02, text, fontsize=13, va="top", transform=ax.transAxes, linespacing=1.3)
 
     # (a) snapping: down to the grid point below and to the left
     ax = axes[0, 0]
-    lattice(ax, 8, "(a) Snapping to the grid")
+    lattice(ax, 8, "(a) Positions become integers")
+    for v in range(9):  # the integer coordinates of the grid lines
+        ax.text(v, -0.28, str(v), fontsize=12, ha="center", va="top", color="0.35")
+        ax.text(-0.28, v, str(v), fontsize=12, ha="right", va="center", color="0.35")
     rng = np.random.default_rng(3)
-    for x in rng.uniform(0.3, 7.7, (9, 2)):
+    points = rng.uniform(0.3, 7.7, (9, 2))
+    x = points[np.argmax(points[:, 1])]  # one example written out: the topmost point
+    outlined(ax, x[0] - 0.1, x[1] + 0.42, f"({x[0]:.2f}, {x[1]:.2f}) → ({int(x[0])}, {int(x[1])})", fontsize=13,
+             ha="center", va="center")
+    for x in points:
         k = np.floor(x)
         arrow(ax, x, k + 0.06 * (x - k) / max(np.linalg.norm(x - k), 1e-9), color=FAINT, lw=1.3, scale=12)
         ax.plot(*x, marker="o", ms=8, mfc="white", mec=INK, mew=1.4, ls="none", zorder=7)
@@ -949,7 +956,7 @@ def exact_figure():
 
     # (b) the tie
     ax = axes[0, 1]
-    lattice(ax, 16, "(b) Four points on one circle")
+    lattice(ax, 16, "(b) Four points on one circle: which diagonal?")
     ax.add_patch(Circle(centre, radius, fc="none", ec=INK, lw=HEAVY, zorder=3))
     for p, q, colour in ((0, 2, TEST[1]), (1, 3, REBUILD[1])):
         ax.plot(*zip(quad[p], quad[q]), color=colour, lw=HEAVY, ls=(0, (4, 2.5)), zorder=4)
@@ -958,7 +965,8 @@ def exact_figure():
         ax.plot(*q, marker="o", ms=10, mfc=INK, mec="white", mew=1.2, ls="none", zorder=7)
         away = (np.array(q) - centre) / radius
         outlined(ax, *(np.array(q) + 0.9 * away), name[j], fontsize=15, ha="center", va="center", fontweight="bold")
-    outlined(ax, centre[0] + 0.3, centre[1] + 0.5, "?", fontsize=22, ha="center", va="center", fontweight="bold")
+    outlined(ax, 8, 1.3, "in-circle test:  double precision  + or −,   integers  0", fontsize=13, ha="center",
+             va="center")
     up = max(values.values())
     down = min(values.values())
     caption(ax, f"Scaled onto the 2³⁰ grid (×{scale:,}), the rounded in-circle value\n"
@@ -967,7 +975,7 @@ def exact_figure():
             "In exact integers it is 0: a true tie.")
 
     # (c), (d) the perturbation by particle id
-    for ax, ids, label in ((axes[1, 0], [7, 3, 12, 5], "(c) Ties go by particle id"),
+    for ax, ids, label in ((axes[1, 0], [7, 3, 12, 5], "(c) The tie goes by id: lowest id counts as outside"),
                            (axes[1, 1], [2, 9, 6, 4], "(d) Other ids, other diagonal")):
         lattice(ax, 16, label)
         (p, q), low = tie_break(big, ids)

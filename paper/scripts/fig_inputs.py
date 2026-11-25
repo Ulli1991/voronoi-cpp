@@ -53,7 +53,7 @@ def points(fig, cell, kind, d):
     halo = [patheffects.withStroke(linewidth=3.5, foreground="white")]
     x0, y0 = lo + 0.05 * span, lo + 0.07 * span
     ax.plot([x0, x0 + bar], [y0, y0], color="black", lw=2.2, solid_capstyle="butt", zorder=5, path_effects=halo)
-    ax.text(x0 + bar + 0.03 * span, y0, "8 spacings" if whole else "1 spacing", color="black", ha="left",
+    ax.text(x0 + bar + 0.03 * span, y0, "8 Δ" if whole else "Δ", color="black", ha="left",
             va="center", fontsize=11, zorder=5, path_effects=halo)
     ax.set_xlabel(f"{LABEL[kind]} · {contrast(float(d[kind + '_contrast']))}", fontsize=12, labelpad=4)
 
@@ -76,14 +76,12 @@ def main():
         ax.stairs(np.where(f > 0, f, np.nan), bins, color=COLOR[kind], lw=LW * 0.8, label=LABEL[kind],
                   ls="--" if kind in APPLICATION else "-")
     ax.axvline(1.0, color="0.4", lw=1.0, ls=":")
-    ax.text(0.94, 0.92, "mean spacing", transform=ax.get_xaxis_transform(), fontsize=11, color="0.3", ha="right",
-            va="top")  # in the headroom above the peaks
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlim(3e-3, 4)
     ax.set_ylim(1e-5, 40)
     ax.set_xticks([0.01, 0.1, 1], ["0.01", "0.1", "1"])
-    ax.set_xlabel("nearest-neighbour distance / mean spacing")
+    ax.set_xlabel("nearest-neighbour distance / Δ")
     ax.set_ylabel("fraction of points")
     figstyle.decorate(ax)
     ax.legend(loc="upper left", ncol=4, fontsize=11)

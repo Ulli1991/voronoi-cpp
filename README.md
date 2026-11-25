@@ -27,11 +27,11 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 ![Clipping one cell](paper/figures/fig02_clipping.png)
 
-**Fig. 3: Quantisation and exact ties.** (a) Each position goes to the grid point below and left of it; drawn with 8 steps across, the code has 2³⁰. (b) Four grid points exactly on one circle: the rounded in-circle value has opposite signs in different argument orders, inside its error bound, so double precision cannot decide; in exact integers it is 0, a true tie. (c), (d) Ties go by particle id: the particle with the lowest id counts as outside the circle of the other three, so the same diagonal is kept from every argument order, and other ids give the other diagonal.
+**Fig. 3: The integer grid and exact ties.** The code never decides a geometric question in floating point: it maps every position to integers and evaluates its tests exactly. (a) The mapping: each position goes to the grid point below and left of it. Drawn with 8 steps across; the code has 2³⁰ per box side. (b) Why: four grid points exactly on one circle. Which diagonal the mesh takes depends on the sign of the in-circle test; in double precision that sign comes out + in one argument order and − in another, inside the rounding error, while in exact integers it is 0, a true tie. (c), (d) The rule for a tie: the particle with the lowest id (red) counts as outside the circle of the other three, so the same diagonal is kept from every argument order, on every thread and on host and device alike; with other ids the other diagonal is kept.
 
 ![Quantisation and exact ties](paper/figures/fig03_exact_ties.png)
 
-**Fig. 4: Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori) with their density contrast; below, nearest-neighbour distance distributions: the wider, the harder for every library.
+**Fig. 4: Test inputs.** Five synthetic and three application inputs (cosmic web, a thermal fcc solid, points on noisy shells and tori), each as a thin slice with its density contrast. Lengths are in units of the mean spacing Δ = L / N^(1/3), the distance between neighbours if the N points filled the box of side L evenly; the bar in each panel is Δ or 8 Δ. Below, the distribution of each point's distance to its nearest neighbour in units of Δ (dotted line: Δ itself): the wider the distribution, the harder the input for every library.
 
 ![Test inputs](paper/figures/fig04_inputs.png)
 
