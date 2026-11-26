@@ -153,14 +153,13 @@ def headline(summary, pub):
     drawn = curves(ax, merged, rows, big=True)
     axes_inputs(ax)  # measured rows only; the published rates are in captions.md
     application_inputs(ax, drawn, rows, LABELS + [short for _, short in APPLICATION])
-    ax.set_ylim(0.01, 1000)
+    ax.set_ylim(0.01, 3e4)  # the top two decades hold the legend
     ax.set_ylabel("full cells, M cells/s")
     handles, labels = ax.get_legend_handles_labels()
     handles += [ax.plot([], [], "-", color="0.4", lw=LW)[0], ax.plot([], [], "--", color="0.4", lw=LW)[0],
                 ax.plot([], [], "o", color="0.3", mfc="white", mew=1.8, ms=8, ls="none")[0]]
     labels += ["solid: one GPU (A100)", "dashed: one CPU node (72 cores)", "cells missing or wrong"]
-    ax.legend(handles, labels, loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=10.5, handlelength=2.2,
-              frameon=False, labelspacing=0.45)
+    ax.legend(handles, labels, loc="upper center", ncol=3, fontsize=10.5, handlelength=2.2, columnspacing=1.0)
     fig.tight_layout()
     save(fig, "library_headline", DOUBLE)
 

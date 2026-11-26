@@ -40,7 +40,7 @@ MARKER = {"jittered": "o", "bluenoise": "D", "uniform": "s", "clustered": "^", "
 
 # Compact legends, the paper's rule (PLAN.md): inside the axes, tight handles and spacing, an opaque white box without
 # an edge so no grid or data line crosses the text.
-LEGEND = {"legend.frameon": True, "legend.facecolor": "white", "legend.edgecolor": "none", "legend.framealpha": 1.0,
+LEGEND = {"legend.frameon": False,
           "legend.fancybox": False, "legend.handlelength": 1.3, "legend.handletextpad": 0.4,
           "legend.columnspacing": 0.9, "legend.labelspacing": 0.25, "legend.borderpad": 0.2,
           "legend.borderaxespad": 0.4}
