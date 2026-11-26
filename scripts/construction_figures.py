@@ -967,18 +967,18 @@ def snap_panel(ax, label):
 
 def grid_figure():
     """Paper only: panels 1 and 2 of the walkthrough in detail, the integer positions and the Morton cell list."""
-    fig, axes = plt.subplots(1, 3, figsize=(17.4, 6.5))
-    fig.subplots_adjust(left=0.01, right=0.995, bottom=0.01, top=0.93, wspace=0.05)
+    fig, axes = plt.subplots(3, 1, figsize=(6.2, 19.6))  # one above the other: a single column of the page
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.005, top=0.975, hspace=0.12)
     snap_panel(axes[0], "(a) Positions become integers")
-    cell_list_figure(axes[1:], ("(b) Each point's grid cell", "(c) Order in memory: the Morton curve"))
+    cell_list_figure(axes[1:], ("(b) Each point's grid cell", "(c) Order in memory: Morton curve"))
     save(fig, "construction_grid.png")
 
 
 def exact_figure():
     centre, quad, big, scale, values = cocircular()
     if PAPER:  # the tie alone, three panels in a row; the snapping panel is in grid_figure()
-        fig, row = plt.subplots(1, 3, figsize=(17.4, 6.3))
-        fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.92, wspace=0.06)
+        fig, row = plt.subplots(3, 1, figsize=(6.2, 19.6))
+        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.005, top=0.975, hspace=0.12)
         spot, letter = dict(zip("bcd", row)), dict(zip("bcd", ("(a)", "(b)", "(c)")))
     else:
         fig, axes = plt.subplots(2, 2, figsize=(11.4, 12.8))
@@ -991,7 +991,7 @@ def exact_figure():
 
     # (b) the tie
     ax = spot["b"]
-    lattice(ax, 16, letter["b"] + " Four points on one circle: which diagonal?")
+    lattice(ax, 16, letter["b"] + " Four points on one circle")
     ax.add_patch(Circle(centre, radius, fc="none", ec=INK, lw=HEAVY, zorder=3))
     for p, q, colour in ((0, 2, TEST[1]), (1, 3, REBUILD[1])):
         ax.plot(*zip(quad[p], quad[q]), color=colour, lw=HEAVY, ls=(0, (4, 2.5)), zorder=4)
@@ -1010,7 +1010,7 @@ def exact_figure():
             "In exact integers it is 0: a true tie.")
 
     # (c), (d) the perturbation by particle id
-    for ax, ids, label in ((spot["c"], [7, 3, 12, 5], letter["c"] + " The tie goes by id: lowest id counts as outside"),
+    for ax, ids, label in ((spot["c"], [7, 3, 12, 5], letter["c"] + " A tie: the lowest id counts as outside"),
                            (spot["d"], [2, 9, 6, 4], letter["d"] + " Other ids, other diagonal")):
         lattice(ax, 16, label)
         (p, q), low = tie_break(big, ids)
