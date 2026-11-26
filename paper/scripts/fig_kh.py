@@ -36,7 +36,7 @@ def rate(t, m):
 
 
 def main():
-    fig, (a, b) = figure(DOUBLE, 82, ncols=2, gridspec_kw=dict(width_ratios=[1.0, 1.15]))
+    fig, (a, b) = figure(110.0, 185, nrows=2, gridspec_kw=dict(height_ratios=[1.25, 1.0]))
     rho = np.load(os.path.join(KH, "density_t2_1024.npz"))["rho"]
     image = a.imshow(rho.T, origin="lower", extent=(0, 1, 0, 1), cmap="magma", interpolation="nearest")
     a.set_xlabel("x")
@@ -66,7 +66,7 @@ def main():
     figstyle.decorate(b)
     b.legend(loc="lower right", fontsize=11)
     fig.tight_layout()
-    save(fig, "luna_kh", DOUBLE)
+    save(fig, "luna_kh", 110.0)
     for (mesh, n), s in rates.items():
         print(f"{mesh} {n}: measured rate {s:.3f} over t in {WINDOW}, linear theory {SIGMA:.3f}, {100 * (s / SIGMA - 1):+.1f} %")
 

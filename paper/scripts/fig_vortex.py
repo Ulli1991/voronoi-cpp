@@ -13,6 +13,7 @@ import numpy as np
 from paperfig import DATA, DOUBLE, LW, figstyle, figure, save
 
 NX = (32, 64, 128, 256)
+COLUMN = 110.0  # mm: the two panels one above the other
 SIDE, ORIGIN, PLANE = (10.0, 10.0, 2.5), (-5.0, -5.0, 0.0), 1.25
 SLAB = os.path.join(DATA, "luna", "vortex_slab_64_t{t}.npz")  # t: 0 and 10
 
@@ -39,7 +40,7 @@ def picture(ax, t, limits, pixels=900):
     tiles = np.concatenate([x + np.array([i * SIDE[0], j * SIDE[1], 0.0]) for i in (-1, 0, 1) for j in (-1, 0, 1)])
     cell = (cKDTree(tiles).query(query, workers=4)[1] % len(x)).reshape(pixels, pixels)
     image = ax.imshow(rho[cell].T, origin="lower", extent=(ORIGIN[0], ORIGIN[0] + SIDE[0], ORIGIN[1], ORIGIN[1] + SIDE[1]),
-                      cmap="viridis", interpolation="nearest", vmin=limits[0], vmax=limits[1])
+                      cmap="magma", interpolation="nearest", vmin=limits[0], vmax=limits[1])
     edge = np.zeros(cell.shape, bool)
     edge[:-1] |= cell[:-1] != cell[1:]
     edge[:, :-1] |= cell[:, :-1] != cell[:, 1:]
@@ -64,7 +65,7 @@ def main():
     # (a) the density in the plane through the vortex on the moving mesh after 10 time units; (b) the L1 error of the
     # density against resolution. A third panel, the code's cell updates per second against problem size on the A100 and
     # the MI300A, joins when those runs exist.
-    fig, axes = figure(DOUBLE, 80, ncols=2, gridspec_kw=dict(width_ratios=[1.0, 1.15]))
+    fig, axes = figure(COLUMN, 185, nrows=2, gridspec_kw=dict(height_ratios=[1.25, 1.0]))
     picture(axes[0], 10, (float(np.load(SLAB.format(t=10))["rho"].min()), 1.0))
     axes[0].text(0.04, 0.96, "(a)", transform=axes[0].transAxes, va="top", color="white")
     for ax, key, label, v in ((axes[1], "L1_rho", r"$L_1(\rho)$", "rho"),):
@@ -90,7 +91,7 @@ def main():
     axes[1].text(0.96, 0.96, "(b)", transform=axes[1].transAxes, va="top", ha="right")
     # the test and solver (3D Yee vortex, HLLC, MC limiter) are in the caption
     fig.tight_layout()
-    save(fig, "luna_vortex", DOUBLE)
+    save(fig, "luna_vortex", COLUMN)
 
 
 if __name__ == "__main__":
