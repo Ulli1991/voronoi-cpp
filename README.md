@@ -21,49 +21,49 @@ One NVIDIA A100 40 GB at 1305 MHz, double precision, periodic unit box, unless s
 
 **Fig. 1: Building the mesh.** One 2D example of 96 points, computed by the library's 2D mesh. Panels: 1 quantise positions (inset: one grid cell, much enlarged), 2 Morton cell list, 3 clip one cell, 4 all cells with their face rings, 5 exact Delaunay start, 6 the caller moves the points. All but 6 run on the GPU.
 
-![Building the mesh](paper/figures/fig01_build.png)
+![Building the mesh](paper/figures/fig01_build.png?v=1126b)
 
 **Fig. 2: Integer positions and the Morton cell list (panels 1 and 2 of Fig. 1 in detail).** Everything the build does afterwards works on integers and on one sorted array, and this is where both are made. (a) Each position goes to the grid point below and left of it; drawn with 8 steps across, the code has 2³⁰ per box side. (b) Every point is filed in a grid cell, on a finer grid where the points are dense (800 clustered points; cells of a 32², a 64² and a 128² grid), so that a cell never holds many points. (c) The points are then stored in the order of the Morton curve through those cells (dark: first in memory, light: last). Points close in space are close in memory, and every square of the hierarchy, such as the blue one, is one contiguous run of the array, so the neighbours a cell needs are found by reading a few such runs.
 
-![Integer positions and the Morton cell list](paper/figures/fig02_grid.png)
+![Integer positions and the Morton cell list](paper/figures/fig02_grid.png?v=1126b)
 
 **Fig. 3: Clipping one cell (panel 3 of Fig. 1 in detail).** (a) The start square, a quarter of the box wide on each side of the generator; R is the distance to its farthest corner, and every particle within 2R may still cut the cell. (b) The 3 × 3 grid cells around the home cell, nearest particle first: each bisector cuts off a corner (orange) and R falls. (c) The next rings of grid cells; only particles within 2R are tested, hollow ones were tested and their bisector missed the cell (dashed: the cell after (b)). (d) Certified: no particle is left within 2R (red), the walk stops at the first grid cell 2R away (dashed square), and most particles were never looked at. In (d): blue, the neighbours that give the cell its faces; orange rings, particles tested whose bisector missed the cell; grey rings, particles never tested.
 
-![Clipping one cell](paper/figures/fig03_clipping.png)
+![Clipping one cell](paper/figures/fig03_clipping.png?v=1126b)
 
 **Fig. 4: Exact ties (the test behind panel 5 of Fig. 1, and behind every flip of the mesh update).** Because the positions are integers (Fig. 2a), the code can evaluate its geometric tests exactly instead of in floating point. (a) Four grid points exactly on one circle: which diagonal the mesh takes depends on the sign of the in-circle test. In double precision that sign comes out + in one argument order and − in another, inside the rounding error; in exact integers it is 0, a true tie. (b), (c) The rule for a tie: the particle with the lowest id (red) counts as outside the circle of the other three, so the same diagonal is kept from every argument order, on every thread and on host and device alike; with other ids the other diagonal is kept.
 
-![Quantisation and exact ties](paper/figures/fig04_exact_ties.png)
+![Quantisation and exact ties](paper/figures/fig04_exact_ties.png?v=1126b)
 
 **Fig. 5: Test inputs.** Five synthetic inputs and three taken from applications, each as a thin slice with its density contrast. *Cosmic web:* the matter distribution of a cosmological simulation (Zel'dovich approximation from a lattice, CDM spectrum, 100 Mpc/h box, growth factor 0.5), with filaments, walls and voids. *fcc solid:* the atoms of a molecular-dynamics crystal near melting (an fcc lattice with the thermal displacements of a Lennard-Jones solid), where every cell is close to a degenerate, exactly tied configuration. *Surface:* points sampled on closed surfaces (spherical shells and tori, slightly roughened), as in surface meshing and reconstruction, the input the computer-graphics Voronoi codes are built for; in a simulation the same geometry appears as a thin dense shell around an evacuated bubble. Its cells are long needles that reach far into the empty space on both sides, which makes it the hardest input here. Lengths are in units of the mean spacing Δ = L / N^(1/3), the distance between neighbours if the N points filled the box of side L evenly; the bar in each panel is Δ or 8 Δ. Below, the distribution of each point's distance to its nearest neighbour in units of Δ (dotted line: Δ itself): the wider the distribution, the harder the input for every library.
 
-![Test inputs](paper/figures/fig05_inputs.png)
+![Test inputs](paper/figures/fig05_inputs.png?v=1126b)
 
 **Fig. 6: Speed of the build against the public libraries.** Every curve is one code building the full mesh (faces, areas, centroids and neighbours for every cell) of about two million points (128³) from scratch, in million cells per second, on each of the eight inputs. Solid lines are GPU codes on one A100; dashed lines are CPU codes on one full node (72 cores). Kikkou appears three times: on the GPU as the plain rebuild (clipping only) and as the exact start (the checked mesh a moving run starts from), and on the CPU node as the rebuild. Codes that return only tetrahedra or neighbours have our face construction added and timed. An open marker means the code misses cells or returns wrong volumes on that input; a missing marker means it crashed or, for Kikkou on the CPU node, was not run on the three application inputs. The GPU codes that return only volumes are compared in Fig. 7. Kikkou's GPU points on surface, and all its exact-start points, are older than the current code: main now builds the surface at 0.29 M cells/s with no cell refused (figure: 0.036), and the exact start at 25 M cells/s on jittered input (figure: 9.5). Split by stage, Kikkou's neighbour search takes under 1 ns per cell, while the k-nearest-neighbour GPU codes spend 20–55 % of their build time finding neighbours.
 
-![Full cells on one A100](paper/figures/fig06_speed_full_cells.png)
+![Full cells on one A100](paper/figures/fig06_speed_full_cells.png?v=1126b)
 
 **Fig. 7: Build speed against correctness.** Every library at 128³ against an independent exact reference, one point per code and input. (a) Relative volume error of 1000 sampled cells on the five synthetic inputs: the marker is the median, the line reaches the largest error. Most codes have their median at the level of double rounding (10⁻¹⁵), geogram at 10⁻¹² and the two single-precision codes at 10⁻⁵. (b)–(e) The fraction of cells a code fails to return, on the synthetic inputs and on the three application inputs; an open marker means returned volumes are wrong. The grey band holds the codes with no cell missing (spread vertically only to tell them apart). votess crashed on cosmic web and on surface and is not drawn there. The surface points of this work predate the work on issue #60 (rebuild then: 2.3 in 10⁴ cells missing, 0.036 M cells/s); main now certifies every cell there, at 0.29 M cells/s.
 
-![Build speed against correctness](paper/figures/fig07_correctness.png)
+![Build speed against correctness](paper/figures/fig07_correctness.png?v=1126b)
 
 **Fig. 8: The build against problem size.** From 32³ to 256³ points on one A100, per input: (a) the plain rebuild, (b) the exact start, (c) the exact start's peak device memory per cell. Panel (b) predates the speed-up of the exact start.
 
-![Build rate and memory against problem size](paper/figures/fig08_build_vs_n.png)
+![Build rate and memory against problem size](paper/figures/fig08_build_vs_n.png?v=1126b)
 
 **Fig. 9: Memory.** (a) Device bytes per cell at the peak, by array, for the rebuild, the exact start and the mesh update at 128³. (b) Peak bytes per cell for every GPU code, from the lowest to the highest of the five inputs. One A100 with 40 GB holds 256³ cells below 2384 bytes per cell, 384³ below 706 and 512³ below 298.
 
-![Memory per cell](paper/figures/fig09_memory.png)
+![Memory per cell](paper/figures/fig09_memory.png?v=1126b)
 
 ### Updating the mesh after the points moved
 
 **Fig. 10: One update of the mesh.** The same example after the points moved (Fig. 1, panel 6). Panels: 1 check: the triangles the motion may have broken (orange), 2 flip: failing edges (red, dashed) replaced by exact flips (green) in rounds, 3 geometry from the dual: circumcentres, then faces, 4 per-cell results summed in a fixed order, 5 fallbacks: a region the flips cannot repair is rebuilt (on the host or the GPU), 6 re-sort along a space-filling curve (3D only, shown in 2D). All on the GPU unless noted.
 
-![One step of the moving mesh](paper/figures/fig10_moving_step.png)
+![One step of the moving mesh](paper/figures/fig10_moving_step.png?v=1126b)
 
 **Fig. 11: Speed of the mesh update (the mesh alone, no solver).** (a) Against problem size, per input, with the points moving 0.1 Δ per step. (b) At 128³ against how far the points move per step; the grey band is the exact start, the cost of building again instead. The cost that grows with the displacement is the flipping and reconnecting of the mesh; the check, the geometry and the per-cell results stay about the same (jittered: 6.6 ns per cell at 0.03 Δ, 17.9 ns at 0.3 Δ). (c) Over 500 steps at 0.1 Δ, jittered, with and without a re-sort of the mesh in memory every 50 steps; the legend gives the rate over the whole run, re-sorts included. The re-sort restores memory order as the moving points scramble it, costs 2.0–2.3 ns per cell and allocates nothing; it is on by default, every 25 updates. (d) Against the mesh update of the other codes that have one, jittered input at 128³.
 
-![Speed of the mesh update](paper/figures/fig11_mesh_update.png)
+![Speed of the mesh update](paper/figures/fig11_mesh_update.png?v=1126b)
 
 ### A moving-mesh code on the library
 
@@ -71,15 +71,15 @@ Figs. 1–11 are made with this library alone. **Figs. 12–14 need [luna-cpp](h
 
 **Fig. 12: Titarev–Toro shock–entropy interaction.** luna-cpp on the 1D moving mesh at 8192 cells against LUNA's Cartesian MUSCL scheme, the static mesh, a high-resolution LUNA run and AthenaK (PPMX): the whole tube, and zooms behind the shock, on the entropy waves, on the waves near the shock and on the shock (figure of luna-cpp, `docs/figures/titarev_toro.png`).
 
-![Titarev-Toro on the moving mesh](paper/figures/fig12_titarev_toro.png)
+![Titarev-Toro on the moving mesh](paper/figures/fig12_titarev_toro.png?v=1126b)
 
 **Fig. 13: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. (a) The density at t = 2 on the moving mesh at 1024² cells. (b) The amplitude of the seeded velocity mode against time on the moving and the static mesh at 256², 512² and 1024² (the three lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles, `paper/scripts/kh_linear_mcnally.py`). The measured growth rates between t = 0.6 and 1.2 are 2.81, 2.84 and 2.85 on the moving mesh and 2.84, 2.85 and 2.85 on the static mesh, within 0.7 % of theory.
 
-![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig13_luna_kh.png)
+![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig13_luna_kh.png?v=1126b)
 
 **Fig. 14: 3D isentropic vortex.** The Yee vortex in 3D with luna-cpp. (a) The density in the plane through the vortex on the moving mesh at 64³ cells after 10 time units; the lines are the cells. (b) The L1 error of the density against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version), with second order for comparison.
 
-![3D vortex convergence of luna-cpp](paper/figures/fig14_luna_vortex.png)
+![3D vortex convergence of luna-cpp](paper/figures/fig14_luna_vortex.png?v=1126b)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 
