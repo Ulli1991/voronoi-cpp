@@ -61,9 +61,9 @@ def figure(width_mm, height_mm, **kw):
 # The paper's order (paper/figures/README.md): figure name in the scripts -> file name. A letter marks the parts of one figure.
 NUMBER = {
     "walkthrough": "fig01_build",
-    "construction_grid": "fig02_grid",
+    "construction_grid": "fig02_grid_column",
     "construction_clipping": "fig03_clipping",
-    "construction_exact": "fig04_exact_ties",
+    "construction_exact": "fig04_exact_ties_column",
     "inputs": "fig05_inputs",
     "library_headline": "fig06_speed_full_cells",
     "correctness": "fig07_correctness",
