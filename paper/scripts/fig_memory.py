@@ -63,11 +63,11 @@ def main():
         big = sum(data[16777216, p].values())
         a.text(i, left + 25, f"{left:.0f}", ha="center", va="bottom", fontsize=11)
     a.set_xticks(range(3), ["rebuild", "exact\nstart", "mesh\nupdate"])
-    a.set_xlim(-0.6, 4.4)  # room right of the bars for the legend
-    a.set_ylim(0, 2200)
+    a.set_xlim(-0.6, 2.6)
+    a.set_ylim(0, 3400)  # room above the bars for the legend
     a.set_ylabel("device B/cell at the peak, 128³")
     handles, labels = a.get_legend_handles_labels()  # outside on the right, top role first as in the stack
-    a.legend(handles[::-1], labels[::-1], loc="center right", fontsize=11)
+    a.legend(handles[::-1], labels[::-1], loc="upper right", ncol=2, fontsize=10.5, columnspacing=1.0)
     a.text(0.03, 0.98, "(a)", transform=a.transAxes, ha="left", va="top")
     figstyle.decorate(a)
     a.xaxis.set_minor_locator(plt.NullLocator())
