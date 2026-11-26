@@ -464,8 +464,13 @@ def clipping_figure():
 
     half = 0.25
     lo, hi = g - half - 0.035, g + half + 0.035
-    fig, axes = plt.subplots(2, 2, figsize=(11.4, 12.6))
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.99, wspace=0.03, hspace=0.03)
+    if PAPER:  # one row across the page
+        fig, row = plt.subplots(1, 4, figsize=(22.8, 6.3))
+        axes = row.reshape(2, 2)
+        fig.subplots_adjust(left=0.005, right=0.995, bottom=0.01, top=0.99, wspace=0.02)
+    else:
+        fig, axes = plt.subplots(2, 2, figsize=(11.4, 12.6))
+        fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.99, wspace=0.03, hspace=0.03)
     order_of = {s["slot"]: n + 1 for n, s in enumerate(steps)}
 
     def frame(ax, label):
@@ -967,8 +972,8 @@ def snap_panel(ax, label):
 
 def grid_figure():
     """Paper only: panels 1 and 2 of the walkthrough in detail, the integer positions and the Morton cell list."""
-    fig, axes = plt.subplots(3, 1, figsize=(6.2, 19.6))  # one above the other: a single column of the page
-    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.005, top=0.975, hspace=0.12)
+    fig, axes = plt.subplots(1, 3, figsize=(17.4, 6.5))
+    fig.subplots_adjust(left=0.01, right=0.995, bottom=0.01, top=0.93, wspace=0.05)
     snap_panel(axes[0], "(a) Positions become integers")
     cell_list_figure(axes[1:], ("(b) Each point's grid cell", "(c) Order in memory: Morton curve"))
     save(fig, "construction_grid.png")
@@ -977,8 +982,8 @@ def grid_figure():
 def exact_figure():
     centre, quad, big, scale, values = cocircular()
     if PAPER:  # the tie alone, three panels in a row; the snapping panel is in grid_figure()
-        fig, row = plt.subplots(3, 1, figsize=(6.2, 19.6))
-        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.005, top=0.975, hspace=0.12)
+        fig, row = plt.subplots(1, 3, figsize=(17.4, 6.3))
+        fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.92, wspace=0.06)
         spot, letter = dict(zip("bcd", row)), dict(zip("bcd", ("(a)", "(b)", "(c)")))
     else:
         fig, axes = plt.subplots(2, 2, figsize=(11.4, 12.8))
