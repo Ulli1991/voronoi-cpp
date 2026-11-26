@@ -13,13 +13,18 @@ from paperfig import DOUBLE, figure, save
 
 def main():
     _, table, _ = fig_sweep.load(sys.argv[1] if len(sys.argv) > 1 else None)
-    fig, ((a, b), (c, d)) = figure(DOUBLE, 150, nrows=2, ncols=2)
+    # the size and displacement of one update
+    fig, (a, b) = figure(DOUBLE, 78, ncols=2)
     fig_sweep.step_vs_n(a, table)
     fig_sweep.displacement(b, table)
-    fig_resort.resort(c)
-    fig_library.step_codes(d, fig_library.load()[0])
     fig.tight_layout()
     save(fig, "mesh_update", DOUBLE)
+    # a long run, and the other codes
+    fig, (c, d) = figure(DOUBLE, 78, ncols=2)
+    fig_resort.resort(c, "(a)")
+    fig_library.step_codes(d, fig_library.load()[0], "(b)")
+    fig.tight_layout()
+    save(fig, "mesh_update_run", DOUBLE)
 
 
 if __name__ == "__main__":

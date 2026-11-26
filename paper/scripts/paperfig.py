@@ -71,9 +71,10 @@ NUMBER = {
     "memory": "fig09_memory",
     "walkthrough_step": "fig10_moving_step",
     "mesh_update": "fig11_mesh_update",
-    "titarev_toro": "fig12_titarev_toro",
-    "luna_kh": "fig13_luna_kh",
-    "luna_vortex": "fig14_luna_vortex",
+    "mesh_update_run": "fig12_mesh_update_run",
+    "titarev_toro": "fig13_titarev_toro",
+    "luna_kh": "fig14_luna_kh",
+    "luna_vortex": "fig15_luna_vortex",
 }
 
 
