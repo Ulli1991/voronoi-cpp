@@ -81,9 +81,9 @@ Figs. 1–12 are made with this library alone. **Figs. 13–15 need [luna-cpp](h
 
 ![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig14_luna_kh.png?v=1126c)
 
-**Fig. 15: 3D isentropic vortex.** The Yee vortex in 3D with luna-cpp. (a) The density in the plane through the vortex on the moving mesh at 64³ cells after 10 time units; the lines are the cells. (b) The L1 error of the density against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version), with second order for comparison.
+**Fig. 15: 3D isentropic vortex.** The Yee vortex in 3D with luna-cpp. (a) The density in the plane through the vortex on the moving mesh at 256³ cells after 10 time units (Kikkou + luna-cpp on one MI300A). (b) The L1 error of the density against resolution for Kikkou + luna-cpp on the moving mesh, luna-cpp on a static mesh and LUNA on a fixed grid (runs of an earlier library version), with second order for comparison.
 
-![3D vortex convergence of luna-cpp](paper/figures/fig15_luna_vortex.png?v=1126b)
+![3D vortex convergence of luna-cpp](paper/figures/fig15_luna_vortex.png?v=1126c)
 
 The figures are numbered in the paper's order; a letter marks the parts of one figure. Each is drawn by one script in [`paper/scripts`](paper/scripts) from the data in [`paper/data`](paper/data); the PDFs are next to the PNGs in [`paper/figures`](paper/figures).
 
