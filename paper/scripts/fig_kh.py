@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Part 2 figure, 2D Kelvin-Helmholtz instability (McNally, Lyra & Passy 2012) with luna-cpp on the moving Voronoi mesh.
-Left: the density at t = 2 on the moving mesh (N = 1024), each pixel coloured by the cell it lies in. Right: the amplitude M
-of the v_y mode with k = 4 pi (McNally's diagnostic) against time, moving and static mesh at N = 256, 512, 1024, with the
+Top: the density at t = 2 on the moving mesh (N = 1024), each pixel coloured by the cell it lies in. Bottom: the amplitude M
+of the v_y mode with k = 4 pi (McNally's diagnostic) against time, each code at its highest resolution (CODES), with the
 slope of linear theory for this setup, sigma = 2.832 (kh_linear_mcnally.py: the linearised compressible Euler equations
 about the same rho(y), u(y)). Data: paper/data/luna/kh/ (mode_<mesh>_<N>.txt: t, M, peak kinetic energy density, every
 0.02, from hydro_kh2d on one MI300A; density_t2_1024.npz from kh_density())."""
@@ -16,6 +16,14 @@ KH = os.path.join(DATA, "luna", "kh")
 SIGMA = 2.831857  # kh_linear_mcnally.py, 512 collocation points (2.831714 at 256)
 SIZES = (256, 512, 1024)
 WINDOW = (0.6, 1.2)  # the fit of the measured rate: after the start's transient, before saturation
+COMPARE = os.path.join(KH, "compare")
+# file stem, directory, legend label, colour; drawn in this order, a code without files is left out
+CODES = [
+    ("athenak_plm_rk2", COMPARE, "AthenaK", "#ff7f0e"),
+    ("luna", COMPARE, "LUNA, fixed grid", "#2ca02c"),
+    ("static", KH, "luna-cpp, static mesh", "#17becf"),
+    ("moving", KH, "Kikkou + luna-cpp (this work)", "#1f77b4"),
+]
 
 
 def kh_density(prefix, pixels=1024):
@@ -46,14 +54,12 @@ def main():
     bar.set_label(r"$\rho$")
     a.text(0.04, 0.96, "(a)", transform=a.transAxes, va="top", color="white")
     b.text(0.04, 0.96, "(b)", transform=b.transAxes, va="top")
-    colours = {256: "#9ecae1", 512: "#4292c6", 1024: "#08306b"}
     rates = {}
-    for mesh, style in (("moving", "-"), ("static", "--")):
-        for n in SIZES:
-            t, m, _ = np.loadtxt(os.path.join(KH, f"mode_{mesh}_{n}.txt")).T
-            rates[mesh, n] = rate(t, m)
-            # the three resolutions lie on one another: one legend entry per mesh
-            b.plot(t, m, style, color=colours[n], lw=LW, label=f"{mesh} mesh" if n == SIZES[-1] else None)
+    for k, (stem, where, label, colour) in enumerate(CODES):
+        runs = {n: np.loadtxt(f).T[:2] for n in SIZES if os.path.exists(f := os.path.join(where, f"mode_{stem}_{n}.txt"))}
+        rates.update({(stem, n): rate(*r) for n, r in runs.items()})
+        if runs:  # the highest resolution each code has; widths step down so every curve shows under the next
+            b.plot(*runs[max(runs)], "-", color=colour, lw=LW * (2.6 - 0.6 * k), label=label, solid_capstyle="butt")
     t0 = WINDOW[0]
     t, m, _ = np.loadtxt(os.path.join(KH, "mode_moving_1024.txt")).T
     anchor = 0.45 * np.interp(t0, t, m)
@@ -64,11 +70,11 @@ def main():
     b.set_xlabel("t")
     b.set_ylabel("mode amplitude M")
     figstyle.decorate(b)
-    b.legend(loc="lower right", fontsize=11)
+    b.legend(loc="lower right", fontsize=11, frameon=False)
     fig.tight_layout()
     save(fig, "luna_kh", 110.0)
-    for (mesh, n), s in rates.items():
-        print(f"{mesh} {n}: measured rate {s:.3f} over t in {WINDOW}, linear theory {SIGMA:.3f}, {100 * (s / SIGMA - 1):+.1f} %")
+    for (code, n), s in rates.items():
+        print(f"{code} {n}: measured rate {s:.3f} over t in {WINDOW}, linear theory {SIGMA:.3f}, {100 * (s / SIGMA - 1):+.1f} %")
 
 
 if __name__ == "__main__":

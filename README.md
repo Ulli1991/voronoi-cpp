@@ -79,7 +79,7 @@ Figs. 1–12 are made with this library alone. **Figs. 13–15 need [luna-cpp](h
 
 **Fig. 14: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. (a) The density at t = 2 on the moving mesh at 1024² cells. (b) The amplitude of the seeded velocity mode against time on the moving and the static mesh at 256², 512² and 1024² (the three lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles, `paper/scripts/kh_linear_mcnally.py`). The measured growth rates between t = 0.6 and 1.2 are 2.81, 2.84 and 2.85 on the moving mesh and 2.84, 2.85 and 2.85 on the static mesh, within 0.7 % of theory.
 
-![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig14_luna_kh.png?v=1126b)
+![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig14_luna_kh.png?v=1126c)
 
 **Fig. 15: 3D isentropic vortex.** The Yee vortex in 3D with luna-cpp. (a) The density in the plane through the vortex on the moving mesh at 64³ cells after 10 time units; the lines are the cells. (b) The L1 error of the density against resolution for the moving mesh, the static mesh and LUNA's Cartesian MUSCL scheme (runs of an earlier library version), with second order for comparison.
 
