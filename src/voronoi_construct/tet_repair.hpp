@@ -389,6 +389,8 @@ KOKKOS_INLINE_FUNCTION void mark(const State& s, int t) {
 
 // One flip round's steps, one item each: for the per-step kernels of large rounds and for the one team that runs small
 // rounds back to back (repair). Holds the round's views and the host's sizes at its start.
+// The steps are forced inline: on gfx942 an out-of-line call adds the callee's AGPRs on top of the kernel's 128
+// VGPRs, which no 1024-thread work group can hold (the queue aborts with HSA_STATUS_ERROR_INVALID_ISA).
 template <class MemorySpace>
 struct Round {
     tet_mesh::Mesh<MemorySpace> m;
@@ -400,7 +402,7 @@ struct Round {
 
     // 1. Listed tetrahedron i: its failing triangles onto the work list, each triangle once (from the dirty side, or
     // from the lower index when both are). Turned inside out: listed stuck for the host, but flips usually untangle it.
-    KOKKOS_INLINE_FUNCTION void find(int i) const {
+    KOKKOS_FORCEINLINE_FUNCTION void find(int i) const {
         const int t = st.listed(i);
         if (!st.alive(t)) return;
         const auto& point = st.point;
@@ -428,7 +430,7 @@ struct Round {
     }
 
     // 2-3. Plan work item i and vote with `vote` on the tetrahedra it rewrites and their neighbours.
-    KOKKOS_INLINE_FUNCTION void plan(int i, unsigned vote) const {
+    KOKKOS_FORCEINLINE_FUNCTION void plan(int i, unsigned vote) const {
         const int t = work(i, 0), k = work(i, 1);
         Packed p{Packed::none, {-1, -1, -1}, {0, 0, 0, 0, 0}};
         const int u = m.adjacent(t, k);
@@ -449,7 +451,7 @@ struct Round {
 
     // 4. Apply plan i if it won every vote; losers stay dirty for the next round. Slots: the old ones, then a free one
     // (of the `free_top` at the round's start) or a new one after `count`; a flip with no room retries next round.
-    KOKKOS_INLINE_FUNCTION void apply(int i, unsigned vote, int free_top, int count) const {
+    KOKKOS_FORCEINLINE_FUNCTION void apply(int i, unsigned vote, int free_top, int count) const {
         const Packed p = plans(i);
         if (p.kind <= 0) return;
         const bool two = p.kind == Packed::flip23;  // 2->3: two old tetrahedra, three new

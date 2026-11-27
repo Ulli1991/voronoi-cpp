@@ -190,6 +190,30 @@ public:
                 scratch_ = own_scratch_;
             }
         }
+#elif defined(KOKKOS_ENABLE_HIP)
+        if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {  // the CUDA branch with hipCUB (rocPRIM)
+            hipcub::DoubleBuffer<Key> k(nullptr, nullptr);
+            hipcub::DoubleBuffer<int> v(nullptr, nullptr);
+            std::size_t bytes = 0;
+            (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, k, v, capacity, 0,
+                                                     8 * static_cast<int>(sizeof(Key)), exec.hip_stream());
+            if (arena) {
+                keys_ = arena->template take<Key>(capacity);
+                ids_ = arena->template take<int>(capacity);
+                scratch_ = arena->template take<char>(bytes);
+            }
+            if (!keys_.data() || !ids_.data() || !scratch_.data()) {
+                own_keys_ = Kokkos::View<Key*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_keys")), capacity);
+                own_ids_ = Kokkos::View<int*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_ids")), capacity);
+                own_scratch_ = Kokkos::View<char*, Memory>(
+                    Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string("order_sort")), bytes);
+                keys_ = own_keys_;
+                ids_ = own_ids_;
+                scratch_ = own_scratch_;
+            }
+        }
 #else
         (void)capacity, (void)arena;
 #endif
@@ -205,6 +229,21 @@ public:
             cub::DoubleBuffer<int> v(ids.data(), ids_.data());
             std::size_t bytes = scratch_.extent(0);
             cub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, k, v, n, 0, bits, exec_.cuda_stream());
+            if (k.selector) {
+                Kokkos::deep_copy(exec_, keys, Kokkos::subview(keys_, std::make_pair(0, n)));
+                Kokkos::deep_copy(exec_, ids, Kokkos::subview(ids_, std::make_pair(0, n)));
+            }
+            return;
+        }
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+        if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {
+            hipcub::DoubleBuffer<Key> k(keys.data(), keys_.data());
+            hipcub::DoubleBuffer<int> v(ids.data(), ids_.data());
+            std::size_t bytes = scratch_.extent(0);
+            if (hipcub::DeviceRadixSort::SortPairs(scratch_.data(), bytes, k, v, n, 0, bits, exec_.hip_stream()) !=
+                hipSuccess)
+                throw std::runtime_error("mesh_order::PairSort: hipcub radix sort failed");
             if (k.selector) {
                 Kokkos::deep_copy(exec_, keys, Kokkos::subview(keys_, std::make_pair(0, n)));
                 Kokkos::deep_copy(exec_, ids, Kokkos::subview(ids_, std::make_pair(0, n)));

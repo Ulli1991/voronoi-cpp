@@ -126,7 +126,7 @@ Every path takes positions in a periodic box, quantises them to integer coordina
 
 Faces cost most of the memory: a 3D cell has about 16 faces (15.9 measured; each stored once, 8 per cell), so when faces are not needed, `volumes_and_centroids` takes 101 B/cell against 671 for the clipping rebuild with faces, both measured with the cell list in the library benchmark.
 
-Not available yet: weighted (power, Laguerre) diagrams; non-periodic boxes in 2D and 3D (only periodic; 1D has walls); face velocities (the caller computes them from the motion); cells larger than the certification rule allows (about 6 or more particles across the shortest side, see [usage.md](docs/usage.md#what-a-caller-can-rely-on)). The fast warp kernel is CUDA only; other backends (OpenMP, Serial, HIP) run the per-thread kernel, the same cells.
+Not available yet: weighted (power, Laguerre) diagrams; non-periodic boxes in 2D and 3D (only periodic; 1D has walls); face velocities (the caller computes them from the motion); cells larger than the certification rule allows (about 6 or more particles across the shortest side, see [usage.md](docs/usage.md#what-a-caller-can-rely-on)). The fast warp kernel runs on CUDA and on HIP (one 64-lane wavefront per cell); other backends (OpenMP, Serial) run the per-thread kernel, the same cells.
 
 ## Install and build
 

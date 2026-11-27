@@ -12,6 +12,9 @@
 #ifdef KOKKOS_ENABLE_CUDA
 #include <cuda_runtime_api.h>
 #endif
+#ifdef KOKKOS_ENABLE_HIP
+#include <hip/hip_runtime_api.h>
+#endif
 
 // Device allocations through the Kokkos Tools callbacks: current and peak bytes, per phase if phase() is called, and
 // the live allocations at the peak by label. Memory is the execution space's memory space.
@@ -55,6 +58,11 @@ struct DeviceMemory {
         // Everything the GPU holds: Kokkos views, CUDA context, kernel local memory.
         std::size_t free = 0, total = 0;
         cudaMemGetInfo(&free, &total);
+        std::cout << " gpu_used_MB=" << (total - free) / 1e6;
+#endif
+#ifdef KOKKOS_ENABLE_HIP
+        std::size_t free = 0, total = 0;
+        (void)hipMemGetInfo(&free, &total);
         std::cout << " gpu_used_MB=" << (total - free) / 1e6;
 #endif
         std::cout << "\n";

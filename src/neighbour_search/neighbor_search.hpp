@@ -14,6 +14,9 @@
 #if defined(KOKKOS_ENABLE_CUDA)
 #include <cub/device/device_radix_sort.cuh>
 #endif
+#if defined(KOKKOS_ENABLE_HIP)
+#include <hipcub/device/device_radix_sort.hpp>
+#endif
 
 // Stage 2, index (3D and 2D): called by Mesh::index after snap (configure when n changes, then build); the sorted cell
 // list feeds the clipping start (shell_voronoi make_grid, polygon_clip make_grid). 1D needs none.
@@ -246,6 +249,16 @@ void configure(CellList<ExecSpace, D>& s, int n, const exact_predicates::BoxN<D>
         detail::ensure(s.sort_scratch, "cell_list_sort_scratch", bytes);
     }
 #endif
+#if defined(KOKKOS_ENABLE_HIP)
+    if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {  // the CUDA branch with hipCUB (rocPRIM)
+        std::size_t bytes = 0;
+        const auto b = detail::sort_buffers(nullptr, n);
+        hipcub::DoubleBuffer<std::uint64_t> keys(b.keys[0], b.keys[1]);
+        hipcub::DoubleBuffer<int> ids(b.ids[0], b.ids[1]);
+        (void)hipcub::DeviceRadixSort::SortPairs(nullptr, bytes, keys, ids, n, 0, key_bits(s));
+        detail::ensure(s.sort_scratch, "cell_list_sort_scratch", bytes);
+    }
+#endif
 }
 
 // Sort the particles by Morton key, then fill the slots, the base-cell
@@ -291,6 +304,17 @@ void build(const ExecSpace& exec, const CellList<ExecSpace, D>& s, const InPosit
         cub::DoubleBuffer<int> ids(b.ids[0], b.ids[1]);
         std::size_t bytes = s.sort_scratch.extent(0);
         cub::DeviceRadixSort::SortPairs(s.sort_scratch.data(), bytes, keys, ids, n, 0, key_bits(s), exec.cuda_stream());
+        sorted = keys.selector;
+    } else
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+        if constexpr (std::is_same_v<ExecSpace, Kokkos::HIP>) {
+        hipcub::DoubleBuffer<std::uint64_t> keys(b.keys[0], b.keys[1]);
+        hipcub::DoubleBuffer<int> ids(b.ids[0], b.ids[1]);
+        std::size_t bytes = s.sort_scratch.extent(0);
+        if (hipcub::DeviceRadixSort::SortPairs(s.sort_scratch.data(), bytes, keys, ids, n, 0, key_bits(s),
+                                               exec.hip_stream()) != hipSuccess)
+            throw std::runtime_error("neighbor_search::build: hipcub radix sort failed");
         sorted = keys.selector;
     } else
 #endif

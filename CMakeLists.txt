@@ -20,6 +20,11 @@ target_compile_features(voronoi_library INTERFACE cxx_std_17)
 target_include_directories(voronoi_library INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/neighbour_search
     ${CMAKE_CURRENT_SOURCE_DIR}/src/voronoi_construct)
+# hipcc fuses a * b + c by default, so the rounded arithmetic on the device would not give the host's bits (and not the
+# same bits from run to run); 0.4-1.4 % slower on an MI300A.
+if(Kokkos_ENABLE_HIP)
+    target_compile_options(voronoi_library INTERFACE -ffp-contract=off)
+endif()
 
 function(voronoi_program name source)
     add_executable(${name} ${source})
@@ -32,6 +37,8 @@ voronoi_program(voronoi_bench src/bench/voronoi_bench.cpp)
 voronoi_program(mesh2d_bench src/bench/mesh2d_bench.cpp)
 voronoi_program(library_bench src/bench/library_bench.cpp)
 voronoi_program(geometry_derivative_bench src/bench/geometry_derivative_bench.cpp)
+voronoi_program(cell_list_bench src/bench/cell_list_bench.cpp)  # the cell list as a neighbour search (MI300A study)
+voronoi_program(ngb_csr_bench src/bench/ngb_csr_bench.cpp)  # CSR neighbour lists with per-particle h (GIZMO use case)
 # CPU and GPU in one build (Kokkos with OpenMP and CUDA): the probe of docs/ideas.md, "CPU and GPU together".
 if(Kokkos_ENABLE_OPENMP AND Kokkos_ENABLE_CUDA)
     voronoi_program(backends_probe src/bench/backends_probe.cpp)
