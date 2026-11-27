@@ -68,9 +68,9 @@ def main():
         ax.plot(nx[keep], d[f"avg_{v}_L1"][pick][order][keep], "o-", color="#1f77b4", lw=LW, ms=7,
                 label="LUNA, fixed grid")
         ax.plot(NX, [float(rows["sta", n][key]) for n in NX], "s--", color="#ff7f0e", lw=LW, ms=7,
-                label="luna-cpp, static mesh")
+                label="Kikkou + luna-cpp, static mesh (this work)")
         ax.plot(NX, [float(rows["tp", n][key]) for n in NX], "D-", color="#2ca02c", lw=LW, ms=7,
-                label="Kikkou + luna-cpp (this work)")
+                label="Kikkou + luna-cpp, moving mesh (this work)")
         ref = [float(rows["tp", 32][key]) * (32 / n) ** 2 for n in NX]
         ax.plot(NX, ref, ":", color="k", lw=1.6, label=r"$\propto n_x^{-2}$")
         ax.set_xscale("log", base=2)

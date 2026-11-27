@@ -22,8 +22,8 @@ CODES = [
     ("arepo", COMPARE, "Arepo", "#9467bd"),
     ("athenak_plm_rk2", COMPARE, "AthenaK", "#ff7f0e"),
     ("luna", COMPARE, "LUNA, fixed grid", "#2ca02c"),
-    ("static", KH, "luna-cpp, static mesh", "#17becf"),
-    ("moving", KH, "Kikkou + luna-cpp (this work)", "#1f77b4"),
+    ("static", KH, "Kikkou + luna-cpp, static mesh (this work)", "#17becf"),
+    ("moving", KH, "Kikkou + luna-cpp, moving mesh (this work)", "#1f77b4"),
 ]
 
 
