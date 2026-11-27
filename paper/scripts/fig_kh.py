@@ -19,6 +19,7 @@ WINDOW = (0.6, 1.2)  # the fit of the measured rate: after the start's transient
 COMPARE = os.path.join(KH, "compare")
 # file stem, directory, legend label, colour; drawn in this order, a code without files is left out
 CODES = [
+    ("arepo", COMPARE, "Arepo", "#9467bd"),
     ("athenak_plm_rk2", COMPARE, "AthenaK", "#ff7f0e"),
     ("luna", COMPARE, "LUNA, fixed grid", "#2ca02c"),
     ("static", KH, "luna-cpp, static mesh", "#17becf"),
@@ -59,7 +60,9 @@ def main():
         runs = {n: np.loadtxt(f).T[:2] for n in SIZES if os.path.exists(f := os.path.join(where, f"mode_{stem}_{n}.txt"))}
         rates.update({(stem, n): rate(*r) for n, r in runs.items()})
         if runs:  # the highest resolution each code has; widths step down so every curve shows under the next
-            b.plot(*runs[max(runs)], "-", color=colour, lw=LW * (2.6 - 0.6 * k), label=label, solid_capstyle="butt")
+            top = max(runs)  # a code not yet run at the largest size says which size it shows
+            b.plot(*runs[top], "-", color=colour, lw=LW * (2.6 - 0.5 * k), solid_capstyle="butt",
+                   label=label if top == SIZES[-1] else f"{label}, {top}$^2$")
     t0 = WINDOW[0]
     t, m, _ = np.loadtxt(os.path.join(KH, "mode_moving_1024.txt")).T
     anchor = 0.45 * np.interp(t0, t, m)
