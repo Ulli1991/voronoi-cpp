@@ -66,9 +66,10 @@ def main():
     t0 = WINDOW[0]
     t, m, _ = np.loadtxt(os.path.join(KH, "mode_moving_1024.txt")).T
     anchor = 0.45 * np.interp(t0, t, m)
-    line = np.array([0.3, 1.5])
-    b.plot(line, anchor * np.exp(SIGMA * (line - t0)), ":", color="k", lw=1.8, label=r"linear theory, $\sigma = 2.83$")
     b.set_yscale("log")
+    b.set_ylim(3e-3, 0.4)  # the theory line crosses the whole panel, below the codes, clipped at the edges
+    line = np.array([0.0, 2.5])
+    b.plot(line, anchor * np.exp(SIGMA * (line - t0)), ":", color="k", lw=1.8, label=r"linear theory, $\sigma = 2.83$")
     b.set_xlim(0, 2.5)
     b.set_xlabel("t")
     b.set_ylabel("mode amplitude M")

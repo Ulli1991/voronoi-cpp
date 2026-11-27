@@ -79,7 +79,7 @@ Figs. 1–12 are made with this library alone. **Figs. 13–15 need [luna-cpp](h
 
 **Fig. 14: Kelvin–Helmholtz instability.** The smooth shear layer of McNally, Lyra & Passy (2012) with luna-cpp on one MI300A. (a) The density at t = 2 on the moving mesh at 1024² cells. (b) The amplitude of the seeded velocity mode against time at 1024² for Kikkou + luna-cpp on the moving mesh and on a static mesh (Kikkou builds it once from the initial points), LUNA on a fixed Cartesian grid, AthenaK, and Arepo at 256² (the curves lie on one another), with the slope of linear theory for this setup, σ = 2.83 (the linearised compressible Euler equations about the same density and velocity profiles). The growth rates measured between t = 0.6 and 1.2 at 256², 512² and 1024² are 2.81, 2.84, 2.85 on the moving mesh, 2.84, 2.85, 2.85 on the static mesh, 2.80, 2.83, 2.84 for LUNA 2.84, 2.85, 2.85 for AthenaK and 2.82 for Arepo at 256², within 1.3 % of theory; Arepo at 512² and 1024² is running.
 
-![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig14_luna_kh.png?v=1127b)
+![Kelvin-Helmholtz instability on the moving mesh](paper/figures/fig14_luna_kh.png?v=1127c)
 
 **Fig. 15: 3D isentropic vortex.** The Yee vortex in 3D with luna-cpp. (a) The density in the plane through the vortex on the moving mesh at 256³ cells after 10 time units (Kikkou + luna-cpp on one MI300A). (b) The L1 error of the density against resolution for Kikkou + luna-cpp on the moving mesh and on a static mesh (Kikkou builds it once from the initial points) and LUNA on a fixed grid (runs of an earlier library version), with second order for comparison.
 
